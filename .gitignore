@@ -1,0 +1,15 @@
+# Unignore specific files
+!README.MD
+!.gitignore
+
+# Explicitly ignore these (redundant due to * but good for clarity/overrides if I change * later)
+config.py
+logs/
+tests/
+results.md
+TZ.md
+AGENTS.md
+**/__pycache__/
+
+# База данных (создаётся автоматически при запуске)
+database/vpn_bot.db
