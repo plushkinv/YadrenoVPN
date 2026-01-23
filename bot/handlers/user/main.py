@@ -306,6 +306,24 @@ async def show_help(send_function):
     )
 
 
+@router.callback_query(F.data == "help")
+async def help_handler(callback: CallbackQuery):
+    """Показывает справку по кнопке."""
+    # Пытаемся отредактировать (если текст)
+    # Если это фото/файл (после замены/покупки/показа), edit_text упадёт.
+    try:
+        await show_help(callback.message.edit_text)
+    except Exception:
+        # Удаляем фото/файл и отправляем новое сообщение
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await show_help(callback.message.answer)
+    
+    await callback.answer()
+
+
 @router.callback_query(F.data == "my_keys")
 async def my_keys_handler(callback: CallbackQuery):
     """Список VPN-ключей пользователя."""
