@@ -168,22 +168,30 @@ def update_check_result_kb(has_updates: bool) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def update_confirm_kb() -> InlineKeyboardMarkup:
+def update_confirm_kb(has_updates: bool = True) -> InlineKeyboardMarkup:
     """Клавиатура подтверждения обновления бота."""
     builder = InlineKeyboardBuilder()
     
-    builder.row(
-        InlineKeyboardButton(
-            text="✅ Обновить и перезапустить",
-            callback_data="admin_update_bot_confirm"
+    if has_updates:
+        builder.row(
+            InlineKeyboardButton(
+                text="✅ Обновить и перезапустить",
+                callback_data="admin_update_bot_confirm"
+            )
         )
-    )
-    builder.row(
-        InlineKeyboardButton(
-            text="❌ Отмена",
-            callback_data="admin_bot_settings"
+        builder.row(
+            InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="admin_bot_settings"
+            )
         )
-    )
+    else:
+        builder.row(
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data="admin_bot_settings"
+            )
+        )
     
     return builder.as_markup()
 

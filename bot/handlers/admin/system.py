@@ -170,18 +170,54 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
+    # Проверяем и обновляем remote URL если нужно
+    current_remote = get_remote_url()
+    if current_remote != GITHUB_REPO_URL:
+        set_remote_url(GITHUB_REPO_URL)
+    
+    # Показываем сообщение о проверке
+    await callback.message.edit_text(
+        "🔍 *Проверка обновлений...*\n\n"
+        "Подключаюсь к GitHub...",
+        parse_mode="Markdown"
+    )
+    
+    # Проверяем наличие обновлений
+    success, commits_behind, log_text = check_for_updates()
+    
+    if not success:
+        await callback.message.edit_text(
+            f"❌ *Ошибка проверки*\n\n{log_text}",
+            reply_markup=back_and_home_kb("admin_bot_settings"),
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+    
     commit = get_current_commit() or "неизвестно"
     recent = get_recent_commits(3)
     
-    await callback.message.edit_text(
-        "🔄 *Обновление бота*\n\n"
-        f"Текущая версия: `{commit}`\n\n"
-        f"Последние коммиты:\n```\n{recent}\n```\n\n"
-        "⚠️ После обновления бот автоматически перезапустится.\n"
-        "Это займёт несколько секунд.",
-        reply_markup=update_confirm_kb(),
-        parse_mode="Markdown"
-    )
+    # Если обновлений нет
+    if commits_behind == 0:
+        await callback.message.edit_text(
+            "✅ *Обновление не требуется, у вас последняя версия*\n\n"
+            f"Текущая версия: `{commit}`\n\n"
+            f"Последние коммиты:\n```\n{recent}\n```",
+            reply_markup=update_confirm_kb(has_updates=False),
+            parse_mode="Markdown"
+        )
+    else:
+        # Есть обновления
+        await callback.message.edit_text(
+            "🔄 *Обновление бота*\n\n"
+            f"Текущая версия: `{commit}`\n\n"
+            f"Последние коммиты:\n```\n{recent}\n```\n\n"
+            "⚠️ После обновления бот автоматически перезапустится.\n"
+            "Это займёт несколько секунд.",
+            reply_markup=update_confirm_kb(has_updates=True),
+            parse_mode="Markdown"
+        )
+    
     await callback.answer()
 
 

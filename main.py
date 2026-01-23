@@ -5,6 +5,7 @@
 """
 import asyncio
 import logging
+import os
 import signal
 import sys
 from aiogram import Bot, Dispatcher
@@ -21,6 +22,10 @@ from bot.handlers.user.main import router as user_router
 from bot.handlers.user.payments import router as payments_router
 # Импортируем общий роутер админки, который уже включает в себя все подроутеры
 from bot.handlers.admin import admin_router
+
+
+# Создаём папку для логов если её нет (важно сделать до basicConfig)
+os.makedirs("logs", exist_ok=True)
 
 
 # Настройка логирования
@@ -101,10 +106,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Создаём папку для логов если нет
-    import os
-    os.makedirs("logs", exist_ok=True)
-    
     # Запускаем бота
     try:
         asyncio.run(main())
