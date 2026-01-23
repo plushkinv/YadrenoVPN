@@ -251,14 +251,14 @@ CRYPTO_PARAMS = [
     {
         "key": "crypto_item_url",
         "label": "Ссылка на товар",
-        "hint": "скопируйте из @Ya_SellerBot",
+        "hint": "скопируйте из @Ya\\_SellerBot",
         "validate": lambda x: x.startswith("https://t.me/Ya_SellerBot?start=item"),
-        "error": "Ссылка должна начинаться с https://t.me/Ya_SellerBot?start=item"
+        "error": "Ссылка должна начинаться с https://t.me/Ya\\_SellerBot?start=item"
     },
     {
         "key": "crypto_secret_key",
         "label": "Секретный ключ",
-        "hint": "Профиль → Ключ подписи в @Ya_SellerBot",
+        "hint": "Профиль → Ключ подписи в @Ya\\_SellerBot",
         "validate": lambda x: len(x) >= 16,
         "error": "Ключ должен быть минимум 16 символов"
     },

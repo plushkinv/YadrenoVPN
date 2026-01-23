@@ -328,7 +328,7 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
     ad_text = ""
     if key == 'news_channel_link':
         ad_text = (
-            "\n\n📢 *Прокачай свой канал с @Ya_FooterBot*\n\n"
+            "\n\n📢 *Прокачай свой канал с @Ya\_FooterBot*\n\n"
             "Автоматические подписи в три клика:\n"
             "• 🔄 Автоматическая ротация подписей\n"
             "• ⏱ Удаление постов по таймеру\n"
@@ -364,7 +364,8 @@ async def edit_text_save(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка состояния.")
         return
     
-    new_value = message.text.strip()
+    # md_text: автоматически экранирует спецсимволы + сохраняет форматирование из UI Telegram
+    new_value = message.md_text.strip() if message.md_text else message.text.strip()
     
     # Сохраняем
     set_setting(key, new_value)

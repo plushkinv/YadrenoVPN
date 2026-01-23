@@ -13,6 +13,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 
+from bot.utils.text import escape_md
 from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ async def renew_stars_select_tariff(callback: CallbackQuery):
     
     await callback.message.edit_text(
         f"⭐ *Оплата звёздами*\n\n"
-        f"🔑 Ключ: *{key['display_name']}*\n\n"
+        f"🔑 Ключ: *{escape_md(key['display_name'])}*\n\n"
         "Выберите тариф для продления:",
         reply_markup=renew_tariff_select_kb(tariffs, key_id),
         parse_mode="Markdown"
@@ -326,7 +327,7 @@ async def renew_invoice_cancel_handler(callback: CallbackQuery):
 
     await callback.message.answer(
         f"⭐ *Оплата звёздами*\n\n"
-        f"🔑 Ключ: *{key['display_name']}*\n\n"
+        f"🔑 Ключ: *{escape_md(key['display_name'])}*\n\n"
         "Выберите тариф для продления:",
         reply_markup=renew_tariff_select_kb(tariffs, key_id),
         parse_mode="Markdown"

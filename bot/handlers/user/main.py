@@ -16,6 +16,7 @@ from config import ADMIN_IDS
 from database.requests import get_or_create_user, is_user_banned, get_all_servers
 from bot.keyboards.user import main_menu_kb
 from bot.states.user_states import RenameKey, ReplaceKey
+from bot.utils.text import escape_md
 
 logger = logging.getLogger(__name__)
 
@@ -268,8 +269,8 @@ async def show_my_keys(telegram_id: int, send_function):
         server = key.get('server_name') or "Не выбран"
         
         # Собираем строку (дизайн пользователя)
-        lines.append(f"{status_emoji}*{key['display_name']}* - {traffic_text} - до {expires}")
-        lines.append(f"     📍{server} - {inbound_name} ({protocol})")
+        lines.append(f"{status_emoji}*{escape_md(key['display_name'])}* - {traffic_text} - до {expires}")
+        lines.append(f"     📍{escape_md(server)} - {escape_md(inbound_name)} ({escape_md(protocol)})")
         lines.append("")
     
     lines.append("Выберите ключ для управления:")
@@ -405,10 +406,10 @@ async def key_details_handler(callback: CallbackQuery):
     server = key.get('server_name') or "Не выбран"
     
     lines = [
-        f"🔑 *{key['display_name']}*\n",
+        f"🔑 *{escape_md(key['display_name'])}*\n",
         f"*Статус:* {status}",
-        f"*Сервер:* {server}",
-        f"*Протокол:* {inbound_name} ({protocol})",
+        f"*Сервер:* {escape_md(server)}",
+        f"*Протокол:* {escape_md(inbound_name)} ({escape_md(protocol)})",
         f"*Трафик:* {traffic_info}",
         f"*Действует до:* {expires}",
         ""
@@ -420,7 +421,7 @@ async def key_details_handler(callback: CallbackQuery):
         lines.append("📜 *История операций:*")
         for p in payments:  # Показываем все
             date = p['paid_at'][:10] if p['paid_at'] else "—"
-            tariff = p.get('tariff_name') or "Тариф"
+            tariff = escape_md(p.get('tariff_name') or "Тариф")
             if p['payment_type'] == 'stars':
                 amount = f"{p['amount_stars']} ⭐"
             else:
