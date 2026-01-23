@@ -297,8 +297,18 @@ async def show_help(send_function):
     help_text = get_setting('help_page_text', "❓ *Справка*")
     
     # Получаем ссылки для кнопок
-    news_link = get_setting('news_channel_link', 'https://t.me/YadrenoRu')
-    support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
+    # Валидируем URL, чтобы избежать ошибки "URL host is empty"
+    default_news = 'https://t.me/YadrenoRu'
+    default_support = 'https://t.me/YadrenoChat'
+    
+    news_link = get_setting('news_channel_link', default_news)
+    support_link = get_setting('support_channel_link', default_support)
+    
+    # Если ссылка не является валидным URL — используем дефолт
+    if not news_link or not news_link.startswith(('http://', 'https://')):
+        news_link = default_news
+    if not support_link or not support_link.startswith(('http://', 'https://')):
+        support_link = default_support
     
     await send_function(
         help_text,

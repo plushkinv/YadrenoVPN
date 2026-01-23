@@ -354,7 +354,7 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
 async def edit_text_save(message: Message, state: FSMContext):
     """Сохранение нового значения текста."""
     from database.requests import set_setting
-    from bot.keyboards.admin import back_and_home_kb
+    from bot.keyboards.admin import back_and_home_kb, cancel_kb
     
     data = await state.get_data()
     key = data.get('editing_key')
@@ -366,6 +366,18 @@ async def edit_text_save(message: Message, state: FSMContext):
     
     # md_text: автоматически экранирует спецсимволы + сохраняет форматирование из UI Telegram
     new_value = message.md_text.strip() if message.md_text else message.text.strip()
+    
+    # Валидация для ссылок: должны начинаться с http:// или https://
+    if key in ('news_channel_link', 'support_channel_link'):
+        if not new_value.startswith(('http://', 'https://')):
+            await message.answer(
+                "❌ *Ошибка:* Ссылка должна начинаться с `http://` или `https://`\n\n"
+                f"Вы ввели: `{new_value}`\n\n"
+                "Попробуйте ещё раз или нажмите Отмена.",
+                reply_markup=cancel_kb("admin_edit_texts"),
+                parse_mode="Markdown"
+            )
+            return
     
     # Сохраняем
     set_setting(key, new_value)

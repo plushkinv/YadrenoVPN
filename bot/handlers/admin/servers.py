@@ -191,11 +191,15 @@ async def refresh_servers_list(callback: CallbackQuery, state: FSMContext):
     text = await get_servers_list_text()
     servers = get_all_servers()
     
-    await callback.message.edit_text(
-        text,
-        reply_markup=servers_list_kb(servers),
-        parse_mode="Markdown"
-    )
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=servers_list_kb(servers),
+            parse_mode="Markdown"
+        )
+    except Exception:
+        # Игнорируем ошибку "message is not modified"
+        pass
 
 
 # ============================================================================
