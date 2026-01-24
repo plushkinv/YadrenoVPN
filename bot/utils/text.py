@@ -20,3 +20,19 @@ def escape_md2(text: str) -> str:
     for char in chars:
         text = text.replace(char, '\\' + char)
     return text
+
+
+def escape_markdown_url(url: str) -> str:
+    """
+    Экранирует специальные символы в URL для использования в Markdown-ссылках.
+    
+    В Markdown-ссылках вида [текст](url) символы ) и \\ нужно экранировать,
+    иначе парсер Telegram не сможет найти конец ссылки.
+    """
+    if not url:
+        return url
+    # Экранируем ) и \ в URL
+    url = url.replace('\\', '\\\\')
+    url = url.replace(')', '\\)')
+    return url
+

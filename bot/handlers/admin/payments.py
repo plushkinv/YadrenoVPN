@@ -34,6 +34,7 @@ from bot.keyboards.admin import (
     crypto_management_kb,
     back_and_home_kb
 )
+from bot.utils.text import escape_markdown_url
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,8 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
     if crypto:
         item_url = get_setting('crypto_item_url', '')
         if item_url:
-            text += f"🟢 *Крипто (Ya.Seller)*\n[Ссылка на товар]({item_url})\n"
+            safe_url = escape_markdown_url(item_url)
+            text += f"🟢 *Крипто (Ya.Seller)*\n[Ссылка на товар]({safe_url})\n"
         else:
             text += "🟢 *Крипто (Ya.Seller)*\n"
     else:
@@ -227,8 +229,9 @@ async def process_crypto_url(message: Message, state: FSMContext):
         set_setting('crypto_item_url', url)
         await state.update_data(edit_mode=False)
         
+        safe_url = escape_markdown_url(url)
         await message.answer(
-            f"✅ Ссылка обновлена!\n[Ссылка на товар]({url})",
+            f"✅ Ссылка обновлена!\n[Ссылка на товар]({safe_url})",
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
@@ -253,8 +256,9 @@ async def process_crypto_url(message: Message, state: FSMContext):
         # Переходим к вводу секретного ключа
         await state.set_state(AdminStates.crypto_setup_secret)
         
+        safe_url = escape_markdown_url(url)
         await message.answer(
-            f"✅ Ссылка принята!\n[Ссылка на товар]({url})\n\n"
+            f"✅ Ссылка принята!\n[Ссылка на товар]({safe_url})\n\n"
             "Теперь введите *Секретный ключ*:\n"
             "Найти его можно в @Ya\\_SellerBot: Профиль → Ключ подписи",
             reply_markup=crypto_setup_kb(2),
@@ -314,10 +318,11 @@ async def process_crypto_secret(message: Message, state: FSMContext):
         await state.set_state(AdminStates.payments_menu)
         
         item_url = crypto_data.get('crypto_item_url', '')
+        safe_url = escape_markdown_url(item_url)
         
         await message.answer(
             "✅ *Все данные введены!*\n\n"
-            f"📦 Товар: [Ссылка на товар]({item_url})\n"
+            f"📦 Товар: [Ссылка на товар]({safe_url})\n"
             f"🔐 Ключ: `{'•' * 16}`\n\n"
             "Сохранить и включить крипто-платежи?",
             reply_markup=crypto_setup_confirm_kb(),
@@ -395,10 +400,11 @@ async def show_crypto_management_menu(callback: CallbackQuery, state: FSMContext
     status_text = "включены" if is_enabled else "выключены"
     
     if item_url:
+        safe_url = escape_markdown_url(item_url)
         text = (
             "💰 *Управление крипто-платежами*\n\n"
             f"{status_emoji} Статус: *{status_text}*\n"
-            f"📦 Товар: [Ссылка на товар]({item_url})\n\n"
+            f"📦 Товар: [Ссылка на товар]({safe_url})\n\n"
             "Выберите действие:"
         )
     else:
@@ -448,9 +454,10 @@ async def crypto_mgmt_edit_url(callback: CallbackQuery, state: FSMContext):
     current_url = get_setting('crypto_item_url', '')
     
     if current_url:
+        safe_url = escape_markdown_url(current_url)
         text = (
             "🔗 *Изменение ссылки на товар*\n\n"
-            f"Текущая ссылка: [Ссылка на товар]({current_url})\n\n"
+            f"Текущая ссылка: [Ссылка на товар]({safe_url})\n\n"
             "Введите новую ссылку на товар из @Ya\\_SellerBot:"
         )
     else:
