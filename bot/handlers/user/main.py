@@ -63,7 +63,7 @@ def get_welcome_text(is_admin: bool = False) -> str:
             price_stars = tariff['price_stars']
             
             # Экранируем динамические данные и спецсимволы
-            lines.append(f"• {escape_md2(duration)} \\— ${escape_md2(f'{price_usd:.0f}')} / {price_stars} ⭐")
+            lines.append(f"• {escape_md2(duration)} — ${escape_md2(f'{price_usd:.0f}')} / {price_stars} ⭐")
         
         lines.append("")  # Пустая строка после тарифов
     

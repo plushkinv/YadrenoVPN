@@ -63,7 +63,23 @@ class XUIClient:
             jar = aiohttp.CookieJar(unsafe=True)
             self.session = aiohttp.ClientSession(connector=connector, cookie_jar=jar)
             self.is_authenticated = False
+            logger.debug(f"Создана новая сессия для {self.server['name']}")
         return self.session
+    
+    async def _reset_session(self) -> None:
+        """
+        Сбрасывает текущую сессию.
+        
+        Вызывается при ошибках подключения для пересоздания сессии.
+        """
+        if self.session and not self.session.closed:
+            try:
+                await self.session.close()
+            except Exception as e:
+                logger.debug(f"Ошибка при закрытии сессии: {e}")
+        self.session = None
+        self.is_authenticated = False
+        logger.debug(f"Сессия сброшена для {self.server['name']}")
     
     async def _request(
         self, 
@@ -124,25 +140,27 @@ class XUIClient:
                         except json.JSONDecodeError:
                             # Иногда возвращает HTML при редиректе на логин
                             if "login" in text.lower():
-                                self.is_authenticated = False
+                                logger.warning("Сессия истекла (редирект на логин), пересоздаём...")
+                                await self._reset_session()
                                 if attempt < attempts - 1:
-                                    logger.warning("Сессия истекла, релогин...")
-                                    await self.login()
+                                    # Сессия будет пересоздана при следующем запросе
                                     continue
                             logger.error(f"Невалидный JSON: {text[:100]}")
                             raise VPNAPIError("Некорректный ответ сервера")
                     elif response.status == 404:
                          raise VPNAPIError(f"Endpoint not found: {url}")
                     elif response.status == 401:
-                        self.is_authenticated = False
+                        logger.warning("HTTP 401, пересоздаём сессию...")
+                        await self._reset_session()
                         if attempt < attempts - 1:
-                            await self.login()
                             continue
                     
                     raise VPNAPIError(f"HTTP {response.status}: {text[:100]}")
                     
             except aiohttp.ClientError as e:
                 logger.warning(f"Ошибка подключения (попытка {attempt+1}): {e}")
+                # Сбрасываем сессию при ошибках подключения, чтобы пересоздать её
+                await self._reset_session()
                 if attempt < attempts - 1:
                     await asyncio.sleep(delays[attempt])
                 else:
@@ -654,7 +672,16 @@ def invalidate_client_cache(server_id: int):
         server_id: ID сервера
     """
     if server_id in _clients:
-        # Не закрываем асинхронно — просто удаляем из кэша
+        client = _clients[server_id]
+        # Запускаем закрытие сессии, если она есть
+        if client.session and not client.session.closed:
+            try:
+                # Создаём задачу на закрытие в фоне
+                import asyncio
+                asyncio.create_task(client.close())
+            except RuntimeError:
+                # Если нет активного event loop, просто пропускаем
+                pass
         del _clients[server_id]
         logger.debug(f"Клиент сервера {server_id} удалён из кэша")
 
