@@ -103,7 +103,7 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
     if crypto:
         item_url = get_setting('crypto_item_url', '')
         if item_url:
-            text += f"🟢 *Крипто (Ya.Seller)*\n{item_url}\n"
+            text += f"🟢 *Крипто (Ya.Seller)*\n[Ссылка на товар]({item_url})\n"
         else:
             text += "🟢 *Крипто (Ya.Seller)*\n"
     else:

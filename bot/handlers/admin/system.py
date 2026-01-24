@@ -364,7 +364,8 @@ async def edit_text_save(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка состояния.")
         return
     
-    # md_text: автоматически экранирует спецсимволы + сохраняет форматирование из UI Telegram
+    # Используем md_text для сохранения форматирования (жирный, курсив и т.д.)
+    # md_text экранирует для MarkdownV2, поэтому выводить нужно с parse_mode="MarkdownV2"
     new_value = message.md_text.strip() if message.md_text else message.text.strip()
     
     # Валидация для ссылок: должны начинаться с http:// или https://

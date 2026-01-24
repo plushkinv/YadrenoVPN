@@ -30,9 +30,10 @@ router = Router()
 def get_welcome_text(is_admin: bool = False) -> str:
     """Формирует приветственный текст с реальными тарифами из БД."""
     from database.requests import get_all_tariffs, get_setting
+    from bot.utils.text import escape_md2
     
-    # 1. Получаем статический текст из БД
-    welcome_text = get_setting('main_page_text', "🔐 *Добро пожаловать в VPN-бот!*")
+    # 1. Получаем статический текст из БД (уже в формате MarkdownV2)
+    welcome_text = get_setting('main_page_text', "🔐 *Добро пожаловать в VPN\\-бот\\!*")
     
     lines = [welcome_text, ""]
     
@@ -57,11 +58,12 @@ def get_welcome_text(is_admin: bool = False) -> str:
             else:
                 duration = f"{days} дней"
             
-            # Форматируем цену
+            # Форматируем цену (экранируем для MarkdownV2)
             price_usd = tariff['price_cents'] / 100
             price_stars = tariff['price_stars']
             
-            lines.append(f"• {duration} — ${price_usd:.0f} / {price_stars} ⭐")
+            # Экранируем динамические данные и спецсимволы
+            lines.append(f"• {escape_md2(duration)} \\— ${escape_md2(f'{price_usd:.0f}')} / {price_stars} ⭐")
         
         lines.append("")  # Пустая строка после тарифов
     
@@ -116,7 +118,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     await message.answer(
         text,
         reply_markup=main_menu_kb(is_admin=is_admin),
-        parse_mode="Markdown"
+        parse_mode="MarkdownV2"
     )
 
 
@@ -144,7 +146,7 @@ async def callback_start(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             text,
             reply_markup=main_menu_kb(is_admin=is_admin),
-            parse_mode="Markdown"
+            parse_mode="MarkdownV2"
         )
     except Exception:
         # Удаляем фото/файл и отправляем новое сообщение
@@ -155,7 +157,7 @@ async def callback_start(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             text,
             reply_markup=main_menu_kb(is_admin=is_admin),
-            parse_mode="Markdown"
+            parse_mode="MarkdownV2"
         )
 
     await callback.answer()
@@ -310,10 +312,11 @@ async def show_help(send_function):
     if not support_link or not support_link.startswith(('http://', 'https://')):
         support_link = default_support
     
+    # Ошибки Markdown парсинга обрабатываются глобально в SafeParseSession
     await send_function(
         help_text,
         reply_markup=help_kb(news_link, support_link),
-        parse_mode="Markdown"
+        parse_mode="MarkdownV2"
     )
 
 

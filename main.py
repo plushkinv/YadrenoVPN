@@ -72,8 +72,12 @@ async def on_shutdown(bot: Bot):
 
 async def main():
     """Главная функция запуска бота."""
-    # Создаём бота и диспетчер
-    bot = Bot(token=BOT_TOKEN)
+    # Импортируем кастомную сессию с fallback для ошибок Markdown
+    from bot.middlewares.parse_mode_fallback import SafeParseSession
+    
+    # Создаём бота с кастомной сессией и диспетчер
+    session = SafeParseSession()
+    bot = Bot(token=BOT_TOKEN, session=session)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
     
