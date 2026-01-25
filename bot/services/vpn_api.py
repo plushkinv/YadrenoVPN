@@ -343,7 +343,8 @@ class XUIClient:
                     "expiryTime": expire_time,
                     "enable": enable,
                     "tgId": tg_id,
-                    "subId": "",
+                    "tgId": tg_id,
+                    "subId": uuid.uuid4().hex,
                     "reset": 30  # Сброс счётчика трафика каждые 30 дней
                 }]
             })
@@ -512,6 +513,12 @@ class XUIClient:
                     # Нашли клиента, возвращаем конфигурацию
                     stream_settings = json.loads(inbound.get("streamSettings", "{}"))
                     
+                    # DEBUG: логируем stream_settings для отладки Reality-параметров
+                    logger.debug(f"Stream settings for {email}: {json.dumps(stream_settings, ensure_ascii=False)}")
+                    if stream_settings.get("security") == "reality":
+                        reality = stream_settings.get("realitySettings", {})
+                        logger.info(f"Reality settings for {email}: pbk={reality.get('publicKey')}, sni={reality.get('serverName')}, fp={reality.get('fingerprint')}, shortIds={reality.get('shortIds')}")
+                    
                     return {
                         "uuid": target_client["id"],
                         "email": target_client["email"],
@@ -519,10 +526,74 @@ class XUIClient:
                         "protocol": inbound["protocol"],
                         "host": self.server["host"], # Внешний адрес
                         "stream_settings": stream_settings,
-                        "inbound_name": inbound.get("remark", "VPN")
+                        "inbound_name": inbound.get("remark", "VPN"),
+                        "sub_id": target_client.get("subId", ""),
+                        "flow": target_client.get("flow", "")
                     }
         except Exception as e:
             logger.error(f"Error getting client config for {email}: {e}")
+        return None
+
+    async def get_subscription_link(self, sub_id: str) -> Optional[str]:
+        """
+        Получает VLESS-ссылку через endpoint подписки.
+        
+        Args:
+            sub_id: Subscription ID клиента
+            
+        Returns:
+            Готовая VLESS-ссылка или None если не удалось получить
+        """
+        session = await self._ensure_session()
+        
+        # Строим список URL кандидатов
+        # 1. С base_path
+        # 2. Без base_path
+        # 3. /subscribe/ вместо /sub/ (иногда бывает)
+        
+        from urllib.parse import urlparse
+        parsed = urlparse(self.base_url)
+        host_url = f"{parsed.scheme}://{parsed.netloc}"
+        
+        candidates = [
+            f"{self.base_url}/sub/{sub_id}",
+            f"{host_url}/sub/{sub_id}",
+            f"{self.base_url}/subscribe/{sub_id}",
+            f"{host_url}/subscribe/{sub_id}"
+        ]
+        
+        for url in candidates:
+            try:
+                # Важно: Не используем _request, так как это публичный endpoint
+                async with session.get(url, ssl=False) as response:
+                    logger.info(f"Sub URL probe: {url} -> {response.status}")
+                    
+                    if response.status == 200:
+                        text = await response.text()
+                        text = text.strip()
+                        
+                        # Если вернул VLESS
+                        if text.startswith("vless://") or text.startswith("vmess://") or text.startswith("trojan://"):
+                            return text
+                        
+                        # Если вернул base64
+                        try:
+                            import base64
+                            # Добавляем паддинг если нужно
+                            missing_padding = len(text) % 4
+                            if missing_padding:
+                                text += '=' * (4 - missing_padding)
+                            decoded = base64.b64decode(text).decode('utf-8').strip()
+                            if decoded.startswith("vless://") or decoded.startswith("vmess://") or decoded.startswith("trojan://"):
+                                return decoded
+                        except:
+                            # Логируем, если это что-то странное
+                            if len(text) < 200:
+                                logger.debug(f"Unknown response text: {text}")
+                            pass
+            except Exception as e:
+                logger.warning(f"Ошибка получения подписки ({url}): {e}")
+            
         return None
 
     async def get_database_backup(self) -> bytes:

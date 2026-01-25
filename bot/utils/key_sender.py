@@ -54,7 +54,9 @@ async def send_key_with_qr(
             return
 
         # 2. Генерируем данные
+        logger.info(f"Generating manual VLESS key for {key_data.get('panel_email')}")
         vless_link = generate_vless_link(config)
+            
         vless_json = generate_vless_json(config)
         qr_bytes = generate_qr_code(vless_link)
         

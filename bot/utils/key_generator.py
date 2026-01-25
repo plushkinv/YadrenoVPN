@@ -21,7 +21,12 @@ def generate_vless_link(config: Dict[str, Any]) -> str:
     uuid = config['uuid']
     host = config['host']
     port = config['port']
-    remark = urllib.parse.quote(config['inbound_name'])
+    
+    # Формируем имя: remark-email
+    remark_part = config.get('inbound_name', 'VPN')
+    email_part = config.get('email', '')
+    name = f"{remark_part}-{email_part}"
+    name_encoded = urllib.parse.quote(name)
     
     stream = config.get('stream_settings', {})
     network = stream.get('network', 'tcp')
@@ -48,10 +53,8 @@ def generate_vless_link(config: Dict[str, Any]) -> str:
     elif network == 'tcp':
         tcp_settings = stream.get('tcpSettings', {})
         header = tcp_settings.get('header', {})
-        params['headerType'] = header.get('type', 'none')
         if header.get('type') == 'http':
-             # TODO: Добавить host/path если используется
-             pass
+             params['headerType'] = 'http'
 
     # Добавляем sni/fp/alpn если это TLS/Reality
     if security == 'tls':
@@ -65,21 +68,58 @@ def generate_vless_link(config: Dict[str, Any]) -> str:
 
     elif security == 'reality':
         reality_settings = stream.get('realitySettings', {})
-        if reality_settings.get('serverName'):
-            params['sni'] = reality_settings['serverName']
-        if reality_settings.get('fingerprint'):
-            params['fp'] = reality_settings['fingerprint']
-        if reality_settings.get('publicKey'):
-            params['pbk'] = reality_settings['publicKey']
-        if reality_settings.get('shortIds'):
-            # Берем первый shortId для ссылки
-            params['sid'] = reality_settings['shortIds'][0]
-        params['flow'] = 'xtls-rprx-vision' # Обычно для reality используется vision
+        settings_inner = reality_settings.get('settings', {})
+        
+        # SNI (serverName или serverNames[0])
+        # Приоритет: settings.serverName (иногда пусто) -> serverName -> serverNames[0]
+        sni = settings_inner.get('serverName')
+        if not sni:
+            sni = reality_settings.get('serverName')
+        if not sni:
+            server_names = reality_settings.get('serverNames', [])
+            if server_names:
+                sni = server_names[0]
+        if not sni:
+             # Fallback
+             sni = reality_settings.get('dest', '').split(':')[0]
+
+        if sni:
+            params['sni'] = sni
+        
+        # Fingerprint
+        fp = settings_inner.get('fingerprint') or reality_settings.get('fingerprint') or 'chrome'
+        params['fp'] = fp
+        
+        # Public Key (pbk или publicKey)
+        pbk = settings_inner.get('publicKey') or reality_settings.get('publicKey')
+        if pbk:
+            params['pbk'] = pbk
+        
+        # Short ID (shortIds[0], shortId, или sid)
+        # В realitySettings.shortIds список
+        short_ids = reality_settings.get('shortIds', [])
+        sid = short_ids[0] if short_ids else ""
+        if not sid:
+             sid = reality_settings.get('shortId')
+             
+        if sid:
+            params['sid'] = sid
+        
+        # Spider X (spx) - путь, обычно "/"
+        spx = settings_inner.get('spiderX') or reality_settings.get('spiderX') or '/'
+        if spx:
+            params['spx'] = spx
+        
+    # Flow
+    # Берем прямо из конфига клиента (мы добавили его в vpn_api.py)
+    flow = config.get('flow', '')
+    if flow:
+        params['flow'] = flow
 
     # Собираем query string
-    query = "&".join([f"{k}={v}" for k, v in params.items() if v])
+    query = "&".join([f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items() if v])
     
-    link = f"vless://{uuid}@{host}:{port}?{query}#{remark}"
+    link = f"vless://{uuid}@{host}:{port}?{query}#{name_encoded}"
     return link
 
 
