@@ -159,6 +159,9 @@ def delete_server(server_id: int) -> bool:
         True если удаление успешно
     """
     with get_db() as conn:
+        # Сначала отвязываем ключи от этого сервера, чтобы не нарушить Foreign Key
+        conn.execute("UPDATE vpn_keys SET server_id = NULL WHERE server_id = ?", (server_id,))
+        
         cursor = conn.execute("DELETE FROM servers WHERE id = ?", (server_id,))
         success = cursor.rowcount > 0
         if success:

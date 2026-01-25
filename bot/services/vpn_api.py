@@ -133,8 +133,18 @@ class XUIClient:
                             result = json.loads(text)
                             if result.get("success"):
                                 return result
+                            
                             # Бывает success=False но есть msg
                             if "msg" in result and not result["success"]:
+                                msg = result["msg"].lower()
+                                # Проверяем на признаки истечения сессии
+                                if any(x in msg for x in ["login", "auth", "session", "token"]):
+                                    logger.warning(f"Сессия возможно истекла (msg='{result['msg']}'), пересоздаём...")
+                                    await self._reset_session()
+                                    if attempt < attempts - 1:
+                                        # Сессия будет пересоздана при следующем запросе
+                                        continue
+                                        
                                 raise VPNAPIError(result["msg"])
                             return result
                         except json.JSONDecodeError:
