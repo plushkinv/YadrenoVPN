@@ -158,6 +158,13 @@ class XUIClient:
                             logger.error(f"Невалидный JSON: {text[:100]}")
                             raise VPNAPIError("Некорректный ответ сервера")
                     elif response.status == 404:
+                         # Некоторые версии X-UI возвращают 404 если сессия истекла
+                         # Пытаемся пересоздать сессию
+                         logger.warning(f"HTTP 404 (Endpoint not found), сессия возможно истекла. Попытка {attempt+1}/{attempts}")
+                         await self._reset_session()
+                         if attempt < attempts - 1:
+                             continue
+                         
                          raise VPNAPIError(f"Endpoint not found: {url}")
                     elif response.status == 401:
                         logger.warning("HTTP 401, пересоздаём сессию...")
