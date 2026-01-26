@@ -101,25 +101,10 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key") -> InlineKey
     builder = InlineKeyboardBuilder()
     
     for tariff in tariffs:
-        # Форматируем длительность
-        days = tariff['duration_days']
-        if days >= 365:
-            duration = f"{days // 365} год" if days // 365 == 1 else f"{days // 365} года"
-        elif days >= 30:
-            months = days // 30
-            if months == 1:
-                duration = "1 мес"
-            elif months in [2, 3, 4]:
-                duration = f"{months} мес"
-            else:
-                duration = f"{months} мес"
-        else:
-            duration = f"{days} дн"
-        
         # Кнопка тарифа
         builder.row(
             InlineKeyboardButton(
-                text=f"⭐ {duration} — {tariff['price_stars']} звёзд",
+                text=f"⭐ {tariff['name']} — {tariff['price_stars']} звёзд",
                 callback_data=f"stars_pay:{tariff['id']}"
             )
         )
@@ -251,27 +236,12 @@ def renew_tariff_select_kb(tariffs: list, key_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     
     for tariff in tariffs:
-        # Форматируем длительность
-        days = tariff['duration_days']
-        if days >= 365:
-            duration = f"{days // 365} год" if days // 365 == 1 else f"{days // 365} года"
-        elif days >= 30:
-            months = days // 30
-            if months == 1:
-                duration = "1 мес"
-            elif months in [2, 3, 4]:
-                duration = f"{months} мес"
-            else:
-                duration = f"{months} мес"
-        else:
-            duration = f"{days} дн"
-        
         # Цена в Stars
         price_stars = tariff['price_stars']
         
         builder.row(
             InlineKeyboardButton(
-                text=f"⭐ {duration} — {price_stars} звёзд",
+                text=f"⭐ {tariff['name']} — {price_stars} звёзд",
                 callback_data=f"renew_stars:{key_id}:{tariff['id']}"
             )
         )

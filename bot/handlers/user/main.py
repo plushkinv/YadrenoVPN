@@ -35,41 +35,33 @@ def get_welcome_text(is_admin: bool = False) -> str:
     # 1. Получаем статический текст из БД (уже в формате MarkdownV2)
     welcome_text = get_setting('main_page_text', "🔐 *Добро пожаловать в VPN\\-бот\\!*")
     
-    lines = [welcome_text, ""]
-    
     # 2. Получаем тарифы из БД (только активные)
     tariffs = get_all_tariffs()
     
+    tariff_lines = []
     if tariffs:
-        lines.append("📋 *Тарифы:*")
+        tariff_lines.append("📋 *Тарифы:*")
         for tariff in tariffs:
-            # Форматируем длительность
-            days = tariff['duration_days']
-            if days >= 365:
-                duration = f"{days // 365} год" if days // 365 == 1 else f"{days // 365} года"
-            elif days >= 30:
-                months = days // 30
-                if months == 1:
-                    duration = "1 месяц"
-                elif months in [2, 3, 4]:
-                    duration = f"{months} месяца"
-                else:
-                    duration = f"{months} месяцев"
-            else:
-                duration = f"{days} дней"
-            
             # Форматируем цену (экранируем для MarkdownV2)
             price_usd = tariff['price_cents'] / 100
             price_stars = tariff['price_stars']
             
             # Экранируем динамические данные и спецсимволы
-            lines.append(f"• {escape_md2(duration)} — ${escape_md2(f'{price_usd:.0f}')} / {price_stars} ⭐")
-        
-        lines.append("")  # Пустая строка после тарифов
+            tariff_lines.append(f"• {escape_md2(tariff['name'])} — ${escape_md2(f'{price_usd:.0f}')} / {price_stars} ⭐")
+            
+    tariff_text = "\n".join(tariff_lines)
+
+    # 3. Вставляем тарифы
+    # Пытаемся найти плейсхолдер: %тарифы%
+    # Если найден — заменяем
+    # Иначе — добавляем в конец
     
-    lines.append("Выберите действие:")
-    
-    return "\n".join(lines)
+    if "%тарифы%" in welcome_text:
+         return welcome_text.replace("%тарифы%", tariff_text)
+    else:
+         if tariff_text:
+             return f"{welcome_text}\n\n{tariff_text}\n"
+         return welcome_text
 
 
 @router.message(Command("start"))

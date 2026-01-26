@@ -223,12 +223,12 @@ async def broadcast_preview(callback: CallbackQuery):
         await callback.message.answer_photo(
             photo=msg_data['photo_file_id'],
             caption=msg_data.get('text', ''),
-            parse_mode="Markdown"
+            parse_mode="MarkdownV2"
         )
     else:
         await callback.message.answer(
             msg_data['text'],
-            parse_mode="Markdown"
+            parse_mode="MarkdownV2"
         )
 
 
@@ -375,13 +375,13 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                     chat_id=user_id,
                     photo=photo_file_id,
                     caption=text,
-                    parse_mode="Markdown"
+                    parse_mode="MarkdownV2"
                 )
             else:
                 await bot.send_message(
                     chat_id=user_id,
                     text=text,
-                    parse_mode="Markdown"
+                    parse_mode="MarkdownV2"
                 )
             sent += 1
         except TelegramForbiddenError:

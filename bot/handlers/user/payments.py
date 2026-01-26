@@ -145,24 +145,14 @@ async def renew_stars_invoice(callback: CallbackQuery):
         vpn_key_id=key_id
     )
     
-    # Форматируем длительность
-    days = tariff['duration_days']
-    if days >= 365:
-        duration = f"{days // 365} год" if days // 365 == 1 else f"{days // 365} года"
-    elif days >= 30:
-        months = days // 30
-        duration = f"{months} мес"
-    else:
-        duration = f"{days} дней"
-    
     # Отправляем invoice
     # payload содержит order_id для идентификации платежа
     await callback.message.answer_invoice(
-        title=f"Продление VPN на {duration}",
-        description=f"Продление ключа «{key['display_name']}» на {duration}.",
+        title=f"Продление VPN: {tariff['name']}",
+        description=f"Продление ключа «{key['display_name']}»: {tariff['name']}.",
         payload=f"renew:{order_id}",
         currency="XTR",
-        prices=[LabeledPrice(label=f"VPN {duration}", amount=tariff['price_stars'])],
+        prices=[LabeledPrice(label=f"VPN {tariff['name']}", amount=tariff['price_stars'])],
         reply_markup=InlineKeyboardBuilder().row(
             InlineKeyboardButton(text=f"⭐️ Оплатить {tariff['price_stars']} XTR", pay=True)
         ).row(

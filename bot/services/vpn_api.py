@@ -297,7 +297,12 @@ class XUIClient:
             try:
                 status = await self.get_server_status()
                 if status:
-                    cpu_percent = status.get("cpu")
+                    raw_cpu = status.get("cpu")
+                    if raw_cpu is not None:
+                        try:
+                            cpu_percent = int(float(raw_cpu))
+                        except (ValueError, TypeError):
+                            pass
             except VPNAPIError:
                 pass
             
