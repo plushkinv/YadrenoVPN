@@ -86,7 +86,8 @@ class XUIClient:
         method: str, 
         endpoint: str, 
         data: Optional[Dict] = None,
-        retry: bool = True
+        retry: bool = True,
+        log_error: bool = True
     ) -> Dict[str, Any]:
         """
         Выполняет HTTP-запрос к API.
@@ -103,7 +104,6 @@ class XUIClient:
         Raises:
             VPNAPIError: При ошибке запроса
         """
-        session = await self._ensure_session()
         # URL = https://ip:port/secret_path/panel/...
         url = f"{self.base_url}{endpoint}"
         
@@ -118,6 +118,9 @@ class XUIClient:
         
         for attempt in range(attempts):
             try:
+                # Получаем актуальную сессию (важно, так как она может быть пересоздана в _reset_session)
+                session = await self._ensure_session()
+
                 # Если нужна авторизация и мы не авторизованы (и это не запрос логина)
                 if not self.is_authenticated and endpoint != "/login":
                     await self.login()
@@ -160,12 +163,14 @@ class XUIClient:
                     elif response.status == 404:
                          # Некоторые версии X-UI возвращают 404 если сессия истекла
                          # Пытаемся пересоздать сессию
-                         logger.warning(f"HTTP 404 (Endpoint not found), сессия возможно истекла. Попытка {attempt+1}/{attempts}")
+                         logger.warning(f"HTTP 404 (Endpoint not found) для {url}, сессия возможно истекла. Попытка {attempt+1}/{attempts}")
                          await self._reset_session()
                          if attempt < attempts - 1:
                              continue
                          
-                         raise VPNAPIError(f"Endpoint not found: {url}")
+                         if log_error:
+                             logger.error(f"Endpoint not found после {attempts} попыток: {url}")
+                         raise VPNAPIError("Ошибка API: Метод не найден (404). Проверьте настройки сервера.")
                     elif response.status == 401:
                         logger.warning("HTTP 401, пересоздаём сессию...")
                         await self._reset_session()
@@ -244,7 +249,7 @@ class XUIClient:
             Словарь со статусом сервера
         """
         try:
-            result = await self._request("GET", "/server/status")
+            result = await self._request("GET", "/panel/api/server/status")
             return result.get("obj", {})
         except VPNAPIError:
             # Некоторые версии 3X-UI не имеют этого endpoint
@@ -339,7 +344,13 @@ class XUIClient:
             
         Returns:
             Словарь с данными созданного клиента
+            
+        Raises:
+            ValueError: Если expire_days <= 0
         """
+        if expire_days <= 0:
+            raise ValueError("Срок действия ключа должен быть больше 0 дней")
+
         client_uuid = str(uuid.uuid4())
         
         # Время истечения (timestamp в мс)

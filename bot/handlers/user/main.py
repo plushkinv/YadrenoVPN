@@ -594,6 +594,14 @@ async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Ключ не найден", show_alert=True)
         return
     
+    # 0. Проверяем, активен ли ключ
+    if not key['is_active']:
+        await callback.answer(
+            "⏳ Срок действия ключа истёк.\nПродлите его перед заменой.",
+            show_alert=True
+        )
+        return
+    
     # 1. Проверяем трафик (< 20% использовано)
     if key.get('server_active') and key.get('panel_email'):
         try:
