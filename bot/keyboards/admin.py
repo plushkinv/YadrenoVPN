@@ -1027,7 +1027,7 @@ def user_view_kb(
             key_name = key['custom_name']
         else:
             # Формат: первые_4_символа...последние_4_символа от client_uuid
-            uuid = key.get('client_uuid', '')
+            uuid = key.get('client_uuid') or ''
             if len(uuid) >= 8:
                 key_name = f"{uuid[:4]}...{uuid[-4:]}"
             else:

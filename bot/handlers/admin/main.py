@@ -63,12 +63,13 @@ async def get_admin_stats_text() -> str:
                 if stats.get('online'):
                     traffic = format_traffic(stats.get('total_traffic_bytes', 0))
                     active = stats.get('active_clients', 0)
+                    online = stats.get('online_clients', 0)
                     
                     cpu_text = ""
                     if stats.get('cpu_percent') is not None:
                         cpu_text = f" | 💻 {stats['cpu_percent']}% CPU"
                     
-                    lines.append(f"   👥 {active} активных | 📊 {traffic}{cpu_text}")
+                    lines.append(f"   🔑 {online} онлайн | 📊 {traffic}{cpu_text}")
                 else:
                     error = stats.get('error', 'Нет подключения')
                     lines.append(f"   ⚠️ {error}")

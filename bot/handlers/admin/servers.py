@@ -84,12 +84,13 @@ async def get_servers_list_text() -> str:
                 if stats.get('online'):
                     traffic = format_traffic(stats.get('total_traffic_bytes', 0))
                     active = stats.get('active_clients', 0)
+                    online = stats.get('online_clients', 0)
                     
                     cpu_text = ""
                     if stats.get('cpu_percent') is not None:
                         cpu_text = f" | 💻 {stats['cpu_percent']}% CPU"
                     
-                    lines.append(f"   👥 {active} активных | 📊 {traffic}{cpu_text}")
+                    lines.append(f"   🔑 {online} онлайн | 📊 {traffic}{cpu_text}")
                 else:
                     lines.append(f"   ⚠️ Недоступен")
             except Exception as e:
@@ -136,7 +137,7 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
             
             if stats.get('online'):
                 traffic = format_traffic(stats.get('total_traffic_bytes', 0))
-                lines.append(f"   👥 Клиентов: {stats.get('active_clients', 0)} активных")
+                lines.append(f"   🔑 Онлайн: {stats.get('online_clients', 0)}")
                 lines.append(f"   📈 Трафик: {traffic}")
                 
                 if stats.get('cpu_percent') is not None:
@@ -384,7 +385,7 @@ async def process_add_step(message: Message, state: FSMContext):
             text = (
                 f"✅ *Проверка подключения успешна!*\n\n"
                 f"📊 Статистика:\n"
-                f"   👥 Клиентов: {stats.get('active_clients', 0)}\n"
+                f"   🔑 Онлайн: {stats.get('online_clients', 0)}\n"
                 f"   📈 Трафик: {traffic}\n\n"
                 f"Сохранить сервер?"
             )
@@ -455,7 +456,7 @@ async def add_server_retest(callback: CallbackQuery, state: FSMContext):
         text = (
             f"✅ *Проверка подключения успешна!*\n\n"
             f"📊 Статистика:\n"
-            f"   👥 Клиентов: {stats.get('active_clients', 0)}\n"
+            f"   🔑 Онлайн: {stats.get('online_clients', 0)}\n"
             f"   📈 Трафик: {traffic}\n\n"
             f"Сохранить сервер?"
         )

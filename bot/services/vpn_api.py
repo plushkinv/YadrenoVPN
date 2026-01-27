@@ -309,6 +309,7 @@ class XUIClient:
             return {
                 "total_clients": total_clients,
                 "active_clients": active_clients,
+                "online_clients": await self.get_online_clients_count(),
                 "total_traffic_bytes": total_traffic,
                 "cpu_percent": cpu_percent,
                 "online": True
@@ -319,11 +320,30 @@ class XUIClient:
             return {
                 "total_clients": 0,
                 "active_clients": 0,
+                "online_clients": 0,
                 "total_traffic_bytes": 0,
                 "cpu_percent": None,
                 "online": False,
                 "error": str(e)
             }
+
+    async def get_online_clients_count(self) -> int:
+        """
+        Получает количество пользователей онлайн.
+        
+        Returns:
+            Количество пользователей онлайн
+        """
+        try:
+            # Запрос к /panel/api/inbounds/onlines
+            response = await self._request("POST", "/panel/api/inbounds/onlines", retry=False, log_error=False)
+            if response.get("success") and response.get("obj"):
+                return len(response["obj"])
+        except VPNAPIError:
+            pass
+        except Exception as e:
+            logger.debug(f"Ошибка получения online пользователей: {e}")
+        return 0
 
     async def add_client(
         self,

@@ -28,6 +28,7 @@ from database.requests import (
     get_active_servers, get_all_tariffs
 )
 from bot.utils.admin import is_admin
+from bot.utils.text import escape_md
 from bot.states.admin_states import AdminStates
 from bot.keyboards.admin import (
     users_menu_kb, users_list_kb, user_view_kb, user_ban_confirm_kb,
@@ -401,7 +402,7 @@ def _format_user_card(user: dict) -> tuple[str, any]:
                 key_name = key['custom_name']
             else:
                 # Формат: первые_4_символа...последние_4_символа от client_uuid
-                uuid = key.get('client_uuid', '')
+                uuid = key.get('client_uuid') or ''
                 if len(uuid) >= 8:
                     key_name = f"{uuid[:4]}...{uuid[-4:]}"
                 else:
@@ -441,7 +442,9 @@ def _format_user_card(user: dict) -> tuple[str, any]:
             lines.append(f"  ⭐ Сумма (Stars): {total_stars}")
         lines.append(f"  📅 Последняя оплата: {last_payment}")
         if tariffs:
-            lines.append(f"  📋 Тарифы: {', '.join(tariffs)}")
+            # Экранируем спецсимволы Markdown в названиях тарифов
+            safe_tariffs = [escape_md(t) for t in tariffs]
+            lines.append(f"  📋 Тарифы: {', '.join(safe_tariffs)}")
     else:
         lines.append("  _Оплат не было_")
     
@@ -539,7 +542,7 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
         key_name = key['custom_name']
     else:
         # Формат: первые_4_символа...последние_4_символа от client_uuid
-        uuid = key.get('client_uuid', '')
+        uuid = key.get('client_uuid') or ''
         if len(uuid) >= 8:
             key_name = f"{uuid[:4]}...{uuid[-4:]}"
         else:
