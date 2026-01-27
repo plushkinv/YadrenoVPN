@@ -84,9 +84,10 @@ async def collect_daily_stats() -> str:
     today = datetime.now().strftime("%d.%m.%Y")
     
     # Платежи
-    payments_total = payments.get('count', 0)
-    payments_cents = payments.get('total_cents', 0)
-    payments_stars = payments.get('total_stars', 0)
+    payments_total = payments.get('paid_count', 0)
+    payments_cents = payments.get('paid_cents', 0)
+    payments_stars = payments.get('paid_stars', 0)
+    payments_pending = payments.get('pending_count', 0)
     
     payments_text = []
     if payments_cents > 0:
@@ -99,6 +100,7 @@ async def collect_daily_stats() -> str:
 
 👥 *Пользователи:*
   Всего: {users.get('total', 0)}
+  Активных: {users.get('active', 0)}
   Новых за сутки: {new_users}
 
 🔑 *VPN-ключи:*
@@ -108,7 +110,8 @@ async def collect_daily_stats() -> str:
   Создано за сутки: {keys.get('created_today', 0)}
 
 💳 *Платежи за сутки:*
-  Количество: {payments_total}
+  Успешных: {payments_total}
+  Ожидающих: {payments_pending}
   Сумма: {payments_sum}
 
 🖥️ *Серверы:*

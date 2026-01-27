@@ -11,9 +11,7 @@ from .connection import get_db
 logger = logging.getLogger(__name__)
 
 # Текущая версия схемы БД
-LATEST_VERSION = 1
-
-
+LATEST_VERSION = 2
 
 
 def get_current_version() -> int:
@@ -219,8 +217,61 @@ def migration_1(conn: sqlite3.Connection) -> None:
     logger.info("Миграция v1 применена")
 
 
+def migration_2(conn: sqlite3.Connection) -> None:
+    """
+    Миграция v2: Разрешаем NULL в таблице payments для tariff_id, period_days и payment_type.
+    
+    Это необходимо, чтобы не фиксировать тариф и тип оплаты при создании pending-ордера,
+    так как пользователь выбирает их непосредственно при оплате.
+    """
+    logger.info("Применение миграции v2 (Make payments fields nullable)...")
+    
+    # 1. Создаём новую таблицу (tariff_id, period_days, payment_type теперь без NOT NULL)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS payments_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vpn_key_id INTEGER,
+            user_id INTEGER NOT NULL,
+            tariff_id INTEGER,  -- Теперь NULLABLE
+            order_id TEXT NOT NULL UNIQUE,
+            payment_type TEXT,  -- Теперь NULLABLE
+            amount_cents INTEGER,
+            amount_stars INTEGER,
+            period_days INTEGER, -- Теперь NULLABLE
+            status TEXT DEFAULT 'paid',
+            paid_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (vpn_key_id) REFERENCES vpn_keys(id),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (tariff_id) REFERENCES tariffs(id)
+        )
+    """)
+    
+    # 2. Копируем данные
+    conn.execute("""
+        INSERT INTO payments_new (id, vpn_key_id, user_id, tariff_id, order_id, payment_type, 
+                                 amount_cents, amount_stars, period_days, status, paid_at)
+        SELECT id, vpn_key_id, user_id, tariff_id, order_id, payment_type, 
+               amount_cents, amount_stars, period_days, status, paid_at
+        FROM payments
+    """)
+    
+    # 3. Удаляем старую таблицу
+    conn.execute("DROP TABLE payments")
+    
+    # 4. Переименовываем новую таблицу
+    conn.execute("ALTER TABLE payments_new RENAME TO payments")
+    
+    # 5. Пересоздаём индексы
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id)")
+    
+    logger.info("Миграция v2 применена")
+
+
 MIGRATIONS = {
     1: migration_1,
+    2: migration_2,
 }
 
 

@@ -94,18 +94,19 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     args = command.args
     if args and args.startswith("bill"):
         from bot.services.billing import process_crypto_payment
-        from bot.handlers.user.payments import start_new_key_config
+        from bot.handlers.user.payments import finalize_payment_ui
         
-        # Обрабатываем платеж
-        success, text, order = process_crypto_payment(args)
+        # Обрабатываем платеж (вернет (success, text, order))
+        success, text, order = process_crypto_payment(args, user_id=user['id'])
         
-        await message.answer(text, parse_mode="Markdown")
+        if success and order:
+            # Используем единый финализатор UI
+            await finalize_payment_ui(message, state, text, order)
+        else:
+             # Ошибка
+             await message.answer(text, parse_mode="Markdown")
         
-        # Если успех и это новый ключ — запускаем настройку
-        if success and order and not order.get('vpn_key_id'):
-            # order_id нужен для привязки
-            await start_new_key_config(message, state, order['order_id'])
-            return
+        return
 
     await message.answer(
         text,
@@ -377,6 +378,11 @@ async def key_details_handler(callback: CallbackQuery):
     protocol = "VLESS" # Дефолт
     inbound_name = "VPN"  # Дефолт
     
+    # Инициализация переменных отображения
+    inbound_name = "—"
+    protocol = "—"
+    is_unconfigured = not key.get('server_id')
+
     if key.get('server_active') and key.get('panel_email'):
         try:
             client = await get_client(key['server_id'])
@@ -404,7 +410,10 @@ async def key_details_handler(callback: CallbackQuery):
             logger.warning(f"Ошибка получения статистики: {e}")
             traffic_info = "Недоступно"
     else:
-        traffic_info = "Сервер недоступен"
+        if is_unconfigured:
+            traffic_info = "⚠️ Требует настройки"
+        else:
+            traffic_info = "Сервер недоступен"
 
     # Формируем текст
     expires = key['expires_at'][:10] if key['expires_at'] else "—"
@@ -441,7 +450,7 @@ async def key_details_handler(callback: CallbackQuery):
     try:
         await callback.message.edit_text(
             msg_text,
-            reply_markup=key_manage_kb(key_id),
+            reply_markup=key_manage_kb(key_id, is_unconfigured=is_unconfigured),
             parse_mode="Markdown"
         )
     except Exception:
@@ -449,7 +458,7 @@ async def key_details_handler(callback: CallbackQuery):
         await callback.message.delete()
         await callback.message.answer(
             msg_text,
-            reply_markup=key_manage_kb(key_id),
+            reply_markup=key_manage_kb(key_id, is_unconfigured=is_unconfigured),
             parse_mode="Markdown"
         )
     
@@ -743,7 +752,7 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
         
         is_same_server = (current_key['server_id'] == new_server_id)
         
-        if current_key.get('server_active') and current_key.get('panel_email'):
+        if current_key.get('server_id') and current_key.get('server_active') and current_key.get('panel_email'):
             try:
                 old_client = await get_client(current_key['server_id'])
                 await old_client.delete_client(current_key['panel_inbound_id'], current_key['client_uuid'])
@@ -781,8 +790,16 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
         # Вычисляем оставшиеся дни
         expires_at = datetime.fromisoformat(current_key['expires_at'])
         now = datetime.now()
-        days_left = (expires_at - now).days
-        if days_left < 0: days_left = 0
+        delta = expires_at - now
+        
+        # Округляем в большую сторону (любой остаток времени считается за день)
+        days_left = delta.days
+        if delta.seconds > 0:
+            days_left += 1
+            
+        # Страховка от 0 дней (API требует > 0)
+        if days_left < 1: 
+            days_left = 1
         
         # Создаем
         res = await new_client.add_client(
@@ -934,37 +951,36 @@ async def buy_key_handler(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     
     # Проверяем какие методы оплаты доступны
+    # Проверяем какие методы оплаты доступны
     crypto_url = None
+    existing_order_id = None  # Сохраняем ID ордера для переиспользования в Stars
+
     if is_crypto_configured():
         # Для крипто-оплаты создаём pending order с первым активным тарифом
         # (или можно использовать специальный placeholder тариф)
         user_id = get_user_internal_id(telegram_id)
         if user_id:
-            # Получаем первый активный тариф (для генерации ссылки)
-            # Примечание: реальный тариф выбирается пользователем в Ya.Seller
-            tariffs = get_all_tariffs(include_hidden=False)
-            if tariffs:
-                first_tariff = tariffs[0]
-                
-                # Создаём pending order
-                _, order_id = create_pending_order(
-                    user_id=user_id,
-                    tariff_id=first_tariff['id'],
-                    payment_type='crypto',
-                    vpn_key_id=None  # Новый ключ
+            # Создаём pending order без конкретного тарифа
+            # (тарифа и сумма определятся при оплате в CryptoBot)
+            _, order_id = create_pending_order(
+                user_id=user_id,
+                tariff_id=None,
+                payment_type=None,
+                vpn_key_id=None  # Новый ключ
+            )
+            existing_order_id = order_id
+            
+            # Формируем ссылку с invoice
+            crypto_item_url = get_setting('crypto_item_url')
+            item_id = extract_item_id_from_url(crypto_item_url)
+            
+            if item_id:
+                crypto_url = build_crypto_payment_url(
+                    item_id=item_id,
+                    invoice_id=order_id,
+                    tariff_external_id=None,  # Пользователь выберет в боте
+                    price_cents=None  # Цена определяется в Ya.Seller
                 )
-                
-                # Формируем ссылку с invoice
-                crypto_item_url = get_setting('crypto_item_url')
-                item_id = extract_item_id_from_url(crypto_item_url)
-                
-                if item_id:
-                    crypto_url = build_crypto_payment_url(
-                        item_id=item_id,
-                        invoice_id=order_id,
-                        tariff_external_id=None,  # Пользователь выберет в боте
-                        price_cents=None  # Цена определяется в Ya.Seller
-                    )
     
     stars_enabled = is_stars_enabled()
     
@@ -999,7 +1015,7 @@ _Приобретая ключ, вы соглашаетесь с этими ус
     
     await callback.message.edit_text(
         text,
-        reply_markup=buy_key_kb(crypto_url=crypto_url, stars_enabled=stars_enabled),
+        reply_markup=buy_key_kb(crypto_url=crypto_url, stars_enabled=stars_enabled, order_id=existing_order_id),
         parse_mode="Markdown"
     )
     await callback.answer()
@@ -1028,13 +1044,18 @@ async def help_stub(callback: CallbackQuery):
 # ОПЛАТА STARS
 # ============================================================================
 
-@router.callback_query(F.data == "pay_stars")
+@router.callback_query(F.data.startswith("pay_stars"))
 async def pay_stars_select_tariff(callback: CallbackQuery):
     """Выбор тарифа для оплаты Stars."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
     
+    # Парсим order_id из callback (pay_stars:ORDER_ID или просто pay_stars)
+    order_id = None
+    if ":" in callback.data:
+        order_id = callback.data.split(":")[1]
+
     # Получаем активные тарифы
     tariffs = get_all_tariffs(include_hidden=False)
     
@@ -1052,7 +1073,7 @@ async def pay_stars_select_tariff(callback: CallbackQuery):
     await callback.message.edit_text(
         "⭐ *Оплата звёздами*\n\n"
         "Выберите тариф:",
-        reply_markup=tariff_select_kb(tariffs),
+        reply_markup=tariff_select_kb(tariffs, order_id=order_id),
         parse_mode="Markdown"
     )
     await callback.answer()
@@ -1062,10 +1083,12 @@ async def pay_stars_select_tariff(callback: CallbackQuery):
 async def pay_stars_invoice(callback: CallbackQuery):
     """Создание инвойса для оплаты Stars."""
     from aiogram.types import LabeledPrice
-    from database.requests import get_tariff_by_id
+    from database.requests import get_tariff_by_id, update_order_tariff, update_payment_type
     
-    # Получаем ID тарифа из callback
-    tariff_id = int(callback.data.split(":")[1])
+    parts = callback.data.split(":")
+    tariff_id = int(parts[1])
+    order_id = parts[2] if len(parts) > 2 else None
+    
     tariff = get_tariff_by_id(tariff_id)
     
     if not tariff:
@@ -1087,27 +1110,32 @@ async def pay_stars_invoice(callback: CallbackQuery):
     else:
         duration = f"{days} дней"
     
-    # Создаем pending order (Единый механизм)
+    # Логика создания/обновления ордера
     from database.requests import get_user_internal_id, create_pending_order
     
-    user_id = get_user_internal_id(callback.from_user.id)
-    if not user_id:
-        await callback.answer("❌ Ошибка пользователя", show_alert=True)
-        return
+    if order_id:
+        # Переиспользуем существующий ордер (меняем тариф и тип оплаты)
+        update_order_tariff(order_id, tariff_id, payment_type='stars')
+        
+    else:
+        # Новая логика (если вдруг старый callback или прямой вызов)
+        user_id = get_user_internal_id(callback.from_user.id)
+        if not user_id:
+            await callback.answer("❌ Ошибка пользователя", show_alert=True)
+            return
 
-    # Создаем заказ для нового ключа (vpn_key_id=None)
-    _, order_id = create_pending_order(
-        user_id=user_id,
-        tariff_id=tariff_id,
-        payment_type='stars',
-        vpn_key_id=None 
-    )
+        _, order_id = create_pending_order(
+            user_id=user_id,
+            tariff_id=tariff_id,
+            payment_type='stars',
+            vpn_key_id=None 
+        )
 
     # Отправляем инвойс c order_id в payload
     await callback.message.answer_invoice(
         title=f"VPN ключ на {duration}",
         description=f"Доступ к VPN-сервису на {duration}. 1 ключ = 1 устройство.",
-        payload=order_id, # Просто order_id, как и в крипте (или можно stars:order_id)
+        payload=order_id, # Просто order_id, как и в крипте
         currency="XTR",  # Telegram Stars
         prices=[LabeledPrice(label=f"VPN {duration}", amount=tariff['price_stars'])],
     )

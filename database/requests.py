@@ -967,7 +967,7 @@ def get_user_payments_stats(user_id: int) -> Dict[str, Any]:
                 COALESCE(SUM(amount_stars), 0) as total_amount_stars,
                 MAX(paid_at) as last_payment_at
             FROM payments
-        WHERE user_id = ?
+            WHERE user_id = ? AND status = 'paid'
         """, (user_id,))
         stats = dict(cursor.fetchone())
         
@@ -1122,21 +1122,30 @@ def get_daily_payments_stats() -> Dict[str, Any]:
     
     Returns:
         Словарь со статистикой:
-        - count: количество платежей
-        - total_cents: сумма в центах
-        - total_stars: сумма в звёздах
+        - paid_count: количество успешных платежей
+        - paid_cents: сумма успешных в центах
+        - paid_stars: сумма успешных в звёздах
+        - pending_count: количество ожидающих (неоплаченных)
     """
     with get_db() as conn:
+        # 1. Успешные (paid) за сутки
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
                 COALESCE(SUM(amount_cents), 0) as total_cents,
                 COALESCE(SUM(amount_stars), 0) as total_stars
             FROM payments
-            WHERE paid_at >= datetime('now', '-1 day')
+            WHERE status = 'paid' 
+            AND paid_at >= datetime('now', '-1 day')
         """)
-        row = cursor.fetchone()
-        return dict(row) if row else {'count': 0, 'total_cents': 0, 'total_stars': 0}
+        paid_row = cursor.fetchone()
+        
+        return {
+            'paid_count': paid_row['count'] if paid_row else 0,
+            'paid_cents': paid_row['total_cents'] if paid_row else 0,
+            'paid_stars': paid_row['total_stars'] if paid_row else 0,
+            'pending_count': 0 
+        }
 
 
 def get_keys_stats() -> Dict[str, int]:
@@ -1224,8 +1233,8 @@ def _int_to_base62(num: int) -> str:
 
 def create_pending_order(
     user_id: int,
-    tariff_id: int,
-    payment_type: str,
+    tariff_id: Optional[int],
+    payment_type: Optional[str],
     vpn_key_id: Optional[int] = None
 ) -> tuple[int, str]:
     """
@@ -1237,32 +1246,33 @@ def create_pending_order(
     
     Args:
         user_id: Внутренний ID пользователя
-        tariff_id: ID тарифа
-        payment_type: 'crypto' или 'stars'
+        tariff_id: ID тарифа (может быть None для крипты)
+        payment_type: 'crypto', 'stars' или None (если выбирается при оплате)
         vpn_key_id: ID ключа для продления (None для нового ключа)
     
     Returns:
         Кортеж (payment_id, order_id)
     """
-    tariff = get_tariff_by_id(tariff_id)
+    tariff = get_tariff_by_id(tariff_id) if tariff_id else None
     
     with get_db() as conn:
         # Шаг 1: создаём запись с временным order_id
         cursor = conn.execute("""
             INSERT INTO payments 
             (user_id, tariff_id, order_id, payment_type, vpn_key_id, 
-             amount_cents, amount_stars, period_days, status)
-            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, 'pending')
+             amount_cents, amount_stars, period_days, status, paid_at)
+            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, 'pending', NULL)
         """, (
             user_id, tariff_id, payment_type, vpn_key_id,
             tariff['price_cents'] if tariff else 0,
             tariff['price_stars'] if tariff else 0,
-            tariff['duration_days'] if tariff else 0
+            tariff['duration_days'] if tariff else None
         ))
         payment_id = cursor.lastrowid
         
         # Шаг 2: генерируем order_id из ID записи (base62)
-        order_id = _int_to_base62(payment_id)
+        # Добавляем префикс '00' для исключения конфликтов с внешними ID
+        order_id = "00" + _int_to_base62(payment_id)
         
         # Шаг 3: обновляем order_id
         conn.execute("""
@@ -1271,6 +1281,50 @@ def create_pending_order(
         
         logger.info(f"Создан pending order: {order_id} (id={payment_id}, user={user_id}, type={payment_type})")
         return payment_id, order_id
+
+
+def create_paid_order_external(
+    order_id: str,
+    user_id: int,
+    tariff_id: int,
+    payment_type: str,
+    amount_cents: int,
+    amount_stars: int,
+    period_days: int
+) -> bool:
+    """
+    Создаёт сразу оплаченный ордер (для внешних платежей).
+    
+    Используется когда оплата пришла извне (без предварительного pending order).
+    
+    Args:
+        order_id: Внешний ID ордера
+        user_id: ID пользователя
+        tariff_id: ID тарифа
+        payment_type: Тип оплаты ('crypto', 'stars')
+        amount_cents: Сумма в центах
+        amount_stars: Сумма в звёздах
+        period_days: Срок действия
+        
+    Returns:
+        True если успешно
+    """
+    try:
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO payments 
+                (user_id, tariff_id, order_id, payment_type, vpn_key_id, 
+                 amount_cents, amount_stars, period_days, status, paid_at)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 'pending', NULL)
+            """, (
+                user_id, tariff_id, order_id, payment_type,
+                amount_cents, amount_stars, period_days
+            ))
+            logger.info(f"Создан external pending order: {order_id} (user={user_id})")
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка создания external order {order_id}: {e}")
+        return False
 
 
 def find_order_by_order_id(order_id: str) -> Optional[Dict[str, Any]]:
@@ -1317,16 +1371,14 @@ def complete_order(order_id: str) -> bool:
         return success
 
 
-def update_order_tariff(order_id: str, tariff_id: int) -> bool:
+def update_order_tariff(order_id: str, tariff_id: int, payment_type: Optional[str] = None) -> bool:
     """
-    Обновляет тариф и суммы в ордере (для крипто-платежей).
-    
-    Используется когда тариф выбирается пользователем в криптопроцессинге,
-    и отличается от того, который был указан при создании ордера (placeholder).
+    Обновляет тариф и суммы в ордере.
     
     Args:
         order_id: ID ордера
         tariff_id: ID нового тарифа
+        payment_type: Тип оплаты (опционально)
     
     Returns:
         True если успешно
@@ -1341,18 +1393,43 @@ def update_order_tariff(order_id: str, tariff_id: int) -> bool:
             SET tariff_id = ?, 
                 amount_cents = ?, 
                 amount_stars = ?, 
-                period_days = ?
+                period_days = ?,
+                payment_type = COALESCE(?, payment_type)
             WHERE order_id = ?
         """, (
             tariff_id, 
             tariff['price_cents'], 
             tariff['price_stars'], 
             tariff['duration_days'], 
+            payment_type,
             order_id
         ))
         success = cursor.rowcount > 0
         if success:
-            logger.info(f"Order {order_id} обновлен на тариф {tariff_id}")
+            logger.info(f"Order {order_id} обновлен на тариф {tariff_id} (тип: {payment_type})")
+        return success
+
+
+def update_payment_type(order_id: str, payment_type: str) -> bool:
+    """
+    Обновляет тип оплаты в ордере.
+    
+    Args:
+        order_id: ID ордера
+        payment_type: Новый тип оплаты ('crypto', 'stars')
+        
+    Returns:
+        True если успешно
+    """
+    with get_db() as conn:
+        cursor = conn.execute("""
+            UPDATE payments 
+            SET payment_type = ?
+            WHERE order_id = ?
+        """, (payment_type, order_id))
+        success = cursor.rowcount > 0
+        if success:
+             logger.info(f"Order {order_id} тип оплаты обновлен на {payment_type}")
         return success
 
 
@@ -1386,12 +1463,72 @@ def create_vpn_key(
     days: int
 ) -> int:
     """
-    Создаёт VPN-ключ (обертка над create_vpn_key_admin).
+    Создаёт полностью настроенный VPN-ключ (обертка над create_vpn_key_admin).
+    Для создания черновика используйте create_initial_vpn_key.
     """
     return create_vpn_key_admin(
         user_id, server_id, tariff_id, panel_inbound_id, 
         panel_email, client_uuid, days
     )
+
+
+def create_initial_vpn_key(
+    user_id: int,
+    tariff_id: int,
+    days: int
+) -> int:
+    """
+    Создаёт начальный (черновой) VPN-ключ без привязки к серверу.
+    Ключ создается сразу после оплаты.
+    
+    Args:
+        user_id: ID пользователя
+        tariff_id: ID тарифа
+        days: Срок действия (дней)
+        
+    Returns:
+        ID созданного ключа
+    """
+    with get_db() as conn:
+        cursor = conn.execute("""
+            INSERT INTO vpn_keys 
+            (user_id, tariff_id, expires_at, created_at)
+            VALUES (?, ?, datetime('now', '+' || ? || ' days'), CURRENT_TIMESTAMP)
+        """, (user_id, tariff_id, days))
+        return cursor.lastrowid
+
+
+def update_vpn_key_config(
+    key_id: int,
+    server_id: int,
+    panel_inbound_id: int,
+    panel_email: str,
+    client_uuid: str
+) -> bool:
+    """
+    Обновляет конфигурацию ключа (привязывает к серверу).
+    Используется для завершения настройки ключа.
+    
+    Args:
+        key_id: ID ключа
+        server_id: ID сервера
+        panel_inbound_id: ID inbound на панели
+        panel_email: Email на панели
+        client_uuid: UUID клиента
+        
+    Returns:
+        True если успешно
+    """
+    with get_db() as conn:
+        cursor = conn.execute("""
+            UPDATE vpn_keys 
+            SET server_id = ?,
+                panel_inbound_id = ?,
+                panel_email = ?,
+                client_uuid = ?
+            WHERE id = ?
+        """, (server_id, panel_inbound_id, panel_email, client_uuid, key_id))
+        return cursor.rowcount > 0
 
 
 
@@ -1451,7 +1588,10 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
                 uuid = key['client_uuid']
                 key['display_name'] = f"{uuid[:4]}...{uuid[-4:]}"
             else:
-                key['display_name'] = f"Ключ #{key['id']}"
+                if not key['server_id']:
+                     key['display_name'] = f"Ключ #{key['id']} (Не настроен)"
+                else:
+                     key['display_name'] = f"Ключ #{key['id']}"
             keys.append(key)
         
         return keys
@@ -1498,7 +1638,10 @@ def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str
             uuid = key['client_uuid']
             key['display_name'] = f"{uuid[:4]}...{uuid[-4:]}"
         else:
-            key['display_name'] = f"Ключ #{key['id']}"
+            if not key['server_id']:
+                 key['display_name'] = f"Ключ #{key['id']} (Не настроен)"
+            else:
+                 key['display_name'] = f"Ключ #{key['id']}"
         
         return key
 

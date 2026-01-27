@@ -59,13 +59,14 @@ def help_kb(news_link: str, support_link: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def buy_key_kb(crypto_url: str = None, stars_enabled: bool = False) -> InlineKeyboardMarkup:
+def buy_key_kb(crypto_url: str = None, stars_enabled: bool = False, order_id: str = None) -> InlineKeyboardMarkup:
     """
     Клавиатура для страницы «Купить ключ».
     
     Args:
         crypto_url: URL для оплаты криптой (если настроен)
         stars_enabled: Показывать ли кнопку оплаты Stars
+        order_id: ID созданного ордера (для оптимизации Stars)
     """
     builder = InlineKeyboardBuilder()
     
@@ -78,8 +79,9 @@ def buy_key_kb(crypto_url: str = None, stars_enabled: bool = False) -> InlineKey
     
     # Stars — переход к выбору тарифа
     if stars_enabled:
+        cb_data = f"pay_stars:{order_id}" if order_id else "pay_stars"
         builder.row(
-            InlineKeyboardButton(text="⭐ Оплатить звёздами", callback_data="pay_stars")
+            InlineKeyboardButton(text="⭐ Оплатить звёздами", callback_data=cb_data)
         )
     
     # Кнопка «На главную» — последний ряд
@@ -90,22 +92,25 @@ def buy_key_kb(crypto_url: str = None, stars_enabled: bool = False) -> InlineKey
     return builder.as_markup()
 
 
-def tariff_select_kb(tariffs: list, back_callback: str = "buy_key") -> InlineKeyboardMarkup:
+def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: str = None) -> InlineKeyboardMarkup:
     """
     Клавиатура выбора тарифа для оплаты Stars.
     
     Args:
         tariffs: Список тарифов из БД
         back_callback: Callback для кнопки «Назад»
+        order_id: ID существующего ордера (для оптимизации)
     """
     builder = InlineKeyboardBuilder()
     
     for tariff in tariffs:
-        # Кнопка тарифа
+        # Если есть order_id, передаем его
+        cb_data = f"stars_pay:{tariff['id']}:{order_id}" if order_id else f"stars_pay:{tariff['id']}"
+        
         builder.row(
             InlineKeyboardButton(
                 text=f"⭐ {tariff['name']} — {tariff['price_stars']} звёзд",
-                callback_data=f"stars_pay:{tariff['id']}"
+                callback_data=cb_data
             )
         )
     
@@ -187,26 +192,36 @@ def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def key_manage_kb(key_id: int) -> InlineKeyboardMarkup:
+def key_manage_kb(key_id: int, is_unconfigured: bool = False) -> InlineKeyboardMarkup:
     """
     Клавиатура управления ключом.
     
     Args:
         key_id: ID ключа
+        is_unconfigured: True, если ключ не настроен (Draft)
     """
     builder = InlineKeyboardBuilder()
     
-    # Первый ряд: показать и продлить
-    builder.row(
-        InlineKeyboardButton(text="📋 Показать ключ", callback_data=f"key_show:{key_id}"),
-        InlineKeyboardButton(text="📈 Продлить", callback_data=f"key_renew:{key_id}")
-    )
-    
-    # Второй ряд: заменить и переименовать
-    builder.row(
-        InlineKeyboardButton(text="🔄 Заменить", callback_data=f"key_replace:{key_id}"),
-        InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"key_rename:{key_id}")
-    )
+    if is_unconfigured:
+        # Для ненастроенного ключа предлагаем настройку
+        builder.row(
+            InlineKeyboardButton(text="⚙️ Настроить", callback_data=f"key_replace:{key_id}"),
+            InlineKeyboardButton(text="📈 Продлить", callback_data=f"key_renew:{key_id}")
+        )
+        builder.row(
+            InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"key_rename:{key_id}")
+        )
+    else:
+        # Стандартные кнопки
+        builder.row(
+            InlineKeyboardButton(text="📋 Показать ключ", callback_data=f"key_show:{key_id}"),
+            InlineKeyboardButton(text="📈 Продлить", callback_data=f"key_renew:{key_id}")
+        )
+        
+        builder.row(
+            InlineKeyboardButton(text="🔄 Заменить", callback_data=f"key_replace:{key_id}"),
+            InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"key_rename:{key_id}")
+        )
     
     # ТРЕТИЙ ряд (унифицированный): Инструкция и Мои ключи
     builder.row(
@@ -225,13 +240,14 @@ def key_show_kb(key_id: int = None) -> InlineKeyboardMarkup:
     return key_issued_kb()
 
 
-def renew_tariff_select_kb(tariffs: list, key_id: int) -> InlineKeyboardMarkup:
+def renew_tariff_select_kb(tariffs: list, key_id: int, order_id: str = None) -> InlineKeyboardMarkup:
     """
     Клавиатура выбора тарифа для продления ключа (для Stars).
     
     Args:
         tariffs: Список активных тарифов
         key_id: ID ключа для продления
+        order_id: ID ордера (для оптимизации)
     """
     builder = InlineKeyboardBuilder()
     
@@ -239,10 +255,15 @@ def renew_tariff_select_kb(tariffs: list, key_id: int) -> InlineKeyboardMarkup:
         # Цена в Stars
         price_stars = tariff['price_stars']
         
+        # Формируем callback: renew_pay_stars:KEY_ID:TARIFF_ID[:ORDER_ID]
+        cb_data = f"renew_pay_stars:{key_id}:{tariff['id']}"
+        if order_id:
+            cb_data += f":{order_id}"
+            
         builder.row(
             InlineKeyboardButton(
                 text=f"⭐ {tariff['name']} — {price_stars} звёзд",
-                callback_data=f"renew_stars:{key_id}:{tariff['id']}"
+                callback_data=cb_data
             )
         )
     

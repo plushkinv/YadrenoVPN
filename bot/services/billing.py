@@ -129,15 +129,73 @@ def parse_crypto_callback(start_param: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def process_crypto_payment(start_param: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
-    Обрабатывает платёж от криптопроцессинга.
+    Универсальная обработка успешного ордера (Crypto или Stars).
+    Закрывает ордер, продлевает ключ или создаёт черновик.
     
-    Args:
-        start_param: Параметр start из deep link (bill1-...)
-        
     Returns:
-        (успех, сообщение для пользователя, словарь заказа)
+        (success, message_text, order_data)
+    """
+    from database.requests import (
+        is_order_already_paid, find_order_by_order_id, complete_order, 
+        extend_vpn_key, create_initial_vpn_key, update_payment_key_id
+    )
+    
+    # 1. Проверка на дубликат (на всякий случай, если вызывающий не проверил)
+    if is_order_already_paid(order_id):
+        # Получаем ордер чтобы вернуть контекст
+        order = find_order_by_order_id(order_id)
+        return True, "✅ Этот платёж уже был обработан ранее.", order
+
+    # 2. Поиск ордера
+    order = find_order_by_order_id(order_id)
+    if not order:
+        logger.warning(f"Ордер не найден: {order_id}")
+        return False, "⚠️ Ордер не найден. Обратитесь в поддержку.", None
+    
+    # 3. Закрываем ордер
+    if not complete_order(order_id):
+        # Если статус уже paid, process_payment_order вызван повторно - обрабатываем как успех
+        if order['status'] == 'paid':
+             pass
+        else:
+             return False, "❌ Ошибка обновления статуса платежа.", order
+    
+    logger.info(f"Order {order_id} processed (paid)")
+
+    # 4. Обработка ключа (Продление или Создание)
+    if order['vpn_key_id']:
+        # Продление
+        days = order.get('period_days') or order.get('duration_days')
+        if days and extend_vpn_key(order['vpn_key_id'], days):
+            logger.info(f"Ключ {order['vpn_key_id']} продлён на {days} дней (order={order_id})")
+            return True, f"✅ Оплата прошла успешно!\n\nВаш ключ продлён на {days} дней.", order
+        else:
+            logger.error(f"Не удалось продлить ключ {order['vpn_key_id']} после оплаты!")
+            return True, "✅ Оплата принята!\n\n⚠️ Возникла проблема с продлением. Мы разберёмся.", order
+    else:
+        # Новый ключ (Черновик)
+        try:
+            days = order.get('period_days') or order.get('duration_days') or 30
+            # Создаем черновик
+            key_id = create_initial_vpn_key(order['user_id'], order['tariff_id'], days)
+            
+            # Привязываем к платежу
+            update_payment_key_id(order_id, key_id)
+            order['vpn_key_id'] = key_id # Обновляем объект
+            
+            logger.info(f"Создан черновик ключа {key_id} для заказа {order_id}")
+            return True, "✅ Оплата прошла успешно!", order
+            
+        except Exception as e:
+            logger.error(f"Ошибка создания черновика ключа: {e}")
+            return True, "✅ Оплата принята, но произошла ошибка при создании ключа. Обратитесь в поддержку.", order
+
+
+def process_crypto_payment(start_param: str, user_id: Optional[int] = None) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    """
+    Обрабатывает платёж от криптопроцессинга (parse + verify + confirm).
     """
     # Парсим callback
     parsed = parse_crypto_callback(start_param)
@@ -156,59 +214,84 @@ def process_crypto_payment(start_param: str) -> Tuple[bool, str, Optional[Dict[s
     
     order_id = parsed['order_id']
     
-    # Проверяем, не был ли уже обработан
-    if is_order_already_paid(order_id):
-        # Если оплачен, но возвращаем успех чтобы показать меню (если это редирект)
-        # Находим заказ чтобы вернуть контекст
-        order = find_order_by_order_id(order_id)
-        return True, "✅ Этот платёж уже был обработан ранее!", order
-    
-    # Находим ордер
+    # --- ЛОГИКА ОБРАБОТКИ ОРДЕРОВ (Внешние/Внутренние) ---
+    is_internal_order = order_id.startswith("00")
     order = find_order_by_order_id(order_id)
-    if not order:
-        logger.warning(f"Ордер не найден: {order_id}")
-        return False, "❌ Платёж не найден. Возможно, он устарел.", None
     
-    if order['status'] == 'expired':
-        return False, "❌ Срок действия платежа истёк. Создайте новый.", order
-    
-    # Если тариф указан в callback и отличается (или ордер создан без тарифа)
-    # Пытаемся обновить тариф в ордере
-    if parsed.get('tariff') and parsed['tariff'] != '_':
+    # Если это внутренний ордер, но пользователь оплатил другой тариф (выбрал в UI процессинга)
+    if order and parsed.get('tariff') and parsed['tariff'] != '_':
         try:
-            tariff_external_id = int(parsed['tariff'])
-            # Ищем наш тариф по external_id
+            tariff_ext_id = int(parsed['tariff'])
             from database.requests import get_tariff_by_external_id, update_order_tariff
+            real_tariff = get_tariff_by_external_id(tariff_ext_id)
             
-            tariff = get_tariff_by_external_id(tariff_external_id)
-            if tariff:
-                update_order_tariff(order_id, tariff['id'])
-                # Обновляем локальную копию ордера для корректного отображения
-                order['tariff_id'] = tariff['id']
-                order['duration_days'] = tariff['duration_days']
-                order['period_days'] = tariff['duration_days']
-                order['amount_cents'] = tariff['price_cents']
-                order['amount_stars'] = tariff['price_stars']
+            # Если тариф найден и он отличается от того, что в ордере (или тарифа нет)
+            if real_tariff and (real_tariff['id'] != order['tariff_id'] or order.get('payment_type') != 'crypto'):
+                logger.info(f"Обновление тарифа ордера {order_id}: {order['tariff_id']} -> {real_tariff['id']} (из callback)")
+                if update_order_tariff(order_id, real_tariff['id'], payment_type='crypto'):
+                    # Обновляем локальный объект order, чтобы дальше логика работала с новыми данными
+                    order['tariff_id'] = real_tariff['id']
+                    order['period_days'] = real_tariff['duration_days']
+                    order['duration_days'] = real_tariff['duration_days'] # На всякий случай
+                    order['payment_type'] = 'crypto'
         except Exception as e:
-            logger.error(f"Ошибка обновления тарифа из callback: {e}")
-
-    # Завершаем ордер
-    if not complete_order(order_id):
-        return False, "❌ Ошибка обработки платежа. Обратитесь в поддержку.", order
+            logger.error(f"Не удалось обновить тариф из callback: {e}")
     
-    # Продлеваем ключ если это продление
-    if order['vpn_key_id']:
-        days = order['duration_days'] or order['period_days']
-        if days and extend_vpn_key(order['vpn_key_id'], days):
-            logger.info(f"Ключ {order['vpn_key_id']} продлён на {days} дней (order={order_id})")
-            return True, f"✅ Оплата прошла успешно!\n\nВаш ключ продлён на {days} дней.", order
-        else:
-            # Деньги приняты, но продление не удалось — нужно уведомить админа
-            logger.error(f"Не удалось продлить ключ {order['vpn_key_id']} после оплаты!")
-            return True, "✅ Оплата принята!\n\n⚠️ Возникла проблема с продлением. Мы разберёмся и свяжемся с вами.", order
-    else:
-        # Новый ключ — возвращаем успех, ключ будет создан в хендлере
-        return True, "✅ Оплата прошла успешно!", order
+    if not order:
+        if is_internal_order:
+             return False, "❌ Ордер не найден в системе.", None
+        
+        # Внешний ордер -> Создаем PAID order в базе ПЕРЕД обработкой
+        if not user_id:
+             return False, "⚠️ Ошибка обработки внешнего заказа (нет user_id).", None
+        
+        logger.info(f"Новый внешний ордер: {order_id}")
+        
+        # Нам нужен тариф для создания ордера
+        tariff_id = None
+        amount_cents = 0
+        amount_stars = 0
+        period_days = 30 # Default
+        
+        if parsed.get('tariff') and parsed['tariff'] != '_':
+            try:
+                tariff_external_id = int(parsed['tariff'])
+                from database.requests import get_tariff_by_external_id
+                tariff = get_tariff_by_external_id(tariff_external_id)
+                if tariff:
+                    tariff_id = tariff['id']
+                    amount_cents = tariff['price_cents']
+                    amount_stars = tariff['price_stars']
+                    period_days = tariff['duration_days']
+            except Exception as e:
+                logger.error(f"Ошибка получения тарифа для внешнего ордера: {e}")
+        
+        # Если тариф не определен, мы не можем создать ордер корректно
+        if not tariff_id:
+             logger.error(f"Внешний ордер {order_id} без валидного тарифа!")
+             return False, "❌ Ошибка: Неизвестный тариф в платеже.", None
+             
+        # Используем цену из callback если она там есть (PRICE)
+        if parsed.get('price') and parsed['price'] > 0:
+            amount_cents = parsed['price']
+            
+        from database.requests import create_paid_order_external
+        
+        success = create_paid_order_external(
+            order_id=order_id,
+            user_id=user_id,
+            tariff_id=tariff_id,
+            payment_type='crypto',
+            amount_cents=amount_cents,
+            amount_stars=amount_stars,
+            period_days=period_days
+        )
+        
+        if not success:
+             return False, "❌ Ошибка сохранения внешнего заказа.", None
+    
+    # Delegate to unified logic
+    return process_payment_order(order_id)
 
 
 def build_crypto_payment_url(
