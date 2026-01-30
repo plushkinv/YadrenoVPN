@@ -68,8 +68,9 @@ async def collect_daily_stats() -> str:
                 traffic = format_traffic(stats.get('total_traffic_bytes', 0))
                 cpu = stats.get('cpu_percent')
                 cpu_text = f", CPU: {cpu}%" if cpu else ""
+                online = stats.get('online_clients', 0)
                 servers_info.append(
-                    f"  🟢 *{server['name']}*: {stats.get('active_clients', 0)} клиентов, "
+                    f"  🟢 *{server['name']}*: {online} онлайн, "
                     f"трафик: {traffic}{cpu_text}"
                 )
             else:

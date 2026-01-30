@@ -1128,22 +1128,38 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         - pending_count: количество ожидающих (неоплаченных)
     """
     with get_db() as conn:
-        # 1. Успешные (paid) за сутки
+        # 1. Считаем USDT (crypto)
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
-                COALESCE(SUM(amount_cents), 0) as total_cents,
+                COALESCE(SUM(amount_cents), 0) as total_cents
+            FROM payments
+            WHERE status = 'paid' 
+            AND payment_type = 'crypto'
+            AND paid_at >= datetime('now', '-1 day')
+        """)
+        crypto_row = cursor.fetchone()
+        
+        # 2. Считаем Stars
+        cursor = conn.execute("""
+            SELECT 
+                COUNT(*) as count,
                 COALESCE(SUM(amount_stars), 0) as total_stars
             FROM payments
             WHERE status = 'paid' 
+            AND payment_type = 'stars'
             AND paid_at >= datetime('now', '-1 day')
         """)
-        paid_row = cursor.fetchone()
+        stars_row = cursor.fetchone()
+        
+        paid_count = (crypto_row['count'] if crypto_row else 0) + (stars_row['count'] if stars_row else 0)
+        total_cents = crypto_row['total_cents'] if crypto_row else 0
+        total_stars = stars_row['total_stars'] if stars_row else 0
         
         return {
-            'paid_count': paid_row['count'] if paid_row else 0,
-            'paid_cents': paid_row['total_cents'] if paid_row else 0,
-            'paid_stars': paid_row['total_stars'] if paid_row else 0,
+            'paid_count': paid_count,
+            'paid_cents': total_cents,
+            'paid_stars': total_stars,
             'pending_count': 0 
         }
 
@@ -1184,6 +1200,9 @@ def get_keys_stats() -> Dict[str, int]:
             'expired': total - active,
             'created_today': created_today
         }
+
+
+
 
 
 def get_new_users_count_today() -> int:

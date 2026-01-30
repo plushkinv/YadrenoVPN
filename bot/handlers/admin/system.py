@@ -364,9 +364,12 @@ async def edit_text_save(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка состояния.")
         return
     
-    # Используем md_text для сохранения форматирования (жирный, курсив и т.д.)
-    # md_text экранирует для MarkdownV2, поэтому выводить нужно с parse_mode="MarkdownV2"
-    new_value = message.md_text.strip() if message.md_text else message.text.strip()
+    # Для ссылок используем сырой текст, для остальных — md_text (чтобы сохранить форматирование)
+    if key in ('news_channel_link', 'support_channel_link'):
+        new_value = message.text.strip()
+    else:
+        # md_text экранирует для MarkdownV2
+        new_value = message.md_text.strip() if message.md_text else message.text.strip()
     
     # Валидация для ссылок: должны начинаться с http:// или https://
     if key in ('news_channel_link', 'support_channel_link'):
