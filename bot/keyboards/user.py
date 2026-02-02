@@ -59,6 +59,26 @@ def help_kb(news_link: str, support_link: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def support_kb(support_link: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура с кнопкой поддержки и возвратом на главную.
+    
+    Args:
+        support_link: Ссылка на поддержку
+    """
+    builder = InlineKeyboardBuilder()
+    
+    builder.row(
+        InlineKeyboardButton(text="💬 Support", url=support_link)
+    )
+    
+    builder.row(
+        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
+    )
+    
+    return builder.as_markup()
+
+
 def buy_key_kb(crypto_url: str = None, stars_enabled: bool = False, order_id: str = None) -> InlineKeyboardMarkup:
     """
     Клавиатура для страницы «Купить ключ».

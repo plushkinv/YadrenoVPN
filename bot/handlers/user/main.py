@@ -97,14 +97,31 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         from bot.handlers.user.payments import finalize_payment_ui
         
         # Обрабатываем платеж (вернет (success, text, order))
-        success, text, order = process_crypto_payment(args, user_id=user['id'])
-        
-        if success and order:
-            # Используем единый финализатор UI
-            await finalize_payment_ui(message, state, text, order)
-        else:
-             # Ошибка
-             await message.answer(text, parse_mode="Markdown")
+        try:
+            success, text, order = process_crypto_payment(args, user_id=user['id'])
+            
+            if success and order:
+                # Используем единый финализатор UI
+                await finalize_payment_ui(message, state, text, order)
+            else:
+                 # Обычная ошибка (возвращенная текстом)
+                 await message.answer(text, parse_mode="Markdown")
+                 
+        except Exception as e:
+            # Проверяем, является ли это нашей ошибкой
+            # Импортируем внутри, чтобы избежать циклических импортов если они есть, но здесь это безопасно
+            from bot.errors import TariffNotFoundError
+            
+            if isinstance(e, TariffNotFoundError):
+                 from bot.database.requests import get_setting
+                 from bot.keyboards.user import support_kb
+                 
+                 support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
+                 await message.answer(str(e), reply_markup=support_kb(support_link), parse_mode="Markdown")
+            else:
+                # Неизвестная ошибка
+                logger.exception(f"Ошибка обработки платежа: {e}")
+                await message.answer("❌ Произошла ошибка при обработке платежа.", parse_mode="Markdown")
         
         return
 

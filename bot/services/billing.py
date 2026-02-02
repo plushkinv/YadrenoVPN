@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
+
+
 def encode_base62(data: bytes) -> str:
     """
     Кодирует бинарные данные в Base62.
@@ -176,6 +178,11 @@ def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict[str, 
             return True, "✅ Оплата принята!\n\n⚠️ Возникла проблема с продлением. Мы разберёмся.", order
     else:
         # Новый ключ (Черновик)
+        if not order.get('tariff_id'):
+            logger.error(f"Ордер {order_id}: тариф не найден или неактивен в БД (received tariff_id could not be resolved).")
+            from bot.errors import TariffNotFoundError
+            raise TariffNotFoundError()
+        
         try:
             days = order.get('period_days') or order.get('duration_days') or 30
             # Создаем черновик
@@ -229,11 +236,9 @@ def process_crypto_payment(start_param: str, user_id: Optional[int] = None) -> T
             if real_tariff and (real_tariff['id'] != order['tariff_id'] or order.get('payment_type') != 'crypto'):
                 logger.info(f"Обновление тарифа ордера {order_id}: {order['tariff_id']} -> {real_tariff['id']} (из callback)")
                 if update_order_tariff(order_id, real_tariff['id'], payment_type='crypto'):
-                    # Обновляем локальный объект order, чтобы дальше логика работала с новыми данными
-                    order['tariff_id'] = real_tariff['id']
-                    order['period_days'] = real_tariff['duration_days']
-                    order['duration_days'] = real_tariff['duration_days'] # На всякий случай
-                    order['payment_type'] = 'crypto'
+                    # Перезагружаем ордер из базы, чтобы получить обновленные данные
+                    order = find_order_by_order_id(order_id)
+                    logger.info(f"Ордер {order_id} перезагружен: tariff_id={order['tariff_id']}, period_days={order.get('period_days')}")
         except Exception as e:
             logger.error(f"Не удалось обновить тариф из callback: {e}")
     
@@ -269,7 +274,8 @@ def process_crypto_payment(start_param: str, user_id: Optional[int] = None) -> T
         # Если тариф не определен, мы не можем создать ордер корректно
         if not tariff_id:
              logger.error(f"Внешний ордер {order_id} без валидного тарифа!")
-             return False, "❌ Ошибка: Неизвестный тариф в платеже.", None
+             from bot.errors import TariffNotFoundError
+             raise TariffNotFoundError()
              
         # Используем цену из callback если она там есть (PRICE)
         if parsed.get('price') and parsed['price'] > 0:

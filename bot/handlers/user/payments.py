@@ -45,18 +45,35 @@ async def handle_start_with_payment(message: Message, command: CommandObject, st
     user_id = user['id']
     
     # Обрабатываем платёж
-    success, response_text, order = process_crypto_payment(start_param, user_id=user_id)
-    
-    # Используем единую точку выхода UI
-    if success and order:
-        await finalize_payment_ui(message, state, response_text, order)
-    else:
-        from bot.keyboards.admin import home_only_kb
-        await message.answer(
-            response_text,
-            reply_markup=home_only_kb(),
-            parse_mode="Markdown"
-        )
+    try:
+        success, response_text, order = process_crypto_payment(start_param, user_id=user_id)
+        
+        # Используем единую точку выхода UI
+        if success and order:
+            await finalize_payment_ui(message, state, response_text, order)
+        else:
+            from bot.keyboards.admin import home_only_kb
+            await message.answer(
+                response_text,
+                reply_markup=home_only_kb(),
+                parse_mode="Markdown"
+            )
+            
+    except Exception as e:
+        from bot.errors import TariffNotFoundError
+        if isinstance(e, TariffNotFoundError):
+            from database.requests import get_setting
+            from bot.keyboards.user import support_kb
+            
+            support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
+            await message.answer(
+                str(e),
+                reply_markup=support_kb(support_link),
+                parse_mode="Markdown"
+            )
+        else:
+            logger.exception(f"Ошибка платежа: {e}")
+            await message.answer("❌ Ошибка обработки", parse_mode="Markdown")
 
 
 
@@ -193,20 +210,31 @@ async def successful_payment_handler(message: Message, state: FSMContext):
         order_id = payload
     
     # Обрабатываем платеж через единую функцию
-    success, text, order = process_payment_order(order_id)
-    
-    # Завершаем UI
-    if success and order:
-        await finalize_payment_ui(message, state, text, order)
-    else:
-        # Если ошибка (например, не найден ордер или дубль, но process_payment возвращает True для дублей)
-        # Если success=True, но order=None (например, дубль без контекста?)
-        # process_payment возвращает order даже для дублей
-        pass
+    try:
+        success, text, order = process_payment_order(order_id)
         
-    if not success:
-         from bot.keyboards.admin import home_only_kb
-         await message.answer(text, reply_markup=home_only_kb(), parse_mode="Markdown")
+        # Завершаем UI
+        if success and order:
+            await finalize_payment_ui(message, state, text, order)
+        else:
+             from bot.keyboards.admin import home_only_kb
+             await message.answer(text, reply_markup=home_only_kb(), parse_mode="Markdown")
+             
+    except Exception as e:
+        from bot.errors import TariffNotFoundError
+        if isinstance(e, TariffNotFoundError):
+            from database.requests import get_setting
+            from bot.keyboards.user import support_kb
+            
+            support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
+            await message.answer(
+                str(e),
+                reply_markup=support_kb(support_link),
+                parse_mode="Markdown"
+            )
+        else:
+            logger.exception(f"Ошибка обработки Stars платежа: {e}")
+            await message.answer("❌ Произошла ошибка при обработке платежа.", parse_mode="Markdown")
 
 
 async def finalize_payment_ui(message: Message, state: FSMContext, text: str, order: dict):
