@@ -13,3 +13,12 @@ AGENTS.md
 
 # База данных (создаётся автоматически при запуске)
 database/vpn_bot.db
+
+# Virtual Environment
+venv/
+env/
+.venv/
+.env/
+env*/
+venv*/
+.env
