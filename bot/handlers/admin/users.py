@@ -437,7 +437,8 @@ def _format_user_card(user: dict) -> tuple[str, any]:
         
         lines.append(f"  📊 Всего платежей: {total_payments}")
         if total_usd > 0:
-            lines.append(f"  💰 Сумма (крипто): ${total_usd:.2f}")
+            total_usd_str = f"{total_usd:g}".replace('.', ',')
+            lines.append(f"  💰 Сумма (крипто): ${total_usd_str}")
         if total_stars > 0:
             lines.append(f"  ⭐ Сумма (Stars): {total_stars}")
         lines.append(f"  📅 Последняя оплата: {last_payment}")
@@ -1033,13 +1034,16 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
     try:
         # Создаём клиента в панели 3X-UI
         client = get_client_from_server_data(server)
+        flow = await client.get_inbound_flow(inbound_id)
+        
         result = await client.add_client(
             inbound_id=inbound_id,
             email=email,
             total_gb=traffic_gb,
             expire_days=days,
             limit_ip=1,
-            tg_id=str(user_telegram_id)
+            tg_id=str(user_telegram_id),
+            flow=flow
         )
         
         client_uuid = result['uuid']

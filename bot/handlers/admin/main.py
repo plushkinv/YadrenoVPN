@@ -91,6 +91,7 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
+    await callback.answer()
     await state.set_state(AdminStates.admin_menu)
     
     text = await get_admin_stats_text()
@@ -100,7 +101,6 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
         reply_markup=admin_main_menu_kb(),
         parse_mode="Markdown"
     )
-    await callback.answer()
 
 
 # ============================================================================

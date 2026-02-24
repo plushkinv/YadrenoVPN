@@ -88,9 +88,10 @@ async def show_tariffs_list(callback: CallbackQuery, state: FSMContext):
         for tariff in tariffs:
             status = "🟢" if tariff['is_active'] else "🔴"
             price_usd = tariff['price_cents'] / 100
+            price_str = f"{price_usd:g}".replace('.', ',')
             lines.append(
                 f"{status} *{tariff['name']}* — "
-                f"${price_usd:.2f} / ⭐ {tariff['price_stars']} / "
+                f"${price_str} / ⭐ {tariff['price_stars']} / ₽ {tariff.get('price_rub', 0)} / "
                 f"{tariff['duration_days']} дн."
             )
             
@@ -119,11 +120,13 @@ async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext
     
     status_emoji = "🟢 Активен" if tariff['is_active'] else "🔴 Скрыт"
     price_usd = tariff['price_cents'] / 100
+    price_str = f"{price_usd:g}".replace('.', ',')
     
     lines = [
         f"📋 *{tariff['name']}*\n",
-        f"💰 Цена (USDT): `${price_usd:.2f}`",
+        f"💰 Цена (USDT): `${price_str}`",
         f"⭐ Цена (Stars): `{tariff['price_stars']}`",
+        f"💳 Цена (₽): `{tariff.get('price_rub', 0)}`",
         f"📅 Длительность: `{tariff['duration_days']} дней`",
     ]
     
@@ -200,6 +203,7 @@ ADD_TARIFF_STATES = [
     AdminStates.add_tariff_name,
     AdminStates.add_tariff_price_cents,
     AdminStates.add_tariff_price_stars,
+    AdminStates.add_tariff_price_rub,
     AdminStates.add_tariff_duration,
     AdminStates.add_tariff_external_id,
 ]
@@ -221,6 +225,7 @@ def get_add_step_state(step: int, include_crypto: bool) -> AdminStates:
         'name': AdminStates.add_tariff_name,
         'price_cents': AdminStates.add_tariff_price_cents,
         'price_stars': AdminStates.add_tariff_price_stars,
+        'price_rub': AdminStates.add_tariff_price_rub,
         'duration_days': AdminStates.add_tariff_duration,
         'external_id': AdminStates.add_tariff_external_id,
         'display_order': AdminStates.add_tariff_confirm,  # display_order пропускаем при добавлении
@@ -383,12 +388,14 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
         await state.set_state(AdminStates.add_tariff_confirm)
         
         price_usd = tariff_data['price_cents'] / 100
+        price_str = f"{price_usd:g}".replace('.', ',')
         
         lines = [
             "✅ *Все данные введены!*\n",
             f"📌 Название: `{tariff_data['name']}`",
-            f"💰 Цена (USDT): `${price_usd:.2f}`",
+            f"💰 Цена (USDT): `${price_str}`",
             f"⭐ Цена (Stars): `{tariff_data['price_stars']}`",
+            f"💳 Цена (₽): `{tariff_data.get('price_rub', 0)}`",
             f"📅 Длительность: `{tariff_data['duration_days']} дней`",
         ]
         
@@ -420,6 +427,11 @@ async def add_tariff_price_stars_handler(message: Message, state: FSMContext):
     await process_add_tariff_step(message, state)
 
 
+@router.message(AdminStates.add_tariff_price_rub)
+async def add_tariff_price_rub_handler(message: Message, state: FSMContext):
+    await process_add_tariff_step(message, state)
+
+
 @router.message(AdminStates.add_tariff_duration)
 async def add_tariff_duration_handler(message: Message, state: FSMContext):
     await process_add_tariff_step(message, state)
@@ -446,6 +458,7 @@ async def add_tariff_save(callback: CallbackQuery, state: FSMContext):
             duration_days=tariff_data['duration_days'],
             price_cents=tariff_data['price_cents'],
             price_stars=tariff_data['price_stars'],
+            price_rub=tariff_data.get('price_rub', 0),
             external_id=tariff_data.get('external_id'),
             display_order=0
         )

@@ -161,12 +161,15 @@ async def renew_stars_invoice(callback: CallbackQuery):
     
     # Отправляем invoice
     # payload содержит order_id для идентификации платежа
+    bot_info = await callback.bot.get_me()
+    bot_name = bot_info.first_name
+    
     await callback.message.answer_invoice(
-        title=f"Продление VPN: {tariff['name']}",
+        title=bot_name,
         description=f"Продление ключа «{key['display_name']}»: {tariff['name']}.",
         payload=f"renew:{order_id}",
         currency="XTR",
-        prices=[LabeledPrice(label=f"VPN {tariff['name']}", amount=tariff['price_stars'])],
+        prices=[LabeledPrice(label=f"Тариф {tariff['name']}", amount=tariff['price_stars'])],
         reply_markup=InlineKeyboardBuilder().row(
             InlineKeyboardButton(text=f"⭐️ Оплатить {tariff['price_stars']} XTR", pay=True)
         ).row(
@@ -205,7 +208,7 @@ async def successful_payment_handler(message: Message, state: FSMContext):
     if payload.startswith("renew:"):
         order_id = payload.split(":")[1]
     elif payload.startswith("vpn_key:"):
-        order_id = payment.telegram_payment_charge_id
+        order_id = payload.split(":")[1]
     else:
         order_id = payload
     
@@ -277,10 +280,12 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
         await start_new_key_config(message, state, order['order_id'], key_id)
     else:
         # Если это продление или готовый ключ
-        await message.answer(
-            text,
-            reply_markup=home_only_kb(),
-            parse_mode="Markdown"
+        from bot.handlers.user.main import show_key_details
+        await show_key_details(
+            telegram_id=user_id,
+            key_id=key_id,
+            send_function=message.answer,
+            prepend_text=text
         )
 
 
@@ -321,17 +326,15 @@ async def start_new_key_config(message: Message, state: FSMContext, order_id: st
 
 @router.callback_query(F.data.startswith("renew_invoice_cancel:"))
 async def renew_invoice_cancel_handler(callback: CallbackQuery):
-    """Отмена инвойса и возврат к выбору тарифа (Stars)."""
-    from bot.keyboards.user import renew_tariff_select_kb
-    from database.requests import get_key_details_for_user, get_all_tariffs
+    """Отмена инвойса и возврат к выбору способа оплаты."""
+    from bot.keyboards.user import renew_payment_method_kb
+    from database.requests import get_key_details_for_user, get_all_tariffs, is_crypto_configured, is_stars_enabled, is_cards_enabled, get_user_internal_id, create_pending_order, get_setting
+    from bot.services.billing import build_crypto_payment_url, extract_item_id_from_url
     
     parts = callback.data.split(":")
     key_id = int(parts[1])
-    # tariff_id = int(parts[2]) # не используется для возврата к списку
-    
     telegram_id = callback.from_user.id
     
-    # Пытаемся удалить сообщение с инвойсом
     try:
         await callback.message.delete()
     except Exception:
@@ -342,18 +345,36 @@ async def renew_invoice_cancel_handler(callback: CallbackQuery):
         await callback.answer("❌ Ключ не найден", show_alert=True)
         return
 
-    # Получаем тарифы
-    tariffs = get_all_tariffs(include_hidden=False)
+    crypto_configured = is_crypto_configured()
+    stars_enabled = is_stars_enabled()
+    cards_enabled = is_cards_enabled()
     
-    if not tariffs:
-         await callback.answer("Нет доступных тарифов", show_alert=True)
+    if not crypto_configured and not stars_enabled and not cards_enabled:
+         await callback.message.answer("😔 Способы оплаты временно недоступны.", parse_mode="Markdown")
          return
+         
+    crypto_url = None
+    if crypto_configured:
+        tariffs = get_all_tariffs(include_hidden=False)
+        if tariffs:
+            user_id = get_user_internal_id(telegram_id)
+            if user_id:
+                 _, order_id = create_pending_order(
+                    user_id=user_id,
+                    tariff_id=tariffs[0]['id'],
+                    payment_type='crypto',
+                    vpn_key_id=key_id
+                )
+                 item_url = get_setting('crypto_item_url')
+                 item_id = extract_item_id_from_url(item_url)
+                 if item_id:
+                     crypto_url = build_crypto_payment_url(item_id=item_id, invoice_id=order_id, tariff_external_id=None, price_cents=None)
 
     await callback.message.answer(
-        f"⭐ *Оплата звёздами*\n\n"
-        f"🔑 Ключ: *{escape_md(key['display_name'])}*\n\n"
-        "Выберите тариф для продления:",
-        reply_markup=renew_tariff_select_kb(tariffs, key_id),
+        f"💳 *Продление ключа*\n\n"
+        f"🔑 Ключ: *{key['display_name']}*\n\n"
+        "Выберите способ оплаты:",
+        reply_markup=renew_payment_method_kb(key_id, crypto_url, stars_enabled, cards_enabled),
         parse_mode="Markdown"
     )
     await callback.answer()
@@ -474,6 +495,9 @@ async def process_new_key_final(callback: CallbackQuery, state: FSMContext, serv
         # Конвертируем байты в ГБ (int) для API
         limit_gb = int(DEFAULT_TOTAL_GB / (1024**3))
         
+        # Определяем flow для inbound (xtls-rprx-vision для VLESS Reality TCP)
+        flow = await client.get_inbound_flow(inbound_id)
+        
         res = await client.add_client(
             inbound_id=inbound_id,
             email=panel_email,
@@ -481,7 +505,8 @@ async def process_new_key_final(callback: CallbackQuery, state: FSMContext, serv
             expire_days=days,
             limit_ip=1,
             enable=True,
-            tg_id=str(telegram_id)
+            tg_id=str(telegram_id),
+            flow=flow
         )
         
         client_uuid = res['uuid']
@@ -529,4 +554,231 @@ async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
         reply_markup=new_key_server_list_kb(servers),
         parse_mode="Markdown"
     )
+
+
+# ============================================================================
+# ОПЛАТА КАРТАМИ ЮКАССА
+# ============================================================================
+
+@router.callback_query(F.data.startswith("pay_cards"))
+async def pay_cards_select_tariff(callback: CallbackQuery):
+    """Выбор тарифа для оплаты Картой (Новый ключ)."""
+    from database.requests import get_all_tariffs
+    from bot.keyboards.user import tariff_select_kb
+    from bot.keyboards.admin import home_only_kb
+    
+    order_id = None
+    if ":" in callback.data:
+        order_id = callback.data.split(":")[1]
+
+    tariffs = get_all_tariffs(include_hidden=False)
+    
+    if not tariffs:
+        await callback.message.edit_text(
+            "💳 *Оплата картой*\n\n"
+            "😔 Нет доступных тарифов.\n\n"
+            "Попробуйте позже или обратитесь в поддержку.",
+            reply_markup=home_only_kb(),
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+    
+    await callback.message.edit_text(
+        "💳 *Оплата картой*\n\n"
+        "Выберите тариф:",
+        reply_markup=tariff_select_kb(tariffs, order_id=order_id, is_cards=True),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("cards_pay:"))
+async def pay_cards_invoice(callback: CallbackQuery):
+    """Создание инвойса для оплаты Картой (Новый ключ)."""
+    from aiogram.types import LabeledPrice
+    from database.requests import get_tariff_by_id, get_user_internal_id, create_pending_order, update_order_tariff, get_setting
+    
+    parts = callback.data.split(":")
+    tariff_id = int(parts[1])
+    order_id = parts[2] if len(parts) > 2 else None
+    
+    tariff = get_tariff_by_id(tariff_id)
+    if not tariff:
+        await callback.answer("❌ Тариф не найден", show_alert=True)
+        return
+        
+    provider_token = get_setting('cards_provider_token', '')
+    if not provider_token:
+        await callback.answer("❌ Провайдер платежей не настроен", show_alert=True)
+        return
+        
+        
+    days = tariff['duration_days']
+        
+    if order_id:
+        update_order_tariff(order_id, tariff_id, payment_type='cards')
+    else:
+        user_id = get_user_internal_id(callback.from_user.id)
+        if not user_id:
+            await callback.answer("❌ Ошибка пользователя", show_alert=True)
+            return
+
+        _, order_id = create_pending_order(
+            user_id=user_id,
+            tariff_id=tariff_id,
+            payment_type='cards',
+            vpn_key_id=None 
+        )
+
+    price_rub = float(tariff.get('price_rub') or 0)
+    price_kopecks = int(round(price_rub * 100))
+    if price_kopecks <= 0:
+        await callback.answer("❌ Ошибка: цена тарифа в рублях не задана.", show_alert=True)
+        return
+        
+    from aiogram.exceptions import TelegramBadRequest
+
+    try:
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        from aiogram.types import InlineKeyboardButton
+        
+        bot_info = await callback.bot.get_me()
+        bot_name = bot_info.first_name
+        
+        await callback.message.answer_invoice(
+            title=bot_name,
+            description=f"Оплата тарифа «{tariff['name']}» ({days} дн.).",
+            payload=f"vpn_key:{order_id}",
+            provider_token=provider_token,
+            currency="RUB",
+            prices=[LabeledPrice(label=f"Тариф {tariff['name']}", amount=price_kopecks)],
+            reply_markup=InlineKeyboardBuilder().row(
+                InlineKeyboardButton(text=f"💳 Оплатить {price_rub} ₽", pay=True)
+            ).row(
+                InlineKeyboardButton(text="❌ Отмена", callback_data="buy_key")
+            ).as_markup()
+        )
+    except TelegramBadRequest as e:
+        if "CURRENCY_TOTAL_AMOUNT_INVALID" in str(e):
+            logger.warning(f"Ошибка платежа (CARDS): Неправильная сумма (меньше лимита ~$1). Тариф: ID {tariff['id']}, Цена {price_rub} руб. Подробности: {e}")
+            await callback.answer("❌ Ошибка платежной системы. К сожалению, сумма тарифа меньше допустимого лимита эквайринга.", show_alert=True)
+            return
+        logger.exception("Ошибка при отправке инвойса картой (новый ключ).")
+        raise e
+    
+    await callback.message.delete()
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("renew_cards_tariff:"))
+async def renew_cards_select_tariff(callback: CallbackQuery):
+    """Выбор тарифа для продления (Картой)."""
+    from database.requests import get_key_details_for_user, get_all_tariffs
+    from bot.keyboards.user import renew_tariff_select_kb
+    
+    parts = callback.data.split(':')
+    key_id = int(parts[1])
+    order_id = parts[2] if len(parts) > 2 else None
+    
+    telegram_id = callback.from_user.id
+    
+    key = get_key_details_for_user(key_id, telegram_id)
+    if not key:
+        await callback.answer("❌ Ключ не найден", show_alert=True)
+        return
+
+    tariffs = get_all_tariffs(include_hidden=False)
+    
+    if not tariffs:
+         await callback.answer("Нет доступных тарифов", show_alert=True)
+         return
+
+    await callback.message.edit_text(
+        f"💳 *Оплата картой*\n\n"
+        f"🔑 Ключ: *{escape_md(key['display_name'])}*\n\n"
+        "Выберите тариф для продления:",
+        reply_markup=renew_tariff_select_kb(tariffs, key_id, order_id=order_id, is_cards=True),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("renew_pay_cards:"))
+async def renew_cards_invoice(callback: CallbackQuery):
+    """Инвойс для продления (Картой)."""
+    from aiogram.types import LabeledPrice
+    from database.requests import (
+        get_tariff_by_id, get_user_internal_id, 
+        create_pending_order, get_key_details_for_user,
+        update_order_tariff, get_setting
+    )
+    
+    parts = callback.data.split(":")
+    key_id = int(parts[1])
+    tariff_id = int(parts[2])
+    order_id = parts[3] if len(parts) > 3 else None
+    
+    tariff = get_tariff_by_id(tariff_id)
+    key = get_key_details_for_user(key_id, callback.from_user.id)
+    
+    if not tariff or not key:
+        await callback.answer("Ошибка тарифа или ключа", show_alert=True)
+        return
+        
+    provider_token = get_setting('cards_provider_token', '')
+    if not provider_token:
+        await callback.answer("❌ Провайдер платежей не настроен", show_alert=True)
+        return
+        
+    user_id = get_user_internal_id(callback.from_user.id)
+    if not user_id:
+        return
+
+    if order_id:
+         update_order_tariff(order_id, tariff_id, payment_type='cards')
+    else:
+         _, order_id = create_pending_order(
+            user_id=user_id,
+            tariff_id=tariff_id,
+            payment_type='cards',
+            vpn_key_id=key_id
+        )
+    
+    price_rub = float(tariff.get('price_rub') or 0)
+    price_kopecks = int(round(price_rub * 100))
+    if price_kopecks <= 0:
+        await callback.answer("❌ Ошибка: цена тарифа в рублях не задана.", show_alert=True)
+        return
+        
+    # Формируем клавиатуру оплаты
+    # У Telegram Payments кнопка "Оплатить X RUB" добавляется автоматически, 
+    # если не передать reply_markup. Но если мы хотим отмену, нужно
+    # передать pay=True первой кнопкой.
+    from aiogram.exceptions import TelegramBadRequest
+
+    try:
+        bot_info = await callback.bot.get_me()
+        bot_name = bot_info.first_name
+        
+        await callback.message.answer_invoice(
+            title=bot_name,
+            description=f"Продление ключа «{key['display_name']}»: {tariff['name']}.",
+            payload=f"renew:{order_id}",
+            provider_token=provider_token,
+            currency="RUB",
+            prices=[LabeledPrice(label=f"Тариф {tariff['name']}", amount=price_kopecks)],
+            reply_markup=InlineKeyboardBuilder().row(
+                InlineKeyboardButton(text=f"💳 Оплатить {tariff.get('price_rub', 0)} ₽", pay=True)
+            ).row(
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"renew_invoice_cancel:{key_id}:{tariff_id}")
+            ).as_markup()
+        )
+    except TelegramBadRequest as e:
+        if "CURRENCY_TOTAL_AMOUNT_INVALID" in str(e):
+            logger.warning(f"Ошибка платежа (CARDS_RENEW): Неправильная сумма (меньше лимита ~$1). Тариф: ID {tariff['id']}, Цена {price_rub} руб. Подробности: {e}")
+            await callback.answer("❌ Ошибка платежной системы. К сожалению, сумма тарифа меньше допустимого лимита эквайринга.", show_alert=True)
+            return
+        logger.exception("Ошибка при отправке инвойса картой (продление ключа).")
+        raise e
+    
+    await callback.message.delete()
+    await callback.answer()
 

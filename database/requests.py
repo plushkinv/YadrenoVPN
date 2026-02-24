@@ -339,6 +339,74 @@ def is_crypto_configured() -> bool:
     return bool(crypto_item_url and crypto_item_url.strip())
 
 
+def is_cards_enabled() -> bool:
+    """Проверяет, включена ли оплата картами (ЮКасса)."""
+    return get_setting('cards_enabled', '0') == '1'
+
+
+def is_cards_configured() -> bool:
+    """
+    Проверяет, настроена ли оплата картами.
+    
+    Returns:
+        True если оплата картами включена И есть provider_token
+    """
+    if not is_cards_enabled():
+        return False
+    token = get_setting('cards_provider_token')
+    return bool(token and token.strip())
+
+
+def is_trial_enabled() -> bool:
+    """Включена ли функция пробной подписки."""
+    return get_setting('trial_enabled', '0') == '1'
+
+
+def get_trial_tariff_id() -> Optional[int]:
+    """
+    Возвращает ID тарифа для пробной подписки.
+    
+    Returns:
+        ID тарифа или None если тариф не задан
+    """
+    val = get_setting('trial_tariff_id', '')
+    return int(val) if val and val.isdigit() else None
+
+
+def has_used_trial(telegram_id: int) -> bool:
+    """
+    Проверяет, использовал ли пользователь пробную подписку.
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        
+    Returns:
+        True если пользователь уже использовал пробный период
+    """
+    with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT used_trial FROM users WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        row = cursor.fetchone()
+        return bool(row['used_trial']) if row else False
+
+
+def mark_trial_used(user_id: int) -> None:
+    """
+    Помечает, что пользователь использовал пробную подписку.
+    
+    Args:
+        user_id: Внутренний ID пользователя (не Telegram ID)
+    """
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET used_trial = 1 WHERE id = ?",
+            (user_id,)
+        )
+        logger.info(f"Пользователь ID {user_id} использовал пробный период")
+
+
 # ============================================================================
 # ТАРИФЫ (tariffs)
 # ============================================================================
@@ -356,14 +424,14 @@ def get_all_tariffs(include_hidden: bool = False) -> List[Dict[str, Any]]:
     with get_db() as conn:
         if include_hidden:
             cursor = conn.execute("""
-                SELECT id, name, duration_days, price_cents, price_stars, 
+                SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
                        external_id, display_order, is_active
                 FROM tariffs
                 ORDER BY display_order, id
             """)
         else:
             cursor = conn.execute("""
-                SELECT id, name, duration_days, price_cents, price_stars, 
+                SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
                        external_id, display_order, is_active
                 FROM tariffs
                 WHERE is_active = 1
@@ -384,7 +452,7 @@ def get_tariff_by_id(tariff_id: int) -> Optional[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, duration_days, price_cents, price_stars, 
+            SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
                    external_id, display_order, is_active
             FROM tariffs
             WHERE id = ?
@@ -405,7 +473,7 @@ def get_tariff_by_external_id(external_id: int) -> Optional[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, duration_days, price_cents, price_stars, 
+            SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
                    external_id, display_order, is_active
             FROM tariffs
             WHERE external_id = ? AND is_active = 1
@@ -419,6 +487,7 @@ def add_tariff(
     duration_days: int,
     price_cents: int,
     price_stars: int,
+    price_rub: int = 0,
     external_id: Optional[int] = None,
     display_order: int = 0
 ) -> int:
@@ -430,6 +499,7 @@ def add_tariff(
         duration_days: Длительность в днях
         price_cents: Цена в центах (USDT * 100)
         price_stars: Цена в Telegram Stars
+        price_rub: Цена в рублях
         external_id: Номер тарифа в Ya.Seller (1-9), опционально
         display_order: Порядок отображения
         
@@ -438,10 +508,10 @@ def add_tariff(
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            INSERT INTO tariffs (name, duration_days, price_cents, price_stars, 
+            INSERT INTO tariffs (name, duration_days, price_cents, price_stars, price_rub, 
                                 external_id, display_order, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, 1)
-        """, (name, duration_days, price_cents, price_stars, external_id, display_order))
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+        """, (name, duration_days, price_cents, price_stars, price_rub, external_id, display_order))
         tariff_id = cursor.lastrowid
         logger.info(f"Добавлен тариф: {name} (ID: {tariff_id})")
         return tariff_id
@@ -458,7 +528,7 @@ def update_tariff(tariff_id: int, **fields) -> bool:
     Returns:
         True если обновление успешно
     """
-    allowed_fields = {'name', 'duration_days', 'price_cents', 'price_stars', 
+    allowed_fields = {'name', 'duration_days', 'price_cents', 'price_stars', 'price_rub',
                       'external_id', 'display_order', 'is_active'}
     fields = {k: v for k, v in fields.items() if k in allowed_fields}
     
@@ -546,7 +616,7 @@ def get_admin_tariff() -> Optional[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, duration_days, price_cents, price_stars, 
+            SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
                    external_id, display_order, is_active
             FROM tariffs
             WHERE name = 'Admin Tariff'
@@ -559,8 +629,8 @@ def get_admin_tariff() -> Optional[Dict[str, Any]]:
         
         # Если тариф не найден, создаём его
         cursor = conn.execute("""
-            INSERT INTO tariffs (name, duration_days, price_cents, price_stars, display_order, is_active)
-            VALUES ('Admin Tariff', 30, 0, 0, 999, 0)
+            INSERT INTO tariffs (name, duration_days, price_cents, price_stars, price_rub, display_order, is_active)
+            VALUES ('Admin Tariff', 30, 0, 0, 0, 999, 0)
         """)
         logger.info("Создан Admin Tariff")
         
@@ -570,6 +640,7 @@ def get_admin_tariff() -> Optional[Dict[str, Any]]:
             'duration_days': 30,
             'price_cents': 0,
             'price_stars': 0,
+            'price_rub': 0,
             'external_id': None,
             'display_order': 999,
             'is_active': 0

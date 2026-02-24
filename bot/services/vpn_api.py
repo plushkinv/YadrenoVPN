@@ -61,7 +61,8 @@ class XUIClient:
             # Unsafe=True важно для IP-адресов и самоподписанных сертификатов
             connector = aiohttp.TCPConnector(ssl=False)
             jar = aiohttp.CookieJar(unsafe=True)
-            self.session = aiohttp.ClientSession(connector=connector, cookie_jar=jar)
+            timeout = aiohttp.ClientTimeout(total=5)
+            self.session = aiohttp.ClientSession(connector=connector, cookie_jar=jar, timeout=timeout)
             self.is_authenticated = False
             logger.debug(f"Создана новая сессия для {self.server['name']}")
         return self.session
@@ -353,7 +354,8 @@ class XUIClient:
         expire_days: int = 30,
         limit_ip: int = 1,
         enable: bool = True,
-        tg_id: str = ""
+        tg_id: str = "",
+        flow: str = ""
     ) -> Dict[str, Any]:
         """
         Добавляет клиента в inbound.
@@ -366,6 +368,7 @@ class XUIClient:
             limit_ip: Ограничение по IP (1 = 1 устройство)
             enable: Активен ли клиент
             tg_id: Telegram ID для уведомлений панели
+            flow: Параметр flow (напр. 'xtls-rprx-vision' для VLESS Reality/TLS TCP)
             
         Returns:
             Словарь с данными созданного клиента
@@ -376,30 +379,76 @@ class XUIClient:
         if expire_days <= 0:
             raise ValueError("Срок действия ключа должен быть больше 0 дней")
 
+        # Определяем протокол inbound для правильной структуры клиента
+        protocol = ""
+        method = ""
+        try:
+            inbounds = await self.get_inbounds()
+            for ib in inbounds:
+                if ib['id'] == inbound_id:
+                    protocol = ib.get('protocol', '')
+                    settings_raw = ib.get('settings', '{}')
+                    if isinstance(settings_raw, str):
+                        settings = json.loads(settings_raw)
+                    else:
+                        settings = settings_raw
+                    method = settings.get('method', '')
+                    break
+        except Exception:
+            pass
+
         client_uuid = str(uuid.uuid4())
         
+        # Для Shadowsocks 2022 требуется base64 пароль определенной длины
+        if protocol == 'shadowsocks':
+            import base64
+            import os
+            if method.startswith('2022-'):
+                if '128' in method:
+                    client_uuid = base64.b64encode(os.urandom(16)).decode('utf-8')
+                else:
+                    client_uuid = base64.b64encode(os.urandom(32)).decode('utf-8')
+            else:
+                # Для обычного SS лучше тоже использовать base64 (надежнее, чем uuid с дефисами)
+                client_uuid = base64.urlsafe_b64encode(os.urandom(16)).decode('utf-8').rstrip('=')
+
         # Время истечения (timestamp в мс)
         expire_time = int((time.time() + expire_days * 86400) * 1000) if expire_days > 0 else 0
         
         # Лимит трафика (байты)
         total_bytes = total_gb * 1024 * 1024 * 1024 if total_gb > 0 else 0
         
+        # Базовая структура клиента
+        client_entry = {
+            "email": email,
+            "limitIp": limit_ip,
+            "totalGB": total_bytes,
+            "expiryTime": expire_time,
+            "enable": enable,
+            "tgId": tg_id,
+            "subId": uuid.uuid4().hex,
+            "reset": 30,
+        }
+        
+        # Протокол-зависимые поля
+        if protocol == 'trojan':
+            # Trojan использует password вместо id
+            client_entry["password"] = client_uuid
+            client_entry["flow"] = flow
+        elif protocol == 'shadowsocks':
+            # Shadowsocks — клиенты наследуют password/method из inbound
+            client_entry["password"] = client_uuid
+            client_entry["method"] = ""
+        else:
+            # VLESS / VMess — используют id (UUID)
+            client_entry["id"] = client_uuid
+            client_entry["flow"] = flow
+        
         # Структура для 3X-UI
         client_data = {
             "id": inbound_id,
             "settings": json.dumps({
-                "clients": [{
-                    "id": client_uuid,
-                    "email": email,
-                    "limitIp": limit_ip,
-                    "totalGB": total_bytes,
-                    "expiryTime": expire_time,
-                    "enable": enable,
-                    "tgId": tg_id,
-                    "tgId": tg_id,
-                    "subId": uuid.uuid4().hex,
-                    "reset": 30  # Сброс счётчика трафика каждые 30 дней
-                }]
+                "clients": [client_entry]
             })
         }
         
@@ -412,6 +461,36 @@ class XUIClient:
             "expire_time": expire_time,
             "total_gb": total_gb
         }
+    
+    async def get_inbound_flow(self, inbound_id: int) -> str:
+        """
+        Определяет нужное значение flow для inbound.
+        Flow = 'xtls-rprx-vision' нужен только для VLESS + TCP + (Reality или TLS).
+        """
+        try:
+            inbounds = await self.get_inbounds()
+            for inbound in inbounds:
+                if inbound['id'] == inbound_id:
+                    protocol = inbound.get('protocol', '')
+                    if protocol != 'vless':
+                        return ""
+                    
+                    stream_raw = inbound.get('streamSettings', '{}')
+                    if isinstance(stream_raw, str):
+                        stream = json.loads(stream_raw)
+                    else:
+                        stream = stream_raw
+                    
+                    network = stream.get('network', 'tcp')
+                    security = stream.get('security', 'none')
+                    
+                    # Flow нужен только для VLESS + TCP + (reality | tls)
+                    if network == 'tcp' and security in ('reality', 'tls'):
+                        return 'xtls-rprx-vision'
+                    return ""
+        except Exception as e:
+            logger.warning(f"Error determining flow for inbound {inbound_id}: {e}")
+        return ""
     
     async def get_client_stats(self, email: str) -> Optional[Dict[str, Any]]:
         """
@@ -565,6 +644,7 @@ class XUIClient:
                 if target_client:
                     # Нашли клиента, возвращаем конфигурацию
                     stream_settings = json.loads(inbound.get("streamSettings", "{}"))
+                    protocol = inbound.get("protocol", "vless")
                     
                     # DEBUG: логируем stream_settings для отладки Reality-параметров
                     logger.debug(f"Stream settings for {email}: {json.dumps(stream_settings, ensure_ascii=False)}")
@@ -572,17 +652,31 @@ class XUIClient:
                         reality = stream_settings.get("realitySettings", {})
                         logger.info(f"Reality settings for {email}: pbk={reality.get('publicKey')}, sni={reality.get('serverName')}, fp={reality.get('fingerprint')}, shortIds={reality.get('shortIds')}")
                     
-                    return {
-                        "uuid": target_client["id"],
-                        "email": target_client["email"],
+                    result = {
+                        "uuid": target_client.get("id", ""),
+                        "email": target_client.get("email", ""),
                         "port": inbound["port"],
-                        "protocol": inbound["protocol"],
-                        "host": self.server["host"], # Внешний адрес
+                        "protocol": protocol,
+                        "host": self.server["host"],
                         "stream_settings": stream_settings,
                         "inbound_name": inbound.get("remark", "VPN"),
                         "sub_id": target_client.get("subId", ""),
                         "flow": target_client.get("flow", "")
                     }
+                    
+                    # Протокол-специфичные поля
+                    if protocol == 'trojan':
+                        result["password"] = target_client.get("password", target_client.get("id", ""))
+                    elif protocol == 'shadowsocks':
+                        # Для Shadowsocks method хранится в inbound settings, 
+                        # а пароль у каждого клиента свой (с fallback на общие)
+                        result["method"] = settings.get("method", "aes-256-gcm")
+                        result["password"] = target_client.get("password", settings.get("password", ""))
+                        result["server_password"] = settings.get("password", "")
+                    elif protocol == 'vmess':
+                        result["security_method"] = target_client.get("security", "auto")
+                    
+                    return result
         except Exception as e:
             logger.error(f"Error getting client config for {email}: {e}")
         return None

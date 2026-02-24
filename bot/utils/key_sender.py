@@ -6,7 +6,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.services.vpn_api import get_client
-from bot.utils.key_generator import generate_vless_link, generate_vless_json, generate_qr_code
+from bot.utils.key_generator import generate_link, generate_json, generate_qr_code
 
 logger = logging.getLogger(__name__)
 
@@ -54,17 +54,17 @@ async def send_key_with_qr(
             return
 
         # 2. Генерируем данные
-        logger.info(f"Generating manual VLESS key for {key_data.get('panel_email')}")
-        vless_link = generate_vless_link(config)
+        logger.info(f"Generating key for {key_data.get('panel_email')} (protocol: {config.get('protocol', 'vless')})")
+        link = generate_link(config)
             
-        vless_json = generate_vless_json(config)
-        qr_bytes = generate_qr_code(vless_link)
+        json_config = generate_json(config)
+        qr_bytes = generate_qr_code(link)
         
         # 3. Формируем сообщение
         title = "✅ *Ваш новый VPN-ключ!*" if is_new else "📋 *Ваш VPN-ключ*"
         caption = (
             f"{title}\n\n"
-            f"```\n{vless_link}\n```\n"
+            f"```\n{link}\n```\n"
             "☝️ Нажмите на ссылку, чтобы скопировать.\n\n"
             "📱 *Инструкция:*\n"
             "1. Скопируйте ссылку или отсканируйте QR-код.\n"
@@ -77,7 +77,7 @@ async def send_key_with_qr(
              caption = (
                 f"{title}\n\n"
                 "👇 *Ваша ссылка доступа (нажмите для копирования):*\n"
-                f"`{vless_link}`\n\n"
+                f"`{link}`\n\n"
                 "📸 Отсканируйте QR-код для быстрого подключения."
              )
 
@@ -88,7 +88,7 @@ async def send_key_with_qr(
         send_func = messageable.answer_photo if hasattr(messageable, 'answer_photo') else messageable.message.answer_photo
         
         # Отправляем JSON конфиг файлом
-        config_file = BufferedInputFile(vless_json.encode('utf-8'), filename=f"vpn_config_{key_data.get('id', 'new')}.json")
+        config_file = BufferedInputFile(json_config.encode('utf-8'), filename=f"vpn_config_{key_data.get('id', 'new')}.json")
         
         await send_func(
             photo=photo,

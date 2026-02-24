@@ -33,6 +33,7 @@ class AdminStates(StatesGroup):
     
     # ========== Раздел «Оплаты» ==========
     payments_menu = State()          # Главный экран оплат
+    cards_setup_token = State()      # Ввод токена ЮКасса
     
     # ========== Настройка крипто-платежей ==========
     crypto_setup_url = State()       # Ввод ссылки на товар
@@ -41,6 +42,7 @@ class AdminStates(StatesGroup):
     
     # ========== Редактирование текстов ==========
     waiting_for_text = State()       # Ожидание ввода нового текста
+    waiting_for_trial_text = State() # Ожидание ввода текста пробной подписки
     
     # ========== Управление тарифами ==========
     tariffs_list = State()           # Список тарифов
@@ -50,10 +52,11 @@ class AdminStates(StatesGroup):
     add_tariff_name = State()        # Шаг 1: Название
     add_tariff_price_cents = State() # Шаг 2: Цена в центах
     add_tariff_price_stars = State() # Шаг 3: Цена в звёздах
-    add_tariff_duration = State()    # Шаг 4: Длительность
-    add_tariff_external_id = State() # Шаг 5: ID тарифа в Ya.Seller (1-9)
+    add_tariff_price_rub = State()   # Шаг 4: Цена в рублях (карты)
+    add_tariff_duration = State()    # Шаг 5: Длительность
+    add_tariff_external_id = State() # Шаг 6: ID тарифа в Ya.Seller (1-9)
     add_tariff_confirm = State()     # Подтверждение
-    
+
     # ========== Редактирование тарифа ==========
     edit_tariff = State()            # Редактирование с навигацией по параметрам
     
@@ -167,7 +170,7 @@ TARIFF_PARAMS = [
         ),
         "error": "Цена от $0.01 до $1000.00",
         "convert": lambda x: int(float(x.replace(',', '.')) * 100),
-        "format": lambda x: f"${x / 100:.2f}"
+        "format": lambda x: f"${(x / 100):g}".replace('.', ',')
     },
     {
         "key": "price_stars",
@@ -177,6 +180,16 @@ TARIFF_PARAMS = [
         "error": "Цена от 1 до 100000 Stars",
         "convert": int,
         "format": lambda x: f"⭐ {x}"
+    },
+    {
+        "key": "price_rub",
+        "label": "Цена (₽)",
+        "hint": "в целых рублях: минимум ~100 руб",
+        "validate": lambda x: x.isdigit() and 0 <= int(x) <= 100000,
+        "error": "Цена от 0 до 100000 рублей (целое число)",
+        "convert": int,
+        "format": lambda x: f"{x} ₽",
+        "help": "⚠️ *Важно:* Telegram не позволяет проводить платежи меньше $1. Минимальная цена в рублях должна быть не менее ~100 руб, иначе бот вернет ошибку. Чтобы скрыть тариф из раздела оплат картами - установите 0."
     },
     {
         "key": "duration_days",

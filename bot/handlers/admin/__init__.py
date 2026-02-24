@@ -11,6 +11,7 @@ from bot.handlers.admin.tariffs import router as tariffs_router
 from bot.handlers.admin.broadcast import router as broadcast_router
 from bot.handlers.admin.users import router as users_router
 from bot.handlers.admin.system import router as system_router
+from bot.handlers.admin.trial import router as trial_router
 
 # Создаём основной роутер для админки
 admin_router = Router()
@@ -23,4 +24,5 @@ admin_router.include_router(tariffs_router)
 admin_router.include_router(broadcast_router)
 admin_router.include_router(users_router)
 admin_router.include_router(system_router)
+admin_router.include_router(trial_router)
 

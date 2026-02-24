@@ -68,13 +68,39 @@ def admin_main_menu_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")
     )
     
+    # Пробная подписка
+    builder.row(
+        InlineKeyboardButton(text="🎁 Пробная подписка", callback_data="admin_trial")
+    )
+    
     # Настройки бота (обновление, остановка, тексты)
     builder.row(
         InlineKeyboardButton(text="⚙️ Настройки бота", callback_data="admin_bot_settings")
     )
     
+    # Скачать логи
+    builder.row(
+        InlineKeyboardButton(text="📥 Скачать логи", callback_data="admin_logs_menu")
+    )
+    
     # На главную
     builder.row(home_button())
+    
+    return builder.as_markup()
+
+
+def admin_logs_menu_kb() -> InlineKeyboardMarkup:
+    """Меню скачивания логов."""
+    builder = InlineKeyboardBuilder()
+    
+    # Первый ряд
+    builder.row(
+        InlineKeyboardButton(text="📄 Полный лог", callback_data="admin_download_log_full"),
+        InlineKeyboardButton(text="⚠️ Ошибки", callback_data="admin_download_log_errors")
+    )
+    
+    # Второй ряд
+    builder.row(back_button("admin_panel"), home_button())
     
     return builder.as_markup()
 
@@ -425,13 +451,14 @@ def confirm_delete_kb(server_id: int) -> InlineKeyboardMarkup:
 # РАЗДЕЛ «ОПЛАТЫ»
 # ============================================================================
 
-def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool) -> InlineKeyboardMarkup:
+def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: bool) -> InlineKeyboardMarkup:
     """
     Главное меню раздела оплат.
     
     Args:
         stars_enabled: Включены ли Telegram Stars
         crypto_enabled: Включены ли крипто-платежи
+        cards_enabled: Включена ли оплата картами (ЮКасса)
     """
     builder = InlineKeyboardBuilder()
     
@@ -450,6 +477,15 @@ def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool) -> InlineKeyboar
         InlineKeyboardButton(
             text=f"💰 Крипто-платежи: {crypto_status}",
             callback_data="admin_payments_toggle_crypto"
+        )
+    )
+    
+    # Toggle для Карт
+    cards_status = "✅" if cards_enabled else "❌"
+    builder.row(
+        InlineKeyboardButton(
+            text=f"💳 Оплата картами (ЮКасса): {cards_status}",
+            callback_data="admin_payments_cards"
         )
     )
     
@@ -493,6 +529,49 @@ def crypto_setup_kb(step: int) -> InlineKeyboardMarkup:
 
 
 def crypto_setup_confirm_kb() -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения настроек крипто."""
+    builder = InlineKeyboardBuilder()
+    
+    builder.row(
+        InlineKeyboardButton(text="✅ Сохранить и включить", callback_data="admin_crypto_setup_save")
+    )
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_crypto_setup_back"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="admin_payments")
+    )
+    
+    return builder.as_markup()
+
+
+# ============================================================================
+# МЕНЮ УПРАВЛЕНИЯ КАРТАМИ
+# ============================================================================
+
+def cards_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
+    """Клавиатура управления оплатой картами."""
+    builder = InlineKeyboardBuilder()
+    
+    # Кнопка включить/выключить
+    toggle_text = "Выключить 🔴" if is_enabled else "Включить 🟢"
+    builder.row(
+        InlineKeyboardButton(
+            text=toggle_text,
+            callback_data="admin_cards_mgmt_toggle"
+        )
+    )
+    
+    # Кнопка изменения токена
+    builder.row(
+        InlineKeyboardButton(
+            text="🔗 Изменить Provider Token",
+            callback_data="admin_cards_mgmt_edit_token"
+        )
+    )
+    
+    # Кнопки навигации
+    builder.row(back_button("admin_payments"), home_button())
+    
+    return builder.as_markup()
     """Клавиатура подтверждения настройки крипто."""
     builder = InlineKeyboardBuilder()
     
@@ -613,7 +692,8 @@ def tariffs_list_kb(tariffs: List[Dict[str, Any]], include_hidden: bool = True) 
     for tariff in tariffs:
         status_emoji = "🟢" if tariff.get('is_active') else "🔴"
         price = tariff['price_cents'] / 100
-        text = f"{status_emoji} {tariff['name']} — ${price:.2f}"
+        price_str = f"{price:g}".replace('.', ',')
+        text = f"{status_emoji} {tariff['name']} — ${price_str}"
         builder.row(
             InlineKeyboardButton(
                 text=text,
@@ -1256,4 +1336,99 @@ def key_action_cancel_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMa
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_key_view:{key_id}")
     )
     return builder.as_markup()
+
+
+# ============================================================================
+# ПРОБНАЯ ПОДПИСКА
+# ============================================================================
+
+def trial_settings_kb(enabled: bool, tariff_name: Optional[str] = None) -> InlineKeyboardMarkup:
+    """
+    Клавиатура управления пробной подпиской.
+    
+    Args:
+        enabled: Включена ли пробная подписка
+        tariff_name: Название выбранного тарифа или None
+    """
+    builder = InlineKeyboardBuilder()
+    
+    # Кнопка включения/выключения
+    if enabled:
+        toggle_text = "🟢 Выключить"
+    else:
+        toggle_text = "⚪ Включить"
+    builder.row(
+        InlineKeyboardButton(text=toggle_text, callback_data="admin_trial_toggle")
+    )
+    
+    # Изменить текст страницы
+    builder.row(
+        InlineKeyboardButton(text="✏️ Изменить текст", callback_data="admin_trial_edit_text")
+    )
+    
+    # Выбор тарифа
+    tariff_label = tariff_name if tariff_name else "не задан"
+    builder.row(
+        InlineKeyboardButton(
+            text=f"📋 Тариф: {tariff_label}",
+            callback_data="admin_trial_select_tariff"
+        )
+    )
+    
+    # Навигация
+    builder.row(
+        back_button("admin_panel"),
+        home_button()
+    )
+    
+    return builder.as_markup()
+
+
+def trial_tariff_select_kb(tariffs: List[Dict[str, Any]], selected_id: Optional[int] = None) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора тарифа для пробной подписки.
+    
+    Отображает все тарифы кроме Admin Tariff.
+    
+    Args:
+        tariffs: Список всех тарифов (включая неактивные)
+        selected_id: ID текущего выбранного тарифа
+    """
+    builder = InlineKeyboardBuilder()
+    
+    for tariff in tariffs:
+        # Пропускаем Admin Tariff
+        if tariff.get('name') == 'Admin Tariff':
+            continue
+        
+        # Статус тарифа (активен/неактивен)
+        status = "🟢" if tariff.get('is_active') else "🔴"
+        
+        # Выбран ли этот тариф
+        is_selected = tariff['id'] == selected_id
+        selected_mark = "🔘 " if is_selected else "⚪ "
+        
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{selected_mark}{status} {tariff['name']} ({tariff['duration_days']} дн.)",
+                callback_data=f"admin_trial_set_tariff:{tariff['id']}"
+            )
+        )
+    
+    builder.row(
+        back_button("admin_trial"),
+        home_button()
+    )
+    
+    return builder.as_markup()
+
+
+def trial_edit_text_cancel_kb() -> InlineKeyboardMarkup:
+    """Клавиатура отмены редактирования текста пробной подписки."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="❌ Отмена", callback_data="admin_trial")
+    )
+    return builder.as_markup()
+
 

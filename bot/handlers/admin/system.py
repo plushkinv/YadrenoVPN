@@ -5,9 +5,10 @@
 """
 import asyncio
 import logging
+import os
 import sys
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, FSInputFile
 from aiogram.fsm.context import FSMContext
 
 from config import GITHUB_REPO_URL
@@ -29,6 +30,7 @@ from bot.keyboards.admin import (
     update_confirm_kb,
     stop_bot_confirm_kb,
     back_and_home_kb,
+    admin_logs_menu_kb,
 )
 
 logger = logging.getLogger(__name__)
@@ -438,3 +440,89 @@ async def stop_bot_confirmed(callback: CallbackQuery, state: FSMContext):
     
     # Завершаем работу скрипта
     sys.exit(0)
+
+
+# ============================================================================
+# СКАЧИВАНИЕ ЛОГОВ
+# ============================================================================
+
+@router.callback_query(F.data == "admin_logs_menu")
+async def show_logs_menu(callback: CallbackQuery, state: FSMContext):
+    """Меню скачивания логов."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+        
+    await callback.message.edit_text(
+        "📥 *Скачивание логов*\n\n"
+        "Выберите какие логи хотите скачать:",
+        reply_markup=admin_logs_menu_kb(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_download_log_full")
+async def download_log_full(callback: CallbackQuery, state: FSMContext):
+    """Скачивание полного лога."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    
+    log_path = "logs/bot.log"
+    if not os.path.exists(log_path):
+        await callback.answer("Файл логов не найден.", show_alert=True)
+        return
+    
+    # Отвечаем на коллбек до отправки файла, чтобы избежать таймаута
+    await callback.answer()
+    
+    await callback.message.answer_document(
+        document=FSInputFile(log_path, filename="bot.log"),
+        caption="📄 Полный лог бота"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_download_log_errors")
+async def download_log_errors(callback: CallbackQuery, state: FSMContext):
+    """Скачивание лога с ошибками."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    
+    log_path = "logs/bot.log"
+    error_log_path = "logs/errors.log"
+    
+    if not os.path.exists(log_path):
+        await callback.answer("Файл логов не найден.", show_alert=True)
+        return
+    
+    try:
+        with open(log_path, 'r', encoding='utf-8') as f_in, open(error_log_path, 'w', encoding='utf-8') as f_out:
+            capturing = False
+            for line in f_in:
+                # Начало новой записи в логе формата [2026-...
+                if line.startswith('['):
+                    if ' [ERROR] ' in line or ' [WARNING] ' in line or ' [CRITICAL] ' in line or ' [EXCEPTION] ' in line:
+                        capturing = True
+                        f_out.write(line)
+                    else:
+                        capturing = False
+                elif capturing:
+                    # Строки traceback
+                    f_out.write(line)
+    except Exception as e:
+        logger.error(f"Ошибка при формировании лога ошибок: {e}")
+        await callback.answer("Ошибка при обработке логов.", show_alert=True)
+        return
+    
+    if not os.path.exists(error_log_path) or os.path.getsize(error_log_path) == 0:
+        await callback.answer("Ошибок не найдено! 🎉", show_alert=True)
+        return
+    
+    # Отвечаем на коллбек до отправки файла, чтобы избежать таймаута
+    await callback.answer()
+        
+    await callback.message.answer_document(
+        document=FSInputFile(error_log_path, filename="errors.log"),
+        caption="⚠️ Лог ошибок и предупреждений"
+    )

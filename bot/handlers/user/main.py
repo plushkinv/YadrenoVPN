@@ -9,8 +9,9 @@ import asyncio
 from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramForbiddenError
 
 from config import ADMIN_IDS
 from database.requests import get_or_create_user, is_user_banned, get_all_servers
@@ -29,11 +30,19 @@ router = Router()
 
 def get_welcome_text(is_admin: bool = False) -> str:
     """Формирует приветственный текст с реальными тарифами из БД."""
-    from database.requests import get_all_tariffs, get_setting
+    from database.requests import (
+        get_all_tariffs, get_setting, 
+        is_crypto_configured, is_stars_enabled, is_cards_enabled
+    )
     from bot.utils.text import escape_md2
     
     # 1. Получаем статический текст из БД (уже в формате MarkdownV2)
     welcome_text = get_setting('main_page_text', "🔐 *Добро пожаловать в VPN\\-бот\\!*")
+    
+    # Получаем настройки оплат
+    crypto_enabled = is_crypto_configured()
+    stars_enabled = is_stars_enabled()
+    cards_enabled = is_cards_enabled()
     
     # 2. Получаем тарифы из БД (только активные)
     tariffs = get_all_tariffs()
@@ -42,34 +51,52 @@ def get_welcome_text(is_admin: bool = False) -> str:
     if tariffs:
         tariff_lines.append("📋 *Тарифы:*")
         for tariff in tariffs:
-            # Форматируем цену (экранируем для MarkdownV2)
-            price_usd = tariff['price_cents'] / 100
-            price_stars = tariff['price_stars']
+            prices = []
             
-            # Экранируем динамические данные и спецсимволы
-            tariff_lines.append(f"• {escape_md2(tariff['name'])} — ${escape_md2(f'{price_usd:.0f}')} / {price_stars} ⭐")
+            if crypto_enabled:
+                price_usd = tariff['price_cents'] / 100
+                price_str = f"{price_usd:g}".replace('.', ',')
+                prices.append(f"${escape_md2(price_str)}")
+                
+            if stars_enabled:
+                prices.append(f"{tariff['price_stars']} ⭐")
+                
+            if cards_enabled and tariff.get('price_rub', 0) > 0:
+                prices.append(f"{int(tariff['price_rub'])} ₽")
+            
+            # Если нет доступных методов оплаты (или все выключены),
+            # все равно выведем название тарифа, но без цены (или оставим как есть)
+            price_display = " \\/ ".join(prices) if prices else "Цена не установлена"
+            
+            # Экранируем название
+            tariff_lines.append(f"• {escape_md2(tariff['name'])} — {price_display}")
             
     tariff_text = "\n".join(tariff_lines)
 
-    # 3. Вставляем тарифы
-    # Пытаемся найти плейсхолдер: %тарифы%
-    # Если найден — заменяем
-    # Иначе — добавляем в конец
-    
-    if "%тарифы%" in welcome_text:
-         return welcome_text.replace("%тарифы%", tariff_text)
-    else:
-         if tariff_text:
-             return f"{welcome_text}\n\n{tariff_text}\n"
-         return welcome_text
+    # 3. Нормализуем текст: приводим к единственному виду с %тарифы%
+    # %без_тарифов% — полностью отключает вывод тарифов (тег удаляется, тарифы не добавляются)
+    # %тарифы%      — вставляет список тарифов в указанное место
+    # без тегов     — список тарифов автоматически добавляется в конец
+    if "%без_тарифов%" in welcome_text:
+        return welcome_text.replace("%без_тарифов%", "")
+
+    if "%тарифы%" not in welcome_text:
+        welcome_text = f"{welcome_text}\n\n%тарифы%"
+
+    return welcome_text.replace("%тарифы%", tariff_text)
 
 
-@router.message(Command("start"))
+@router.message(Command("start"), StateFilter("*"))
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     """Обработчик команды /start."""
     user_id = message.from_user.id
     username = message.from_user.username
     
+    logger.info(f"CMD_START: User {user_id} started bot")
+
+    # Сбрасываем любое активное FSM-состояние (важно: до проверок)
+    await state.clear()
+
     # Регистрируем/обновляем пользователя
     user = get_or_create_user(user_id, username)
     
@@ -81,9 +108,6 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
             parse_mode="Markdown"
         )
         return
-    
-    # Сбрасываем состояние FSM
-    await state.clear()
     
     # Проверяем админа
     is_admin = user_id in ADMIN_IDS
@@ -109,7 +133,6 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
                  
         except Exception as e:
             # Проверяем, является ли это нашей ошибкой
-            # Импортируем внутри, чтобы избежать циклических импортов если они есть, но здесь это безопасно
             from bot.errors import TariffNotFoundError
             
             if isinstance(e, TariffNotFoundError):
@@ -125,11 +148,25 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         
         return
 
-    await message.answer(
-        text,
-        reply_markup=main_menu_kb(is_admin=is_admin),
-        parse_mode="MarkdownV2"
+    # Вычисляем, показывать ли кнопку пробной подписки
+    from database.requests import is_trial_enabled, get_trial_tariff_id, has_used_trial
+    show_trial = (
+        is_trial_enabled() and
+        get_trial_tariff_id() is not None and
+        not has_used_trial(user_id)
     )
+
+    try:
+        await message.answer(
+            text,
+            reply_markup=main_menu_kb(is_admin=is_admin, show_trial=show_trial),
+            parse_mode="MarkdownV2"
+        )
+    except TelegramForbiddenError:
+        logger.warning(f"User {user_id} blocked the bot during /start")
+    except Exception as e:
+        logger.error(f"Error sending start message to {user_id}: {e}")
+
 
 
 @router.callback_query(F.data == "start")
@@ -149,13 +186,21 @@ async def callback_start(callback: CallbackQuery, state: FSMContext):
     is_admin = user_id in ADMIN_IDS
     
     text = get_welcome_text(is_admin)
+
+    # Вычисляем, показывать ли кнопку пробной подписки
+    from database.requests import is_trial_enabled, get_trial_tariff_id, has_used_trial
+    show_trial = (
+        is_trial_enabled() and
+        get_trial_tariff_id() is not None and
+        not has_used_trial(user_id)
+    )
     
     # Пытаемся отредактировать сообщение (если текст)
     # Если это фото/файл (после выдачи ключа), edit_text упадёт.
     try:
         await callback.message.edit_text(
             text,
-            reply_markup=main_menu_kb(is_admin=is_admin),
+            reply_markup=main_menu_kb(is_admin=is_admin, show_trial=show_trial),
             parse_mode="MarkdownV2"
         )
     except Exception:
@@ -166,11 +211,118 @@ async def callback_start(callback: CallbackQuery, state: FSMContext):
             pass
         await callback.message.answer(
             text,
-            reply_markup=main_menu_kb(is_admin=is_admin),
+            reply_markup=main_menu_kb(is_admin=is_admin, show_trial=show_trial),
             parse_mode="MarkdownV2"
         )
 
     await callback.answer()
+
+
+# ============================================================================
+# ПРОБНАЯ ПОДПИСКА
+# ============================================================================
+
+@router.callback_query(F.data == "trial_subscription")
+async def show_trial_subscription(callback: CallbackQuery):
+    """Показывает страницу пробной подписки."""
+    from database.requests import (
+        is_trial_enabled, get_trial_tariff_id, has_used_trial, get_setting
+    )
+    from bot.keyboards.user import trial_sub_kb
+    from bot.keyboards.admin import home_only_kb
+
+    user_id = callback.from_user.id
+
+    # Повторная проверка условий
+    if not is_trial_enabled():
+        await callback.answer("❌ Пробная подписка недоступна", show_alert=True)
+        return
+
+    if get_trial_tariff_id() is None:
+        await callback.answer("❌ Тариф не настроен", show_alert=True)
+        return
+
+    if has_used_trial(user_id):
+        await callback.answer("ℹ️ Вы уже использовали пробный период", show_alert=True)
+        return
+
+    # Получаем текст страницы из настроек
+    trial_text = get_setting('trial_page_text', '🎁 *Пробная подписка*')
+
+    await callback.message.edit_text(
+        trial_text,
+        reply_markup=trial_sub_kb(),
+        parse_mode="MarkdownV2"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "trial_activate")
+async def activate_trial_subscription(callback: CallbackQuery, state: FSMContext):
+    """Активирует пробную подписку: создаёт ключ через стандартный механизм."""
+    from database.requests import (
+        is_trial_enabled, get_trial_tariff_id, has_used_trial, get_tariff_by_id,
+        get_or_create_user, mark_trial_used, create_initial_vpn_key,
+        create_pending_order, complete_order
+    )
+    from bot.handlers.user.payments import start_new_key_config
+    from bot.keyboards.admin import home_only_kb
+
+    user_id = callback.from_user.id
+
+    # Повторная проверка (защита от повторных активаций)
+    if not is_trial_enabled():
+        await callback.answer("❌ Пробная подписка недоступна", show_alert=True)
+        return
+
+    tariff_id = get_trial_tariff_id()
+    if tariff_id is None:
+        await callback.answer("❌ Тариф не настроен", show_alert=True)
+        return
+
+    if has_used_trial(user_id):
+        await callback.answer("ℹ️ Вы уже использовали пробный период", show_alert=True)
+        return
+
+    tariff = get_tariff_by_id(tariff_id)
+    if not tariff:
+        await callback.answer("❌ Тариф не найден", show_alert=True)
+        return
+
+    # Получаем внутренний ID пользователя
+    user = get_or_create_user(user_id, callback.from_user.username)
+    internal_user_id = user['id']
+
+    # Ставим флаг пробного периода
+    mark_trial_used(internal_user_id)
+    logger.info(
+        f"Пользователь {user_id} активировал пробный период (tарифf ID={tariff_id})"
+    )
+
+    # Создаём ключ в БД (черновик — без сервера)
+    duration_days = tariff['duration_days']
+    key_id = create_initial_vpn_key(internal_user_id, tariff_id, duration_days)
+
+    # Создаём РЕАЛЬНЫЙ ордер в таблице payments (триал = бесплатно, сразу paid)
+    _, order_id = create_pending_order(
+        user_id=internal_user_id,
+        tariff_id=tariff_id,
+        payment_type='trial',
+        vpn_key_id=key_id
+    )
+    complete_order(order_id)  # Помечаем как оплаченный сразу
+
+    await state.update_data(new_key_order_id=order_id, new_key_id=key_id)
+
+    # Удаляем текущее сообщение и запускаем выбор сервера
+    await callback.answer()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await start_new_key_config(callback.message, state, order_id, key_id)
+
 
 
 # ============================================================================
@@ -368,20 +520,18 @@ async def my_keys_handler(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("key:"))
-async def key_details_handler(callback: CallbackQuery):
-    """Детальная информация о ключе с улучшенной статистикой."""
+async def show_key_details(telegram_id: int, key_id: int, send_function, prepend_text: str = ""):
+    """Общая логика для показа деталей ключа."""
     from database.requests import get_key_details_for_user, get_key_payments_history
     from bot.keyboards.user import key_manage_kb
-    from bot.keyboards.admin import home_only_kb
     from bot.services.vpn_api import get_client, format_traffic
+    import logging
     
-    key_id = int(callback.data.split(":")[1])
-    telegram_id = callback.from_user.id
+    logger = logging.getLogger(__name__)
     
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
-        await callback.answer("❌ Ключ не найден", show_alert=True)
+        await send_function("❌ Ключ не найден")
         return
     
     # Статус
@@ -436,7 +586,12 @@ async def key_details_handler(callback: CallbackQuery):
     expires = key['expires_at'][:10] if key['expires_at'] else "—"
     server = key.get('server_name') or "Не выбран"
     
-    lines = [
+    lines = []
+    if prepend_text:
+        lines.append(prepend_text)
+        lines.append("")
+        
+    lines.extend([
         f"🔑 *{escape_md(key['display_name'])}*\n",
         f"*Статус:* {status}",
         f"*Сервер:* {escape_md(server)}",
@@ -444,7 +599,7 @@ async def key_details_handler(callback: CallbackQuery):
         f"*Трафик:* {traffic_info}",
         f"*Действует до:* {expires}",
         ""
-    ]
+    ])
     
     # История платежей (Все платежи)
     payments = get_key_payments_history(key_id)
@@ -453,33 +608,40 @@ async def key_details_handler(callback: CallbackQuery):
         for p in payments:  # Показываем все
             date = p['paid_at'][:10] if p['paid_at'] else "—"
             tariff = escape_md(p.get('tariff_name') or "Тариф")
+            amount_val = p['amount_cents']/100
+            amount_str = f"{amount_val:g}".replace('.', ',')
             if p['payment_type'] == 'stars':
                 amount = f"{p['amount_stars']} ⭐"
             else:
-                amount = f"${p['amount_cents']/100:.2f}"
+                amount = f"${amount_str}"
             lines.append(f"   • {date}: {tariff} ({amount})")
     
     msg_text = "\n".join(lines)
+    
+    await send_function(
+        msg_text,
+        reply_markup=key_manage_kb(key_id, is_unconfigured=is_unconfigured),
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(F.data.startswith("key:"))
+async def key_details_handler(callback: CallbackQuery):
+    """Детальная информация о ключе с улучшенной статистикой."""
+    key_id = int(callback.data.split(":")[1])
+    telegram_id = callback.from_user.id
     
     # Пытаемся отредактировать сообщение. 
     # Если это было фото (после Show Key), edit_text вызовет ошибку.
     # В этом случае удаляем старое и отправляем новое.
     try:
-        await callback.message.edit_text(
-            msg_text,
-            reply_markup=key_manage_kb(key_id, is_unconfigured=is_unconfigured),
-            parse_mode="Markdown"
-        )
+        await show_key_details(telegram_id, key_id, callback.message.edit_text)
     except Exception:
         # Если не получилось отредактировать (например, это фото)
         await callback.message.delete()
-        await callback.message.answer(
-            msg_text,
-            reply_markup=key_manage_kb(key_id, is_unconfigured=is_unconfigured),
-            parse_mode="Markdown"
-        )
+        await show_key_details(telegram_id, key_id, callback.message.answer)
     
     await callback.answer()
+
 
 
 @router.callback_query(F.data.startswith("key_show:"))
@@ -524,7 +686,7 @@ async def key_renew_select_payment(callback: CallbackQuery):
     """Выбор способа оплаты для продления (сразу, без тарифа)."""
     from database.requests import (
         get_all_tariffs, get_key_details_for_user, get_user_internal_id,
-        is_crypto_configured, is_stars_enabled, get_setting,
+        is_crypto_configured, is_stars_enabled, is_cards_enabled, get_setting,
         create_pending_order
     )
     from bot.services.billing import build_crypto_payment_url, extract_item_id_from_url
@@ -542,8 +704,9 @@ async def key_renew_select_payment(callback: CallbackQuery):
     # Получаем методы оплаты
     crypto_configured = is_crypto_configured()
     stars_enabled = is_stars_enabled()
+    cards_enabled = is_cards_enabled()
     
-    if not crypto_configured and not stars_enabled:
+    if not crypto_configured and not stars_enabled and not cards_enabled:
          await callback.message.edit_text(
             "💳 *Продление ключа*\n\n"
             "😔 Способы оплаты временно недоступны.\n"
@@ -587,7 +750,7 @@ async def key_renew_select_payment(callback: CallbackQuery):
         f"💳 *Продление ключа*\n\n"
         f"🔑 Ключ: *{key['display_name']}*\n\n"
         "Выберите способ оплаты:",
-        reply_markup=renew_payment_method_kb(key_id, crypto_url, stars_enabled),
+        reply_markup=renew_payment_method_kb(key_id, crypto_url, stars_enabled, cards_enabled),
         parse_mode="Markdown"
     )
     await callback.answer()
@@ -819,6 +982,8 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
             days_left = 1
         
         # Создаем
+        flow = await new_client.get_inbound_flow(new_inbound_id)
+        
         res = await new_client.add_client(
             inbound_id=new_inbound_id,
             email=new_email,
@@ -826,7 +991,8 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
             expire_days=days_left,
             limit_ip=1,
             enable=True,
-            tg_id=str(telegram_id)
+            tg_id=str(telegram_id),
+            flow=flow
         )
         
         new_uuid = res['uuid']
@@ -958,7 +1124,7 @@ async def key_rename_submit_handler(message: Message, state: FSMContext):
 async def buy_key_handler(callback: CallbackQuery):
     """Страница «Купить ключ» с условиями и способами оплаты."""
     from database.requests import (
-        is_crypto_configured, is_stars_enabled, get_setting, 
+        is_crypto_configured, is_stars_enabled, is_cards_enabled, get_setting,
         get_user_internal_id, get_all_tariffs, create_pending_order
     )
     from bot.services.billing import build_crypto_payment_url, extract_item_id_from_url
@@ -1000,9 +1166,10 @@ async def buy_key_handler(callback: CallbackQuery):
                 )
     
     stars_enabled = is_stars_enabled()
+    cards_enabled = is_cards_enabled()
     
     # Если нет ни одного метода оплаты — показываем заглушку
-    if not crypto_url and not stars_enabled:
+    if not crypto_url and not stars_enabled and not cards_enabled:
         await callback.message.edit_text(
             "💳 *Купить ключ*\n\n"
             "😔 К сожалению, сейчас оплата недоступна.\n\n"
@@ -1030,11 +1197,23 @@ _Приобретая ключ, вы соглашаетесь с этими ус
 
 Выберите способ оплаты:"""
     
-    await callback.message.edit_text(
-        text,
-        reply_markup=buy_key_kb(crypto_url=crypto_url, stars_enabled=stars_enabled, order_id=existing_order_id),
-        parse_mode="Markdown"
-    )
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=buy_key_kb(crypto_url=crypto_url, stars_enabled=stars_enabled, cards_enabled=cards_enabled, order_id=existing_order_id),
+            parse_mode="Markdown"
+        )
+    except Exception:
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.message.answer(
+            text,
+            reply_markup=buy_key_kb(crypto_url=crypto_url, stars_enabled=stars_enabled, cards_enabled=cards_enabled, order_id=existing_order_id),
+            parse_mode="Markdown"
+        )
+        
     await callback.answer()
 
 
@@ -1112,20 +1291,7 @@ async def pay_stars_invoice(callback: CallbackQuery):
         await callback.answer("❌ Тариф не найден", show_alert=True)
         return
     
-    # Форматируем длительность для описания
     days = tariff['duration_days']
-    if days >= 365:
-        duration = f"{days // 365} год" if days // 365 == 1 else f"{days // 365} года"
-    elif days >= 30:
-        months = days // 30
-        if months == 1:
-            duration = "1 месяц"
-        elif months in [2, 3, 4]:
-            duration = f"{months} месяца"
-        else:
-            duration = f"{months} месяцев"
-    else:
-        duration = f"{days} дней"
     
     # Логика создания/обновления ордера
     from database.requests import get_user_internal_id, create_pending_order
@@ -1148,14 +1314,32 @@ async def pay_stars_invoice(callback: CallbackQuery):
             vpn_key_id=None 
         )
 
-    # Отправляем инвойс c order_id в payload
-    await callback.message.answer_invoice(
-        title=f"VPN ключ на {duration}",
-        description=f"Доступ к VPN-сервису на {duration}. 1 ключ = 1 устройство.",
-        payload=order_id, # Просто order_id, как и в крипте
-        currency="XTR",  # Telegram Stars
-        prices=[LabeledPrice(label=f"VPN {duration}", amount=tariff['price_stars'])],
-    )
+    try:
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        from aiogram.types import InlineKeyboardButton
+        
+        bot_info = await callback.bot.get_me()
+        bot_name = bot_info.first_name
+        
+        price_stars = tariff['price_stars']
+
+        await callback.message.answer_invoice(
+            title=bot_name,
+            description=f"Оплата тарифа «{tariff['name']}» ({days} дн.).",
+            payload=order_id, # Просто order_id, как и в крипте
+            currency="XTR",  # Telegram Stars
+            prices=[LabeledPrice(label=f"Тариф {tariff['name']}", amount=price_stars)],
+            reply_markup=InlineKeyboardBuilder().row(
+                InlineKeyboardButton(text=f"⭐️ Оплатить {price_stars} XTR", pay=True)
+            ).row(
+                InlineKeyboardButton(text="❌ Отмена", callback_data="buy_key")
+            ).as_markup()
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Ошибка при выставлении счета Stars: {e}")
+        await callback.answer("❌ Произошла ошибка при создании счета", show_alert=True)
+        return
     
     # Удаляем предыдущее сообщение с выбором тарифа
     await callback.message.delete()

@@ -92,7 +92,9 @@ async def collect_daily_stats() -> str:
     
     payments_text = []
     if payments_cents > 0:
-        payments_text.append(f"${payments_cents / 100:.2f}")
+        payments_val = payments_cents / 100
+        payments_str = f"{payments_val:g}".replace('.', ',')
+        payments_text.append(f"${payments_str}")
     if payments_stars > 0:
         payments_text.append(f"⭐{payments_stars}")
     payments_sum = " + ".join(payments_text) if payments_text else "0"

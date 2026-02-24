@@ -11,7 +11,7 @@ from .connection import get_db
 logger = logging.getLogger(__name__)
 
 # Текущая версия схемы БД
-LATEST_VERSION = 2
+LATEST_VERSION = 4
 
 
 def get_current_version() -> int:
@@ -269,9 +269,93 @@ def migration_2(conn: sqlite3.Connection) -> None:
     logger.info("Миграция v2 применена")
 
 
+def migration_3(conn: sqlite3.Connection) -> None:
+    """
+    Миграция v3: Функция «Пробная подписка».
+
+    Изменения:
+    - Добавляет колонку used_trial в таблицу users (флаг использования пробного периода)
+    - Добавляет настройки trial_enabled, trial_tariff_id, trial_page_text в settings
+    """
+    logger.info("Применение миграции v3 (Пробная подписка)...")
+
+    # Добавляем колонку used_trial в таблицу users (если не существует)
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN used_trial INTEGER DEFAULT 0")
+        logger.info("Колонка used_trial добавлена в таблицу users")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" in str(e):
+            logger.info("Колонка used_trial уже существует")
+        else:
+            # Если ошибка другая — пробрасываем её
+            raise
+    except Exception as e:
+        logger.error(f"Ошибка миграции v3: {e}")
+        raise
+
+    # Дефолтный текст для страницы пробной подписки (MarkdownV2)
+    trial_page_text_default = (
+        "🎁 *Пробная подписка*\n\n"
+        "Хотите попробовать наш VPN бесплатно?\n\n"
+        "Мы предлагаем пробный период, чтобы вы могли убедиться в качестве "
+        "и скорости нашего сервиса\\.\n\n"
+        "*Что входит в пробный доступ:*\n"
+        "• Полный доступ к VPN без ограничений по сайтам\n"
+        "• Высокая скорость соединения\n"
+        "• Несколько протоколов на выбор\n\n"
+        "Нажмите кнопку ниже, чтобы активировать пробный доступ прямо сейчас\!\n\n"
+        "_Пробный период предоставляется один раз на аккаунт\._"
+    )
+
+    # Настройки пробной подписки
+    trial_settings = [
+        ('trial_enabled', '0'),          # Выключено по умолчанию
+        ('trial_tariff_id', ''),          # Тариф не задан
+        ('trial_page_text', trial_page_text_default),  # Текст по умолчанию
+    ]
+    for key, value in trial_settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+
+    logger.info("Миграция v3 применена")
+
+
+def migration_4(conn: sqlite3.Connection) -> None:
+    """
+    Миграция v4: Оплата российскими картами.
+    
+    - Добавляет поле price_rub (цена в рублях) в таблицу tariffs
+    - Добавляет настройки cards_enabled и cards_provider_token
+    """
+    logger.info("Применение миграции v4...")
+
+    # Добавляем price_rub в tariffs (если его еще нет)
+    try:
+        conn.execute("ALTER TABLE tariffs ADD COLUMN price_rub INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass # Игнорируем ошибку, если колонка уже существует
+
+    # Добавляем новые настройки
+    card_settings = [
+        ('cards_enabled', '0'),          # Выключено по умолчанию
+        ('cards_provider_token', ''),    # Токен провайдера пустой
+    ]
+    for key, value in card_settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+
+    logger.info("Миграция v4 применена")
+
+
 MIGRATIONS = {
     1: migration_1,
     2: migration_2,
+    3: migration_3,
+    4: migration_4,
 }
 
 
@@ -281,19 +365,24 @@ def run_migrations() -> None:
     
     Проверяет текущую версию и применяет все миграции от текущей до LATEST_VERSION.
     """
-    current = get_current_version()
-    
-    if current >= LATEST_VERSION:
-        logger.debug(f"БД актуальна (версия {current})")
-        return
-    
-    logger.info(f"Обновление БД с версии {current} до {LATEST_VERSION}")
-    
-    with get_db() as conn:
-        for version in range(current + 1, LATEST_VERSION + 1):
-            if version in MIGRATIONS:
-                logger.info(f"Применяю миграцию v{version}...")
-                MIGRATIONS[version](conn)
-                set_version(conn, version)
-    
-    logger.info(f"БД обновлена до версии {LATEST_VERSION}")
+    try:
+        current = get_current_version()
+        
+        if current >= LATEST_VERSION:
+            logger.info(f"✅ БД соответствует версии {LATEST_VERSION}. Миграция не требуется.")
+            return
+        
+        logger.info(f"🔄 Требуется миграция БД с версии {current} до {LATEST_VERSION}")
+        
+        with get_db() as conn:
+            for version in range(current + 1, LATEST_VERSION + 1):
+                if version in MIGRATIONS:
+                    logger.info(f"🚀 Применяю миграцию v{version}...")
+                    MIGRATIONS[version](conn)
+                    set_version(conn, version)
+        
+        logger.info(f"✅ Миграция успешная : БД обновлена до версии {LATEST_VERSION}")
+        
+    except Exception as e:
+        logger.error(f"❌ Неуспешная миграция: {e}")
+        raise

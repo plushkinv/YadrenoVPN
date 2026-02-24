@@ -17,7 +17,8 @@ from database.requests import (
     get_setting,
     set_setting,
     is_crypto_enabled,
-    is_stars_enabled
+    is_stars_enabled,
+    is_cards_enabled
 )
 from bot.states.admin_states import (
     AdminStates,
@@ -32,6 +33,7 @@ from bot.keyboards.admin import (
     crypto_setup_confirm_kb,
     edit_crypto_kb,
     crypto_management_kb,
+    cards_management_kb,
     back_and_home_kb
 )
 from bot.utils.text import escape_markdown_url
@@ -90,6 +92,7 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
     
     stars = is_stars_enabled()
     crypto = is_crypto_enabled()
+    cards = is_cards_enabled()
     
     text = (
         "💳 *Настройки оплаты*\n\n"
@@ -105,15 +108,20 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
         item_url = get_setting('crypto_item_url', '')
         if item_url:
             safe_url = escape_markdown_url(item_url)
-            text += f"🟢 *Крипто (Ya.Seller)*\n[Ссылка на товар]({safe_url})\n"
+            text += f"🟢 *Крипто (@Ya_SellerBot)*\n[Ссылка на товар]({safe_url})\n"
         else:
-            text += "🟢 *Крипто (Ya.Seller)*\n"
+            text += "🟢 *Крипто (@Ya_SellerBot)*\n"
     else:
-        text += "⚪ *Крипто (Ya.Seller)*\n"
+        text += "⚪ *Крипто (@Ya_SellerBot)*\n"
+        
+    if cards:
+        text += "🟢 *Оплата картами (ЮКасса)*\n"
+    else:
+        text += "⚪ *Оплата картами (ЮКасса)*\n"
     
     await callback.message.edit_text(
         text,
-        reply_markup=payments_menu_kb(stars, crypto),
+        reply_markup=payments_menu_kb(stars, crypto, cards),
         parse_mode="Markdown",
         disable_web_page_preview=True
     )
@@ -644,3 +652,156 @@ async def crypto_edit_done(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer("✅ Настройки сохранены")
     await show_payments_menu(callback, state)
+
+
+# ============================================================================
+# УПРАВЛЕНИЕ ОПЛАТОЙ КАРТАМИ
+# ============================================================================
+
+@router.callback_query(F.data == "admin_payments_cards")
+async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext):
+    """Показывает меню управления оплатой картами (ЮКасса)."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.payments_menu)
+    
+    is_enabled = is_cards_enabled()
+    token = get_setting('cards_provider_token', '')
+    
+    status_emoji = "🟢" if is_enabled else "⚪"
+    status_text = "включено" if is_enabled else "выключено"
+    
+    if token:
+        # Маскируем токен: первые 4 и последние 4 символа
+        masked_token = f"{token[:4]}...{token[-4:]}"
+        token_display = f"Установлен ✅ (`{masked_token}`)"
+    else:
+        token_display = "Не установлен ❌"
+    
+    text = (
+        "💳 *Управление оплатой картами*\n\n"
+        "Для работы этого способа необходимо настроить провайдера ЮКасса.\n\n"
+        "❗️ *ШАГ 1: РЕГИСТРАЦИЯ*\n"
+        "Обязательно [зарегистрируйте магазин в ЮКассе по этой ссылке](https://yookassa.ru/joinups/?source=sva)\n\n"
+        "После проверки документов ЮКассой переходите к настройке токена.\n\n"
+        f"{status_emoji} Статус: *{status_text}*\n"
+        f"🔑 Provider Token: *{token_display}*\n\n"
+        "Выберите действие:"
+    )
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=cards_management_kb(is_enabled),
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_cards_mgmt_toggle")
+async def cards_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
+    """Включает/выключает оплату картами."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    
+    # Нельзя включить, если нет токена
+    if not is_cards_enabled() and not get_setting('cards_provider_token', ''):
+        await callback.answer("❌ Сначала укажите Provider Token!", show_alert=True)
+        return
+
+    current = is_cards_enabled()
+    new_value = '0' if current else '1'
+    set_setting('cards_enabled', new_value)
+    
+    status = "включена ✅" if new_value == '1' else "выключена"
+    await callback.answer(f"Оплата картами {status}")
+    
+    # Обновляем меню
+    await show_cards_management_menu(callback, state)
+
+
+@router.callback_query(F.data == "admin_cards_mgmt_edit_token")
+async def cards_mgmt_edit_token(callback: CallbackQuery, state: FSMContext):
+    """Начинает редактирование токена ЮКасса."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    
+    await state.set_state(AdminStates.cards_setup_token)
+    # Сохраняем ID сообщения, чтобы потом его отредактировать
+    await state.update_data(last_menu_msg_id=callback.message.message_id)
+    
+    text = (
+        "🔗 *Установка Provider Token*\n\n"
+        "❗️ *ШАГ 1: РЕГИСТРАЦИЯ В ЮКАССЕ*\n"
+        "Обязательно [зарегистрируйтесь по этой ссылке](https://yookassa.ru/joinups/?source=sva)\n\n"
+        "*ШАГ 2: ПОЛУЧЕНИЕ ТОКЕНА В @BotFather*\n"
+        "1. Отправьте команду `/mybots` и выберите бота.\n"
+        "2. Нажмите `Payments` → `YooKassa`.\n"
+        "3. Подключите магазин в боте провайдера и **обязательно вернитесь в @BotFather**.\n"
+        "4. В BotFather снова откройте `Payments`, там появится токен.\n\n"
+        "Отправьте полученный токен ответом на это сообщение:"
+    )
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=back_and_home_kb("admin_payments_cards"),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.cards_setup_token)
+async def cards_setup_token_value(message: Message, state: FSMContext):
+    """Обрабатывает ввод токена ЮКасса."""
+    data = await state.get_data()
+    last_menu_msg_id = data.get('last_menu_msg_id')
+
+    token = message.text.strip()
+    
+    if len(token) < 20 or ':' not in token:
+        await message.answer("❌ Неверный формат токена. Попробуйте ещё раз:")
+        return
+    
+    set_setting('cards_provider_token', token)
+    
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    # Если у нас есть ID сообщения меню, используем его для редактирования
+    menu_message = message
+    if last_menu_msg_id:
+        try:
+            # Создаем объект сообщения с нужным ID для редактирования
+            menu_message = await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=last_menu_msg_id,
+                text="⌛ Сохранение..."
+            )
+        except Exception:
+            # Если не вышло (например, сообщение удалено), будем отвечать новым
+            menu_message = await message.answer("⌛ Сохранение...")
+
+    # Возвращаемся в меню через FakeCallback
+    class FakeCallback:
+        def __init__(self, msg, user, success_msg=None):
+            self.message = msg
+            self.from_user = user
+            self.bot = msg.bot
+            self.data = "admin_payments_cards"
+            self.success_msg = success_msg
+        
+        async def answer(self, text=None, show_alert=False, *args, **kwargs):
+            # Если передали текст для popup, запоминаем его (он будет показан при нажатии кнопок)
+            # Но так как в AIOGram answerCallbackQuery работает только для реальных инстансов,
+            # мы просто выведем информацию в консоль или пропустим.
+            # Для пользователя мы добавим текст в само сообщение.
+            pass
+            
+    fake = FakeCallback(menu_message, message.from_user)
+    await show_cards_management_menu(fake, state)
