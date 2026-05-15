@@ -133,7 +133,7 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
 
     lines = [
         f"🗍️ <b>{server['name']}</b>\n",
-        f"🔗 URL панели: `{server.get('protocol', 'https')}://{server['host']}:{server['port']}{server['web_base_path']}`",
+        f"🔗 URL панели: {server.get('protocol', 'https')}://{server['host']}:{server['port']}{server['web_base_path']}",
         f"👤 Логин: <code>{server['login']}</code>",
         f"🔐 Пароль: <code>{password_masked}</code>\n",
         f"📊 <b>Статистика:</b>",

@@ -476,18 +476,20 @@ def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def key_manage_kb(key_id: int, is_unconfigured: bool = False, is_active: bool = True, is_traffic_exhausted: bool = False) -> InlineKeyboardMarkup:
+def key_manage_kb(key_id: int, is_unconfigured: bool = False, is_active: bool = True, is_traffic_exhausted: bool = False, has_sub_id: bool = False) -> InlineKeyboardMarkup:
     """
     Клавиатура управления ключом.
-    
+
     Args:
         key_id: ID ключа
         is_unconfigured: True, если ключ не настроен (Draft)
         is_active: True, если ключ активен (срок действия не истек)
         is_traffic_exhausted: True, если трафик исчерпан
+        has_sub_id: True, если у ключа есть sub_id (показывает «📋 Показать подписку»)
     """
+    show_label = "📋 Показать подписку" if has_sub_id else "📋 Показать ключ"
     builder = InlineKeyboardBuilder()
-    
+
     if not is_active:
         # Для неактивных ключей (даже если не настроен) нет показа и замены, есть удаление
         builder.row(
@@ -519,7 +521,7 @@ def key_manage_kb(key_id: int, is_unconfigured: bool = False, is_active: bool = 
     else:
         # Стандартные кнопки активного ключа
         builder.row(
-            InlineKeyboardButton(text="📋 Показать ключ", callback_data=f"key_show:{key_id}"),
+            InlineKeyboardButton(text=show_label, callback_data=f"key_show:{key_id}"),
             InlineKeyboardButton(text="📈 Продлить", callback_data=f"key_renew:{key_id}")
         )
         

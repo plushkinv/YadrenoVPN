@@ -59,7 +59,10 @@ async def show_my_keys(telegram_id: int, message, is_callback: bool = True):
         traffic_text = f'{used_str} / {limit_str}'
         protocol = 'VLESS'
         inbound_name = 'VPN'
-        if key.get('server_id') and key.get('panel_email'):
+        if key.get('sub_id'):
+            protocol = 'SUBSCRIPTION'
+            inbound_name = 'Все протоколы'
+        elif key.get('server_id') and key.get('panel_email'):
             try:
                 client = await get_client(key['server_id'])
                 stats = await client.get_client_stats(key['panel_email'])
@@ -125,7 +128,11 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
         traffic_info = f'{format_traffic(traffic_used)} (безлимит)'
     else:
         traffic_info = 'Безлимит'
-    if key.get('server_active') and key.get('panel_email'):
+    if key.get('sub_id'):
+        # Subscription: один ключ покрывает все inbound сервера сразу
+        inbound_name = 'Все протоколы'
+        protocol = 'SUBSCRIPTION'
+    elif key.get('server_active') and key.get('panel_email'):
         try:
             from bot.services.vpn_api import get_client
             client = await get_client(key['server_id'])
@@ -156,7 +163,7 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
                 amount = f'${amount_str}'
             lines.append(f'   • {date}: {tariff} ({amount})')
     msg_text = '\n'.join(lines)
-    kb = key_manage_kb(key_id, is_unconfigured=is_unconfigured, is_active=key_active, is_traffic_exhausted=traffic_exhausted)
+    kb = key_manage_kb(key_id, is_unconfigured=is_unconfigured, is_active=key_active, is_traffic_exhausted=traffic_exhausted, has_sub_id=bool(key.get('sub_id')))
     if is_callback:
         await safe_edit_or_send(message, msg_text, reply_markup=kb)
     else:
@@ -178,11 +185,19 @@ async def key_delete_handler(callback: CallbackQuery):
     if key['is_active']:
         await callback.answer('❌ Активные ключи нельзя удалить.', show_alert=True)
         return
-    if key.get('server_id') and key.get('panel_inbound_id') and key.get('client_uuid'):
+    if key.get('server_id') and key.get('panel_email'):
         try:
             client = await get_client(key['server_id'])
-            await client.delete_client(key['panel_inbound_id'], key['client_uuid'])
-            logger.info(f"Клиент {key.get('panel_email', 'unknown')} удален с сервера 3X-UI")
+            if key.get('sub_id'):
+                # Subscription: удаляем всех клиентов с этим email на сервере
+                deleted = await client.delete_clients_by_email_on_server(key['panel_email'])
+                logger.info(
+                    f"Subscription-ключ {key_id}: удалено {deleted} клиентов "
+                    f"с email {key['panel_email']} с сервера 3X-UI"
+                )
+            elif key.get('panel_inbound_id') and key.get('client_uuid'):
+                await client.delete_client(key['panel_inbound_id'], key['client_uuid'])
+                logger.info(f"Клиент {key.get('panel_email', 'unknown')} удален с сервера 3X-UI")
         except Exception as e:
             logger.warning(f"Не удалось удалить клиента {key.get('panel_email', 'unknown')} с сервера 3X-UI: {e}")
     success = delete_vpn_key(key_id)
@@ -261,7 +276,6 @@ async def key_renew_select_payment(callback: CallbackQuery):
 async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
     """Начало процедуры замены ключа."""
     from database.requests import get_key_details_for_user, get_active_servers
-    from bot.services.vpn_api import get_client
     from bot.keyboards.user import replace_server_list_kb
     from bot.utils.groups import get_servers_for_key
     key_id = int(callback.data.split(':')[1])
@@ -273,21 +287,6 @@ async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
     if not key['is_active']:
         await callback.answer('⏳ Срок действия ключа истёк.\nПродлите его перед заменой.', show_alert=True)
         return
-    if key.get('server_active') and key.get('panel_email'):
-        try:
-            client = await get_client(key['server_id'])
-            stats = await client.get_client_stats(key['panel_email'])
-            if stats and stats['total'] > 0:
-                used = stats['up'] + stats['down']
-                percent = used / stats['total']
-                if percent > 0.2:
-                    await callback.answer(f'⛔ Замена невозможна.\nИспользовано {percent * 100:.1f}% трафика (макс. 20%).', show_alert=True)
-                    return
-            elif stats and stats['total'] == 0:
-                pass
-        except Exception as e:
-            logger.warning(f'Ошибка проверки трафика для замены: {e}')
-            pass
     tariff_id = key.get('tariff_id')
     servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
     if not servers:
@@ -301,15 +300,47 @@ async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(ReplaceKey.users_server, F.data.startswith('replace_server:'))
 async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext):
     """Выбор сервера для замены."""
-    from database.requests import get_server_by_id
-    from bot.services.vpn_api import get_client, VPNAPIError
-    from bot.keyboards.user import replace_inbound_list_kb
+    from database.requests import get_server_by_id, get_key_details_for_user
+    from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
+    from bot.keyboards.user import replace_inbound_list_kb, replace_confirm_kb
     server_id = int(callback.data.split(':')[1])
     server = get_server_by_id(server_id)
     if not server:
         await callback.answer('Сервер не найден', show_alert=True)
         return
     await state.update_data(replace_server_id=server_id)
+
+    # Subscription mode: пропускаем выбор inbound — сразу подтверждение
+    if is_subscription_mode():
+        data = await state.get_data()
+        key_id = data.get('replace_key_id')
+        key = get_key_details_for_user(key_id, callback.from_user.id)
+        if not key:
+            await callback.answer('❌ Ключ не найден', show_alert=True)
+            return
+        # Минимальная проба сервера (получим inbounds позже при выполнении)
+        try:
+            client = await get_client(server_id)
+            inbounds = await client.get_inbounds()
+            if not inbounds:
+                await callback.answer('❌ На сервере нет доступных протоколов', show_alert=True)
+                return
+        except VPNAPIError as e:
+            await callback.answer(f'❌ Ошибка подключения: {e}', show_alert=True)
+            return
+        await state.set_state(ReplaceKey.confirm)
+        await state.update_data(replace_inbound_id=None)
+        await safe_edit_or_send(callback.message,
+            f"⚠️ <b>Подтверждение замены</b>\n\n"
+            f"Ключ: <b>{escape_html(key['display_name'])}</b>\n"
+            f"Новый сервер: <b>{escape_html(server['name'])}</b>\n\n"
+            "Подписка будет пересоздана на новом сервере (со всеми протоколами).\n"
+            "Старая ссылка перестанет работать — нужно будет обновить её в приложении.\n\n"
+            "Вы уверены?",
+            reply_markup=replace_confirm_kb(key_id))
+        await callback.answer()
+        return
+
     try:
         client = await get_client(server_id)
         inbounds = await client.get_inbounds()
@@ -344,14 +375,15 @@ async def key_replace_inbound_handler(callback: CallbackQuery, state: FSMContext
 async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
     """Выполнение замены ключа."""
     from database.requests import get_key_details_for_user, get_server_by_id, update_vpn_key_connection
-    from bot.services.vpn_api import get_client, VPNAPIError
+    from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
     from bot.handlers.admin.users_keys import generate_unique_email
     from bot.utils.key_sender import send_key_with_qr
     from bot.keyboards.user import key_issued_kb
+    import uuid as _uuid
     data = await state.get_data()
     key_id = data.get('replace_key_id')
     new_server_id = data.get('replace_server_id')
-    new_inbound_id = data.get('replace_inbound_id')
+    new_inbound_id = data.get('replace_inbound_id')  # None в subscription
     telegram_id = callback.from_user.id
     current_key = get_key_details_for_user(key_id, telegram_id)
     new_server_data = get_server_by_id(new_server_id)
@@ -359,29 +391,41 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
         await callback.answer('❌ Ошибка данных', show_alert=True)
         return
     await safe_edit_or_send(callback.message, '⏳ Выполняется замена ключа...')
+
+    subscription_mode = is_subscription_mode()
+    old_had_sub = bool(current_key.get('sub_id'))
+    is_same_server = current_key.get('server_id') == new_server_id
+
     try:
-        is_same_server = current_key['server_id'] == new_server_id
+        # === 1. Удаление старого ===
         if current_key.get('server_id') and current_key.get('server_active') and current_key.get('panel_email'):
             try:
                 old_client = await get_client(current_key['server_id'])
-                await old_client.delete_client(current_key['panel_inbound_id'], current_key['client_uuid'])
-                logger.info(f"Старый ключ {key_id} успешно удалён (uuid: {current_key['client_uuid']})")
+                if old_had_sub or subscription_mode:
+                    # Удаляем всех клиентов с этим email на старом сервере
+                    deleted = await old_client.delete_clients_by_email_on_server(current_key['panel_email'])
+                    logger.info(
+                        f"Старый ключ {key_id}: удалено {deleted} клиентов с email "
+                        f"{current_key['panel_email']} на сервере {current_key['server_id']}"
+                    )
+                else:
+                    await old_client.delete_client(current_key['panel_inbound_id'], current_key['client_uuid'])
+                    logger.info(f"Старый ключ {key_id} успешно удалён (uuid: {current_key['client_uuid']})")
             except Exception as e:
                 error_msg = str(e)
                 logger.warning(f'Ошибка удаления старого ключа {key_id}: {error_msg}')
-                if is_same_server:
+                if is_same_server and not (old_had_sub or subscription_mode):
                     if 'not found' in error_msg.lower() or 'не найден' in error_msg.lower() or 'no client remained' in error_msg.lower():
                         logger.info('Ключ не найден на сервере, считаем удаленным.')
                     else:
                         raise VPNAPIError(f'Не удалось удалить старый ключ: {error_msg}. Замена отменена во избежание дублей.')
-                else:
-                    pass
+
+        # === 2. Подсчёт остатков ===
         new_client = await get_client(new_server_id)
         user_fake_dict = {'telegram_id': telegram_id, 'username': current_key.get('username')}
         new_email = generate_unique_email(user_fake_dict)
         traffic_limit = current_key.get('traffic_limit', 0) or 0
         traffic_used = current_key.get('traffic_used', 0) or 0
-        traffic_notified_pct = current_key.get('traffic_notified_pct', 100) or 100
         if traffic_limit > 0:
             remaining_bytes = max(0, traffic_limit - traffic_used)
             limit_gb = max(1, int(remaining_bytes / 1024 ** 3))
@@ -396,14 +440,65 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
             days_left += 1
         if days_left < 1:
             days_left = 1
-        flow = await new_client.get_inbound_flow(new_inbound_id)
-        res = await new_client.add_client(inbound_id=new_inbound_id, email=new_email, total_gb=limit_gb, expire_days=days_left, limit_ip=1, enable=True, tg_id=str(telegram_id), flow=flow)
-        new_uuid = res['uuid']
-        update_vpn_key_connection(key_id=key_id, server_id=new_server_id, panel_inbound_id=new_inbound_id, panel_email=new_email, client_uuid=new_uuid)
+
+        # === 3. Создание нового ===
+        if subscription_mode:
+            inbounds = await new_client.get_inbounds()
+            if not inbounds:
+                raise RuntimeError('На сервере нет доступных inbound')
+            new_sub_id = _uuid.uuid4().hex
+            min_inb_id = min(inb['id'] for inb in inbounds)
+            first_uuid = None
+            created = 0
+            for inb in inbounds:
+                try:
+                    flow = await new_client.get_inbound_flow(inb['id'])
+                    res = await new_client.add_client(
+                        inbound_id=inb['id'], email=new_email,
+                        total_gb=limit_gb, expire_days=days_left,
+                        limit_ip=1, enable=True, tg_id=str(telegram_id),
+                        flow=flow, sub_id=new_sub_id,
+                    )
+                    if inb['id'] == min_inb_id:
+                        first_uuid = res['uuid']
+                    created += 1
+                except Exception as e:
+                    logger.warning(
+                        f"replace_execute (subscription): не удалось создать клиента "
+                        f"в inbound {inb['id']}: {e}"
+                    )
+            if not first_uuid or created == 0:
+                raise RuntimeError('Не удалось создать ни одного клиента на новом сервере')
+            update_vpn_key_connection(
+                key_id=key_id, server_id=new_server_id,
+                panel_inbound_id=min_inb_id, panel_email=new_email,
+                client_uuid=first_uuid, sub_id=new_sub_id,
+            )
+        else:
+            flow = await new_client.get_inbound_flow(new_inbound_id)
+            res = await new_client.add_client(
+                inbound_id=new_inbound_id, email=new_email,
+                total_gb=limit_gb, expire_days=days_left,
+                limit_ip=1, enable=True, tg_id=str(telegram_id), flow=flow,
+            )
+            new_uuid = res['uuid']
+            # Очищаем sub_id (теперь это keys-mode ключ)
+            update_vpn_key_connection(
+                key_id=key_id, server_id=new_server_id,
+                panel_inbound_id=new_inbound_id, panel_email=new_email,
+                client_uuid=new_uuid, sub_id=None,
+            )
+
+        # === 4. Перенос трафика ===
         if traffic_limit > 0:
-            from database.requests import bulk_update_traffic, update_key_notified_pct
+            from database.requests import bulk_update_traffic
             bulk_update_traffic([(traffic_used, key_id)])
-            logger.info(f'Перенос трафика ключа {key_id}: остаток {remaining_bytes / 1024 ** 3:.1f} ГБ (totalGB на сервере), полный тариф {traffic_limit / 1024 ** 3:.1f} ГБ, использовано {traffic_used / 1024 ** 3:.1f} ГБ')
+            logger.info(
+                f'Перенос трафика ключа {key_id}: остаток {remaining_bytes / 1024 ** 3:.1f} ГБ, '
+                f'полный тариф {traffic_limit / 1024 ** 3:.1f} ГБ, '
+                f'использовано {traffic_used / 1024 ** 3:.1f} ГБ'
+            )
+
         await state.clear()
         updated_key = get_key_details_for_user(key_id, telegram_id)
         await send_key_with_qr(callback, updated_key, key_issued_kb(), is_new=True)

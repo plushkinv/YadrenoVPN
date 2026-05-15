@@ -4,16 +4,41 @@ from typing import List, Dict, Any, Optional
 
 from .admin_misc import back_button, home_button, cancel_button
 
-def bot_settings_kb() -> InlineKeyboardMarkup:
+def bot_settings_kb(current_mode: str = 'subscription') -> InlineKeyboardMarkup:
     """
     Клавиатура раздела 'Настройки бота'.
+
+    Args:
+        current_mode: Текущий режим работы бота ('subscription' | 'key').
+                      Влияет только на лейбл кнопки переключения режима.
     """
     builder = InlineKeyboardBuilder()
+    mode_label = (
+        '🔁 Режим: 📡 Подписка' if current_mode == 'subscription'
+        else '🔁 Режим: 🔑 Ключи'
+    )
+    builder.row(InlineKeyboardButton(text=mode_label, callback_data='admin_toggle_bot_mode'))
     builder.row(InlineKeyboardButton(text='🔄 Обновления', callback_data='admin_update_bot'))
     builder.row(InlineKeyboardButton(text='✏️ Изменить тексты', callback_data='admin_edit_texts'))
     builder.row(InlineKeyboardButton(text='🔗 Реферальная система', callback_data='admin_referral'))
     builder.row(InlineKeyboardButton(text='🛑 Остановить бота', callback_data='admin_stop_bot'))
     builder.row(back_button('admin_panel'), home_button())
+    return builder.as_markup()
+
+
+def bot_mode_toggle_confirm_kb(target_mode: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура подтверждения переключения режима бота.
+
+    Args:
+        target_mode: Режим, на который переключаемся ('subscription' | 'key')
+    """
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text='✅ Да, переключить',
+                             callback_data=f'admin_set_bot_mode:{target_mode}'),
+        InlineKeyboardButton(text='❌ Отмена', callback_data='admin_bot_settings'),
+    )
     return builder.as_markup()
 
 def trial_settings_kb(enabled: bool, tariff_name: Optional[str]=None) -> InlineKeyboardMarkup:

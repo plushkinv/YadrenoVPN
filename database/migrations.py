@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 27
+LATEST_VERSION = 28
 
 
 def get_current_version() -> int:
@@ -146,6 +146,11 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('update_blocked', '0'),
         ('daily_tasks_time', '03:00'),
         ('update_check_time', '12:00'),
+        # Режим работы бота для новых установок — Subscription
+        # (бот выдаёт subscription URL, ключи во всех inbound с единым subId).
+        # На существующих ботах migration_28 ставит 'key' — там уже есть рабочие
+        # одиночные ключи, и режим менять нельзя без явного действия админа.
+        ('bot_mode', 'subscription'),
     ]
     for key, value in default_settings:
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
@@ -777,6 +782,30 @@ def migration_27(conn):
     logger.info("Миграция v27 применена: добавлена колонка servers.api_token для 3x-ui v3.0+")
 
 
+def migration_28(conn):
+    """
+    Миграция v28: введение режима Subscription.
+
+    - Добавляет vpn_keys.sub_id — идентификатор подписки (общий для всех клиентов
+      с этим email на одном сервере). NULL для legacy ключей (режим Keys).
+    - Создаёт индекс (server_id, panel_email) для быстрого поиска клиентов
+      одной подписки в синхронизации.
+    - Устанавливает bot_mode='key' для существующих ботов: они уже работают
+      с одиночными ключами, и менять режим без явного решения админа нельзя.
+      На новых установках migration_initial кладёт 'subscription' раньше —
+      INSERT OR IGNORE ниже не перезапишет его.
+    """
+    _add_column(conn, "vpn_keys", "sub_id TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vpn_keys_server_email "
+        "ON vpn_keys(server_id, panel_email)"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('bot_mode', 'key')"
+    )
+    logger.info("Миграция v28 применена: добавлено vpn_keys.sub_id, индекс server_email, bot_mode='key' (legacy upgrade)")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -784,6 +813,7 @@ MIGRATIONS = {
     25: migration_25,
     26: migration_26,
     27: migration_27,
+    28: migration_28,
 }
 
 

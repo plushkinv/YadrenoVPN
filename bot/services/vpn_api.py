@@ -1,7 +1,9 @@
 """
 Фасад для работы с API VPN-панелей.
 """
+import json
 import logging
+import uuid as _uuid
 from typing import Optional, Dict, Any, List
 import asyncio
 
@@ -12,6 +14,30 @@ from .panels.marzban import MarzbanClient
 logger = logging.getLogger(__name__)
 
 _clients: Dict[int, BaseVPNClient] = {}
+
+# Per-key locks для ensure_subscription_keys_on_server (защита от гонок)
+_ensure_locks: Dict[int, asyncio.Lock] = {}
+
+
+def get_bot_mode() -> str:
+    """
+    Возвращает текущий глобальный режим работы бота.
+
+    Returns:
+        'subscription' (по умолчанию) или 'key'
+    """
+    try:
+        from database.db_settings import get_setting
+        value = get_setting('bot_mode', 'subscription') or 'subscription'
+        return value if value in ('subscription', 'key') else 'subscription'
+    except Exception as e:
+        logger.warning(f"get_bot_mode: ошибка чтения settings, fallback subscription: {e}")
+        return 'subscription'
+
+
+def is_subscription_mode() -> bool:
+    """True, если бот работает в режиме Subscription."""
+    return get_bot_mode() == 'subscription'
 
 def get_client_from_server_data(server: Dict[str, Any]) -> BaseVPNClient:
     """
@@ -371,9 +397,265 @@ def restore_traffic_limit_in_db(key_id: int) -> bool:
     return True
 
 
+async def ensure_subscription_keys_on_server(key_id: int) -> Dict[str, int]:
+    """
+    Приводит набор клиентов с key.panel_email на key.server_id в соответствие
+    с текущим bot_mode и состоянием ключа в БД.
+
+    Режим 'subscription':
+      - В каждом inbound сервера, где нет клиента с key.panel_email, создаёт
+        клиента с key.sub_id, key.expires_at, key.traffic_limit.
+        Если у ключа sub_id IS NULL — генерирует (или подхватывает существующий
+        subId из найденного клиента на панели) и сохраняет в БД.
+      - Обновляет vpn_keys.panel_inbound_id и client_uuid на минимальный inbound.
+      - Если traffic_exhausted ИЛИ expired — set_clients_enabled_by_email(False)
+        для всех клиентов с этим email.
+      - Если ключ активен — set_clients_enabled_by_email(True).
+
+    Режим 'key':
+      - Оставляет клиента в МИНИМАЛЬНОМ inbound, остальных с тем же email удаляет.
+      - Обновляет panel_inbound_id и client_uuid в БД на минимальный.
+
+    Args:
+        key_id: ID ключа в БД
+
+    Returns:
+        Словарь со статистикой: {'created', 'deleted', 'enabled', 'disabled'}
+    """
+    stats = {'created': 0, 'deleted': 0, 'enabled': 0, 'disabled': 0}
+
+    lock = _ensure_locks.setdefault(key_id, asyncio.Lock())
+    async with lock:
+        from database.requests import get_vpn_key_by_id
+        from database.db_keys import (
+            is_key_active, is_traffic_exhausted,
+            update_vpn_key_config, update_vpn_key_sub_id,
+        )
+
+        key = get_vpn_key_by_id(key_id)
+        if not key:
+            return stats
+        if not key.get('server_active'):
+            return stats
+        email = key.get('panel_email')
+        server_id = key.get('server_id')
+        if not email or not server_id:
+            return stats
+
+        server_data = {
+            'id': server_id,
+            'name': key.get('server_name'),
+            'host': key.get('host'),
+            'port': key.get('port'),
+            'web_base_path': key.get('web_base_path'),
+            'login': key.get('login'),
+            'password': key.get('password'),
+            'protocol': key.get('protocol', 'https'),
+            'api_token': key.get('api_token'),
+        }
+
+        try:
+            client = get_client_from_server_data(server_data)
+            inbounds = await client.get_inbounds()
+        except Exception as e:
+            logger.warning(f"ensure_subscription_keys: сервер {server_id} недоступен: {e}")
+            return stats
+
+        if not inbounds:
+            return stats
+
+        # presence: inbound_id -> client_obj
+        presence: Dict[int, Dict[str, Any]] = {}
+        for inb in inbounds:
+            try:
+                settings_raw = inb.get('settings', '{}')
+                settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for cl in settings.get('clients', []):
+                if cl.get('email') == email:
+                    presence.setdefault(inb['id'], cl)
+
+        mode = get_bot_mode()
+
+        if mode == 'subscription':
+            # Гарантируем sub_id у ключа
+            sub_id = key.get('sub_id')
+            if not sub_id:
+                # Подхватим subId из существующего клиента на панели, если есть
+                for cl in presence.values():
+                    existing = cl.get('subId')
+                    if existing:
+                        sub_id = existing
+                        break
+                if not sub_id:
+                    sub_id = _uuid.uuid4().hex
+                update_vpn_key_sub_id(key_id, sub_id)
+                key['sub_id'] = sub_id
+
+            # Параметры для add_client в отсутствующих inbound
+            from datetime import datetime, timezone
+            traffic_limit = key.get('traffic_limit', 0) or 0
+            total_gb = int(traffic_limit / (1024 ** 3)) if traffic_limit > 0 else 0
+
+            expires_at = key.get('expires_at')
+            if expires_at:
+                try:
+                    dt = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00'))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    delta = dt - datetime.now(timezone.utc)
+                    days_left = max(1, int(delta.total_seconds() / 86400) + (1 if delta.seconds else 0))
+                except Exception:
+                    days_left = 30
+            else:
+                days_left = 0
+
+            active = is_key_active(key) and not is_traffic_exhausted(key)
+
+            # Создаём в отсутствующих inbound
+            missing = [inb for inb in inbounds if inb['id'] not in presence]
+            for inb in missing:
+                try:
+                    flow = await client.get_inbound_flow(inb['id'])
+                    res = await client.add_client(
+                        inbound_id=inb['id'],
+                        email=email,
+                        total_gb=total_gb,
+                        expire_days=days_left if days_left > 0 else 365,
+                        limit_ip=1,
+                        enable=active,
+                        tg_id=str(key.get('telegram_id') or ''),
+                        flow=flow,
+                        sub_id=sub_id,
+                    )
+                    stats['created'] += 1
+                    presence[inb['id']] = {
+                        'email': email,
+                        'id': res['uuid'],
+                        'password': res['uuid'],
+                        'subId': sub_id,
+                        'enable': active,
+                    }
+                except Exception as e:
+                    logger.warning(
+                        f"ensure_subscription_keys: не удалось создать клиента {email} "
+                        f"в inbound {inb['id']} сервера {server_id}: {e}"
+                    )
+
+            # Обновляем panel_inbound_id/client_uuid на МИНИМАЛЬНЫЙ присутствующий inbound
+            if presence:
+                min_inb_id = min(presence.keys())
+                min_client = presence[min_inb_id]
+                uuid_or_pwd = min_client.get('id') or min_client.get('password') or ''
+                if (key.get('panel_inbound_id') != min_inb_id
+                        or (key.get('client_uuid') or '') != uuid_or_pwd):
+                    update_vpn_key_config(
+                        key_id=key_id,
+                        server_id=server_id,
+                        panel_inbound_id=min_inb_id,
+                        panel_email=email,
+                        client_uuid=uuid_or_pwd,
+                        sub_id=sub_id,
+                    )
+
+            # Включить/отключить всех клиентов по состоянию ключа
+            target_enable = active
+            need_change = any(
+                bool(cl.get('enable', True)) != target_enable
+                for cl in presence.values()
+            )
+            if need_change:
+                try:
+                    cnt = await client.set_clients_enabled_by_email(email, target_enable)
+                    if target_enable:
+                        stats['enabled'] += cnt
+                    else:
+                        stats['disabled'] += cnt
+                except Exception as e:
+                    logger.warning(
+                        f"ensure_subscription_keys: не удалось переключить enable={target_enable} "
+                        f"для {email} на сервере {server_id}: {e}"
+                    )
+
+        else:  # mode == 'key'
+            if len(presence) <= 1:
+                # Уже один или ноль клиентов — обновим только panel_inbound_id если нужно
+                if presence:
+                    min_inb_id = min(presence.keys())
+                    min_client = presence[min_inb_id]
+                    uuid_or_pwd = min_client.get('id') or min_client.get('password') or ''
+                    if (key.get('panel_inbound_id') != min_inb_id
+                            or (key.get('client_uuid') or '') != uuid_or_pwd):
+                        update_vpn_key_config(
+                            key_id=key_id,
+                            server_id=server_id,
+                            panel_inbound_id=min_inb_id,
+                            panel_email=email,
+                            client_uuid=uuid_or_pwd,
+                        )
+                return stats
+
+            min_inb_id = min(presence.keys())
+            for inb_id, cl in list(presence.items()):
+                if inb_id == min_inb_id:
+                    continue
+                cid = cl.get('id') or cl.get('password')
+                if not cid:
+                    continue
+                try:
+                    await client.delete_client(inb_id, cid)
+                    stats['deleted'] += 1
+                    presence.pop(inb_id, None)
+                except Exception as e:
+                    logger.warning(
+                        f"ensure_subscription_keys (key-mode): не удалось удалить {email} "
+                        f"из inbound {inb_id} сервера {server_id}: {e}"
+                    )
+
+            min_client = presence.get(min_inb_id)
+            if min_client:
+                uuid_or_pwd = min_client.get('id') or min_client.get('password') or ''
+                if (key.get('panel_inbound_id') != min_inb_id
+                        or (key.get('client_uuid') or '') != uuid_or_pwd):
+                    update_vpn_key_config(
+                        key_id=key_id,
+                        server_id=server_id,
+                        panel_inbound_id=min_inb_id,
+                        panel_email=email,
+                        client_uuid=uuid_or_pwd,
+                    )
+
+    return stats
+
+
+async def get_subscription_url_for_key(key: Dict[str, Any]) -> Optional[str]:
+    """
+    Возвращает HTTP-URL подписки для ключа.
+
+    Args:
+        key: dict с полями sub_id, server_id (+ обычные поля сервера если есть)
+
+    Returns:
+        Subscription URL или None (если у ключа нет sub_id или сервер недоступен)
+    """
+    sub_id = key.get('sub_id')
+    server_id = key.get('server_id')
+    if not sub_id or not server_id:
+        return None
+    try:
+        client = await get_client(server_id)
+        return await client.build_subscription_url(sub_id)
+    except Exception as e:
+        logger.warning(f"get_subscription_url_for_key: не удалось построить URL: {e}")
+        return None
+
+
 __all__ = [
     "VPNAPIError", "get_client_from_server_data", "invalidate_client_cache",
     "format_traffic", "close_all_clients", "get_client", "test_server_connection",
     "reset_key_traffic_if_active", "extend_key_on_server", "restore_key_traffic_limit",
-    "push_key_to_panel", "restore_traffic_limit_in_db"
+    "push_key_to_panel", "restore_traffic_limit_in_db",
+    "get_bot_mode", "is_subscription_mode",
+    "ensure_subscription_keys_on_server", "get_subscription_url_for_key",
 ]

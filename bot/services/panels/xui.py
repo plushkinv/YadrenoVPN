@@ -60,6 +60,10 @@ class XUIClient(BaseVPNClient):
         self.csrf_token: Optional[str] = None
         self.api_token: Optional[str] = server.get('api_token') or None
 
+        # Кеш настроек панели (subPort/subPath/subDomain/...) из /panel/setting/all.
+        # Используется build_subscription_url() — за сессию запрашивается один раз.
+        self._panel_settings: Optional[Dict[str, Any]] = None
+
         logger.debug(
             f"Инициализирован XUIClient для {server['name']}: {self.base_url} "
             f"(api_token={'есть' if self.api_token else 'нет'})"
@@ -596,11 +600,12 @@ class XUIClient(BaseVPNClient):
         limit_ip: int = 1,
         enable: bool = True,
         tg_id: str = "",
-        flow: str = ""
+        flow: str = "",
+        sub_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Добавляет клиента в inbound.
-        
+
         Args:
             inbound_id: ID inbound-подключения
             email: Уникальный идентификатор клиента (используем user_{id})
@@ -610,10 +615,13 @@ class XUIClient(BaseVPNClient):
             enable: Активен ли клиент
             tg_id: Telegram ID для уведомлений панели
             flow: Параметр flow (напр. 'xtls-rprx-vision' для VLESS Reality/TLS TCP)
-            
+            sub_id: Subscription ID. Если передан — используется как есть (для
+                режима subscription, где один subId должен быть на всех клиентах
+                с одним email). Если None — генерируется новый uuid.
+
         Returns:
             Словарь с данными созданного клиента
-            
+
         Raises:
             ValueError: Если expire_days <= 0
         """
@@ -667,7 +675,7 @@ class XUIClient(BaseVPNClient):
             "expiryTime": expire_time,
             "enable": enable,
             "tgId": tg_id,
-            "subId": uuid.uuid4().hex,
+            "subId": sub_id if sub_id else uuid.uuid4().hex,
             "reset": 0,
         }
         
@@ -694,13 +702,14 @@ class XUIClient(BaseVPNClient):
         }
         
         await self._request("POST", "/panel/api/inbounds/addClient", data=client_data)
-        
+
         return {
             "uuid": client_uuid,
             "email": email,
             "inbound_id": inbound_id,
             "expire_time": expire_time,
-            "total_gb": total_gb
+            "total_gb": total_gb,
+            "sub_id": client_entry["subId"],
         }
     
     async def get_inbound_flow(self, inbound_id: int) -> str:
@@ -768,11 +777,11 @@ class XUIClient(BaseVPNClient):
     async def delete_client(self, inbound_id: int, client_uuid: str) -> bool:
         """
         Удаляет клиента из inbound.
-        
+
         Args:
             inbound_id: ID inbound-подключения
             client_uuid: UUID клиента
-            
+
         Returns:
             True при успешном удалении
         """
@@ -780,6 +789,196 @@ class XUIClient(BaseVPNClient):
         encoded_uuid = urllib.parse.quote(client_uuid, safe='')
         await self._request("POST", f"/panel/api/inbounds/{inbound_id}/delClient/{encoded_uuid}")
         return True
+
+    async def delete_clients_by_email_on_server(self, email: str) -> int:
+        """
+        Удаляет ВСЕХ клиентов с указанным email во всех inbound сервера.
+
+        Используется в режиме subscription при замене ключа, удалении ключа
+        и при переключении на режим keys (зачистка дубликатов).
+
+        Args:
+            email: Email/идентификатор клиента
+
+        Returns:
+            Количество фактически удалённых клиентов
+        """
+        inbounds = await self.get_inbounds()
+        deleted = 0
+        for inbound in inbounds:
+            try:
+                settings_raw = inbound.get('settings', '{}')
+                settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for client in settings.get('clients', []):
+                if client.get('email') != email:
+                    continue
+                cid = client.get('id') or client.get('password')
+                if not cid:
+                    continue
+                try:
+                    await self.delete_client(inbound['id'], cid)
+                    deleted += 1
+                except VPNAPIError as e:
+                    logger.warning(
+                        f"Не удалось удалить клиента {email} из inbound {inbound['id']}: {e}"
+                    )
+        return deleted
+
+    async def set_clients_enabled_by_email(self, email: str, enable: bool) -> int:
+        """
+        Включает/отключает ВСЕХ клиентов с указанным email во всех inbound сервера.
+
+        Используется при истечении трафика или срока действия в режиме subscription:
+        панель сама не отключает клиента по нашему счётчику (только по своему totalGB),
+        поэтому отключаем вручную.
+
+        Args:
+            email: Email клиента
+            enable: True — включить, False — отключить
+
+        Returns:
+            Количество обновлённых клиентов
+        """
+        import urllib.parse
+        inbounds = await self.get_inbounds()
+        count = 0
+        for inbound in inbounds:
+            try:
+                settings_raw = inbound.get('settings', '{}')
+                settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for cl in settings.get('clients', []):
+                if cl.get('email') != email:
+                    continue
+                if cl.get('enable', True) == enable:
+                    continue
+                cid = cl.get('id') or cl.get('password')
+                if not cid:
+                    continue
+                # Сохраняем все поля клиента, меняем только enable
+                updated_client = dict(cl)
+                updated_client['enable'] = enable
+                data = {
+                    "id": inbound['id'],
+                    "settings": json.dumps({"clients": [updated_client]}),
+                }
+                try:
+                    encoded = urllib.parse.quote(cid, safe='')
+                    await self._request(
+                        "POST",
+                        f"/panel/api/inbounds/updateClient/{encoded}",
+                        data=data,
+                    )
+                    count += 1
+                except VPNAPIError as e:
+                    action = "включить" if enable else "отключить"
+                    logger.warning(
+                        f"Не удалось {action} клиента {email} в inbound {inbound['id']}: {e}"
+                    )
+        return count
+
+    async def get_panel_settings(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Получает настройки панели через POST /panel/setting/all.
+
+        В частности возвращает поля subscription server: subEnable, subListen,
+        subPort, subPath, subDomain, subURI, subCertFile, subKeyFile, subEncrypt.
+
+        Результат кешируется на уровне клиента; повторные вызовы не делают запросов.
+
+        Args:
+            force_refresh: True — игнорировать кеш и сделать новый запрос.
+
+        Returns:
+            Словарь настроек или None, если не удалось получить.
+        """
+        if not force_refresh and self._panel_settings is not None:
+            return self._panel_settings
+        try:
+            resp = await self._request("POST", "/panel/setting/all")
+        except Exception as e:
+            logger.warning(f"get_panel_settings: запрос не удался: {e}")
+            return None
+        if not isinstance(resp, dict) or not resp.get("success"):
+            logger.warning(f"get_panel_settings: панель ответила без success: {resp}")
+            return None
+        obj = resp.get("obj")
+        if not isinstance(obj, dict):
+            return None
+        self._panel_settings = obj
+        return obj
+
+    async def build_subscription_url(self, sub_id: str) -> Optional[str]:
+        """
+        Возвращает HTTP-URL подписки для пользователя, собранный по настройкам
+        subscription-server из API панели (subDomain/subPort/subPath/subURI).
+
+        НЕ угадывает порт/путь по host:port API — берёт реальные значения с панели.
+        Если у панели subEnable=false или настройки получить не удалось — возвращает
+        None: пусть вызывающий код покажет пользователю осмысленную ошибку, а не
+        выдаст битый URL.
+
+        Args:
+            sub_id: Subscription ID клиента
+
+        Returns:
+            Полный URL вида 'https://host:2096/sub/{sub_id}' или None.
+        """
+        settings = await self.get_panel_settings()
+        if not settings:
+            logger.warning(
+                f"build_subscription_url: не удалось получить настройки панели "
+                f"{self.server.get('name', self.server_id)}; URL не строится."
+            )
+            return None
+
+        # Подписка вообще включена?
+        if not settings.get("subEnable"):
+            logger.warning(
+                f"build_subscription_url: на панели {self.server.get('name', self.server_id)} "
+                f"subscription отключена (subEnable=false). Включите её в настройках 3X-UI."
+            )
+            return None
+
+        # Если админ задал кастомный subURI — это готовый префикс, добавляем только sub_id.
+        sub_uri = (settings.get("subURI") or "").strip()
+        if sub_uri:
+            if not sub_uri.endswith("/"):
+                sub_uri = sub_uri + "/"
+            return f"{sub_uri}{sub_id}"
+
+        # Собираем URL из компонент.
+        from urllib.parse import urlparse
+        sub_domain = (settings.get("subDomain") or "").strip()
+        if not sub_domain:
+            # Берём хост панели (без http://)
+            parsed = urlparse(self.base_url)
+            sub_domain = parsed.hostname or self.host
+
+        sub_port = settings.get("subPort") or 0
+        try:
+            sub_port = int(sub_port)
+        except (TypeError, ValueError):
+            sub_port = 0
+
+        # Путь: 3X-UI кладёт его как '/sub/' или 'sub/' — нормализуем.
+        sub_path = settings.get("subPath") or "/"
+        if not sub_path.startswith("/"):
+            sub_path = "/" + sub_path
+        if not sub_path.endswith("/"):
+            sub_path = sub_path + "/"
+
+        # Схема: HTTPS если у sub-server задан сертификат, иначе HTTP.
+        # subKeyFile + subCertFile вместе означают TLS на sub-port.
+        cert_file = (settings.get("subCertFile") or "").strip()
+        key_file = (settings.get("subKeyFile") or "").strip()
+        scheme = "https" if (cert_file and key_file) else "http"
+
+        port_part = f":{sub_port}" if sub_port and sub_port not in (80 if scheme == "http" else 443,) else ""
+        return f"{scheme}://{sub_domain}{port_part}{sub_path}{sub_id}"
 
 
     async def update_client_traffic_limit(
@@ -1176,15 +1375,15 @@ class XUIClient(BaseVPNClient):
                 # Важно: Не используем _request, так как это публичный endpoint
                 async with session.get(url, ssl=False) as response:
                     logger.info(f"Sub URL probe: {url} -> {response.status}")
-                    
+
                     if response.status == 200:
                         text = await response.text()
                         text = text.strip()
-                        
+
                         # Если вернул VLESS
                         if text.startswith("vless://") or text.startswith("vmess://") or text.startswith("trojan://"):
                             return text
-                        
+
                         # Если вернул base64
                         try:
                             import base64
@@ -1202,7 +1401,7 @@ class XUIClient(BaseVPNClient):
                             pass
             except Exception as e:
                 logger.warning(f"Ошибка получения подписки ({url}): {e}")
-            
+
         return None
 
     async def get_database_backup(self) -> bytes:

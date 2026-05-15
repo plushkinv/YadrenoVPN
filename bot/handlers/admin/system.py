@@ -31,6 +31,7 @@ from bot.utils.git_utils import (
 )
 from bot.keyboards.admin import (
     bot_settings_kb,
+    bot_mode_toggle_confirm_kb,
     update_confirm_kb,
     force_overwrite_confirm_kb,
     stop_bot_confirm_kb,
@@ -56,27 +57,95 @@ async def show_bot_settings(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
-    
-    # Информация о текущей версии
-    commit = get_current_commit() or "неизвестно"
-    branch = get_current_branch() or "неизвестно"
-    
-    # Проверяем настроен ли GitHub
-    github_status = "✅ Настроен" if GITHUB_REPO_URL else "❌ Не настроен"
-    
+
+    from bot.services.vpn_api import get_bot_mode
+    mode = get_bot_mode()
+    if mode == 'subscription':
+        mode_label = "📡 Подписка"
+        mode_desc = (
+            "Бот выдаёт пользователю одну <b>subscription-ссылку</b> — "
+            "клиент сам подтягивает все протоколы сервера."
+        )
+    else:
+        mode_label = "🔑 Ключи"
+        mode_desc = (
+            "Бот создаёт один VLESS/VMess-клиент в одном inbound "
+            "и выдаёт ссылку + JSON-конфиг."
+        )
+
     text = (
         "⚙️ <b>Настройки бота</b>\n\n"
-        f"📌 Версия: <code>{commit}</code>\n"
-        f"🌿 Ветка: <code>{branch}</code>\n"
-        f"🔗 GitHub: {github_status}\n\n"
+        f"<b>Режим работы:</b> {mode_label}\n"
+        f"<i>{mode_desc}</i>\n\n"
         "Выберите действие:"
     )
-    
-    await safe_edit_or_send(callback.message, 
+
+    await safe_edit_or_send(callback.message,
         text,
-        reply_markup=bot_settings_kb()
+        reply_markup=bot_settings_kb(mode)
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_toggle_bot_mode")
+async def admin_toggle_bot_mode(callback: CallbackQuery, state: FSMContext):
+    """Показывает экран подтверждения переключения режима работы бота."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    from bot.services.vpn_api import get_bot_mode
+    current = get_bot_mode()
+    target = 'key' if current == 'subscription' else 'subscription'
+
+    if target == 'subscription':
+        warning = (
+            "⚠️ <b>Переключение в режим Подписка</b>\n\n"
+            "При ближайших синхронизациях (≈раз в 30 минут) бот:\n"
+            "• создаст клиентов во всех inbound каждого сервера для существующих ключей "
+            "(с единым subId и email);\n"
+            "• новые ключи будут выдаваться как <b>subscription URL</b>.\n\n"
+            "Текущие пользователи продолжат работать со старыми ссылками "
+            "до их замены или продления.\n\n"
+            "Продолжить?"
+        )
+    else:
+        warning = (
+            "⚠️ <b>Переключение в режим Ключи</b>\n\n"
+            "При ближайших синхронизациях бот:\n"
+            "• оставит на каждом сервере по одному клиенту (в inbound с минимальным id) "
+            "на каждый ключ;\n"
+            "• остальных клиентов с тем же email — <b>удалит</b>;\n"
+            "• новые ключи будут выдаваться как одна VLESS/VMess-ссылка.\n\n"
+            "<b>Subscription URL у пользователей перестанут работать.</b>\n\n"
+            "Продолжить?"
+        )
+
+    await safe_edit_or_send(callback.message, warning,
+                            reply_markup=bot_mode_toggle_confirm_kb(target))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_set_bot_mode:"))
+async def admin_set_bot_mode(callback: CallbackQuery, state: FSMContext):
+    """Сохраняет новый режим работы бота в settings."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    target = callback.data.split(":", 1)[1]
+    if target not in ('subscription', 'key'):
+        await callback.answer("⛔ Недопустимое значение", show_alert=True)
+        return
+
+    from database.db_settings import set_setting
+    set_setting('bot_mode', target)
+    logger.info(
+        f"Bot mode переключён в '{target}' администратором {callback.from_user.id}"
+    )
+    label = "📡 Подписка" if target == 'subscription' else "🔑 Ключи"
+    await callback.answer(f"✅ Режим установлен: {label}", show_alert=True)
+    await show_bot_settings(callback, state)
 
 
 

@@ -853,20 +853,27 @@ async def sync_traffic_stats(bot: Bot) -> None:
         try:
             client = get_client_from_server_data(server)
             inbounds = await client.get_inbounds()
-            
-            # Строим словарь email -> {total, used} из всех inbounds
+
+            # Строим словарь email -> агрегированные {total, up, down} по всем inbound
+            # В режиме subscription один клиент существует во всех inbound с одним
+            # email и subId — агрегация даёт реальный суммарный расход.
             stats_map = {}
             for inbound in inbounds:
                 for stats in inbound.get("clientStats", []):
                     email = stats.get("email")
-                    if email:
-                        stats_map[email] = {
-                            'total': stats.get('total', 0),
-                            'up': stats.get('up', 0),
-                            'down': stats.get('down', 0),
-                        }
-            
-            # Сопоставляем с ключами — «умная» формула через остаток
+                    if not email:
+                        continue
+                    if email not in stats_map:
+                        stats_map[email] = {'total': 0, 'up': 0, 'down': 0}
+                    stats_map[email]['up'] += stats.get('up', 0) or 0
+                    stats_map[email]['down'] += stats.get('down', 0) or 0
+                    # totalGB одинаковый на каждом inbound — берём максимум
+                    stats_map[email]['total'] = max(
+                        stats_map[email]['total'],
+                        stats.get('total', 0) or 0,
+                    )
+
+            # Сопоставляем с ключами
             for key in server_keys:
                 email = key.get('panel_email')
                 if email and email in stats_map:
@@ -874,18 +881,23 @@ async def sync_traffic_stats(bot: Bot) -> None:
                     used_on_server = s['up'] + s['down']
                     total_on_server = s['total']
                     traffic_limit = key.get('traffic_limit', 0) or 0
-                    
-                    if traffic_limit > 0 and total_on_server > 0:
-                        # Формула: сколько осталось на сервере → вычитаем из нашего лимита
+                    sub_mode_key = bool(key.get('sub_id'))
+
+                    if sub_mode_key:
+                        # Subscription: прямая сумма up+down по всем inbound.
+                        # Формула «через остаток» здесь некорректна — totalGB
+                        # одинаковый на N inbound, но фактический расход общий.
+                        traffic_used = used_on_server
+                    elif traffic_limit > 0 and total_on_server > 0:
+                        # Legacy keys-mode: формула через остаток
                         remaining_on_server = max(0, total_on_server - used_on_server)
                         traffic_used = max(0, traffic_limit - remaining_on_server)
                     else:
-                        # Безлимит или нет данных — прямой учёт
                         traffic_used = used_on_server
-                    
+
                     traffic_updates.append((traffic_used, key['id']))
                     key['_new_traffic_used'] = traffic_used
-        
+
         except Exception as e:
             # Graceful degradation: не трогаем данные, продолжаем
             logger.warning(f"⚠️ Синхронизация трафика: сервер {server.get('name', server_id)} недоступен: {e}")
@@ -949,29 +961,93 @@ async def sync_traffic_stats(bot: Bot) -> None:
                 key['traffic_notified_pct'] = threshold
                 break  # Только одно уведомление за раз
     
+    # Для subscription-ключей: если по нашему счётчику трафик исчерпан или
+    # ключ истёк — отключаем ВСЕХ клиентов с этим email на сервере немедленно.
+    # totalGB на отдельных inbound одинаковый, но клиенты сами не отключатся
+    # пока их собственный счётчик не достигнет лимита, поэтому делаем это руками.
+    from database.db_keys import is_key_active, is_traffic_exhausted
+    from bot.services.vpn_api import ensure_subscription_keys_on_server, is_subscription_mode
+
+    sub_mode_active = is_subscription_mode()
+    for key in keys:
+        if not key.get('sub_id'):
+            continue
+        # Подменяем traffic_used на свежее значение для проверки
+        merged = dict(key)
+        if '_new_traffic_used' in key:
+            merged['traffic_used'] = key['_new_traffic_used']
+        if is_traffic_exhausted(merged) or not is_key_active(merged):
+            try:
+                await ensure_subscription_keys_on_server(key['id'])
+            except Exception as e:
+                logger.warning(
+                    f"sync_traffic_stats: ensure_subscription_keys для key {key['id']} "
+                    f"при истечении не удался: {e}"
+                )
+
     logger.debug(f"Синхронизация трафика завершена: обновлено {len(traffic_updates)} ключей")
+
+
+async def materialize_subscription_state() -> None:
+    """
+    Полный проход по всем активным ключам с вызовом
+    ensure_subscription_keys_on_server() — добивает отсутствующих клиентов
+    в режиме subscription и удаляет лишние в режиме keys.
+
+    Запускается раз в ~30 минут (каждые 6 циклов traffic-sync).
+    """
+    from database.requests import get_all_active_keys_with_server
+    from bot.services.vpn_api import ensure_subscription_keys_on_server
+
+    keys = get_all_active_keys_with_server()
+    if not keys:
+        return
+
+    logger.info(f"🔁 materialize_subscription_state: проход по {len(keys)} ключам")
+    stats_total = {'created': 0, 'deleted': 0, 'enabled': 0, 'disabled': 0}
+    for key in keys:
+        try:
+            res = await ensure_subscription_keys_on_server(key['id'])
+            for k, v in res.items():
+                stats_total[k] = stats_total.get(k, 0) + v
+        except Exception as e:
+            logger.warning(
+                f"materialize_subscription_state: ключ {key['id']} не обработан: {e}"
+            )
+    if any(stats_total.values()):
+        logger.info(f"🔁 materialize_subscription_state завершён: {stats_total}")
 
 
 async def run_traffic_sync_scheduler(bot: Bot) -> None:
     """
     Фоновая задача для синхронизации трафика каждые 5 минут.
-    Не заменяет существующие ежедневные задачи.
-    
+    Каждые 6 циклов (≈30 мин) дополнительно вызывает
+    materialize_subscription_state() для подгонки клиентов на панелях
+    под текущий bot_mode.
+
     Args:
         bot: Экземпляр бота
     """
-    logger.info("📊 Планировщик синхронизации трафика запущен (каждые 5 мин)")
-    
+    logger.info("📊 Планировщик синхронизации трафика запущен (каждые 5 мин, materialize каждые 30 мин)")
+
     # Первый запуск через 30 секунд после старта бота
     await asyncio.sleep(30)
-    
+
+    cycle = 0
     while True:
         try:
             await sync_traffic_stats(bot)
-            
+            cycle += 1
+            # Раз в 6 циклов (≈30 мин) — материализация subscription-состояния
+            if cycle % 6 == 0:
+                try:
+                    await materialize_subscription_state()
+                except Exception as e:
+                    logger.error(f"Ошибка в materialize_subscription_state: {e}")
+
             # Ждём 5 минут
             await asyncio.sleep(300)
-            
+
         except asyncio.CancelledError:
             logger.info("Планировщик синхронизации трафика остановлен")
             break

@@ -246,12 +246,33 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
     from database.requests import get_server_by_id
+    from bot.services.vpn_api import is_subscription_mode
     server_id = int(callback.data.split(':')[1])
     server = get_server_by_id(server_id)
     if not server:
         await callback.answer('Сервер не найден', show_alert=True)
         return
     await state.update_data(add_key_server_id=server_id)
+
+    # Subscription mode: пропускаем выбор inbound — ключ создаётся во всех
+    if is_subscription_mode():
+        try:
+            client = get_client_from_server_data(server)
+            inbounds = await client.get_inbounds()
+            if not inbounds:
+                await callback.answer('❌ На сервере нет inbound', show_alert=True)
+                return
+        except VPNAPIError as e:
+            await callback.answer(f'❌ Ошибка: {e}', show_alert=True)
+            return
+        await state.update_data(add_key_inbound_id=None)
+        await state.set_state(AdminStates.add_key_traffic)
+        await safe_edit_or_send(callback.message,
+            '📊 <b>Лимит трафика</b>\n\nВведите лимит в ГБ (0 = без лимита):',
+            reply_markup=add_key_step_kb(2))
+        await callback.answer()
+        return
+
     try:
         client = get_client_from_server_data(server)
         inbounds = await client.get_inbounds()
@@ -323,22 +344,72 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
     inbound_id = data.get('add_key_inbound_id')
     traffic_gb = data.get('add_key_traffic_gb', 0)
     days = data.get('add_key_days', 30)
-    from database.requests import get_server_by_id
+    from database.requests import get_server_by_id, get_admin_tariff
+    from database.db_keys import create_vpn_key_subscription_admin
+    from bot.services.vpn_api import is_subscription_mode
+    import uuid as _uuid
     server = get_server_by_id(server_id)
     if not server:
         await callback.answer('Сервер не найден', show_alert=True)
         return
     user = get_user_by_telegram_id(user_telegram_id)
     email = generate_unique_email(user)
+    traffic_limit_bytes = (traffic_gb or 0) * 1024 ** 3
+    subscription_mode = is_subscription_mode() and inbound_id is None
     try:
         client = get_client_from_server_data(server)
-        flow = await client.get_inbound_flow(inbound_id)
-        result = await client.add_client(inbound_id=inbound_id, email=email, total_gb=traffic_gb, expire_days=days, limit_ip=1, tg_id=str(user_telegram_id), flow=flow)
-        client_uuid = result['uuid']
-        from database.requests import get_admin_tariff
         admin_tariff = get_admin_tariff()
         tariff_id = admin_tariff['id']
-        key_id = create_vpn_key_admin(user_id=user_id, server_id=server_id, tariff_id=tariff_id, panel_inbound_id=inbound_id, panel_email=email, client_uuid=client_uuid, days=days)
+
+        if subscription_mode:
+            inbounds = await client.get_inbounds()
+            if not inbounds:
+                await callback.answer('❌ На сервере нет inbound', show_alert=True)
+                return
+            sub_id = _uuid.uuid4().hex
+            min_inbound_id = min(inb['id'] for inb in inbounds)
+            first_uuid = None
+            created = 0
+            for inb in inbounds:
+                try:
+                    flow = await client.get_inbound_flow(inb['id'])
+                    res = await client.add_client(
+                        inbound_id=inb['id'], email=email,
+                        total_gb=traffic_gb, expire_days=days,
+                        limit_ip=1, tg_id=str(user_telegram_id),
+                        flow=flow, sub_id=sub_id,
+                    )
+                    if inb['id'] == min_inbound_id:
+                        first_uuid = res['uuid']
+                    created += 1
+                except Exception as e:
+                    logger.warning(
+                        f"admin_add_key (subscription): не удалось создать клиента "
+                        f"в inbound {inb['id']}: {e}"
+                    )
+            if not first_uuid or created == 0:
+                raise RuntimeError('Не удалось создать ни одного клиента на сервере')
+            key_id = create_vpn_key_subscription_admin(
+                user_id=user_id, server_id=server_id, tariff_id=tariff_id,
+                panel_inbound_id=min_inbound_id, panel_email=email,
+                client_uuid=first_uuid, sub_id=sub_id,
+                days=days, traffic_limit=traffic_limit_bytes,
+            )
+        else:
+            flow = await client.get_inbound_flow(inbound_id)
+            result = await client.add_client(
+                inbound_id=inbound_id, email=email, total_gb=traffic_gb,
+                expire_days=days, limit_ip=1,
+                tg_id=str(user_telegram_id), flow=flow,
+            )
+            client_uuid = result['uuid']
+            key_id = create_vpn_key_admin(
+                user_id=user_id, server_id=server_id, tariff_id=tariff_id,
+                panel_inbound_id=inbound_id, panel_email=email,
+                client_uuid=client_uuid, days=days,
+                traffic_limit=traffic_limit_bytes,
+            )
+
         await callback.answer('✅ Ключ успешно создан!', show_alert=True)
         await _show_user_view_edit(callback, state, user_telegram_id)
     except VPNAPIError as e:
@@ -367,6 +438,7 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
+    from bot.services.vpn_api import is_subscription_mode
     current_state = await state.get_state()
     data = await state.get_data()
     if current_state == AdminStates.add_key_inbound.state:
@@ -374,6 +446,14 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
         await state.set_state(AdminStates.add_key_server)
         user = get_user_by_telegram_id(data.get('add_key_user_telegram_id'))
         await safe_edit_or_send(callback.message, f"➕ *Добавление ключа для {(format_user_display(user) if user else '?')}*\n\nВыберите сервер:", reply_markup=add_key_server_kb(servers))
+    elif (current_state == AdminStates.add_key_traffic.state
+          and is_subscription_mode()
+          and data.get('add_key_inbound_id') is None):
+        # В subscription шага inbound нет — возвращаемся сразу на выбор сервера
+        servers = get_active_servers()
+        await state.set_state(AdminStates.add_key_server)
+        user = get_user_by_telegram_id(data.get('add_key_user_telegram_id'))
+        await safe_edit_or_send(callback.message, f"➕ <b>Добавление ключа для {(format_user_display(user) if user else '?')}</b>\n\nВыберите сервер:", reply_markup=add_key_server_kb(servers))
     else:
         await cancel_add_key(callback, state)
 

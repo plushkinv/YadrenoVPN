@@ -13,6 +13,7 @@ __all__ = [
     'get_vpn_key_by_id',
     'extend_vpn_key',
     'create_vpn_key_admin',
+    'create_vpn_key_subscription_admin',
     'update_vpn_key_connection',
     'create_vpn_key',
     'create_initial_vpn_key',
@@ -25,6 +26,7 @@ __all__ = [
     'reset_key_traffic_notification',
     'update_key_traffic_limit',
     'update_vpn_key_config',
+    'update_vpn_key_sub_id',
     'delete_vpn_key',
     'get_all_keys_with_server',
     'get_user_keys_for_display',
@@ -46,9 +48,9 @@ def get_user_vpn_keys(user_id: int) -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT 
-                vk.id, vk.client_uuid, vk.custom_name, vk.expires_at, 
-                vk.created_at, vk.panel_inbound_id, vk.panel_email,
+            SELECT
+                vk.id, vk.client_uuid, vk.custom_name, vk.expires_at,
+                vk.created_at, vk.panel_inbound_id, vk.panel_email, vk.sub_id,
                 t.name as tariff_name, t.duration_days,
                 s.name as server_name, s.id as server_id
             FROM vpn_keys vk
@@ -158,34 +160,49 @@ def update_vpn_key_connection(
     server_id: int,
     panel_inbound_id: int,
     panel_email: str,
-    client_uuid: str
+    client_uuid: str,
+    sub_id: Optional[str] = ...,
 ) -> bool:
     """
     Обновляет технические данные ключа (сервер, UUID, inbound).
     Используется при замене ключа.
-    
+
     Args:
         key_id: ID ключа
         server_id: ID нового сервера
         panel_inbound_id: ID inbound в панели
         panel_email: Email (идентификатор) клиента в панели
         client_uuid: Новый UUID клиента
-        
+        sub_id: Subscription ID. Если передан (включая None) — обновляется
+                в БД. По умолчанию (Ellipsis) — поле не трогается.
+
     Returns:
         True если успешно
     """
     with get_db() as conn:
-        cursor = conn.execute("""
-            UPDATE vpn_keys 
-            SET server_id = ?, 
-                panel_inbound_id = ?, 
-                panel_email = ?, 
-                client_uuid = ?
-            WHERE id = ?
-        """, (server_id, panel_inbound_id, panel_email, client_uuid, key_id))
+        if sub_id is ...:
+            cursor = conn.execute("""
+                UPDATE vpn_keys
+                SET server_id = ?,
+                    panel_inbound_id = ?,
+                    panel_email = ?,
+                    client_uuid = ?
+                WHERE id = ?
+            """, (server_id, panel_inbound_id, panel_email, client_uuid, key_id))
+        else:
+            cursor = conn.execute("""
+                UPDATE vpn_keys
+                SET server_id = ?,
+                    panel_inbound_id = ?,
+                    panel_email = ?,
+                    client_uuid = ?,
+                    sub_id = ?
+                WHERE id = ?
+            """, (server_id, panel_inbound_id, panel_email, client_uuid, sub_id, key_id))
         success = cursor.rowcount > 0
         if success:
-            logger.info(f"Ключ ID {key_id} перенесён на сервер {server_id} (новый UUID: {client_uuid[:4]}...)")
+            preview = (client_uuid[:4] + '...') if client_uuid else '?'
+            logger.info(f"Ключ ID {key_id} перенесён на сервер {server_id} (новый UUID: {preview})")
         return success
 
 def create_vpn_key(
@@ -291,10 +308,10 @@ def get_all_active_keys_with_server() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT 
+            SELECT
                 vk.id, vk.panel_email, vk.traffic_used, vk.traffic_limit,
                 vk.traffic_notified_pct, vk.custom_name, vk.client_uuid,
-                vk.panel_inbound_id, vk.tariff_id, vk.expires_at,
+                vk.panel_inbound_id, vk.tariff_id, vk.expires_at, vk.sub_id,
                 s.id as server_id, s.name as server_name,
                 u.telegram_id
             FROM vpn_keys vk
@@ -316,9 +333,9 @@ def get_all_keys_with_server() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT 
+            SELECT
                 vk.id, vk.panel_email, vk.client_uuid,
-                vk.panel_inbound_id, vk.server_id,
+                vk.panel_inbound_id, vk.server_id, vk.sub_id,
                 s.name as server_name,
                 u.telegram_id
             FROM vpn_keys vk
@@ -409,32 +426,111 @@ def update_vpn_key_config(
     server_id: int,
     panel_inbound_id: int,
     panel_email: str,
-    client_uuid: str
+    client_uuid: str,
+    sub_id: Optional[str] = ...,
 ) -> bool:
     """
     Обновляет конфигурацию ключа (привязывает к серверу).
     Используется для завершения настройки ключа.
-    
+
     Args:
         key_id: ID ключа
         server_id: ID сервера
         panel_inbound_id: ID inbound на панели
         panel_email: Email на панели
         client_uuid: UUID клиента
-        
+        sub_id: Subscription ID. Если передан (включая None) — обновляется
+                в БД. По умолчанию (Ellipsis) — поле не трогается.
+
     Returns:
         True если успешно
     """
     with get_db() as conn:
-        cursor = conn.execute("""
-            UPDATE vpn_keys 
-            SET server_id = ?,
-                panel_inbound_id = ?,
-                panel_email = ?,
-                client_uuid = ?
-            WHERE id = ?
-        """, (server_id, panel_inbound_id, panel_email, client_uuid, key_id))
+        if sub_id is ...:
+            cursor = conn.execute("""
+                UPDATE vpn_keys
+                SET server_id = ?,
+                    panel_inbound_id = ?,
+                    panel_email = ?,
+                    client_uuid = ?
+                WHERE id = ?
+            """, (server_id, panel_inbound_id, panel_email, client_uuid, key_id))
+        else:
+            cursor = conn.execute("""
+                UPDATE vpn_keys
+                SET server_id = ?,
+                    panel_inbound_id = ?,
+                    panel_email = ?,
+                    client_uuid = ?,
+                    sub_id = ?
+                WHERE id = ?
+            """, (server_id, panel_inbound_id, panel_email, client_uuid, sub_id, key_id))
         return cursor.rowcount > 0
+
+
+def update_vpn_key_sub_id(key_id: int, sub_id: Optional[str]) -> bool:
+    """
+    Обновляет sub_id ключа.
+
+    Args:
+        key_id: ID ключа
+        sub_id: Новый subscription ID (или None для очистки)
+
+    Returns:
+        True если успешно
+    """
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE vpn_keys SET sub_id = ? WHERE id = ?",
+            (sub_id, key_id),
+        )
+        return cursor.rowcount > 0
+
+
+def create_vpn_key_subscription_admin(
+    user_id: int,
+    server_id: int,
+    tariff_id: int,
+    panel_inbound_id: int,
+    panel_email: str,
+    client_uuid: str,
+    sub_id: str,
+    days: int,
+    traffic_limit: int = 0,
+) -> int:
+    """
+    Создаёт VPN-ключ администратором в режиме subscription.
+
+    Аналогичен create_vpn_key_admin, но дополнительно записывает sub_id.
+
+    Args:
+        user_id: Внутренний ID пользователя
+        server_id: ID сервера
+        tariff_id: ID тарифа
+        panel_inbound_id: ID минимального inbound (для совместимости)
+        panel_email: Email клиента (общий для всех inbound)
+        client_uuid: UUID клиента из минимального inbound
+        sub_id: Subscription ID (один на все inbound этого ключа)
+        days: Срок действия в днях
+        traffic_limit: Лимит трафика в байтах (0 = безлимит)
+
+    Returns:
+        ID созданного ключа
+    """
+    with get_db() as conn:
+        cursor = conn.execute("""
+            INSERT INTO vpn_keys
+            (user_id, server_id, tariff_id, panel_inbound_id, panel_email,
+             client_uuid, sub_id, expires_at, traffic_limit)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '+' || ? || ' days'), ?)
+        """, (user_id, server_id, tariff_id, panel_inbound_id, panel_email,
+              client_uuid, sub_id, days, traffic_limit))
+        key_id = cursor.lastrowid
+        logger.info(
+            f"Администратор создал subscription-ключ ID {key_id} для user_id {user_id} "
+            f"(sub_id={sub_id[:8]}...)"
+        )
+        return key_id
 
 def delete_vpn_key(key_id: int) -> bool:
     """
@@ -473,13 +569,14 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT 
-                vk.id, vk.client_uuid, vk.custom_name, vk.expires_at, 
+            SELECT
+                vk.id, vk.client_uuid, vk.custom_name, vk.expires_at,
                 s.name as server_name, s.id as server_id, vk.panel_email,
+                vk.sub_id,
                 vk.traffic_used, vk.traffic_limit,
-                CASE 
-                    WHEN vk.expires_at > datetime('now') THEN 1 
-                    ELSE 0 
+                CASE
+                    WHEN vk.expires_at > datetime('now') THEN 1
+                    ELSE 0
                 END as is_active
             FROM vpn_keys vk
             LEFT JOIN servers s ON vk.server_id = s.id

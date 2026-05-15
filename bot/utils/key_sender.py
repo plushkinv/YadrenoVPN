@@ -24,16 +24,19 @@ DEFAULT_KEY_DELIVERY_TEXT = (
 
 
 async def send_key_with_qr(
-    messageable, 
-    key_data: dict, 
+    messageable,
+    key_data: dict,
     key_manage_markup: InlineKeyboardMarkup = None,
     is_new: bool = False
 ):
     """
     Отправляет пользователю ключ с QR-кодом и файлом конфигурации.
-    
+
     Использует единый HTML-контракт для текстов из редактора.
-    
+
+    В режиме subscription (key_data['sub_id'] не пустой И is_subscription_mode):
+    выдаёт subscription URL и QR этой ссылки; JSON-файл не отправляется.
+
     Args:
         messageable: Объект Message или CallbackQuery, куда отвечать
         key_data: Данные ключа из БД (должны содержать server_id, panel_email, client_uuid)
@@ -41,12 +44,59 @@ async def send_key_with_qr(
         is_new: Является ли ключ только что созданным
     """
     from bot.utils.text import escape_html
-    
+    from bot.services.vpn_api import is_subscription_mode, get_subscription_url_for_key
+    from bot.utils.message_editor import get_message_data
+
     try:
         # Проверяем наличие необходимых данных
         if not key_data.get('server_id') or not key_data.get('panel_email'):
              await _send_error(messageable, "Неполные данные ключа", key_manage_markup)
              return
+
+        # === Subscription mode: выдаём subscription URL + QR этой ссылки ===
+        if key_data.get('sub_id') and is_subscription_mode():
+            sub_url = await get_subscription_url_for_key(key_data)
+            if not sub_url:
+                await _send_error(messageable,
+                    "Не удалось получить subscription URL. "
+                    "Проверьте, что на панели 3X-UI включена подписка "
+                    "(Settings → Subscription → Enable).",
+                    key_manage_markup)
+                return
+
+            delivery_data = get_message_data('key_delivery_text', DEFAULT_KEY_DELIVERY_TEXT)
+            base_caption = delivery_data.get('text', DEFAULT_KEY_DELIVERY_TEXT)
+            key_snippet = f"<pre>{escape_html(sub_url)}</pre>"
+            caption = base_caption.replace('%ключ%', key_snippet)
+            if len(caption) > 1024:
+                title = "✅ <b>Ваша подписка!</b>" if is_new else "📋 <b>Ваша подписка</b>"
+                caption = (
+                    f"{title}\n\n"
+                    "👇 <b>Ваша subscription-ссылка (нажмите для копирования):</b>\n"
+                    f"<code>{escape_html(sub_url)}</code>\n\n"
+                    "📸 Отсканируйте QR-код, чтобы импортировать подписку в клиент."
+                )
+
+            qr_bytes = generate_qr_code(sub_url)
+            photo = BufferedInputFile(qr_bytes, filename="subscription_qr.png")
+            send_func = messageable.answer_photo if hasattr(messageable, 'answer_photo') else messageable.message.answer_photo
+
+            await send_func(
+                photo=photo,
+                caption=caption,
+                reply_markup=key_manage_markup,
+                parse_mode="HTML",
+            )
+
+            # Удаляем старое сообщение для CallbackQuery
+            if hasattr(messageable, 'message'):
+                try:
+                    await messageable.message.delete()
+                except Exception:
+                    pass
+            return
+
+        # === Keys-mode: текущая логика (ссылка + QR + JSON) ===
 
         # 1. Получаем конфигурацию с сервера
         try:

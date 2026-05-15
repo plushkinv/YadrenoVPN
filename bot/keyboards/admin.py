@@ -24,6 +24,7 @@ __all__ = [
     'admin_logs_menu_kb',
     'stop_bot_confirm_kb',
     'bot_settings_kb',
+    'bot_mode_toggle_confirm_kb',
     'force_overwrite_confirm_kb',
     'update_confirm_kb',
     'servers_list_kb',
