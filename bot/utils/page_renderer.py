@@ -147,6 +147,7 @@ def _build_keyboard(
         action_value = btn.get('action_value')
         label = btn.get('label', '')
         is_hidden = btn.get('is_hidden', False)
+        color = btn.get('color')
         row = btn.get('row', 0)
         col = btn.get('col', 0)
 
@@ -212,6 +213,7 @@ def _build_keyboard(
             'label': label,
             'callback_data': callback_data,
             'url': url,
+            'style': _resolve_button_style(color),
             'row': row,
             'col': col,
         })
@@ -236,11 +238,19 @@ def _build_keyboard(
             for btn in row_buttons:
                 if btn['url']:
                     kb_buttons.append(
-                        InlineKeyboardButton(text=btn['label'], url=btn['url'])
+                        InlineKeyboardButton(
+                            text=btn['label'],
+                            url=btn['url'],
+                            **({'style': btn['style']} if btn['style'] else {}),
+                        )
                     )
                 elif btn['callback_data']:
                     kb_buttons.append(
-                        InlineKeyboardButton(text=btn['label'], callback_data=btn['callback_data'])
+                        InlineKeyboardButton(
+                            text=btn['label'],
+                            callback_data=btn['callback_data'],
+                            **({'style': btn['style']} if btn['style'] else {}),
+                        )
                     )
 
             # Фолбэк: по MAX_BUTTONS_PER_ROW в ряд
@@ -254,6 +264,17 @@ def _build_keyboard(
             builder.row(*row_btns)
 
     return builder.as_markup()
+
+
+def _resolve_button_style(color: Optional[str]) -> Optional[str]:
+    """
+    Преобразует цвет из JSON кнопки в поддерживаемый Telegram style.
+
+    secondary — это обычный стиль клиента Telegram, его не передаём явно.
+    """
+    if color in {'primary', 'success', 'danger'}:
+        return color
+    return None
 
 
 async def render_page(
@@ -313,4 +334,33 @@ async def render_page(
 
     # 5. Отправляем/редактируем
     msg = target.message if isinstance(target, CallbackQuery) else target
-    await safe_edit_or_send(msg, text, reply_markup=kb, photo=image, force_new=force_new)
+    rendered_message = await safe_edit_or_send(
+        msg,
+        text,
+        reply_markup=kb,
+        photo=image,
+        force_new=force_new,
+    )
+
+    # 6. Запоминаем редактируемую пользовательскую страницу для /yaa.
+    try:
+        from config import ADMIN_IDS
+        from bot.services.page_context import remember_page_context
+
+        if isinstance(target, CallbackQuery):
+            viewer_id = target.from_user.id
+        else:
+            viewer_id = target.from_user.id if target.from_user else None
+
+        if viewer_id in ADMIN_IDS:
+            remember_page_context(
+                viewer_id,
+                page_key=page_key,
+                message=rendered_message,
+                visibility=visibility,
+                context=context,
+                text_replacements=text_replacements,
+                append_buttons=append_buttons,
+            )
+    except Exception as e:
+        logger.warning("Не удалось сохранить контекст страницы для /yaa: %s", e)

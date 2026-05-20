@@ -7,20 +7,76 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.services.vpn_api import get_client
 from bot.utils.key_generator import generate_link, generate_json, generate_qr_code
+from bot.utils.text import escape_html
 
 logger = logging.getLogger(__name__)
+
+KEY_COPY_PLACEHOLDER = '%ключ%'
+KEY_LINK_PLACEHOLDER = '%ссылка%'
+KEY_DELIVERY_PAGE = 'key_delivery'
 
 
 # Дефолтный текст выдачи ключа в формате HTML
 DEFAULT_KEY_DELIVERY_TEXT = (
     "✅ <b>Ваш VPN-ключ!</b>\n\n"
-    "%ключ%\n"
+    f"{KEY_COPY_PLACEHOLDER}\n"
     "☝️ Нажмите, чтобы скопировать.\n\n"
     "📱 <b>Инструкция:</b>\n"
     "1. Скопируйте ссылку или отсканируйте QR-код.\n"
     "2. Импортируйте в свой клиент. Какой именно клиент подходит, смотри в инструкции по кнопке ниже.\n"
     "3. Нажмите подключиться!"
 )
+
+
+def format_key_copy_value(raw_value: str) -> str:
+    """Форматирует ключ/подписку как копируемый моноширинный фрагмент."""
+    return f"<code>{escape_html(raw_value)}</code>"
+
+
+def format_key_plain_link(raw_value: str) -> str:
+    """
+    Возвращает чистую ссылку без code/pre.
+
+    HTTP/HTTPS subscription-ссылки Telegram показывает кликабельными. Для
+    custom-схем вроде vless:// ссылка остаётся обычным текстом, если клиент
+    Telegram не поддерживает такой переход.
+    """
+    return escape_html(raw_value)
+
+
+def build_key_delivery_text(template: str, raw_value: str) -> str:
+    """Подставляет плейсхолдеры выдачи ключа в редактируемый текст."""
+    return (
+        template
+        .replace(KEY_COPY_PLACEHOLDER, format_key_copy_value(raw_value))
+        .replace(KEY_LINK_PLACEHOLDER, format_key_plain_link(raw_value))
+    )
+
+
+def build_compact_delivery_text(
+    title: str,
+    raw_value: str,
+    copy_label: str,
+    qr_hint: str,
+) -> str:
+    """Фоллбэк для caption Telegram: сначала пробуем оставить оба варианта ссылки."""
+    compact = (
+        f"{title}\n\n"
+        f"👇 <b>{copy_label}:</b>\n"
+        f"{format_key_copy_value(raw_value)}\n\n"
+        "🔗 <b>Чистая ссылка:</b>\n"
+        f"{format_key_plain_link(raw_value)}\n\n"
+        f"{qr_hint}"
+    )
+    if len(compact) <= 1024:
+        return compact
+
+    return (
+        f"{title}\n\n"
+        f"👇 <b>{copy_label}:</b>\n"
+        f"{format_key_copy_value(raw_value)}\n\n"
+        f"{qr_hint}"
+    )
 
 
 async def send_key_with_qr(
@@ -43,7 +99,6 @@ async def send_key_with_qr(
         key_manage_markup: Клавиатура управления ключом
         is_new: Является ли ключ только что созданным
     """
-    from bot.utils.text import escape_html
     from bot.services.vpn_api import is_subscription_mode, get_subscription_url_for_key
     from bot.utils.message_editor import get_message_data
 
@@ -64,17 +119,16 @@ async def send_key_with_qr(
                     key_manage_markup)
                 return
 
-            delivery_data = get_message_data('key_delivery_text', DEFAULT_KEY_DELIVERY_TEXT)
+            delivery_data = get_message_data(KEY_DELIVERY_PAGE, DEFAULT_KEY_DELIVERY_TEXT)
             base_caption = delivery_data.get('text', DEFAULT_KEY_DELIVERY_TEXT)
-            key_snippet = f"<pre>{escape_html(sub_url)}</pre>"
-            caption = base_caption.replace('%ключ%', key_snippet)
+            caption = build_key_delivery_text(base_caption, sub_url)
             if len(caption) > 1024:
                 title = "✅ <b>Ваша подписка!</b>" if is_new else "📋 <b>Ваша подписка</b>"
-                caption = (
-                    f"{title}\n\n"
-                    "👇 <b>Ваша subscription-ссылка (нажмите для копирования):</b>\n"
-                    f"<code>{escape_html(sub_url)}</code>\n\n"
-                    "📸 Отсканируйте QR-код, чтобы импортировать подписку в клиент."
+                caption = build_compact_delivery_text(
+                    title=title,
+                    raw_value=sub_url,
+                    copy_label="Ваша subscription-ссылка",
+                    qr_hint="📸 Отсканируйте QR-код, чтобы импортировать подписку в клиент.",
                 )
 
             qr_bytes = generate_qr_code(sub_url)
@@ -112,7 +166,7 @@ async def send_key_with_qr(
             uuid = key_data.get('client_uuid', 'Unknown')
             text = (
                 f"📋 <b>Ваш VPN-ключ</b>\n\n"
-                f"<pre>{escape_html(uuid)}</pre>\n\n"
+                f"{format_key_copy_value(uuid)}\n\n"
                 "☝️ Нажмите на ключ, чтобы скопировать.\n"
                 "⚠️ Не удалось получить полную конфигурацию (сервер недоступен).\n"
                 "Попробуйте позже."
@@ -130,22 +184,20 @@ async def send_key_with_qr(
         # 3. Формируем сообщение через единый helper
         from bot.utils.message_editor import get_message_data
         
-        delivery_data = get_message_data('key_delivery_text', DEFAULT_KEY_DELIVERY_TEXT)
+        delivery_data = get_message_data(KEY_DELIVERY_PAGE, DEFAULT_KEY_DELIVERY_TEXT)
         base_caption = delivery_data.get('text', DEFAULT_KEY_DELIVERY_TEXT)
         
-        # Подстановка %ключ% — внутри <pre> экранирование не нужно
-        key_snippet = f"<pre>{link}</pre>"
-        caption = base_caption.replace('%ключ%', key_snippet)
+        caption = build_key_delivery_text(base_caption, link)
         
         # Если caption слишком длинный (Telegram limit 1024), сокращаем
         if len(caption) > 1024:
-             title = "✅ <b>Ваш новый VPN-ключ!</b>" if is_new else "📋 <b>Ваш VPN-ключ</b>"
-             caption = (
-                f"{title}\n\n"
-                "👇 <b>Ваша ссылка доступа (нажмите для копирования):</b>\n"
-                f"<code>{escape_html(link)}</code>\n\n"
-                "📸 Отсканируйте QR-код для быстрого подключения."
-             )
+            title = "✅ <b>Ваш новый VPN-ключ!</b>" if is_new else "📋 <b>Ваш VPN-ключ</b>"
+            caption = build_compact_delivery_text(
+                title=title,
+                raw_value=link,
+                copy_label="Ваша ссылка доступа",
+                qr_hint="📸 Отсканируйте QR-код для быстрого подключения.",
+            )
 
         # 4. Отправляем фото с QR и ссылкой
         photo = BufferedInputFile(qr_bytes, filename="qrcode.png")

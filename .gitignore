@@ -10,6 +10,7 @@ docs/
 results.md
 AGENTS.md
 .agents/
+tmp/
 **/__pycache__/
 .vscode
 

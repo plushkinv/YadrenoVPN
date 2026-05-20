@@ -12,6 +12,12 @@ __all__ = [
     'get_setting',
     'set_setting',
     'delete_setting',
+    'get_yadreno_admin_api_key',
+    'set_yadreno_admin_api_key',
+    'delete_yadreno_admin_api_key',
+    'get_yadreno_admin_server_ip',
+    'set_yadreno_admin_server_ip',
+    'delete_yadreno_admin_server_ip',
     'is_crypto_enabled',
     'is_stars_enabled',
     'is_crypto_configured',
@@ -82,6 +88,40 @@ def delete_setting(key: str) -> bool:
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
         return cursor.rowcount > 0
+
+
+YADRENO_ADMIN_API_KEY_SETTING = 'yadreno_admin_api_key'
+YADRENO_ADMIN_SERVER_IP_SETTING = 'yadreno_admin_server_ip'
+
+
+def get_yadreno_admin_api_key() -> Optional[str]:
+    """Возвращает общий api_key Yadreno Admin для этого Telegram-бота."""
+    return get_setting(YADRENO_ADMIN_API_KEY_SETTING)
+
+
+def set_yadreno_admin_api_key(api_key: str) -> None:
+    """Сохраняет общий api_key Yadreno Admin в settings."""
+    set_setting(YADRENO_ADMIN_API_KEY_SETTING, api_key)
+
+
+def delete_yadreno_admin_api_key() -> bool:
+    """Удаляет общий api_key Yadreno Admin из settings."""
+    return delete_setting(YADRENO_ADMIN_API_KEY_SETTING)
+
+
+def get_yadreno_admin_server_ip() -> str:
+    """Возвращает сохранённый публичный IP сервера для Yadreno Admin."""
+    return get_setting(YADRENO_ADMIN_SERVER_IP_SETTING, '') or ''
+
+
+def set_yadreno_admin_server_ip(server_ip: str) -> None:
+    """Сохраняет публичный IP сервера для Yadreno Admin в settings."""
+    set_setting(YADRENO_ADMIN_SERVER_IP_SETTING, server_ip.strip())
+
+
+def delete_yadreno_admin_server_ip() -> bool:
+    """Удаляет сохранённый публичный IP сервера Yadreno Admin из settings."""
+    return delete_setting(YADRENO_ADMIN_SERVER_IP_SETTING)
 
 def is_crypto_enabled() -> bool:
     """Проверяет, включены ли крипто-платежи."""

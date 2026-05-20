@@ -96,6 +96,8 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer()
     await state.set_state(AdminStates.admin_menu)
+    from bot.services.page_context import clear_page_context
+    clear_page_context(callback.from_user.id)
 
     # Снимаем застрявшую Reply-клавиатуру (например, после поиска пользователя)
     import asyncio
