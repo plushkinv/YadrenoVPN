@@ -49,15 +49,15 @@ def _renew_payment_page_text() -> str:
 def _renew_payment_page_buttons() -> str:
     """Дефолтные кнопки страницы выбора способа оплаты при продлении."""
     return json.dumps([
-        {"id": "btn_renew_pay_crypto",  "label": "🪙 Оплатить USDT",              "color": "primary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_stars",   "label": "⭐ Оплатить звёздами",          "color": "primary",   "row": 1, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_cards",   "label": "💳 TG payments",                "color": "primary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_qr",      "label": "📱 ЮКасса (QR/СБП)",            "color": "primary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_wata",    "label": "🌊 WATA (Карта/СБП)",           "color": "primary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_platega", "label": "💸 Platega (СБП)",              "color": "primary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_cardlink", "label": "🔗 Cardlink (Карта/СБП)",      "color": "primary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_demo",    "label": "🏦 Демо оплата (РФ карта)",     "color": "primary",   "row": 7, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_balance", "label": "💎 Использовать баланс",        "color": "primary",   "row": 8, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_crypto",  "label": "🪙 Оплатить USDT",              "color": "secondary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_stars",   "label": "⭐ Оплатить звёздами",          "color": "secondary",   "row": 1, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_cards",   "label": "💳 TG payments",                "color": "secondary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_qr",      "label": "📱 ЮКасса (QR/СБП)",            "color": "secondary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_wata",    "label": "🌊 WATA (Карта/СБП)",           "color": "secondary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_platega", "label": "💸 Platega (СБП)",              "color": "secondary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_cardlink", "label": "🔗 Cardlink (Карта/СБП)",      "color": "secondary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_demo",    "label": "🏦 Демо оплата (РФ карта)",     "color": "secondary",   "row": 7, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_balance", "label": "💎 Использовать баланс",        "color": "secondary",   "row": 8, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_back",        "label": "⬅️ Назад",                     "color": "secondary", "row": 9, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_back_main",         "label": "🈴 На главную",                "color": "secondary", "row": 9, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
     ], ensure_ascii=False)
