@@ -30,6 +30,10 @@ class SafeParseSession(AiohttpSession):
         method: TelegramMethod[TelegramType],
         timeout: Optional[float] = None
     ) -> TelegramType:
+        from bot.utils.text import prepare_telegram_method
+
+        method = prepare_telegram_method(method)
+
         try:
             return await super().make_request(bot, method, timeout)
         except TelegramBadRequest as e:

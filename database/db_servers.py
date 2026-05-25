@@ -16,9 +16,15 @@ __all__ = [
     'update_server',
     'update_server_field',
     'update_server_api_token',
+    'update_server_panel_info',
     'delete_server',
     'toggle_server_active',
 ]
+
+SERVER_SELECT_FIELDS = """
+    id, name, host, port, web_base_path, login, password, is_active, protocol,
+    api_token, panel_version, panel_api_profile, panel_checked_at
+"""
 
 def get_all_servers() -> List[Dict[str, Any]]:
     """
@@ -29,7 +35,7 @@ def get_all_servers() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, api_token
+            SELECT """ + SERVER_SELECT_FIELDS + """
             FROM servers
             ORDER BY id
         """)
@@ -47,7 +53,7 @@ def get_server_by_id(server_id: int) -> Optional[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, api_token
+            SELECT """ + SERVER_SELECT_FIELDS + """
             FROM servers
             WHERE id = ?
         """, (server_id,))
@@ -63,7 +69,7 @@ def get_active_servers() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, host, port, web_base_path, login, password, is_active, protocol, api_token
+            SELECT """ + SERVER_SELECT_FIELDS + """
             FROM servers
             WHERE is_active = 1
             ORDER BY id
@@ -123,7 +129,11 @@ def update_server(server_id: int, **fields) -> bool:
     Returns:
         True если обновление успешно
     """
-    allowed_fields = {'name', 'host', 'port', 'web_base_path', 'login', 'password', 'is_active', 'protocol', 'api_token'}
+    allowed_fields = {
+        'name', 'host', 'port', 'web_base_path', 'login', 'password',
+        'is_active', 'protocol', 'api_token', 'panel_version',
+        'panel_api_profile', 'panel_checked_at',
+    }
     fields = {k: v for k, v in fields.items() if k in allowed_fields}
     
     if not fields:
@@ -169,6 +179,43 @@ def update_server_api_token(server_id: int, token: Optional[str]) -> bool:
                 logger.info(f"Сохранён api_token для сервера ID {server_id} (3x-ui v3.0+)")
             else:
                 logger.info(f"Очищен api_token для сервера ID {server_id}")
+        return success
+
+
+def update_server_panel_info(
+    server_id: int,
+    version: Optional[str],
+    api_profile: Optional[str],
+) -> bool:
+    """
+    Обновляет кеш диагностики API панели 3x-ui.
+
+    Args:
+        server_id: ID сервера
+        version: Версия панели, если удалось определить
+        api_profile: 'legacy_inbounds' или 'clients_api'
+
+    Returns:
+        True если сервер существует
+    """
+    checked_at = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE servers
+            SET panel_version = ?,
+                panel_api_profile = ?,
+                panel_checked_at = ?
+            WHERE id = ?
+            """,
+            (version, api_profile, checked_at, server_id)
+        )
+        success = cursor.rowcount > 0
+        if success:
+            logger.info(
+                f"Обновлена диагностика 3x-ui для сервера ID {server_id}: "
+                f"version={version or 'unknown'}, profile={api_profile or 'unknown'}"
+            )
         return success
 
 

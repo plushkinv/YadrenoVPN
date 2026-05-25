@@ -58,7 +58,7 @@ from bot.keyboards.admin import (
 
 logger = logging.getLogger(__name__)
 
-from bot.utils.text import safe_edit_or_send
+from bot.utils.text import safe_edit_or_send, escape_html
 
 router = Router()
 
@@ -136,6 +136,10 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
         f"🔗 URL панели: {server.get('protocol', 'https')}://{server['host']}:{server['port']}{server['web_base_path']}",
         f"👤 Логин: <code>{server['login']}</code>",
         f"🔐 Пароль: <code>{password_masked}</code>\n",
+        f"🧩 <b>3x-ui API:</b>",
+        f"   Версия: <code>{escape_html(server.get('panel_version') or 'не определена')}</code>",
+        f"   Профиль: <code>{escape_html(server.get('panel_api_profile') or 'не определён')}</code>",
+        f"   Проверка: <code>{escape_html(server.get('panel_checked_at') or 'ещё не выполнялась')}</code>\n",
         f"📊 <b>Статистика:</b>",
         f"   {status_emoji} Статус: {status_text}",
     ]

@@ -78,6 +78,7 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
                 t.name as tariff_name, t.duration_days, t.price_cents,
                 s.name as server_name, s.host, s.port, s.web_base_path,
                 s.login, s.password, s.protocol, s.api_token,
+                s.panel_version, s.panel_api_profile, s.panel_checked_at,
                 s.is_active as server_active,
                 u.telegram_id, u.username
             FROM vpn_keys vk

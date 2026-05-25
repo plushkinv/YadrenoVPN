@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 31
+LATEST_VERSION = 32
 
 
 def _renew_payment_page_text() -> str:
@@ -251,7 +251,11 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             login TEXT NOT NULL,
             password TEXT NOT NULL,
             is_active INTEGER DEFAULT 1,
-            protocol TEXT DEFAULT 'https'
+            protocol TEXT DEFAULT 'https',
+            api_token TEXT,
+            panel_version TEXT,
+            panel_api_profile TEXT,
+            panel_checked_at TEXT
         )
     """)
 
@@ -920,6 +924,20 @@ def migration_31(conn):
     logger.info("Миграция v31 применена: добавлена страница renew_payment")
 
 
+def migration_32(conn):
+    """
+    Миграция v32: кеш диагностики панели 3x-ui.
+
+    panel_version хранит определённую версию панели, panel_api_profile — выбранный
+    профиль API ('legacy_inbounds' или 'clients_api'), panel_checked_at — время
+    последней успешной проверки.
+    """
+    _add_column(conn, "servers", "panel_version TEXT")
+    _add_column(conn, "servers", "panel_api_profile TEXT")
+    _add_column(conn, "servers", "panel_checked_at TEXT")
+    logger.info("Миграция v32 применена: добавлены поля диагностики 3x-ui в servers")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -931,6 +949,7 @@ MIGRATIONS = {
     29: migration_29,
     30: migration_30,
     31: migration_31,
+    32: migration_32,
 }
 
 

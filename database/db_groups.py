@@ -215,7 +215,8 @@ def get_active_servers_by_group(group_id: int) -> List[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.execute("""
             SELECT s.id, s.name, s.host, s.port, s.web_base_path, s.login,
-                   s.password, s.is_active, s.protocol, s.api_token
+                   s.password, s.is_active, s.protocol, s.api_token,
+                   s.panel_version, s.panel_api_profile, s.panel_checked_at
             FROM servers s
             JOIN server_groups sg ON sg.server_id = s.id
             WHERE sg.group_id = ? AND s.is_active = 1

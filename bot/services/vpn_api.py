@@ -141,7 +141,7 @@ async def reset_key_traffic_if_active(key_id: int) -> bool:
     key = get_vpn_key_by_id(key_id)
     if not key or not key.get('server_active'):
         return False
-    server_data = {'id': key.get('server_id'), 'name': key.get('server_name'), 'host': key.get('host'), 'port': key.get('port'), 'web_base_path': key.get('web_base_path'), 'login': key.get('login'), 'password': key.get('password')}
+    server_data = _build_server_data_from_key(key)
     inbound_id = key.get('panel_inbound_id')
     email = key.get('panel_email')
     if not email:
@@ -174,7 +174,7 @@ async def extend_key_on_server(key_id: int, days: int) -> bool:
     key = get_vpn_key_by_id(key_id)
     if not key or not key.get('server_active'):
         return False
-    server_data = {'id': key.get('server_id'), 'name': key.get('server_name'), 'host': key.get('host'), 'port': key.get('port'), 'web_base_path': key.get('web_base_path'), 'login': key.get('login'), 'password': key.get('password')}
+    server_data = _build_server_data_from_key(key)
     inbound_id = key.get('panel_inbound_id')
     client_uuid = key.get('client_uuid')
     email = key.get('panel_email')
@@ -235,12 +235,7 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
     # Обновляем totalGB на панели
     if key.get('server_active') and key.get('panel_email') and traffic_limit > 0:
         try:
-            server_data = {
-                'id': key.get('server_id'), 'name': key.get('server_name'),
-                'host': key.get('host'), 'port': key.get('port'),
-                'web_base_path': key.get('web_base_path'),
-                'login': key.get('login'), 'password': key.get('password')
-            }
+            server_data = _build_server_data_from_key(key)
             client = get_client_from_server_data(server_data)
             await client.update_client_limit(
                 inbound_id=key.get('panel_inbound_id'),
@@ -318,6 +313,9 @@ def _build_server_data_from_key(key: Dict[str, Any]) -> Dict[str, Any]:
         'password': key.get('password'),
         'protocol': key.get('protocol', 'https'),
         'api_token': key.get('api_token'),
+        'panel_version': key.get('panel_version'),
+        'panel_api_profile': key.get('panel_api_profile'),
+        'panel_checked_at': key.get('panel_checked_at'),
     }
 
 
