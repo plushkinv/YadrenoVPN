@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.keyboards.admin import (
+    yadreno_admin_agent_kb,
     yadreno_admin_cancel_key_kb,
     yadreno_admin_chat_kb,
     yadreno_admin_no_key_kb,
@@ -19,10 +20,14 @@ from bot.keyboards.admin import (
 from bot.services.page_context import get_page_context
 from bot.services.yadreno_admin import (
     YadrenoAdminError,
+    YadrenoAdminLatest,
     YadrenoAdminProgressEvent,
     cancel_active_dialog,
     detect_public_server_ip,
+    fetch_latest_dialog_event,
+    get_active_request_id,
     run_dialog,
+    start_new_chat,
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
@@ -68,6 +73,31 @@ def _progress_text(title: str, content: str) -> str:
     return f"{title}\n\n{body}"
 
 
+def _format_final_response(content: str, viewer_url: str | None = None) -> str:
+    """Форматирует финальный ответ агента для Telegram."""
+    response = content or "Готово."
+    if viewer_url:
+        response += f'\n\n<a href="{escape_html(viewer_url)}">Полная версия ответа</a>'
+    return response
+
+
+def _format_latest_event(latest: YadrenoAdminLatest) -> str | None:
+    """Форматирует snapshot для кнопки ручного восстановления."""
+    if latest.final is not None:
+        return _format_final_response(
+            latest.final.content,
+            latest.final.viewer_url,
+        )
+    if latest.progress is not None:
+        title = (
+            "📋 <b>План работы</b>"
+            if latest.progress.event == "task_update"
+            else "🤖 <b>Yadreno Admin</b>"
+        )
+        return _progress_text(title, latest.progress.content)
+    return None
+
+
 class _YadrenoProgressRenderer:
     """Редактирует промежуточные события Yadreno Admin в текущем чате."""
 
@@ -98,7 +128,12 @@ class _YadrenoProgressRenderer:
             target = self._anchor
             force_new = bool(self._status_messages)
 
-        updated = await safe_edit_or_send(target, text, force_new=force_new)
+        updated = await safe_edit_or_send(
+            target,
+            text,
+            reply_markup=yadreno_admin_agent_kb(),
+            force_new=force_new,
+        )
         self._status_messages[slot] = updated
         if not force_new:
             self._anchor = updated
@@ -109,6 +144,7 @@ class _YadrenoProgressRenderer:
         updated = await safe_edit_or_send(
             target,
             text,
+            reply_markup=yadreno_admin_agent_kb(),
             force_new=self._task_message is None,
         )
         self._task_message = updated
@@ -143,6 +179,119 @@ async def show_yadreno_admin(callback: CallbackQuery, state: FSMContext):
         return
     await callback.answer()
     await _show_yadreno_entry(callback, state)
+
+
+@router.callback_query(F.data == "admin_yadreno_new_chat")
+async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
+    """Открывает новый чат, если агент сейчас не занят."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    api_key = get_yadreno_admin_api_key()
+    if not api_key:
+        await callback.answer()
+        await _show_yadreno_entry(callback, state)
+        return
+
+    if get_active_request_id(callback.from_user.id) is not None:
+        await callback.answer(
+            "Агент ещё работает. Дождитесь ответа или нажмите «Отмена».",
+            show_alert=True,
+        )
+        return
+
+    try:
+        result = await start_new_chat(callback.from_user.id, api_key)
+    except YadrenoAdminError as e:
+        await callback.answer(str(e)[:180], show_alert=True)
+        return
+
+    if result.status == "busy":
+        await callback.answer(
+            result.response_text or "Агент ещё работает.",
+            show_alert=True,
+        )
+        return
+
+    await state.set_state(AdminStates.yadreno_chat)
+    await safe_edit_or_send(
+        callback.message,
+        "🆕 <b>Новый чат открыт</b>\n\n"
+        "Контекст сброшен. Напишите новую задачу обычным сообщением.",
+        reply_markup=yadreno_admin_chat_kb(),
+    )
+    await callback.answer("Новый чат открыт")
+
+
+@router.callback_query(F.data == "admin_yadreno_cancel")
+async def cancel_yadreno_dialog_button(callback: CallbackQuery):
+    """Отменяет активный запрос агента с кнопки."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    api_key = get_yadreno_admin_api_key()
+    if not api_key:
+        await callback.answer("Сначала укажите api_key", show_alert=True)
+        return
+
+    if get_active_request_id(callback.from_user.id) is None:
+        await callback.answer("Активного запроса нет", show_alert=False)
+        return
+
+    try:
+        cancelled = await cancel_active_dialog(callback.from_user.id, api_key)
+    except YadrenoAdminError as e:
+        await callback.answer(str(e)[:180], show_alert=True)
+        return
+
+    if not cancelled:
+        await callback.answer("Активного запроса нет", show_alert=False)
+        return
+
+    await safe_edit_or_send(
+        callback.message,
+        "🛑 <b>Запрос отменяется</b>\n\n"
+        "Агент завершит работу на следующей итерации.",
+        reply_markup=yadreno_admin_agent_kb(),
+    )
+    await callback.answer("Отмена отправлена")
+
+
+@router.callback_query(F.data == "admin_yadreno_nudge")
+async def nudge_yadreno_dialog(callback: CallbackQuery):
+    """Показывает последний snapshot через /latest без consume polling."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    api_key = get_yadreno_admin_api_key()
+    if not api_key:
+        await callback.answer("Сначала укажите api_key", show_alert=True)
+        return
+
+    try:
+        latest = await fetch_latest_dialog_event(callback.from_user.id, api_key)
+    except YadrenoAdminError as e:
+        await callback.answer(str(e)[:180], show_alert=True)
+        return
+
+    if latest is None:
+        await callback.answer("Активного запроса нет", show_alert=False)
+        return
+
+    text = _format_latest_event(latest)
+    if text is None:
+        await callback.answer("Пока свежих данных нет", show_alert=False)
+        return
+
+    await safe_edit_or_send(
+        callback.message,
+        text,
+        reply_markup=yadreno_admin_agent_kb(),
+    )
+    await callback.answer("Обновил")
 
 
 @router.callback_query(F.data == "admin_yadreno_set_key")
@@ -243,7 +392,12 @@ async def cancel_yadreno_dialog(message: Message):
         if cancelled
         else "ℹ️ <b>Активного запроса нет</b>"
     )
-    await safe_edit_or_send(message, text, force_new=True)
+    await safe_edit_or_send(
+        message,
+        text,
+        reply_markup=yadreno_admin_agent_kb(),
+        force_new=True,
+    )
 
 
 @router.message(AdminStates.yadreno_chat, F.text, ~F.text.startswith('/'))
@@ -266,6 +420,7 @@ async def handle_yadreno_chat_message(message: Message):
     thinking = await safe_edit_or_send(
         message,
         "🤖 <b>Yadreno Admin</b>\n\n⏳ Думаю...",
+        reply_markup=yadreno_admin_agent_kb(),
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(thinking)
@@ -276,19 +431,16 @@ async def handle_yadreno_chat_message(message: Message):
             text,
             progress_callback=progress.handle,
         )
-        response = final.content or "Готово."
-        if final.viewer_url:
-            response += f'\n\n<a href="{escape_html(final.viewer_url)}">Полная версия ответа</a>'
         await safe_edit_or_send(
             progress.final_target,
-            response,
-            reply_markup=yadreno_admin_chat_kb(),
+            _format_final_response(final.content, final.viewer_url),
+            reply_markup=yadreno_admin_agent_kb(),
         )
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
             f"❌ <b>Yadreno Admin недоступен</b>\n\n{escape_html(str(e))}",
-            reply_markup=yadreno_admin_chat_kb(),
+            reply_markup=yadreno_admin_agent_kb(),
         )
 
 
@@ -500,6 +652,7 @@ async def handle_yaa_command(message: Message, command: CommandObject):
         message,
         "🤖 <b>Yadreno Admin</b>\n\n"
         "⏳ Ведётся агентская работа...",
+        reply_markup=yadreno_admin_agent_kb(),
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(status_message)
@@ -519,6 +672,7 @@ async def handle_yaa_command(message: Message, command: CommandObject):
         await safe_edit_or_send(
             progress.final_target,
             f"❌ <b>Yadreno Admin недоступен</b>\n\n{escape_html(str(e))}",
+            reply_markup=yadreno_admin_agent_kb(),
         )
         return
 
@@ -549,10 +703,11 @@ async def handle_yaa_command(message: Message, command: CommandObject):
         )
         return
 
-    response = final.content or "Готово."
-    if final.viewer_url:
-        response += f'\n\n<a href="{escape_html(final.viewer_url)}">Полная версия ответа</a>'
-    await safe_edit_or_send(progress.final_target, response)
+    await safe_edit_or_send(
+        progress.final_target,
+        _format_final_response(final.content, final.viewer_url),
+        reply_markup=yadreno_admin_agent_kb(),
+    )
 
 
 @router.message(AdminStates.yadreno_chat, F.photo | F.document)
@@ -570,6 +725,6 @@ async def handle_yadreno_chat_attachment(message: Message):
         "Если нужен именно анализ изображения или файла, используйте основной "
         "<a href=\"https://t.me/YadrenoAdmin_Bot\">@YadrenoAdmin_Bot</a>: там файл "
         "скачивается ботом и загружается в файловое хранилище хаба.",
-        reply_markup=yadreno_admin_chat_kb(),
+        reply_markup=yadreno_admin_agent_kb(),
         force_new=True,
     )

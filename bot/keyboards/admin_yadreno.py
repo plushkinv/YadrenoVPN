@@ -26,15 +26,35 @@ def yadreno_admin_no_key_kb() -> InlineKeyboardMarkup:
 
 
 def yadreno_admin_chat_kb() -> InlineKeyboardMarkup:
-    """Клавиатура режима диалога с агентом."""
+    """Входная клавиатура чата с агентом."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
+            text='🆕 Новый чат',
+            callback_data='admin_yadreno_new_chat',
+        ),
+        InlineKeyboardButton(
             text='🔑 Заменить api_key',
             callback_data='admin_yadreno_set_key',
-        )
+        ),
     )
     builder.row(back_button('admin_panel'), home_button())
+    return builder.as_markup()
+
+
+def yadreno_admin_agent_kb() -> InlineKeyboardMarkup:
+    """Клавиатура сообщений агента."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text='❌ Отмена',
+            callback_data='admin_yadreno_cancel',
+        ),
+        InlineKeyboardButton(
+            text='🔄 Ну чё там?',
+            callback_data='admin_yadreno_nudge',
+        ),
+    )
     return builder.as_markup()
 
 

@@ -82,5 +82,6 @@ __all__ = [
     'referral_back_kb',
     'yadreno_admin_no_key_kb',
     'yadreno_admin_chat_kb',
+    'yadreno_admin_agent_kb',
     'yadreno_admin_cancel_key_kb',
 ]
