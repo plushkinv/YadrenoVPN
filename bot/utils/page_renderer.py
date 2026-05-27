@@ -123,6 +123,7 @@ def _build_keyboard(
     buttons: List[Dict],
     visibility: Optional[Dict[str, bool]],
     context: Optional[Dict],
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]],
     append_buttons: Optional[List[List[InlineKeyboardButton]]],
 ) -> InlineKeyboardMarkup:
     """
@@ -221,6 +222,11 @@ def _build_keyboard(
     # Группируем по row и строим клавиатуру
     builder = InlineKeyboardBuilder()
 
+    # Добавляем prepend_buttons перед кнопками страницы.
+    if prepend_buttons:
+        for row_btns in prepend_buttons:
+            builder.row(*row_btns)
+
     if resolved_buttons:
         # Группируем кнопки по row
         rows_map: Dict[int, List[Dict]] = {}
@@ -281,6 +287,7 @@ def build_page_keyboard(
     page_key: str,
     visibility: Optional[Dict[str, bool]] = None,
     context: Optional[Dict] = None,
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> Optional[InlineKeyboardMarkup]:
     """Собирает клавиатуру страницы из таблицы pages без отправки сообщения."""
@@ -292,6 +299,7 @@ def build_page_keyboard(
         buttons=page_data["buttons"],
         visibility=visibility,
         context=context,
+        prepend_buttons=prepend_buttons,
         append_buttons=append_buttons,
     )
 
@@ -302,6 +310,7 @@ async def render_page(
     visibility: Optional[Dict[str, bool]] = None,
     context: Optional[Dict] = None,
     text_replacements: Optional[Dict[str, str]] = None,
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     force_new: bool = False,
 ) -> None:
@@ -316,6 +325,8 @@ async def render_page(
         context: Контекст для system-кнопок (order_id, telegram_id, ...)
         text_replacements: Словарь плейсхолдеров для подстановки в текст
                           {"%тарифы%": "<b>Тарифы:</b>...", "%ключ%": "<pre>...</pre>"}
+        prepend_buttons: Доп. ряды кнопок перед кнопками страницы
+                       Список списков InlineKeyboardButton
         append_buttons: Доп. ряды кнопок вне БД (например, «Админ-панель»)
                        Список списков InlineKeyboardButton
         force_new: Принудительно отправить новое сообщение (не редактировать)
@@ -345,6 +356,7 @@ async def render_page(
         buttons=page_data["buttons"],
         visibility=visibility,
         context=context,
+        prepend_buttons=prepend_buttons,
         append_buttons=append_buttons,
     )
 
@@ -368,8 +380,11 @@ async def render_page(
 
         if isinstance(target, CallbackQuery):
             viewer_id = target.from_user.id
+        elif target.from_user and not target.from_user.is_bot:
+            viewer_id = target.from_user.id
         else:
-            viewer_id = target.from_user.id if target.from_user else None
+            chat = getattr(target, 'chat', None)
+            viewer_id = chat.id if chat and getattr(chat, 'type', None) == 'private' else None
 
         if viewer_id in ADMIN_IDS:
             remember_page_context(
@@ -379,6 +394,7 @@ async def render_page(
                 visibility=visibility,
                 context=context,
                 text_replacements=text_replacements,
+                prepend_buttons=prepend_buttons,
                 append_buttons=append_buttons,
             )
     except Exception as e:

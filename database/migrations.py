@@ -34,7 +34,48 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 32
+LATEST_VERSION = 34
+
+
+def _my_keys_item_template() -> str:
+    """Скрытый дефолт формата одного ключа на странице «Мои ключи»."""
+    return (
+        "%статус%<b>%имяключа%</b> - %трафик% - до %датаокончания%\n"
+        "     📍%сервер% - %инбаунд% (%протокол%)"
+    )
+
+
+def _my_keys_page_text() -> str:
+    """Дефолтный текст страницы списка ключей."""
+    return (
+        "🔑 <b>Мои ключи</b>\n\n"
+        "%списокключей%\n\n"
+        "Выберите ключ для управления:"
+    )
+
+
+def _my_keys_page_buttons() -> str:
+    """Дефолтные кнопки страницы списка ключей."""
+    return json.dumps([
+        {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
+
+
+def _my_keys_empty_page_text() -> str:
+    """Дефолтный текст пустой страницы «Мои ключи»."""
+    return (
+        "🔑 <b>Мои ключи</b>\n\n"
+        "У вас пока нет VPN-ключей.\n\n"
+        "Нажмите «Купить ключ», чтобы приобрести доступ! 🚀"
+    )
+
+
+def _my_keys_empty_page_buttons() -> str:
+    """Дефолтные кнопки пустой страницы «Мои ключи»."""
+    return json.dumps([
+        {"id": "btn_buy_key",   "label": "💳 Купить ключ", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_buy"},
+        {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
 
 
 def _renew_payment_page_text() -> str:
@@ -61,6 +102,145 @@ def _renew_payment_page_buttons() -> str:
         {"id": "btn_renew_back",        "label": "⬅️ Назад",                     "color": "secondary", "row": 9, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_back_main",         "label": "🈴 На главную",                "color": "secondary", "row": 9, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
     ], ensure_ascii=False)
+
+
+def _empty_page_buttons() -> str:
+    """Дефолт без кнопок страницы."""
+    return '[]'
+
+
+def _home_only_page_buttons() -> str:
+    """Дефолтная кнопка возврата на главную."""
+    return json.dumps([
+        {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
+
+
+def _key_navigation_page_buttons() -> str:
+    """Статические кнопки навигации после операций с ключом."""
+    return json.dumps([
+        {"id": "btn_help",      "label": "📄 Инструкция", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_help"},
+        {"id": "btn_my_keys",   "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_my_keys"},
+        {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
+
+
+def _key_details_page_buttons() -> str:
+    """Статическая навигация карточки ключа."""
+    return json.dumps([
+        {"id": "btn_my_keys",   "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_my_keys"},
+        {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
+
+
+def _renew_payment_unavailable_buttons() -> str:
+    """Кнопки страницы, когда способы продления недоступны."""
+    return json.dumps([
+        {"id": "btn_renew_back", "label": "⬅️ Назад", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_back_main",  "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
+
+
+def _key_details_page_text() -> str:
+    """Дефолт карточки конкретного ключа."""
+    return "%информацияключа%\n%историяопераций%"
+
+
+def _key_show_unconfigured_page_text() -> str:
+    """Дефолт страницы показа ещё не настроенного ключа."""
+    return (
+        "📋 <b>Показать ключ</b>\n\n"
+        "⚠️ Ключ ещё не создан на сервере.\n"
+        "Обратитесь в поддержку."
+    )
+
+
+def _renew_payment_unavailable_page_text() -> str:
+    """Дефолт страницы недоступного продления."""
+    return (
+        "💳 <b>Продление ключа</b>\n\n"
+        "😔 Способы оплаты временно недоступны.\n"
+        "Попробуйте позже."
+    )
+
+
+def _key_replace_server_select_page_text() -> str:
+    """Дефолт выбора сервера для замены ключа."""
+    return (
+        "🔄 <b>Замена ключа</b>\n\n"
+        "%данныеэкрана%\n\n"
+        "Выберите сервер:"
+    )
+
+
+def _key_replace_inbound_select_page_text() -> str:
+    """Дефолт выбора протокола для замены ключа."""
+    return (
+        "🖥️ <b>Выбор протокола</b>\n\n"
+        "%данныеэкрана%\n\n"
+        "Выберите протокол:"
+    )
+
+
+def _key_replace_confirm_page_text() -> str:
+    """Дефолт подтверждения замены ключа."""
+    return (
+        "⚠️ <b>Подтверждение замены</b>\n\n"
+        "%данныезамены%\n\n"
+        "Вы уверены?"
+    )
+
+
+def _key_rename_prompt_page_text() -> str:
+    """Дефолт запроса нового имени ключа."""
+    return (
+        "✏️ <b>Переименование ключа</b>\n\n"
+        "%данныеключа%\n\n"
+        "Введите новое название для ключа (макс. 30 символов):\n"
+        "<i>(Отправьте любой текст)</i>"
+    )
+
+
+def _new_key_server_select_page_text() -> str:
+    """Дефолт выбора сервера после оплаты."""
+    return (
+        "🎉 <b>Оплата прошла успешно!</b>\n\n"
+        "%данныеэкрана%"
+    )
+
+
+def _new_key_inbound_select_page_text() -> str:
+    """Дефолт выбора протокола после оплаты."""
+    return (
+        "🖥️ <b>Выбор протокола</b>\n\n"
+        "%данныеэкрана%\n\n"
+        "Выберите протокол:"
+    )
+
+
+def _new_key_no_servers_page_text() -> str:
+    """Дефолт страницы отсутствия серверов после оплаты."""
+    return (
+        "🎉 <b>Оплата прошла успешно!</b>\n\n"
+        "⚠️ К сожалению, сейчас нет доступных серверов.\n"
+        "Пожалуйста, свяжитесь с поддержкой."
+    )
+
+
+def _key_runtime_page_defaults() -> dict:
+    """Дефолты страниц ключей, редактируемых только через /yaa."""
+    return {
+        'key_details': (_key_details_page_text(), _key_details_page_buttons()),
+        'key_show_unconfigured': (_key_show_unconfigured_page_text(), _key_navigation_page_buttons()),
+        'renew_payment_unavailable': (_renew_payment_unavailable_page_text(), _renew_payment_unavailable_buttons()),
+        'key_replace_server_select': (_key_replace_server_select_page_text(), _empty_page_buttons()),
+        'key_replace_inbound_select': (_key_replace_inbound_select_page_text(), _empty_page_buttons()),
+        'key_replace_confirm': (_key_replace_confirm_page_text(), _empty_page_buttons()),
+        'key_rename_prompt': (_key_rename_prompt_page_text(), _empty_page_buttons()),
+        'new_key_server_select': (_new_key_server_select_page_text(), _home_only_page_buttons()),
+        'new_key_inbound_select': (_new_key_inbound_select_page_text(), _empty_page_buttons()),
+        'new_key_no_servers': (_new_key_no_servers_page_text(), _home_only_page_buttons()),
+    }
 
 
 def get_current_version() -> int:
@@ -172,6 +352,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('update_blocked', '0'),
         ('daily_tasks_time', '03:00'),
         ('update_check_time', '12:00'),
+        ('my_keys_item_template', _my_keys_item_template()),
         # Режим работы бота для новых установок — Subscription
         # (бот выдаёт subscription URL, ключи во всех inbound с единым subId).
         # На существующих ботах migration_28 ставит 'key' — там уже есть рабочие
@@ -464,6 +645,14 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             'text': _renew_payment_page_text(),
             'buttons': _renew_payment_page_buttons(),
         },
+        'my_keys': {
+            'text': _my_keys_page_text(),
+            'buttons': _my_keys_page_buttons(),
+        },
+        'my_keys_empty': {
+            'text': _my_keys_empty_page_text(),
+            'buttons': _my_keys_empty_page_buttons(),
+        },
         'referral': {
             'text': (
                 "👥 <b>Реферальная система</b>\n\n"
@@ -497,6 +686,11 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             ], ensure_ascii=False),
         },
     }
+    for page_key, (text_default, buttons_default) in _key_runtime_page_defaults().items():
+        page_defaults[page_key] = {
+            'text': text_default,
+            'buttons': buttons_default,
+        }
 
     for page_key, data in page_defaults.items():
         conn.execute(
@@ -938,6 +1132,74 @@ def migration_32(conn):
     logger.info("Миграция v32 применена: добавлены поля диагностики 3x-ui в servers")
 
 
+def migration_33(conn):
+    """
+    Миграция v33: перенос страницы «Мои ключи» в таблицу pages.
+
+    Создаёт страницы my_keys/my_keys_empty и скрытую настройку формата одного
+    ключа. Кастомные поля страниц не изменяются.
+    """
+    page_defaults = {
+        'my_keys': (_my_keys_page_text(), _my_keys_page_buttons()),
+        'my_keys_empty': (_my_keys_empty_page_text(), _my_keys_empty_page_buttons()),
+    }
+
+    for page_key, (text_default, buttons_default) in page_defaults.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO pages (page_key, text_default, buttons_default)
+            VALUES (?, ?, ?)
+            """,
+            (page_key, text_default, buttons_default),
+        )
+        conn.execute(
+            """
+            UPDATE pages
+            SET text_default = ?,
+                buttons_default = ?
+            WHERE page_key = ?
+            """,
+            (text_default, buttons_default, page_key),
+        )
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('my_keys_item_template', ?)
+        """,
+        (_my_keys_item_template(),),
+    )
+    logger.info("Миграция v33 применена: добавлены страницы my_keys/my_keys_empty")
+
+
+def migration_34(conn):
+    """
+    Миграция v34: перенос дополнительных пользовательских экранов ключей в pages.
+
+    Обновляет только дефолтные поля. Кастомные текст, картинка и кнопки
+    администраторов остаются без изменений.
+    """
+    for page_key, (text_default, buttons_default) in _key_runtime_page_defaults().items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO pages (page_key, text_default, buttons_default)
+            VALUES (?, ?, ?)
+            """,
+            (page_key, text_default, buttons_default),
+        )
+        conn.execute(
+            """
+            UPDATE pages
+            SET text_default = ?,
+                buttons_default = ?
+            WHERE page_key = ?
+            """,
+            (text_default, buttons_default, page_key),
+        )
+
+    logger.info("Миграция v34 применена: добавлены пользовательские страницы ключей")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -950,6 +1212,8 @@ MIGRATIONS = {
     30: migration_30,
     31: migration_31,
     32: migration_32,
+    33: migration_33,
+    34: migration_34,
 }
 
 

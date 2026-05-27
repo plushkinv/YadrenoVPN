@@ -18,9 +18,10 @@ async def start_new_key_config(message: Message, state: FSMContext, order_id: st
     """
     from database.requests import get_active_servers, find_order_by_order_id
     from bot.keyboards.user import new_key_server_list_kb
-    from bot.keyboards.admin import home_only_kb
     from bot.states.user_states import NewKeyConfig
+    from bot.utils.key_pages import build_new_key_server_select_data, keyboard_rows
     from bot.utils.groups import get_servers_for_key
+    from bot.utils.page_renderer import render_page
     order = find_order_by_order_id(order_id)
     tariff_id = order.get('tariff_id') if order else None
     if tariff_id:
@@ -29,11 +30,17 @@ async def start_new_key_config(message: Message, state: FSMContext, order_id: st
         servers = get_active_servers()
     if not servers:
         logger.error(f'Нет активных серверов для создания ключа (Order: {order_id})')
-        await safe_edit_or_send(message, '🎉 <b>Оплата прошла успешно!</b>\n\n⚠️ К сожалению, сейчас нет доступных серверов.\nПожалуйста, свяжитесь с поддержкой.', reply_markup=home_only_kb(), force_new=True)
+        await render_page(message, page_key='new_key_no_servers', force_new=True)
         return
     await state.set_state(NewKeyConfig.waiting_for_server)
     await state.update_data(new_key_order_id=order_id, new_key_id=key_id)
-    await safe_edit_or_send(message, '🎉 <b>Оплата прошла успешно!</b>\n\n🔑 Теперь выберите сервер для вашего нового ключа.', reply_markup=new_key_server_list_kb(servers), force_new=True)
+    await render_page(
+        message,
+        page_key='new_key_server_select',
+        text_replacements={'%данныеэкрана%': build_new_key_server_select_data()},
+        prepend_buttons=keyboard_rows(new_key_server_list_kb(servers, include_home=False)),
+        force_new=True,
+    )
 
 @router.callback_query(F.data.startswith('new_key_server:'))
 async def process_new_key_server_selection(callback: CallbackQuery, state: FSMContext):
@@ -42,6 +49,8 @@ async def process_new_key_server_selection(callback: CallbackQuery, state: FSMCo
     from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
     from bot.keyboards.user import new_key_inbound_list_kb
     from bot.states.user_states import NewKeyConfig
+    from bot.utils.key_pages import build_server_screen_data, keyboard_rows
+    from bot.utils.page_renderer import render_page
     server_id = int(callback.data.split(':')[1])
     server = get_server_by_id(server_id)
     if not server:
@@ -64,7 +73,12 @@ async def process_new_key_server_selection(callback: CallbackQuery, state: FSMCo
             await process_new_key_final(callback, state, server_id, inbounds[0]['id'])
             return
         await state.set_state(NewKeyConfig.waiting_for_inbound)
-        await safe_edit_or_send(callback.message, f"🖥️ <b>Сервер:</b> {escape_html(server['name'])}\n\nВыберите протокол:", reply_markup=new_key_inbound_list_kb(inbounds))
+        await render_page(
+            callback,
+            page_key='new_key_inbound_select',
+            text_replacements={'%данныеэкрана%': build_server_screen_data(server)},
+            prepend_buttons=keyboard_rows(new_key_inbound_list_kb(inbounds)),
+        )
     except VPNAPIError as e:
         await callback.answer(f'❌ Ошибка подключения: {e}', show_alert=True)
     await callback.answer()
@@ -249,7 +263,9 @@ async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
     from database.requests import get_active_servers, find_order_by_order_id
     from bot.keyboards.user import new_key_server_list_kb
     from bot.states.user_states import NewKeyConfig
+    from bot.utils.key_pages import build_new_key_server_back_data, keyboard_rows
     from bot.utils.groups import get_servers_for_key
+    from bot.utils.page_renderer import render_page
     data = await state.get_data()
     order_id = data.get('new_key_order_id')
     tariff_id = None
@@ -258,4 +274,9 @@ async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
         tariff_id = order.get('tariff_id') if order else None
     servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
     await state.set_state(NewKeyConfig.waiting_for_server)
-    await safe_edit_or_send(callback.message, '🔑 Выберите сервер для вашего нового ключа.', reply_markup=new_key_server_list_kb(servers))
+    await render_page(
+        callback,
+        page_key='new_key_server_select',
+        text_replacements={'%данныеэкрана%': build_new_key_server_back_data()},
+        prepend_buttons=keyboard_rows(new_key_server_list_kb(servers, include_home=False)),
+    )

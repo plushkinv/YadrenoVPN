@@ -21,6 +21,18 @@ SUPPORTED_YAA_PAGE_KEYS = frozenset({
     'renew_payment',
     'referral',
     'key_delivery',
+    'my_keys',
+    'my_keys_empty',
+    'key_details',
+    'key_show_unconfigured',
+    'renew_payment_unavailable',
+    'key_replace_server_select',
+    'key_replace_inbound_select',
+    'key_replace_confirm',
+    'key_rename_prompt',
+    'new_key_server_select',
+    'new_key_inbound_select',
+    'new_key_no_servers',
 })
 
 
@@ -33,6 +45,7 @@ class PageContext:
     visibility: Optional[Dict[str, bool]]
     context: Optional[Dict[str, Any]]
     text_replacements: Optional[Dict[str, str]]
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]]
     append_buttons: Optional[List[List[InlineKeyboardButton]]]
 
 
@@ -46,6 +59,7 @@ def remember_page_context(
     visibility: Optional[Dict[str, bool]] = None,
     context: Optional[Dict[str, Any]] = None,
     text_replacements: Optional[Dict[str, str]] = None,
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> None:
     """Запоминает страницу администратора, если она поддерживает /yaa."""
@@ -57,6 +71,7 @@ def remember_page_context(
         visibility=dict(visibility) if visibility else None,
         context=dict(context) if context else None,
         text_replacements=dict(text_replacements) if text_replacements else None,
+        prepend_buttons=prepend_buttons,
         append_buttons=append_buttons,
     )
 

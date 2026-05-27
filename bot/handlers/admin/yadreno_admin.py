@@ -33,6 +33,7 @@ from bot.utils.text import (
     safe_edit_or_send,
 )
 from database.requests import (
+    get_setting,
     get_page,
     get_yadreno_admin_api_key,
     set_yadreno_admin_server_ip,
@@ -296,6 +297,24 @@ def _serialize_for_compare(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
 
 
+def _get_yaa_editable_state(page_key: str) -> dict[str, Any]:
+    """Возвращает состояние, изменение которого должно перерисовать /yaa-экран."""
+    state: dict[str, Any] = {
+        'page': get_page_data(page_key),
+    }
+    if page_key in {'my_keys', 'my_keys_empty'}:
+        from bot.utils.my_keys_page import (
+            DEFAULT_MY_KEYS_ITEM_TEMPLATE,
+            MY_KEYS_ITEM_TEMPLATE_SETTING,
+        )
+
+        state['my_keys_item_template'] = get_setting(
+            MY_KEYS_ITEM_TEMPLATE_SETTING,
+            DEFAULT_MY_KEYS_ITEM_TEMPLATE,
+        )
+    return state
+
+
 def _extract_yaa_attachment_context(message: Message) -> str:
     """Возвращает контекст прикреплённого к /yaa медиа для агента."""
     if message.photo:
@@ -351,6 +370,64 @@ def _build_yaa_prompt(page_key: str, task: str, attachment_context: str = "") ->
         placeholder_hint = (
             "Плейсхолдеры страницы renew_payment:\n"
             "- %имяключа% — название продлеваемого ключа, уже экранированное для HTML.\n\n"
+        )
+    elif page_key in {'my_keys', 'my_keys_empty'}:
+        from bot.utils.my_keys_page import (
+            DEFAULT_MY_KEYS_ITEM_TEMPLATE,
+            MY_KEYS_ITEM_TEMPLATE_SETTING,
+        )
+
+        item_template = get_setting(
+            MY_KEYS_ITEM_TEMPLATE_SETTING,
+            DEFAULT_MY_KEYS_ITEM_TEMPLATE,
+        )
+        placeholder_hint = (
+            "Плейсхолдеры страницы my_keys:\n"
+            "- %списокключей% — готовый HTML-список ключей пользователя.\n\n"
+            "Формат одной записи списка хранится в скрытой настройке settings.my_keys_item_template. "
+            "Обычной админки для неё нет: если администратор просит изменить формат отображения ключей, "
+            "обнови именно строку settings с key='my_keys_item_template'.\n"
+            "Плейсхолдеры скрытого шаблона: %статус%, %имяключа%, %трафик%, %датаокончания%, "
+            "%сервер%, %инбаунд%, %протокол%, %id%.\n"
+            f"Текущее значение settings.my_keys_item_template: {item_template or ''}\n\n"
+        )
+    elif page_key == 'key_details':
+        placeholder_hint = (
+            "Плейсхолдеры страницы key_details:\n"
+            "- %информацияключа% — готовый HTML-блок с названием, статусом, сервером, протоколом, трафиком и сроком ключа.\n"
+            "- %историяопераций% — готовый HTML-блок истории оплат/операций; может быть пустым.\n\n"
+            "Кнопки управления конкретным ключом (показать, продлить, заменить, переименовать) "
+            "генерируются кодом как runtime-кнопки и не лежат в pages.buttons_*.\n\n"
+        )
+    elif page_key in {
+        'key_replace_server_select',
+        'key_replace_inbound_select',
+        'new_key_server_select',
+        'new_key_inbound_select',
+    }:
+        placeholder_hint = (
+            f"Плейсхолдеры страницы {page_key}:\n"
+            "- %данныеэкрана% — готовый HTML-блок с внутренними данными текущего шага.\n\n"
+            "Кнопки списков серверов/протоколов генерируются кодом как runtime-кнопки "
+            "и не лежат в pages.buttons_*.\n\n"
+        )
+    elif page_key == 'key_replace_confirm':
+        placeholder_hint = (
+            "Плейсхолдеры страницы key_replace_confirm:\n"
+            "- %данныезамены% — готовый HTML-блок с ключом, новым сервером и предупреждением.\n\n"
+            "Кнопки подтверждения/отмены генерируются кодом как runtime-кнопки "
+            "и не лежат в pages.buttons_*.\n\n"
+        )
+    elif page_key == 'key_rename_prompt':
+        placeholder_hint = (
+            "Плейсхолдеры страницы key_rename_prompt:\n"
+            "- %данныеключа% — готовый HTML-блок с текущим именем ключа.\n\n"
+            "Кнопка отмены генерируется кодом как runtime-кнопка и не лежит в pages.buttons_*.\n\n"
+        )
+    elif page_key in {'key_show_unconfigured', 'renew_payment_unavailable', 'new_key_no_servers'}:
+        placeholder_hint = (
+            f"Страница {page_key} не требует динамических плейсхолдеров. "
+            "Можно менять текст, картинку и статические кнопки из pages.buttons_*.\n\n"
         )
     attachment_block = (
         f"\n{attachment_context}\n"
@@ -416,7 +493,7 @@ async def handle_yaa_command(message: Message, command: CommandObject):
         )
         return
 
-    before = _serialize_for_compare(get_page_data(page_context.page_key))
+    before = _serialize_for_compare(_get_yaa_editable_state(page_context.page_key))
     attachment_context = _extract_yaa_attachment_context(message)
     prompt = _build_yaa_prompt(page_context.page_key, task, attachment_context)
     status_message = await safe_edit_or_send(
@@ -445,7 +522,7 @@ async def handle_yaa_command(message: Message, command: CommandObject):
         )
         return
 
-    after = _serialize_for_compare(get_page_data(page_context.page_key))
+    after = _serialize_for_compare(_get_yaa_editable_state(page_context.page_key))
     if before != after:
         try:
             await progress.final_target.delete()
@@ -456,12 +533,18 @@ async def handle_yaa_command(message: Message, command: CommandObject):
 
             if await rerender_key_delivery_page_context(page_context, message.from_user.id):
                 return
+        if page_context.page_key in {'my_keys', 'my_keys_empty'}:
+            from bot.handlers.user.keys import rerender_my_keys_page_context
+
+            if await rerender_my_keys_page_context(page_context, message.from_user.id):
+                return
         await render_page(
             page_context.message,
             page_key=page_context.page_key,
             visibility=page_context.visibility,
             context=page_context.context,
             text_replacements=page_context.text_replacements,
+            prepend_buttons=page_context.prepend_buttons,
             append_buttons=page_context.append_buttons,
         )
         return

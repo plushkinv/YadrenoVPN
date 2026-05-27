@@ -69,17 +69,7 @@ async def on_key_delete_confirm(callback: CallbackQuery):
     logger.info(f"Ключ #{key_id} удалён из БД (админ)")
 
     # 2. Затем пытаемся удалить с панели, если ключ был привязан
-    panel_deleted = False
-    if (key.get('server_active') and key.get('panel_inbound_id')
-            and key.get('client_uuid') and key.get('host')):
-        try:
-            server_data = _build_server_data(key)
-            client = get_client_from_server_data(server_data)
-            await client.delete_client(key['panel_inbound_id'], key['client_uuid'])
-            panel_deleted = True
-            logger.info(f"Ключ #{key_id} удалён с панели {key.get('server_name')}")
-        except Exception as e:
-            logger.warning(f"Не удалось удалить ключ #{key_id} с панели: {e}")
+    panel_deleted = await _delete_key_from_panel(key)
 
     status = "✅ Ключ удалён из БД и с панели" if panel_deleted else "✅ Ключ удалён из БД"
     await callback.answer(status, show_alert=True)
@@ -110,6 +100,43 @@ async def on_key_delete_confirm(callback: CallbackQuery):
         "👥 <b>Управление пользователями</b>",
         reply_markup=users_menu_kb(stats)
     )
+
+
+async def _delete_key_from_panel(key: dict) -> bool:
+    """Удаляет ключ с панели, учитывая subscription-ключи во всех inbound."""
+    key_id = key.get('id')
+    if not (key.get('server_active') and key.get('host')):
+        return False
+
+    is_subscription_key = bool(key.get('sub_id') and key.get('panel_email'))
+    is_single_key = bool(key.get('panel_inbound_id') and key.get('client_uuid'))
+    if not (is_subscription_key or is_single_key):
+        return False
+
+    try:
+        server_data = _build_server_data(key)
+        client = get_client_from_server_data(server_data)
+
+        if is_subscription_key:
+            deleted_count = await client.delete_clients_by_email_on_server(key['panel_email'])
+            if deleted_count > 0:
+                logger.info(
+                    f"Ключ #{key_id} удалён с панели {key.get('server_name')} "
+                    f"по panel_email={key.get('panel_email')} ({deleted_count} inbound/client)"
+                )
+                return True
+            logger.warning(
+                f"Ключ #{key_id} не найден на панели {key.get('server_name')} "
+                f"по panel_email={key.get('panel_email')}"
+            )
+            return False
+
+        await client.delete_client(key['panel_inbound_id'], key['client_uuid'])
+        logger.info(f"Ключ #{key_id} удалён с панели {key.get('server_name')}")
+        return True
+    except Exception as e:
+        logger.warning(f"Не удалось удалить ключ #{key_id} с панели: {e}")
+        return False
 
 
 # ──────────────────── Синхронизация удалённых ключей ────────────────────────

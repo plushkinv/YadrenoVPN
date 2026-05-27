@@ -476,7 +476,7 @@ def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def key_manage_kb(key_id: int, is_unconfigured: bool = False, is_active: bool = True, is_traffic_exhausted: bool = False, has_sub_id: bool = False) -> InlineKeyboardMarkup:
+def key_manage_kb(key_id: int, is_unconfigured: bool = False, is_active: bool = True, is_traffic_exhausted: bool = False, has_sub_id: bool = False, include_navigation: bool = True) -> InlineKeyboardMarkup:
     """
     Клавиатура управления ключом.
 
@@ -486,6 +486,7 @@ def key_manage_kb(key_id: int, is_unconfigured: bool = False, is_active: bool = 
         is_active: True, если ключ активен (срок действия не истек)
         is_traffic_exhausted: True, если трафик исчерпан
         has_sub_id: True, если у ключа есть sub_id (показывает «📋 Показать подписку»)
+        include_navigation: Добавлять ли нижний ряд «Мои ключи»/«На главную»
     """
     show_label = "📋 Показать подписку" if has_sub_id else "📋 Показать ключ"
     builder = InlineKeyboardBuilder()
@@ -530,11 +531,12 @@ def key_manage_kb(key_id: int, is_unconfigured: bool = False, is_active: bool = 
             InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"key_rename:{key_id}")
         )
     
-    # ТРЕТИЙ ряд (унифицированный): Инструкция и Мои ключи
-    builder.row(
-        InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"),
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
+    if include_navigation:
+        # ТРЕТИЙ ряд (унифицированный): Мои ключи и главная
+        builder.row(
+            InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"),
+            InlineKeyboardButton(text="🈴 На главную", callback_data="start")
+        )
     
     return builder.as_markup()
 
@@ -737,7 +739,7 @@ def replace_confirm_kb(key_id: int) -> InlineKeyboardMarkup:
 # НОВЫЙ КЛЮЧ (ПОСЛЕ ОПЛАТЫ)
 # ============================================================================
 
-def new_key_server_list_kb(servers: list) -> InlineKeyboardMarkup:
+def new_key_server_list_kb(servers: list, include_home: bool = True) -> InlineKeyboardMarkup:
     """
     Клавиатура выбора сервера для создания нового ключа.
     
@@ -757,12 +759,13 @@ def new_key_server_list_kb(servers: list) -> InlineKeyboardMarkup:
             )
         )
     
-    # Кнопка «На главную» — на случай если передумал (ключ можно создать потом через поддержку, 
-    # но логика бота пока этого не предусматривает -> pending order останется paid но без vpn_key_id.
-    # TODO: Реализовать "досоздание" ключа позже.
-    builder.row(
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
+    if include_home:
+        # Кнопка «На главную» — на случай если передумал (ключ можно создать потом через поддержку,
+        # но логика бота пока этого не предусматривает -> pending order останется paid но без vpn_key_id.
+        # TODO: Реализовать "досоздание" ключа позже.
+        builder.row(
+            InlineKeyboardButton(text="🈴 На главную", callback_data="start")
+        )
     
     return builder.as_markup()
 
