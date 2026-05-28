@@ -103,13 +103,18 @@ class _YadrenoProgressRenderer:
 
     def __init__(self, anchor: Message):
         self._anchor = anchor
+        self._live_status_message: Message | None = anchor
         self._status_messages: dict[str, Message] = {}
         self._task_message: Message | None = None
+        self._last_live_status_text = _progress_text(
+            "🤖 <b>Yadreno Admin</b>",
+            "⏳ Ведётся агентская работа...",
+        )
 
     @property
     def final_target(self) -> Message:
         """Сообщение, которое нужно заменить финальным ответом."""
-        return self._anchor
+        return self._live_status_message or self._anchor
 
     async def handle(self, event: YadrenoAdminProgressEvent) -> None:
         """Показывает status/task_update и продолжает polling."""
@@ -122,11 +127,26 @@ class _YadrenoProgressRenderer:
     async def _show_status(self, event: YadrenoAdminProgressEvent) -> None:
         slot = event.slot or "status"
         text = _progress_text("🤖 <b>Yadreno Admin</b>", event.content)
+        is_live_status = slot in {"status", "heartbeat"}
+
+        if is_live_status:
+            self._last_live_status_text = text
+            target = self._live_status_message or self._anchor
+            updated = await safe_edit_or_send(
+                target,
+                text,
+                reply_markup=yadreno_admin_agent_kb(),
+            )
+            self._live_status_message = updated
+            self._status_messages[slot] = updated
+            if self._task_message is None:
+                self._anchor = updated
+            return
+
         target = self._status_messages.get(slot)
-        force_new = False
+        force_new = target is None
         if target is None:
-            target = self._anchor
-            force_new = bool(self._status_messages)
+            target = self._live_status_message or self._anchor
 
         updated = await safe_edit_or_send(
             target,
@@ -135,19 +155,54 @@ class _YadrenoProgressRenderer:
             force_new=force_new,
         )
         self._status_messages[slot] = updated
-        if not force_new:
-            self._anchor = updated
 
     async def _show_task_update(self, event: YadrenoAdminProgressEvent) -> None:
         text = _progress_text("📋 <b>План работы</b>", event.content)
-        target = self._task_message or self._anchor
-        updated = await safe_edit_or_send(
+        if self._task_message is not None:
+            self._task_message = await safe_edit_or_send(
+                self._task_message,
+                text,
+                reply_markup=yadreno_admin_agent_kb(),
+            )
+            return
+
+        target = self._live_status_message or self._anchor
+        self._task_message = await safe_edit_or_send(
             target,
             text,
             reply_markup=yadreno_admin_agent_kb(),
-            force_new=self._task_message is None,
         )
-        self._task_message = updated
+        self._anchor = self._task_message
+        self._live_status_message = await safe_edit_or_send(
+            self._task_message,
+            self._last_live_status_text,
+            reply_markup=yadreno_admin_agent_kb(),
+            force_new=True,
+        )
+        self._status_messages["status"] = self._live_status_message
+        self._status_messages["heartbeat"] = self._live_status_message
+
+    async def delete_progress_messages(self) -> None:
+        """Удаляет все сообщения progress-рендерера без падения сценария."""
+        messages = [
+            self._anchor,
+            self._task_message,
+            self._live_status_message,
+            *self._status_messages.values(),
+        ]
+        seen: set[int] = set()
+        for msg in messages:
+            if msg is None:
+                continue
+            message_id = getattr(msg, "message_id", None)
+            key = int(message_id) if message_id is not None else id(msg)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                await msg.delete()
+            except Exception:
+                pass
 
 
 async def _show_yadreno_entry(target: Message | CallbackQuery, state: FSMContext) -> None:
@@ -678,10 +733,7 @@ async def handle_yaa_command(message: Message, command: CommandObject):
 
     after = _serialize_for_compare(_get_yaa_editable_state(page_context.page_key))
     if before != after:
-        try:
-            await progress.final_target.delete()
-        except Exception:
-            pass
+        await progress.delete_progress_messages()
         if page_context.page_key == 'key_delivery':
             from bot.utils.key_sender import rerender_key_delivery_page_context
 
