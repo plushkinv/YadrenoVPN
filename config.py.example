@@ -13,6 +13,11 @@ ADMIN_IDS = [
 
 ################# Ниже необязательные настройки ################# 
 
+# Адрес Telegram Bot API
+# Стандартный: https://api.telegram.org
+# Можно указать кастомный адрес (прокси/зеркало), например: https://my-proxy.example.com
+TELEGRAM_API_URL = "https://api.telegram.org"
+
 # Ссылка на GitHub репозиторий для автообновления
 # Формат: https://github.com/username/repo.git или git@github.com:username/repo.git
 GITHUB_REPO_URL = "https://github.com/plushkinv/YadrenoVPN.git"  # Укажите URL вашего репозитория

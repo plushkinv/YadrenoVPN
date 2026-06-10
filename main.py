@@ -107,6 +107,11 @@ async def main():
     bot = Bot(token=BOT_TOKEN, session=session)
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
+
+    from bot.middlewares.bot_blocked import BotBlockedResetMiddleware
+    bot_blocked_reset = BotBlockedResetMiddleware()
+    dp.message.outer_middleware(bot_blocked_reset)
+    dp.callback_query.outer_middleware(bot_blocked_reset)
     
     # Регистрируем роутеры
     # Порядок важен: сначала более специфичные, потом общие

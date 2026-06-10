@@ -25,6 +25,7 @@ __all__ = [
     'update_key_notified_pct',
     'reset_key_traffic_notification',
     'update_key_traffic_limit',
+    'update_vpn_key_tariff_and_traffic_limit',
     'update_vpn_key_config',
     'update_vpn_key_sub_id',
     'delete_vpn_key',
@@ -425,6 +426,36 @@ def update_key_traffic_limit(key_id: int, traffic_limit_bytes: int) -> None:
         conn.execute("""
             UPDATE vpn_keys SET traffic_limit = ? WHERE id = ?
         """, (traffic_limit_bytes, key_id))
+
+def update_vpn_key_tariff_and_traffic_limit(
+    key_id: int,
+    tariff_id: int,
+    traffic_limit_bytes: int
+) -> bool:
+    """
+    Применяет новый тариф к существующему ключу и начинает новый период трафика.
+
+    traffic_limit_bytes=0 означает безлимит и должен сохраняться как 0.
+    """
+    with get_db() as conn:
+        cursor = conn.execute("""
+            UPDATE vpn_keys
+            SET tariff_id = ?,
+                traffic_limit = ?,
+                traffic_used = 0,
+                traffic_updated_at = NULL,
+                traffic_notified_pct = 100
+            WHERE id = ?
+        """, (tariff_id, traffic_limit_bytes, key_id))
+        success = cursor.rowcount > 0
+        if success:
+            limit_gb = traffic_limit_bytes / (1024 ** 3) if traffic_limit_bytes > 0 else 0
+            limit_text = f"{limit_gb:.1f} ГБ" if traffic_limit_bytes > 0 else "безлимит"
+            logger.info(
+                f"Ключ ID {key_id} переведён на тариф {tariff_id}, "
+                f"лимит трафика: {limit_text}"
+            )
+        return success
 
 def update_vpn_key_config(
     key_id: int,

@@ -3,17 +3,31 @@
 
 Перехватывает все вызовы методов Telegram API и при ошибке парсинга
 автоматически повторяет запрос без parse_mode.
+Поддерживает кастомный адрес Telegram Bot API из конфига.
 """
 import logging
 from typing import Any, Optional
 
 from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import TelegramMethod
 from aiogram.methods.base import TelegramType
 
 logger = logging.getLogger(__name__)
+
+# Стандартный адрес Telegram Bot API (фоллбэк)
+DEFAULT_TELEGRAM_API_URL = "https://api.telegram.org"
+
+
+def _get_telegram_api_url() -> str:
+    """Получает адрес Telegram Bot API из конфига с фоллбэком на стандартный."""
+    try:
+        from config import TELEGRAM_API_URL
+        return TELEGRAM_API_URL
+    except ImportError:
+        return DEFAULT_TELEGRAM_API_URL
 
 
 class SafeParseSession(AiohttpSession):
@@ -22,7 +36,23 @@ class SafeParseSession(AiohttpSession):
     
     Если Telegram возвращает ошибку "can't parse entities", 
     автоматически повторяет запрос с parse_mode=None.
+    
+    Использует адрес Telegram Bot API из конфига (TELEGRAM_API_URL).
+    Если параметр не указан — фоллбэк на https://api.telegram.org.
     """
+    
+    def __init__(self, **kwargs):
+        # Получаем кастомный URL из конфига
+        api_url = _get_telegram_api_url()
+        
+        # Если URL отличается от стандартного — настраиваем кастомный сервер
+        if api_url and api_url.rstrip('/') != DEFAULT_TELEGRAM_API_URL:
+            kwargs.setdefault('api', TelegramAPIServer.from_base(api_url))
+            logger.info(f"🌐 Telegram Bot API: {api_url}")
+        else:
+            logger.info(f"🌐 Telegram Bot API: {DEFAULT_TELEGRAM_API_URL} (стандартный)")
+        
+        super().__init__(**kwargs)
     
     async def make_request(
         self,

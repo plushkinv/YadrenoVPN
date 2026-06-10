@@ -195,7 +195,12 @@ async def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict
 
     if order['vpn_key_id']:
         from bot.services.key_lifecycle import renew_key_access
-        renew_result = await renew_key_access(order['vpn_key_id'], days, reset_traffic=True)
+        renew_result = await renew_key_access(
+            order['vpn_key_id'],
+            days,
+            reset_traffic=True,
+            tariff_id=order.get('tariff_id'),
+        )
         if days and renew_result['db_updated']:
             logger.info(f"Ключ {order['vpn_key_id']} продлён на {days} дней (order={order_id})")
             if not renew_result['panel_synced']:

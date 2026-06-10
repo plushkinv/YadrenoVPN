@@ -177,7 +177,12 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
         deduct_from_balance(user_internal_id, actual_deduct)
         renew_result = None
         if key_id:
-            renew_result = await renew_key_access(key_id, days, reset_traffic=True)
+            renew_result = await renew_key_access(
+                key_id,
+                days,
+                reset_traffic=True,
+                tariff_id=tariff_id,
+            )
             logger.info(f'Ключ {key_id} продлён на {days} дней за баланс {actual_deduct} коп')
         else:
             traffic_limit_bytes = (tariff.get('traffic_limit_gb', 0) or 0) * 1024 ** 3
@@ -348,7 +353,14 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
         if not qr_image_data or not qr_url:
             await safe_edit_or_send(callback.message, '❌ ЮКасса не вернула данные для оплаты. Попробуйте позже.', reply_markup=home_only_kb())
             return
-        text = f"📱 <b>QR-код для оплаты</b>\n\n💳 <b>Тариф:</b> {escape_html(tariff['name'])}\n💰 <b>Сумма:</b> {remaining_rub:.2f} ₽\n⏳ <b>Срок:</b> {tariff['duration_days']} дней\n\nОтсканируйте QR код для перехода по <a href=\"{qr_url}\">ссылке на оплату</a>.\n\n<i>После оплаты нажмите «✅ Я оплатил».</i>"
+        from bot.handlers.user.payments.base import format_qr_payment_text
+        text = format_qr_payment_text(
+            title='📱 <b>QR-код для оплаты</b>',
+            tariff_name=escape_html(tariff['name']),
+            price_str=f"{remaining_rub:.2f} ₽",
+            days=tariff['duration_days'],
+            qr_url=qr_url,
+        )
         photo = BufferedInputFile(qr_image_data, filename='qr.png')
         back_cb = f'key_renew:{key_id}' if key_id else 'buy_key'
         await safe_edit_or_send(callback.message, text, photo=photo, reply_markup=yookassa_qr_kb(order_id, back_callback=back_cb, qr_url=qr_url), force_new=True)

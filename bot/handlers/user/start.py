@@ -222,6 +222,17 @@ async def cmd_help(message: Message, state: FSMContext):
     await _render_help_page(message)
 
 
+@router.message(Command('id'))
+async def cmd_id(message: Message):
+    """Обработчик команды /id — показывает Telegram ID пользователя."""
+    user_id = message.from_user.id
+    text = (
+        f"🆔 <b>Ваш Telegram ID</b>\n\n"
+        f"<code>{user_id}</code>"
+    )
+    await safe_edit_or_send(message, text, force_new=True)
+
+
 async def _render_help_page(target):
     """Рендерит страницу справки через render_page."""
     from bot.utils.page_renderer import render_page

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
+from bot.utils.datetime_format import format_date_for_display
 from bot.utils.text import escape_html
 
 
@@ -43,7 +44,7 @@ def build_key_details_replacements(
         info_lines.extend([prepend_html, ''])
 
     server = key.get('server_name') or 'Не выбран'
-    expires = key.get('expires_at')[:10] if key.get('expires_at') else '—'
+    expires = format_date_for_display(key.get('expires_at'))
     info_lines.extend([
         f"🔑 <b>{_safe(key.get('display_name'), 'VPN-ключ')}</b>",
         '',
@@ -68,7 +69,7 @@ def build_key_history_block(payments: Iterable[Mapping[str, Any]]) -> str:
 
     lines = ['', '📜 <b>История операций:</b>']
     for payment in payment_rows:
-        date = payment.get('paid_at')[:10] if payment.get('paid_at') else '—'
+        date = format_date_for_display(payment.get('paid_at'))
         tariff = payment.get('tariff_name') or 'Тариф'
         ptype = payment.get('payment_type')
         if ptype == 'stars':

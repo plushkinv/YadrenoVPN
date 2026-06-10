@@ -129,6 +129,17 @@ async def rerender_my_keys_page_context(page_context, viewer_id: int) -> bool:
     return True
 
 
+async def rerender_key_details_page_context(page_context, viewer_id: int) -> bool:
+    """Перерисовывает сохранённую карточку ключа после правки через /yaa."""
+    context = page_context.context or {}
+    key_id = context.get('key_id')
+    if not key_id:
+        return False
+    telegram_id = context.get('telegram_id') or viewer_id
+    await show_key_details(int(telegram_id), int(key_id), page_context.message)
+    return True
+
+
 async def show_my_keys(telegram_id: int, target, is_callback: bool = True):
     """
     Общая логика для показа списка ключей.
@@ -222,6 +233,7 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
     await render_page(
         message,
         page_key='key_details',
+        context={'telegram_id': telegram_id, 'key_id': key_id},
         text_replacements=replacements,
         prepend_buttons=keyboard_rows(kb),
         force_new=not is_callback,

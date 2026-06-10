@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from config import ADMIN_IDS
 from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, create_vpn_key_admin, get_active_servers, get_all_tariffs, get_user_balance, get_user_referral_coefficient, add_to_balance, deduct_from_balance, set_user_referral_coefficient
 from bot.utils.admin import is_admin
+from bot.utils.datetime_format import format_datetime_for_display
 from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.panel_email import get_panel_email_prefix
 from bot.states.admin_states import AdminStates
@@ -53,8 +54,8 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
             key_name = uuid or f'Ключ #{key_id}'
     server_name = key.get('server_name', 'Неизвестный сервер')
     tariff_name = key.get('tariff_name', 'Неизвестный тариф')
-    expires_at = key.get('expires_at', '?')
-    created_at = key.get('created_at', '?')
+    expires_at = format_datetime_for_display(key.get('expires_at'), fallback='?')
+    created_at = format_datetime_for_display(key.get('created_at'), fallback='?')
     panel_email = key.get('panel_email')
     if panel_email:
         panel_email_line = f'📧 E-mail в панели: <code>{escape_html(panel_email)}</code>'
@@ -79,7 +80,7 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
     if payments_history:
         text += '\n💳 <b>История платежей:</b>\n'
         for p in payments_history:
-            dt = p['paid_at']
+            dt = format_datetime_for_display(p.get('paid_at'), fallback='?')
             amount = ''
             if p['payment_type'] == 'crypto':
                 usd = p['amount_cents'] / 100

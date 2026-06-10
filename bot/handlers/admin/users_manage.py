@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, KeyboardButtonRequestUsers, UsersShared, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from config import ADMIN_IDS
 from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, extend_vpn_key, create_vpn_key_admin, get_active_servers, get_all_tariffs, get_user_balance, get_user_referral_coefficient, add_to_balance, deduct_from_balance, set_user_referral_coefficient
 from bot.utils.admin import is_admin
+from bot.utils.datetime_format import format_datetime_for_display
 from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.panel_email import get_panel_email_prefix
 from bot.states.admin_states import AdminStates
@@ -63,7 +64,8 @@ def _format_user_card(user: dict) -> tuple[str, any]:
     telegram_id = user['telegram_id']
     username = user.get('username')
     is_banned = bool(user.get('is_banned'))
-    created_at = user.get('created_at', 'неизвестно')
+    is_bot_blocked = bool(user.get('is_bot_blocked'))
+    created_at = format_datetime_for_display(user.get('created_at'), fallback='неизвестно')
     balance_cents = get_user_balance(user['id'])
     referral_coefficient = get_user_referral_coefficient(user['id'])
     vpn_keys = get_user_vpn_keys(user['id'])
@@ -79,6 +81,10 @@ def _format_user_card(user: dict) -> tuple[str, any]:
         lines.append('👤 Username: _не указан_')
         
     lines.append(f'📱 Telegram ID: <code>{telegram_id}</code>')
+    if is_bot_blocked:
+        lines.append('📵 Статус доставки: <b>бот заблокирован пользователем</b>')
+    else:
+        lines.append('📨 Статус доставки: <b>доступен для сообщений</b>')
     
     panel_email_prefix = get_panel_email_prefix(user)
     lines.append(f'📧 E-mail в панели: <code>{escape_html(panel_email_prefix)}</code>')
@@ -99,15 +105,18 @@ def _format_user_card(user: dict) -> tuple[str, any]:
                     key_name = f'{uuid[:4]}...{uuid[-4:]}'
                 else:
                     key_name = uuid or f"Ключ #{key['id']}"
-            expires = key.get('expires_at', '?')
+            raw_expires = key.get('expires_at')
             try:
-                expires_dt = datetime.fromisoformat(expires.replace('Z', '+00:00'))
-                if expires_dt < datetime.now(expires_dt.tzinfo if expires_dt.tzinfo else None):
+                expires_dt = datetime.fromisoformat(str(raw_expires).replace('Z', '+00:00'))
+                if expires_dt.tzinfo is None:
+                    expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+                if expires_dt < datetime.now(timezone.utc):
                     status = '🔴'
                 else:
                     status = '🟢'
             except:
                 status = '🔑'
+            expires = format_datetime_for_display(raw_expires, fallback='?')
             lines.append(f'  {status} <code>{key_name}</code> (до {expires})')
     else:
         lines.append('🔑 _VPN-ключей нет_')
@@ -119,7 +128,7 @@ def _format_user_card(user: dict) -> tuple[str, any]:
         total_usd = payment_stats.get('total_amount_cents', 0) / 100
         total_stars = payment_stats.get('total_amount_stars', 0)
         total_rub = payment_stats.get('total_amount_rub', 0)
-        last_payment = payment_stats.get('last_payment_at', '?')
+        last_payment = format_datetime_for_display(payment_stats.get('last_payment_at'), fallback='?')
         lines.append(f'  📊 Всего платежей: {total_payments}')
         if total_usd > 0:
             total_usd_str = f'{total_usd:g}'.replace('.', ',')

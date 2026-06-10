@@ -11,12 +11,13 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest
 
 from config import ADMIN_IDS
 from database.requests import (
     get_setting, set_setting,
-    get_users_for_broadcast, count_users_for_broadcast
+    get_users_for_broadcast, count_users_for_broadcast,
+    mark_user_bot_blocked
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
@@ -30,6 +31,7 @@ from bot.keyboards.admin import (
 logger = logging.getLogger(__name__)
 
 from bot.utils.text import safe_edit_or_send
+from bot.utils.delivery import is_bot_blocked_error
 
 router = Router()
 
@@ -160,9 +162,9 @@ async def broadcast_save_message(message: Message, state: FSMContext):
     
     if message.photo:
         photo_file_id = message.photo[-1].file_id
-        text = get_message_text_for_storage(message, 'markdown')
+        text = get_message_text_for_storage(message, 'html')
     elif message.text:
-        text = get_message_text_for_storage(message, 'markdown')
+        text = get_message_text_for_storage(message, 'html')
     else:
         await safe_edit_or_send(message,
             "❌ Поддерживаются только текст или фото с подписью.",
@@ -358,12 +360,14 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
     total = len(user_ids)
     sent = 0
     blocked = 0
+    failed = 0
     
     # Начинаем рассылку
     await safe_edit_or_send(callback.message, 
         f"📤 <b>Рассылка запущена</b>\n\n"
         f"Отправлено: 0/{total}\n"
-        f"🚫 Заблокировали бота: 0"
+        f"🚫 Заблокировали бота: 0\n"
+        f"⚠️ Ошибки отправки: 0"
     )
     await callback.answer()
     
@@ -376,31 +380,34 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                 await bot.send_photo(
                     chat_id=user_id,
                     photo=photo_file_id,
-                    caption=text
+                    caption=text,
+                    parse_mode="HTML"
                 )
             else:
                 await bot.send_message(
                     chat_id=user_id,
-                    text=text
+                    text=text,
+                    parse_mode="HTML"
                 )
             sent += 1
-        except TelegramForbiddenError:
-            # Пользователь заблокировал бота
-            blocked += 1
-        except TelegramBadRequest as e:
-            logger.warning(f"Ошибка отправки {user_id}: {e}")
-            blocked += 1
         except Exception as e:
-            logger.error(f"Неожиданная ошибка отправки {user_id}: {e}")
-            blocked += 1
-        
+            if is_bot_blocked_error(e):
+                mark_user_bot_blocked(user_id)
+                blocked += 1
+            elif isinstance(e, TelegramBadRequest):
+                logger.warning(f"Ошибка отправки {user_id}: {e}")
+                failed += 1
+            else:
+                logger.error(f"Неожиданная ошибка отправки {user_id}: {e}")
+                failed += 1
         # Обновляем прогресс каждые 10 сообщений
         if (i + 1) % 10 == 0 or (i + 1) == total:
             try:
                 await safe_edit_or_send(callback.message, 
                     f"📤 <b>Рассылка в процессе...</b>\n\n"
                     f"Отправлено: {sent}/{total}\n"
-                    f"🚫 Заблокировали бота: {blocked}"
+                    f"🚫 Заблокировали бота: {blocked}\n"
+                    f"⚠️ Ошибки отправки: {failed}"
                 )
             except TelegramBadRequest:
                 pass  # Сообщение не изменилось
@@ -415,7 +422,8 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
     await safe_edit_or_send(callback.message, 
         f"✅ <b>Рассылка завершена!</b>\n\n"
         f"📤 Отправлено: {sent}\n"
-        f"🚫 Заблокировали бота: {blocked}",
+        f"🚫 Заблокировали бота: {blocked}\n"
+        f"⚠️ Ошибки отправки: {failed}",
         reply_markup=home_only_kb()
     )
 

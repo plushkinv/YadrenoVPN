@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 34
+LATEST_VERSION = 36
 
 
 def _my_keys_item_template() -> str:
@@ -352,6 +352,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('update_blocked', '0'),
         ('daily_tasks_time', '03:00'),
         ('update_check_time', '12:00'),
+        ('display_timezone', 'Europe/Moscow'),
         ('my_keys_item_template', _my_keys_item_template()),
         # Режим работы бота для новых установок — Subscription
         # (бот выдаёт subscription URL, ключи во всех inbound с единым subId).
@@ -370,6 +371,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             telegram_id INTEGER NOT NULL UNIQUE,
             username TEXT,
             is_banned INTEGER DEFAULT 0,
+            is_bot_blocked INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             used_trial INTEGER DEFAULT 0,
             referral_code TEXT,
@@ -379,6 +381,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_is_bot_blocked ON users(is_bot_blocked)")
 
     # ── tariffs ───────────────────────────────────────────────────────────────
 
@@ -1199,6 +1202,32 @@ def migration_34(conn):
 
     logger.info("Миграция v34 применена: добавлены пользовательские страницы ключей")
 
+def migration_35(conn):
+    """
+    Миграция v35: флаг недоступности пользователя для сообщений бота.
+
+    Поле is_bot_blocked помечает пользователей, которые заблокировали бота в Telegram.
+    Такие пользователи исключаются из массовых отправок до нового обращения в бот.
+    """
+    _add_column(conn, "users", "is_bot_blocked INTEGER DEFAULT 0")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_is_bot_blocked ON users(is_bot_blocked)")
+    logger.info("Миграция v35 применена: добавлен флаг is_bot_blocked")
+
+
+def migration_36(conn):
+    """
+    Миграция v36: скрытая настройка часового пояса отображения дат.
+
+    SQLite продолжает хранить даты в UTC, настройка влияет только на вывод в Telegram.
+    """
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('display_timezone', 'Europe/Moscow')
+        """
+    )
+    logger.info("Миграция v36 применена: добавлена настройка display_timezone")
+
 
 MIGRATIONS = {
     22: migration_22,
@@ -1214,6 +1243,8 @@ MIGRATIONS = {
     32: migration_32,
     33: migration_33,
     34: migration_34,
+    35: migration_35,
+    36: migration_36,
 }
 
 

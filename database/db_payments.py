@@ -680,7 +680,7 @@ def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT p.*, t.name as tariff_name
+            SELECT p.*, t.name as tariff_name, t.price_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.vpn_key_id = ? AND p.status = 'paid'

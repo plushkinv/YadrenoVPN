@@ -841,27 +841,34 @@ def trial_sub_kb() -> InlineKeyboardMarkup:
 
 
 # ============================================================================
-# QR-ОПЛАТА ЮКАССА (direct API)
+# ЕДИНАЯ QR-КЛАВИАТУРА ДЛЯ ВСЕХ ПЛАТЁЖНЫХ ПРОВАЙДЕРОВ
 # ============================================================================
 
-def yookassa_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
+def qr_payment_kb(
+    order_id: str,
+    check_prefix: str,
+    back_callback: str = "buy_key",
+    qr_url: str = None,
+) -> InlineKeyboardMarkup:
     """
-    Клавиатура страницы QR-оплаты ЮКассы.
+    Универсальная клавиатура QR-оплаты для любого провайдера.
 
     Args:
         order_id: Наш внутренний order_id
+        check_prefix: Префикс callback для кнопки «✅ Я оплатил»
+                       (напр. 'check_yookassa_qr', 'check_wata', 'check_platega', 'check_cardlink')
         back_callback: Каллбэк для кнопки «Назад»
         qr_url: Ссылка на оплату (URL)
     """
     builder = InlineKeyboardBuilder()
-    
+
     if qr_url:
         builder.row(
             InlineKeyboardButton(text="💳 Оплатить", url=qr_url)
         )
-        
+
     builder.row(
-        InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_yookassa_qr:{order_id}")
+        InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"{check_prefix}:{order_id}")
     )
     builder.row(
         InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
@@ -870,98 +877,23 @@ def yookassa_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = 
     return builder.as_markup()
 
 
-# renew_yookassa_qr_tariff_kb и qr_tariff_select_kb удалены —
-# QR-оплата теперь использует общие renew_tariff_select_kb(is_qr=True) и tariff_select_kb(is_qr=True)
-
-
-# ============================================================================
-# WATA-ОПЛАТА (карта/СБП через ссылку)
-# ============================================================================
+# Алиасы для обратной совместимости (делегируют в qr_payment_kb)
+def yookassa_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
+    """Алиас → qr_payment_kb(check_prefix='check_yookassa_qr')."""
+    return qr_payment_kb(order_id, 'check_yookassa_qr', back_callback, qr_url)
 
 def wata_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
-    """
-    Клавиатура страницы оплаты WATA (карта/СБП).
-
-    Args:
-        order_id: Наш внутренний order_id
-        back_callback: Каллбэк для кнопки «Назад»
-        qr_url: Ссылка на оплату (URL)
-    """
-    builder = InlineKeyboardBuilder()
-
-    if qr_url:
-        builder.row(
-            InlineKeyboardButton(text="💳 Оплатить", url=qr_url)
-        )
-
-    builder.row(
-        InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_wata:{order_id}")
-    )
-    builder.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    return builder.as_markup()
-
-
-# ============================================================================
-# PLATEGA-ОПЛАТА (СБП через ссылку)
-# ============================================================================
+    """Алиас → qr_payment_kb(check_prefix='check_wata')."""
+    return qr_payment_kb(order_id, 'check_wata', back_callback, qr_url)
 
 def platega_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
-    """
-    Клавиатура страницы оплаты Platega (СБП).
-
-    Args:
-        order_id: Наш внутренний order_id
-        back_callback: Каллбэк для кнопки «Назад»
-        qr_url: Ссылка на оплату (URL)
-    """
-    builder = InlineKeyboardBuilder()
-
-    if qr_url:
-        builder.row(
-            InlineKeyboardButton(text="💳 Оплатить", url=qr_url)
-        )
-
-    builder.row(
-        InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_platega:{order_id}")
-    )
-    builder.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    return builder.as_markup()
-
-
-# ============================================================================
-# CARDLINK-ОПЛАТА (Карта/СБП через ссылку)
-# ============================================================================
+    """Алиас → qr_payment_kb(check_prefix='check_platega')."""
+    return qr_payment_kb(order_id, 'check_platega', back_callback, qr_url)
 
 def cardlink_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
-    """
-    Клавиатура страницы оплаты Cardlink (Карта/СБП).
+    """Алиас → qr_payment_kb(check_prefix='check_cardlink')."""
+    return qr_payment_kb(order_id, 'check_cardlink', back_callback, qr_url)
 
-    Args:
-        order_id: Наш внутренний order_id
-        back_callback: Каллбэк для кнопки «Назад»
-        qr_url: Ссылка на оплату (URL)
-    """
-    builder = InlineKeyboardBuilder()
-
-    if qr_url:
-        builder.row(
-            InlineKeyboardButton(text="💳 Оплатить", url=qr_url)
-        )
-
-    builder.row(
-        InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_cardlink:{order_id}")
-    )
-    builder.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    return builder.as_markup()
 
 
 def referral_menu_kb() -> InlineKeyboardMarkup:

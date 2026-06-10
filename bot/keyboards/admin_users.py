@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 
 from .admin_misc import back_button, home_button, cancel_button
 
-USERS_FILTERS = {'all': '👤 Все', 'active': '✅ Активные', 'inactive': '❌ Неактивные', 'never_paid': '🆕 Новые', 'expired': '🚫 Истёкшие'}
+USERS_FILTERS = {'all': '👤 Все', 'active': '✅ Активные', 'inactive': '❌ Неактивные', 'never_paid': '🆕 Новые', 'expired': '🚫 Истёкшие', 'bot_blocked': '📵 Бот заблокирован'}
 
 def users_menu_kb(stats: Dict[str, int]) -> InlineKeyboardMarkup:
     """

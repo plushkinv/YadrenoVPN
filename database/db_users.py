@@ -15,6 +15,8 @@ __all__ = [
     '_generate_referral_code',
     'get_or_create_user',
     'is_user_banned',
+    'mark_user_bot_blocked',
+    'mark_user_bot_unblocked',
     'has_used_trial',
     'mark_trial_used',
     'get_all_users_count',
@@ -89,6 +91,7 @@ def get_or_create_user(telegram_id: int, username: Optional[str] = None) -> tupl
             'telegram_id': telegram_id,
             'username': username,
             'is_banned': 0,
+            'is_bot_blocked': 0,
             'referral_code': referral_code,
             'referred_by': None,
             'personal_balance': 0,
@@ -112,6 +115,30 @@ def is_user_banned(telegram_id: int) -> bool:
         )
         row = cursor.fetchone()
         return bool(row['is_banned']) if row else False
+
+def mark_user_bot_blocked(telegram_id: int) -> bool:
+    """Помечает пользователя как недоступного для сообщений бота."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET is_bot_blocked = 1 WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        success = cursor.rowcount > 0
+        if success:
+            logger.info(f"Пользователь {telegram_id} помечен как заблокировавший бота")
+        return success
+
+def mark_user_bot_unblocked(telegram_id: int) -> bool:
+    """Снимает флаг недоступности, когда пользователь снова обратился в бот."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET is_bot_blocked = 0 WHERE telegram_id = ? AND is_bot_blocked = 1",
+            (telegram_id,)
+        )
+        success = cursor.rowcount > 0
+        if success:
+            logger.info(f"Пользователь {telegram_id} снова доступен для сообщений бота")
+        return success
 
 def has_used_trial(telegram_id: int) -> bool:
     """
@@ -169,13 +196,47 @@ def get_users_stats() -> Dict[str, int]:
         - never_paid: никогда не покупали
         - expired: был ключ, но истёк
     """
-    return {
-        'total': count_users_for_broadcast('all'),
-        'active': count_users_for_broadcast('active'),
-        'inactive': count_users_for_broadcast('inactive'),
-        'never_paid': count_users_for_broadcast('never_paid'),
-        'expired': count_users_for_broadcast('expired'),
-    }
+    with get_db() as conn:
+        def count(query: str) -> int:
+            cursor = conn.execute(query)
+            row = cursor.fetchone()
+            return row['cnt'] if row else 0
+
+        return {
+            'total': count("SELECT COUNT(*) as cnt FROM users WHERE is_banned = 0"),
+            'active': count("""
+                SELECT COUNT(DISTINCT u.id) as cnt FROM users u
+                JOIN vpn_keys vk ON u.id = vk.user_id
+                WHERE u.is_banned = 0 AND vk.expires_at > datetime('now')
+            """),
+            'inactive': count("""
+                SELECT COUNT(*) as cnt FROM users u
+                WHERE u.is_banned = 0
+                AND u.id NOT IN (
+                    SELECT DISTINCT user_id FROM vpn_keys
+                    WHERE expires_at > datetime('now')
+                )
+            """),
+            'never_paid': count("""
+                SELECT COUNT(*) as cnt FROM users u
+                WHERE u.is_banned = 0
+                AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
+            """),
+            'expired': count("""
+                SELECT COUNT(DISTINCT u.id) as cnt FROM users u
+                JOIN vpn_keys vk ON u.id = vk.user_id
+                WHERE u.is_banned = 0
+                AND vk.expires_at <= datetime('now')
+                AND u.id NOT IN (
+                    SELECT DISTINCT user_id FROM vpn_keys
+                    WHERE expires_at > datetime('now')
+                )
+            """),
+            'bot_blocked': count("""
+                SELECT COUNT(*) as cnt FROM users
+                WHERE is_banned = 0 AND is_bot_blocked = 1
+            """),
+        }
 
 def get_all_users_paginated(offset: int = 0, limit: int = 20, 
                              filter_type: str = 'all') -> tuple[List[Dict[str, Any]], int]:
@@ -254,6 +315,15 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
                     SELECT DISTINCT user_id FROM vpn_keys 
                     WHERE expires_at > datetime('now')
                 )
+            """
+        elif filter_type == 'bot_blocked':
+            base_query = """
+                SELECT * FROM users
+                WHERE is_banned = 0 AND is_bot_blocked = 1
+            """
+            count_query = """
+                SELECT COUNT(*) as cnt FROM users
+                WHERE is_banned = 0 AND is_bot_blocked = 1
             """
         else:
             return [], 0

@@ -3,6 +3,7 @@ import logging
 import secrets
 import string
 import datetime
+import re
 from typing import Optional, List, Dict, Any, Tuple
 from .connection import get_db
 
@@ -12,6 +13,9 @@ __all__ = [
     'get_setting',
     'set_setting',
     'delete_setting',
+    'get_display_timezone',
+    'set_display_timezone',
+    'normalize_display_timezone',
     'get_yadreno_admin_api_key',
     'set_yadreno_admin_api_key',
     'delete_yadreno_admin_api_key',
@@ -39,6 +43,19 @@ __all__ = [
     'get_trial_tariff_id',
     'is_demo_payment_enabled',
 ]
+
+DEFAULT_DISPLAY_TIMEZONE = 'Europe/Moscow'
+DISPLAY_TIMEZONE_SETTING = 'display_timezone'
+
+_TIMEZONE_ALIASES = {
+    'москва': DEFAULT_DISPLAY_TIMEZONE,
+    'мск': DEFAULT_DISPLAY_TIMEZONE,
+    'moscow': DEFAULT_DISPLAY_TIMEZONE,
+    'msk': DEFAULT_DISPLAY_TIMEZONE,
+    'utc': 'UTC',
+    'gmt': 'UTC',
+}
+_UTC_OFFSET_RE = re.compile(r'^(?:utc|gmt)?\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$')
 
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     """
@@ -88,6 +105,47 @@ def delete_setting(key: str) -> bool:
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
         return cursor.rowcount > 0
+
+
+def normalize_display_timezone(value: Optional[str]) -> str:
+    """Нормализует скрытую настройку часового пояса для отображения дат."""
+    raw = (value or '').strip()
+    if not raw:
+        return DEFAULT_DISPLAY_TIMEZONE
+
+    key = raw.lower().replace('ё', 'е')
+    compact_key = key.replace(' ', '')
+    if key in _TIMEZONE_ALIASES:
+        return _TIMEZONE_ALIASES[key]
+    if compact_key in _TIMEZONE_ALIASES:
+        return _TIMEZONE_ALIASES[compact_key]
+
+    match = _UTC_OFFSET_RE.match(compact_key)
+    if match:
+        sign, hours_raw, minutes_raw = match.groups()
+        hours = int(hours_raw)
+        minutes = int(minutes_raw or '0')
+        if hours <= 23 and minutes <= 59:
+            return f'UTC{sign}{hours:02d}:{minutes:02d}'
+
+    if '/' in raw and all(part for part in raw.split('/')):
+        return raw
+
+    return DEFAULT_DISPLAY_TIMEZONE
+
+
+def get_display_timezone() -> str:
+    """Возвращает часовой пояс, в котором бот показывает даты пользователям и админам."""
+    return normalize_display_timezone(
+        get_setting(DISPLAY_TIMEZONE_SETTING, DEFAULT_DISPLAY_TIMEZONE)
+    )
+
+
+def set_display_timezone(value: str) -> str:
+    """Сохраняет часовой пояс отображения и возвращает нормализованное значение."""
+    timezone_value = normalize_display_timezone(value)
+    set_setting(DISPLAY_TIMEZONE_SETTING, timezone_value)
+    return timezone_value
 
 
 YADRENO_ADMIN_API_KEY_SETTING = 'yadreno_admin_api_key'

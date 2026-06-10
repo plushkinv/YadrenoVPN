@@ -29,7 +29,7 @@ async def show_users_menu(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.users_menu)
     await state.update_data(users_filter='all', users_page=0)
     stats = get_users_stats()
-    text = f"👥 <b>Пользователи</b>\n\n📊 <b>Статистика:</b>\n👤 Всего: <b>{stats['total']}</b>\n✅ С активными ключами: <b>{stats['active']}</b>\n❌ Без активных ключей: <b>{stats['inactive']}</b>\n🆕 Никогда не покупали: <b>{stats['never_paid']}</b>\n🚫 Ключ истёк: <b>{stats['expired']}</b>"
+    text = f"👥 <b>Пользователи</b>\n\n📊 <b>Статистика:</b>\n👤 Всего: <b>{stats['total']}</b>\n✅ С активными ключами: <b>{stats['active']}</b>\n❌ Без активных ключей: <b>{stats['inactive']}</b>\n🆕 Никогда не покупали: <b>{stats['never_paid']}</b>\n🚫 Ключ истёк: <b>{stats['expired']}</b>\n📵 Заблокировали бота: <b>{stats.get('bot_blocked', 0)}</b>"
     await safe_edit_or_send(callback.message, text, reply_markup=users_menu_kb(stats))
     await callback.answer()
 
@@ -156,7 +156,7 @@ async def process_user_search_input(message: Message, state: FSMContext):
         from database.requests import get_users_stats
         from bot.keyboards.admin import users_menu_kb
         stats = get_users_stats()
-        text = f"👥 <b>Пользователи</b>\n\n📊 <b>Статистика:</b>\n👤 Всего: <b>{stats['total']}</b>\n✅ С активными ключами: <b>{stats['active']}</b>\n❌ Без активных ключей: <b>{stats['inactive']}</b>\n🆕 Никогда не покупали: <b>{stats['never_paid']}</b>\n🚫 Ключ истёк: <b>{stats['expired']}</b>"
+        text = f"👥 <b>Пользователи</b>\n\n📊 <b>Статистика:</b>\n👤 Всего: <b>{stats['total']}</b>\n✅ С активными ключами: <b>{stats['active']}</b>\n❌ Без активных ключей: <b>{stats['inactive']}</b>\n🆕 Никогда не покупали: <b>{stats['never_paid']}</b>\n🚫 Ключ истёк: <b>{stats['expired']}</b>\n📵 Заблокировали бота: <b>{stats.get('bot_blocked', 0)}</b>"
         await safe_edit_or_send(message, text, reply_markup=users_menu_kb(stats), force_new=True)
         return
     from database.requests import get_user_by_username, get_user_by_panel_email

@@ -229,11 +229,10 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
     reset_key_traffic_notification(key_id)
     
     # Обновляем traffic_limit в БД (на случай если тариф менялся)
-    if traffic_limit > 0:
-        update_key_traffic_limit(key_id, traffic_limit)
+    update_key_traffic_limit(key_id, traffic_limit)
     
     # Обновляем totalGB на панели
-    if key.get('server_active') and key.get('panel_email') and traffic_limit > 0:
+    if key.get('server_active') and key.get('panel_email'):
         try:
             server_data = _build_server_data_from_key(key)
             client = get_client_from_server_data(server_data)
@@ -467,6 +466,18 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
         expiry_time_ms = _key_expiry_time_ms(key)
         traffic_limit = key.get('traffic_limit', 0) or 0
         active = is_key_active(key) and not is_traffic_exhausted(key)
+        limit_ip = 1
+        if key.get('tariff_id'):
+            from database.db_tariffs import get_tariff_by_id
+            try:
+                tariff = get_tariff_by_id(key['tariff_id'])
+                if tariff:
+                    limit_ip = tariff.get('max_ips', 1)
+            except Exception as e:
+                logger.warning(
+                    f"ensure_subscription_keys: не удалось получить тариф "
+                    f"{key.get('tariff_id')} для limitIp, используется 1: {e}"
+                )
 
         if mode == 'subscription':
             # Гарантируем sub_id у ключа
@@ -486,19 +497,6 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
             # Параметры для add_client в отсутствующих inbound
             total_gb = int(traffic_limit / (1024 ** 3)) if traffic_limit > 0 else 0
             days_left = _key_days_left_for_add(key)
-            
-            limit_ip = 1
-            if key.get('tariff_id'):
-                from database.db_tariffs import get_tariff_by_id
-                try:
-                    tariff = get_tariff_by_id(key['tariff_id'])
-                    if tariff:
-                        limit_ip = tariff.get('max_ips', 1)
-                except Exception as e:
-                    logger.warning(
-                        f"ensure_subscription_keys: не удалось получить тариф "
-                        f"{key.get('tariff_id')} для limitIp, используется 1: {e}"
-                    )
 
             # Создаём в отсутствующих inbound
             missing = [inb for inb in inbounds if inb['id'] not in presence]
@@ -573,6 +571,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                         total_gb_bytes=traffic_limit,
                         enable=target_enable,
                         sub_id=sub_id,
+                        limit_ip=limit_ip,
                     )
                     stats['updated'] += 1
                     if bool(cl.get('enable', True)) != target_enable:
@@ -646,6 +645,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                         expiry_time_ms=expiry_time_ms,
                         total_gb_bytes=traffic_limit,
                         enable=active,
+                        limit_ip=limit_ip,
                     )
                     stats['updated'] += 1
                     if bool(min_client.get('enable', True)) != active:

@@ -25,11 +25,13 @@ from config import ADMIN_IDS, GITHUB_REPO_URL
 from database.requests import (
     get_all_servers, get_users_stats, get_keys_stats,
     get_daily_payments_stats, get_new_users_count_today,
-    get_setting, get_expiring_keys, is_notification_sent_today, log_notification_sent
+    get_setting, get_expiring_keys, is_notification_sent_today, log_notification_sent,
+    mark_user_bot_blocked
 )
 from bot.services.vpn_api import get_client_from_server_data, VPNAPIError, format_traffic
 from bot.utils.git_utils import check_for_updates
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock
+from bot.utils.delivery import is_bot_blocked_error
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -423,7 +425,11 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
                 log_notification_sent(vpn_key_id)
                 sent_count += 1
             except Exception as e:
-                logger.warning(f"Не удалось отправить уведомление пользователю {user_telegram_id}: {e}")
+                if is_bot_blocked_error(e):
+                    mark_user_bot_blocked(user_telegram_id)
+                    logger.info(f"Пользователь {user_telegram_id} помечен как заблокировавший бота")
+                else:
+                    logger.warning(f"Не удалось отправить уведомление пользователю {user_telegram_id}: {e}")
             
             # Небольшая задержка между сообщениями
             await asyncio.sleep(0.3)

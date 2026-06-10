@@ -38,6 +38,7 @@ from bot.utils.text import (
     safe_edit_or_send,
 )
 from database.requests import (
+    get_display_timezone,
     get_setting,
     get_page,
     get_yadreno_admin_api_key,
@@ -508,6 +509,7 @@ def _get_yaa_editable_state(page_key: str) -> dict[str, Any]:
     """Возвращает состояние, изменение которого должно перерисовать /yaa-экран."""
     state: dict[str, Any] = {
         'page': get_page_data(page_key),
+        'display_timezone': get_display_timezone(),
     }
     if page_key in {'my_keys', 'my_keys_empty'}:
         from bot.utils.my_keys_page import (
@@ -565,6 +567,14 @@ def _build_yaa_prompt(page_key: str, task: str, attachment_context: str = "") ->
     """Формирует запрос агенту с точным контекстом страницы."""
     row = get_page(page_key) or {}
     page_data = get_page_data(page_key) or {}
+    display_timezone = get_display_timezone()
+    timezone_hint = (
+        "Скрытая настройка часового пояса отображения дат хранится в settings.display_timezone. "
+        "Если администратор просит изменить часовой пояс, обнови строку settings с key='display_timezone'. "
+        "Поддерживаются IANA-зоны и алиасы: Москва, МСК, UTC+3. "
+        f"Текущее значение: {display_timezone}. "
+        "Не меняй даты в таблицах users, vpn_keys и payments: они хранятся в UTC.\n\n"
+    )
     placeholder_hint = ""
     if page_key == 'key_delivery':
         placeholder_hint = (
@@ -645,6 +655,7 @@ def _build_yaa_prompt(page_key: str, task: str, attachment_context: str = "") ->
         "Команда /yaa вызвана администратором прямо на пользовательской странице VPN-бота.\n"
         f"Текущая страница: {page_key}\n"
         "Считай, что пользователь говорит именно про эту страницу, даже если не назвал её явно.\n\n"
+        f"{timezone_hint}"
         f"{placeholder_hint}"
         "Текущее состояние страницы в БД:\n"
         f"- text_default: {row.get('text_default') or ''}\n"
@@ -743,6 +754,11 @@ async def handle_yaa_command(message: Message, command: CommandObject):
             from bot.handlers.user.keys import rerender_my_keys_page_context
 
             if await rerender_my_keys_page_context(page_context, message.from_user.id):
+                return
+        if page_context.page_key == 'key_details':
+            from bot.handlers.user.keys import rerender_key_details_page_context
+
+            if await rerender_key_details_page_context(page_context, message.from_user.id):
                 return
         await render_page(
             page_context.message,
