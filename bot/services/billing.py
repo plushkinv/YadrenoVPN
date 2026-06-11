@@ -644,17 +644,20 @@ async def create_wata_payment(
             }
 
 
-async def check_wata_payment_status(order_id: str) -> str:
+async def check_wata_payment_status(wata_link_id: str) -> str:
     """
-    Проверяет статус платежа WATA по нашему order_id.
+    Проверяет статус платёжной ссылки WATA по её ID.
 
-    GET https://api.wata.pro/api/h2h/transactions/?orderId={order_id}
+    GET https://api.wata.pro/api/h2h/links/{wata_link_id}
 
-    WATA имеет лимит — не чаще одного запроса в 30 секунд по одному order_id.
+    Эндпоинт /transactions/?orderId= не работает (404).
+    Вместо этого проверяем статус самой ссылки через /links/{id}.
+
+    WATA имеет лимит — не чаще одного запроса в 30 секунд.
     Контроль частоты запросов выполняется на стороне обработчика.
 
     Args:
-        order_id: Наш внутренний order_id
+        wata_link_id: ID ссылки в системе WATA (UUID)
 
     Returns:
         Нормализованный статус: 'pending' | 'succeeded' | 'canceled'
@@ -672,34 +675,38 @@ async def check_wata_payment_status(order_id: str) -> str:
         "Accept": "application/json",
     }
 
-    url = f"{WATA_API_URL}/transactions/"
-    params = {"orderId": order_id}
+    url = f"{WATA_API_URL}/links/{wata_link_id}"
 
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, params=params, headers=headers) as response:
+        async with session.get(url, headers=headers) as response:
             try:
-                data = await response.json()
+                data = await response.json(content_type=None)
             except Exception:
                 text = await response.text()
                 logger.error(f"WATA статус: невозможно разобрать ответ ({response.status}): {text}")
                 raise RuntimeError("WATA API вернул некорректный ответ")
 
+            if response.status == 429:
+                # Rate-limit — не ошибка, просто слишком частые запросы
+                logger.warning(f"WATA rate-limit (429) при проверке {wata_link_id}")
+                return 'pending'
+
             if response.status != 200:
-                error_desc = data.get('error') or data.get('message') or data.get('description') or 'Неизвестная ошибка'
+                error_desc = (
+                    data.get('error') or data.get('message') or
+                    data.get('description') or 'Неизвестная ошибка'
+                ) if isinstance(data, dict) else f'HTTP {response.status}'
                 logger.error(f"WATA статус ошибка {response.status}: {error_desc}")
                 raise RuntimeError(f"WATA API ошибка: {error_desc}")
 
-            # WATA возвращает либо список транзакций, либо объект с items
-            items = data if isinstance(data, list) else (data.get('items') or data.get('transactions') or [])
+            # Статус ссылки: Created, Closed, Expired и т.д.
+            status = str(data.get('status', '')).lower()
+            logger.debug(f"WATA link {wata_link_id}: status={status}")
 
-            if not items:
-                return 'pending'
-
-            # Если есть хоть одна Paid — считаем оплаченным
-            statuses = [str(t.get('status', '')).lower() for t in items if isinstance(t, dict)]
-            if any(s == 'paid' for s in statuses):
+            # Closed = ссылка закрыта после успешной оплаты
+            if status in ('closed', 'paid'):
                 return 'succeeded'
-            if any(s == 'declined' for s in statuses) and not any(s in ('created', 'pending') for s in statuses):
+            if status in ('declined', 'expired', 'canceled', 'cancelled'):
                 return 'canceled'
 
             return 'pending'
@@ -1271,6 +1278,13 @@ async def complete_payment_flow(
             
             # Реферальное вознаграждение
             await process_referral_reward(user_internal_id, days, referral_amount, payment_type)
+            
+            # Уведомление администраторов об оплате
+            try:
+                from bot.services.notifications import notify_admins_payment
+                await notify_admins_payment(message.bot, order)
+            except Exception as notify_err:
+                logger.warning(f'Ошибка уведомления об оплате: {notify_err}')
             
             # Финализация UI
             await finalize_payment_ui(message, state, text, order, user_id=telegram_id)

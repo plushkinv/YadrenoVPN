@@ -132,6 +132,12 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         try:
             (success, text, order) = await process_crypto_payment(args, user_id=user['id'])
             if success and order:
+                # Уведомление администраторов об оплате
+                try:
+                    from bot.services.notifications import notify_admins_payment
+                    await notify_admins_payment(message.bot, order)
+                except Exception as notify_err:
+                    logging.getLogger(__name__).warning(f'Ошибка уведомления об оплате: {notify_err}')
                 await finalize_payment_ui(message, state, text, order, user_id=message.from_user.id)
             else:
                 await safe_edit_or_send(message, text, force_new=True)

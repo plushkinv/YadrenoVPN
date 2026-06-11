@@ -66,6 +66,16 @@ async def activate_trial_subscription(callback: CallbackQuery, state: FSMContext
     (_, order_id) = create_pending_order(user_id=internal_user_id, tariff_id=tariff_id, payment_type='trial', vpn_key_id=key_id)
     complete_order(order_id)
 
+    # Уведомление администраторов об активации пробной подписки
+    try:
+        from bot.services.notifications import notify_admins_payment
+        from database.requests import find_order_by_order_id
+        trial_order = find_order_by_order_id(order_id)
+        if trial_order:
+            await notify_admins_payment(callback.bot, trial_order)
+    except Exception as notify_err:
+        logger.warning(f'Ошибка уведомления о trial: {notify_err}')
+
     await state.update_data(new_key_order_id=order_id, new_key_id=key_id)
     await callback.answer()
     try:

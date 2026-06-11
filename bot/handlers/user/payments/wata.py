@@ -154,7 +154,7 @@ async def check_wata_payment(callback: CallbackQuery, state: FSMContext):
         payment_type=_WATA_TYPE,
         payment_id_field=_WATA_RESULT_KEY,
         check_func=check_wata_payment_status,
-        check_arg_is_order_id=True,  # WATA принимает order_id, а не link_id
+        check_arg_is_order_id=False,  # WATA: проверяем по wata_link_id через /links/{id}
         rate_limit_seconds=30,
         rate_limit_prefix='wata',
         pending_hint='Если только что оплатили — подождите 30 секунд (ограничение WATA API).',

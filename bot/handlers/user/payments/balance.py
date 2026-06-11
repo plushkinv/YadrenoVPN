@@ -202,14 +202,33 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
         text = f'✅ <b>Оплата успешно завершена!</b>\n\nС вашего баланса списано {price_str}\nКлюч продлён на {days} дн.'
         if renew_result and not renew_result['panel_synced']:
             text += '\n\n⚠️ Доступ продлён в БД, но панель синхронизирована не полностью. Если подключение не обновилось сразу, повторите позже или обратитесь в поддержку.'
+        # Уведомление администраторов (продление балансом)
+        try:
+            from bot.services.notifications import notify_admins_payment
+            from database.requests import create_pending_order, complete_order as _complete_order, find_order_by_order_id
+            (_, bal_order_id) = create_pending_order(user_id=user_internal_id, tariff_id=tariff_id, payment_type='balance', vpn_key_id=key_id)
+            _complete_order(bal_order_id)
+            bal_order = find_order_by_order_id(bal_order_id)
+            if bal_order:
+                await notify_admins_payment(callback.bot, bal_order)
+        except Exception as notify_err:
+            logger.warning(f'Ошибка уведомления о balance-продлении: {notify_err}')
         await safe_edit_or_send(callback.message, text, reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text='🈴 На главную', callback_data='start')).as_markup())
     else:
         # Новый ключ — нужно настроить (выбор сервера/inbound)
         from bot.handlers.user.payments.base import finalize_payment_ui
-        from database.requests import create_pending_order, update_payment_key_id
+        from database.requests import create_pending_order, update_payment_key_id, find_order_by_order_id
         # Создаём ордер для корректной работы finalize_payment_ui
         (_, order_id) = create_pending_order(user_id=user_internal_id, tariff_id=tariff_id, payment_type='balance', vpn_key_id=new_key_id)
         update_payment_key_id(order_id, new_key_id)
+        # Уведомление администраторов (новый ключ балансом)
+        try:
+            from bot.services.notifications import notify_admins_payment
+            bal_order = find_order_by_order_id(order_id)
+            if bal_order:
+                await notify_admins_payment(callback.bot, bal_order)
+        except Exception as notify_err:
+            logger.warning(f'Ошибка уведомления о balance-покупке: {notify_err}')
         order = {'order_id': order_id, 'vpn_key_id': new_key_id, 'tariff_id': tariff_id}
         await finalize_payment_ui(callback.message, state, f'✅ <b>Оплата успешно завершена!</b>\n\nС вашего баланса списано {price_str}', order, user_id=telegram_id)
     await callback.answer()

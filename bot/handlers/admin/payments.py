@@ -159,10 +159,11 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
         text += "⚪ <b>Демо оплата (РФ)</b>\n"
 
     monthly_reset = get_setting('monthly_traffic_reset_enabled', '0') == '1'
+    notify = get_setting('payment_notifications_enabled', '0') == '1'
 
     await safe_edit_or_send(callback.message,
         text,
-        reply_markup=payments_menu_kb(stars, crypto, cards, qr, monthly_reset, demo, wata, platega, cardlink)
+        reply_markup=payments_menu_kb(stars, crypto, cards, qr, monthly_reset, demo, wata, platega, cardlink, notify_enabled=notify)
     )
     await callback.answer()
 
@@ -181,6 +182,24 @@ async def toggle_monthly_reset(callback: CallbackQuery, state: FSMContext):
     current = get_setting('monthly_traffic_reset_enabled', '0')
     new_val = '0' if current == '1' else '1'
     set_setting('monthly_traffic_reset_enabled', new_val)
+    
+    # Перерисовываем меню оплат
+    await show_payments_menu(callback, state)
+
+
+@router.callback_query(F.data == "admin_toggle_payment_notify")
+async def toggle_payment_notify(callback: CallbackQuery, state: FSMContext):
+    """Переключение уведомлений об оплатах."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    
+    current = get_setting('payment_notifications_enabled', '0')
+    new_val = '0' if current == '1' else '1'
+    set_setting('payment_notifications_enabled', new_val)
+    
+    status = "включены 🔔" if new_val == '1' else "выключены"
+    await callback.answer(f"Уведомления об оплатах {status}")
     
     # Перерисовываем меню оплат
     await show_payments_menu(callback, state)
