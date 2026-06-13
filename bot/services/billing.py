@@ -43,6 +43,24 @@ CARDLINK_API_URL = "https://cardlink.link"
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
+def build_payment_return_url(bot_name: str, provider: str, order_id: str) -> str:
+    """
+    Формирует deep-link возврата из внешней платёжной формы в бота.
+
+    Формат start-параметра единый для QR-провайдеров:
+    pay_{provider}_{order_id}
+    """
+    if not bot_name:
+        return "https://t.me"
+
+    provider_code = str(provider or '').strip().lower()
+    order_code = str(order_id or '').strip()
+    if not provider_code or not order_code:
+        return f"https://t.me/{bot_name}"
+
+    return f"https://t.me/{bot_name}?start=pay_{provider_code}_{order_code}"
+
+
 
 
 def encode_base62(data: bytes) -> str:
@@ -155,7 +173,11 @@ def parse_crypto_callback(start_param: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+async def process_payment_order(
+    order_id: str,
+    bot: Optional[Any] = None,
+    process_referrals: bool = True,
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
     Универсальная обработка успешного ордера (Crypto или Stars).
     Закрывает ордер, продлевает ключ или создаёт черновик.
@@ -209,8 +231,11 @@ async def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict
                     f"не полностью: {renew_result.get('sync_stats')}"
                 )
 
-            if order.get('payment_type') == 'crypto':
-                await process_referral_reward(user_internal_id, days, order.get('amount_cents', 0), 'crypto')
+            if process_referrals and order.get('payment_type') == 'crypto':
+                await process_referral_reward(
+                    user_internal_id, days, order.get('amount_cents', 0), 'crypto',
+                    bot=bot, order=order
+                )
             
             return True, f"✅ Оплата прошла успешно!\n\nВаш ключ продлён на {days} дней.", order
         else:
@@ -235,8 +260,11 @@ async def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict
             
             logger.info(f"Создан черновик ключа {key_id} для заказа {order_id}")
             
-            if order.get('payment_type') == 'crypto':
-                await process_referral_reward(user_internal_id, days, order.get('amount_cents', 0), 'crypto')
+            if process_referrals and order.get('payment_type') == 'crypto':
+                await process_referral_reward(
+                    user_internal_id, days, order.get('amount_cents', 0), 'crypto',
+                    bot=bot, order=order
+                )
             
             return True, "✅ Оплата прошла успешно!", order
             
@@ -245,7 +273,11 @@ async def process_payment_order(order_id: str) -> Tuple[bool, str, Optional[Dict
             return True, "✅ Оплата принята, но произошла ошибка при создании ключа. Обратитесь в поддержку.", order
 
 
-async def process_crypto_payment(start_param: str, user_id: Optional[int] = None) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+async def process_crypto_payment(
+    start_param: str,
+    user_id: Optional[int] = None,
+    bot: Optional[Any] = None,
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
     Обрабатывает платёж от криптопроцессинга (parse + verify + confirm).
     """
@@ -297,7 +329,7 @@ async def process_crypto_payment(start_param: str, user_id: Optional[int] = None
         raise TariffNotFoundError()
     
     # Delegate to unified logic
-    return await process_payment_order(order_id)
+    return await process_payment_order(order_id, bot=bot)
 
 
 def build_crypto_payment_url(
@@ -409,6 +441,7 @@ async def create_yookassa_qr_payment(
 
     # Ключ идемпотентности — уникальный для этого ордера
     idempotence_key = f"qr-{order_id}-{uuid.uuid4().hex[:8]}"
+    return_url = build_payment_return_url(bot_name, 'yookassa', order_id)
 
     payload = {
         "amount": {
@@ -418,7 +451,7 @@ async def create_yookassa_qr_payment(
         "capture": True,
         "confirmation": {
             "type": "redirect",
-            "return_url": "https://t.me"
+            "return_url": return_url
         },
         "description": description,
         "receipt": {
@@ -577,7 +610,7 @@ async def create_wata_payment(
     if not token:
         raise ValueError("WATA: JWT-токен не настроен")
 
-    return_url = f"https://t.me/{bot_name}" if bot_name else "https://t.me"
+    return_url = build_payment_return_url(bot_name, 'wata', order_id)
 
     payload = {
         "amount": round(float(amount_rub), 2),
@@ -748,7 +781,7 @@ async def create_platega_payment(
     if not merchant_id or not secret:
         raise ValueError("Platega: не настроены merchant_id или secret")
 
-    return_url = f"https://t.me/{bot_name}" if bot_name else "https://t.me"
+    return_url = build_payment_return_url(bot_name, 'platega', order_id)
     fail_url = return_url
 
     # Platega требует id в формате UUID. Наш короткий order_id сохраняем в payload.
@@ -943,6 +976,10 @@ async def create_cardlink_payment(
     form.add_field("type", "normal")
     form.add_field("description", description[:255])
     form.add_field("name", description[:100])
+    return_url = build_payment_return_url(bot_name, 'cardlink', order_id)
+    form.add_field("return_url", return_url)
+    form.add_field("success_url", return_url)
+    form.add_field("fail_url", return_url)
     form.add_field("partner_uuid", "6e7e8f22-3410-4224-8b9c-e61430705963")
 
     headers = {
@@ -1123,8 +1160,10 @@ async def process_referral_reward(
     payer_id: int,
     period_days: int,
     amount_raw: int,
-    payment_type: str
-) -> None:
+    payment_type: str,
+    bot: Optional[Any] = None,
+    order: Optional[Dict[str, Any]] = None,
+) -> list[Dict[str, Any]]:
     """
     Обработка реферального вознаграждения при оплате.
     Вызывается ПОСЛЕ успешной обработки платежа.
@@ -1144,25 +1183,31 @@ async def process_referral_reward(
         поэтому эта функция не вызывается для платежей балансом.
     """
     if not is_referral_enabled():
-        return
+        return []
     
     reward_type = get_referral_reward_type()
-    levels = get_active_referral_levels()
+    active_levels = dict(get_active_referral_levels())
     
-    if not levels:
-        return
+    if not active_levels:
+        return []
     
     usd_rub_rate = await get_usd_rub_rate()
     amount_rub_cents = convert_to_rub_cents(amount_raw, payment_type, usd_rub_rate)
     
     current_user_id = payer_id
+    events = []
     
     from bot.services.user_locks import user_locks
     
-    for level_num, percent in levels:
+    for level_num in (1, 2, 3):
         referrer_id = get_user_referrer(current_user_id)
         if not referrer_id:
             break
+
+        percent = active_levels.get(level_num)
+        if percent is None:
+            current_user_id = referrer_id
+            continue
         
         coefficient = get_user_referral_coefficient(referrer_id)
         
@@ -1182,7 +1227,8 @@ async def process_referral_reward(
             reward_days = math.ceil(final_days)
             
             if reward_days > 0:
-                add_days_to_first_active_key(referrer_id, reward_days)
+                if not add_days_to_first_active_key(referrer_id, reward_days):
+                    reward_days = 0
             
             final_reward = 0
         
@@ -1190,8 +1236,30 @@ async def process_referral_reward(
             referrer_id, payer_id, level_num,
             final_reward, reward_days
         )
+
+        events.append({
+            'referrer_id': referrer_id,
+            'payer_id': payer_id,
+            'level': level_num,
+            'reward_type': reward_type,
+            'reward_cents': final_reward,
+            'reward_days': reward_days,
+            'period_days': period_days,
+            'amount_raw': amount_raw,
+            'amount_rub_cents': amount_rub_cents,
+            'payment_type': payment_type,
+        })
         
         current_user_id = referrer_id
+
+    if bot is not None and order is not None and events:
+        try:
+            from bot.services.notifications import notify_referrers_purchase
+            await notify_referrers_purchase(bot, order, events)
+        except Exception as notify_err:
+            logger.warning(f'Ошибка уведомления рефоводов о покупке: {notify_err}')
+
+    return events
 
 
 def calculate_balance_discount(user_id: int, tariff_price_cents: int) -> tuple[int, int]:
@@ -1255,7 +1323,11 @@ async def complete_payment_flow(
     balance_to_deduct = state_data.get('balance_to_deduct', 0)
     
     try:
-        (success, text, order) = await process_payment_order(order_id)
+        (success, text, order) = await process_payment_order(
+            order_id,
+            bot=message.bot,
+            process_referrals=False,
+        )
         
         if success and order:
             user_internal_id = order['user_id']
@@ -1277,7 +1349,10 @@ async def complete_payment_flow(
             await state.update_data(balance_to_deduct=0, remaining_cents=0)
             
             # Реферальное вознаграждение
-            await process_referral_reward(user_internal_id, days, referral_amount, payment_type)
+            await process_referral_reward(
+                user_internal_id, days, referral_amount, payment_type,
+                bot=message.bot, order=order
+            )
             
             # Уведомление администраторов об оплате
             try:

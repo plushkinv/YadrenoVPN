@@ -54,8 +54,12 @@ def _missing_key_text() -> str:
     return (
         "🤖 <b>Yadreno Admin</b>\n\n"
         "Чтобы начать диалог с агентом, сначала укажите свой <code>api_key</code>.\n\n"
-        "Получить ключ можно в <a href=\"https://t.me/YadrenoAdmin_Bot\">@YadrenoAdmin_Bot</a> "
-        "в разделе «Профиль»."
+        "🔑 <b>Как получить ключ:</b>\n"
+        "Получите его в <a href=\"https://t.me/YadrenoAdmin_Bot\">@YadrenoAdmin_Bot</a> в разделе «Профиль».\n\n"
+        "🎬 <b>Что умеет агент:</b>\n"
+        "Посмотрите <a href=\"https://www.youtube.com/watch?v=ACPu03aAJns\">видео с примерами возможностей</a>.\n\n"
+        "💬 <b>Остались вопросы?</b>\n"
+        "Задайте их в <a href=\"https://t.me/YadrenoAdmin_Bot\">@YadrenoAdmin_Bot</a> — он бесплатно проконсультирует вас по любым вопросам YadrenoVPN."
     )
 
 

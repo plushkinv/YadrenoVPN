@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from bot.utils.text import escape_html, safe_edit_or_send
 from config import ADMIN_IDS
 from bot.handlers.user.payments.base import (
-    finalize_payment_ui, create_qr_payment_flow, check_qr_payment_flow
+    create_qr_payment_flow, check_qr_payment_flow
 )
 
 logger = logging.getLogger(__name__)
@@ -272,15 +272,26 @@ async def _yookassa_referral_amount(order: dict, state: FSMContext) -> int:
 @router.callback_query(F.data.startswith('check_yookassa_qr:'))
 async def check_yookassa_payment(callback: CallbackQuery, state: FSMContext):
     """Проверяет статус QR-платежа ЮКасса по нажатию «✅ Я оплатил»."""
+    await _run_yookassa_check(
+        callback.message, state,
+        order_id=callback.data.split(':', 1)[1],
+        telegram_id=callback.from_user.id,
+        callback=callback,
+    )
+
+
+async def _run_yookassa_check(message, state, order_id: str,
+                              telegram_id: int, callback=None) -> None:
+    """
+    Общая проверка ЮКасса QR-платежа для кнопки «Я оплатил» и deep-link возврата.
+    """
     from bot.services.billing import check_yookassa_payment_status
 
-    order_id = callback.data.split(':', 1)[1]
-
     await check_qr_payment_flow(
-        message=callback.message,
+        message=message,
         state=state,
         order_id=order_id,
-        telegram_id=callback.from_user.id,
+        telegram_id=telegram_id,
         payment_type=_YK_TYPE,
         payment_id_field=_YK_RESULT_KEY,
         check_func=check_yookassa_payment_status,

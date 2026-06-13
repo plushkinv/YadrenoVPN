@@ -12,6 +12,24 @@ BASE62_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 from .db_tariffs import get_tariff_by_id
 from .db_settings import get_setting, set_setting
 
+DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT = (
+    "👥 <b>Новый реферал</b>\n\n"
+    "По вашей ссылке зарегистрировался пользователь.\n\n"
+    "👤 Имя: <b>%имя%</b>\n"
+    "🔗 Логин: %логин%\n"
+    "📊 Уровень: <b>%уровень%</b>"
+)
+
+DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT = (
+    "💳 <b>Покупка реферала</b>\n\n"
+    "Пользователь <b>%имя%</b> (%логин%) оплатил тариф.\n\n"
+    "🎫 Тариф: <b>%тариф%</b>\n"
+    "💵 Сумма: <b>%сумма%</b>\n"
+    "⏳ Срок: <b>%дней%</b>\n"
+    "🎁 Ваш бонус: <b>%вознаграждение%</b>\n"
+    "📊 Уровень: <b>%уровень%</b>"
+)
+
 
 __all__ = [
     'save_yookassa_payment_id',
@@ -44,6 +62,13 @@ __all__ = [
     'is_referral_enabled',
     'get_referral_reward_type',
     'get_referral_conditions_text',
+    'parse_referral_notification_levels',
+    'get_referral_notification_levels',
+    'is_referral_new_ref_notifications_enabled',
+    'is_referral_purchase_notifications_enabled',
+    'get_referral_new_ref_notification_text',
+    'get_referral_purchase_notification_text',
+    'get_referral_notification_settings',
     'update_referral_setting',
 ]
 
@@ -738,7 +763,7 @@ def update_referral_level(level_number: int, percent: int, enabled: bool) -> boo
 
 def get_referral_stats(user_id: int) -> List[Dict[str, Any]]:
     """
-    Статистика по уровням для пользователя.
+    Статистика по включённым уровням реферальной программы.
     
     Args:
         user_id: Внутренний ID пользователя (реферера)
@@ -747,6 +772,13 @@ def get_referral_stats(user_id: int) -> List[Dict[str, Any]]:
         Список [{level, count, total_reward_cents, total_reward_days}, ...]
     """
     with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT level_number FROM referral_levels WHERE enabled = 1 ORDER BY level_number"
+        )
+        active_levels = [row['level_number'] for row in cursor.fetchall()]
+        if not active_levels:
+            return []
+
         cursor = conn.execute("""
             SELECT 
                 level,
@@ -775,16 +807,16 @@ def get_referral_stats(user_id: int) -> List[Dict[str, Any]]:
             )
             SELECT level, COUNT(*) as total_count 
             FROM referral_tree 
+            WHERE level <= 3
             GROUP BY level
         """, (user_id,))
         counts = {row['level']: row['total_count'] for row in cursor.fetchall()}
         
         result = []
-        # Объединяем данные (и те, где есть вознаграждения, и те, где есть только регистрации)
-        all_levels = set(list(rewards.keys()) + list(counts.keys()))
-        for level in sorted(all_levels):
+        for level in active_levels:
             rew = rewards.get(level, {
                 'level': level,
+                'paying_count': 0,
                 'total_reward_cents': 0,
                 'total_reward_days': 0
             })
@@ -837,6 +869,68 @@ def get_referral_conditions_text() -> str:
     """Текст условий реферальной программы."""
     return get_setting('referral_conditions_text', '')
 
+def parse_referral_notification_levels(raw: Optional[str]) -> List[int]:
+    """
+    Разбирает CSV уровней уведомлений рефовода.
+
+    Допустимые значения: 1, 2, 3. Пустое или некорректное значение
+    трактуется как дефолтный первый уровень.
+    """
+    value = (raw or '').strip()
+    if not value:
+        return [1]
+
+    result = []
+    for part in value.split(','):
+        part = part.strip()
+        if not part.isdigit():
+            return [1]
+        level = int(part)
+        if level not in (1, 2, 3):
+            return [1]
+        if level not in result:
+            result.append(level)
+
+    return result or [1]
+
+def get_referral_notification_levels() -> List[int]:
+    """Уровни, по которым рефовод получает скрытые уведомления."""
+    return parse_referral_notification_levels(
+        get_setting('referral_notification_levels', '1')
+    )
+
+def is_referral_new_ref_notifications_enabled() -> bool:
+    """Включены ли скрытые уведомления о новых рефералах."""
+    return get_setting('referral_new_ref_notifications_enabled', '0') == '1'
+
+def is_referral_purchase_notifications_enabled() -> bool:
+    """Включены ли скрытые уведомления о покупках рефералов."""
+    return get_setting('referral_purchase_notifications_enabled', '0') == '1'
+
+def get_referral_new_ref_notification_text() -> str:
+    """Текст скрытого уведомления о новом реферале."""
+    return get_setting(
+        'referral_new_ref_notification_text',
+        DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT,
+    ) or DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT
+
+def get_referral_purchase_notification_text() -> str:
+    """Текст скрытого уведомления о покупке реферала."""
+    return get_setting(
+        'referral_purchase_notification_text',
+        DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT,
+    ) or DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT
+
+def get_referral_notification_settings() -> Dict[str, Any]:
+    """Текущее состояние скрытых уведомлений рефовода для read-only вывода."""
+    return {
+        'new_ref_enabled': is_referral_new_ref_notifications_enabled(),
+        'new_ref_text_set': bool(get_referral_new_ref_notification_text().strip()),
+        'purchase_enabled': is_referral_purchase_notifications_enabled(),
+        'purchase_text_set': bool(get_referral_purchase_notification_text().strip()),
+        'levels': get_referral_notification_levels(),
+    }
+
 def update_referral_setting(key: str, value: str) -> bool:
     """
     Обновить настройку реферальной системы.
@@ -848,4 +942,5 @@ def update_referral_setting(key: str, value: str) -> bool:
     Returns:
         True если успешно
     """
-    return set_setting(key, value) is not None
+    set_setting(key, value)
+    return True

@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, LabeledPrice, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -9,6 +10,114 @@ from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+PAYMENT_DEEPLINK_PREFIX = 'pay_'
+PAYMENT_DEEPLINK_PROVIDERS = {'yookassa', 'wata', 'platega', 'cardlink'}
+
+
+def parse_payment_deeplink(start_param: str) -> Optional[dict]:
+    """
+    Разбирает единый deep-link возврата из платёжной формы.
+
+    Формат: pay_{provider}_{order_id}
+    """
+    if not start_param or not start_param.startswith(PAYMENT_DEEPLINK_PREFIX):
+        return None
+
+    payload = start_param[len(PAYMENT_DEEPLINK_PREFIX):]
+    provider, separator, order_id = payload.partition('_')
+    if not separator or provider not in PAYMENT_DEEPLINK_PROVIDERS or not order_id:
+        return None
+
+    return {
+        'provider': provider,
+        'order_id': order_id,
+    }
+
+
+async def handle_payment_deeplink(
+    message: Message,
+    state: FSMContext,
+    start_param: str,
+    user_internal_id: int,
+    telegram_id: int,
+) -> bool:
+    """
+    Обрабатывает платёжные deep-link из /start.
+
+    Возвращает True, если параметр относится к платежам и дальнейшая обработка /start не нужна.
+    """
+    if not start_param:
+        return False
+
+    if start_param.startswith(PAYMENT_DEEPLINK_PREFIX):
+        parsed = parse_payment_deeplink(start_param)
+        if not parsed:
+            from bot.keyboards.admin import home_only_kb
+            await safe_edit_or_send(
+                message,
+                '⚠️ <b>Платёжная ссылка устарела или повреждена</b>\n\n'
+                'Откройте оплату заново из бота и попробуйте ещё раз.',
+                reply_markup=home_only_kb(),
+                force_new=True,
+            )
+            return True
+
+        provider = parsed['provider']
+        order_id = parsed['order_id']
+
+        if provider == 'yookassa':
+            from bot.handlers.user.payments.yookassa import _run_yookassa_check
+            await _run_yookassa_check(
+                message, state, order_id=order_id,
+                telegram_id=telegram_id, callback=None
+            )
+        elif provider == 'wata':
+            from bot.handlers.user.payments.wata import _run_wata_check
+            await _run_wata_check(
+                message, state, order_id=order_id,
+                telegram_id=telegram_id, callback=None
+            )
+        elif provider == 'platega':
+            from bot.handlers.user.payments.platega import _run_platega_check
+            await _run_platega_check(
+                message, state, order_id=order_id,
+                telegram_id=telegram_id, callback=None
+            )
+        elif provider == 'cardlink':
+            from bot.handlers.user.payments.cardlink import _run_cardlink_check
+            await _run_cardlink_check(
+                message, state, order_id=order_id,
+                telegram_id=telegram_id, callback=None
+            )
+        return True
+
+    # Совместимость со старыми ссылками Cardlink из настроек магазина.
+    if start_param.startswith('cl_'):
+        from database.requests import find_latest_pending_cardlink_order_for_user
+        from bot.handlers.user.payments.cardlink import _run_cardlink_check
+        from bot.keyboards.admin import home_only_kb
+
+        order = find_latest_pending_cardlink_order_for_user(user_internal_id)
+        if not order:
+            await safe_edit_or_send(
+                message,
+                '⚠️ <b>Активная оплата Cardlink не найдена</b>\n\n'
+                'Возможно, платёж уже обработан или ещё не создан.\n'
+                'Откройте «Купить ключ» и попробуйте снова.',
+                reply_markup=home_only_kb(),
+                force_new=True,
+            )
+            return True
+
+        await _run_cardlink_check(
+            message, state, order_id=order['order_id'],
+            telegram_id=telegram_id, callback=None
+        )
+        return True
+
+    return False
+
 
 def _format_price_compact(cents: int) -> str:
     """Форматирование цены в компактном виде."""
@@ -305,8 +414,8 @@ async def check_qr_payment_flow(
     """
     Универсальный flow проверки статуса QR-платежа.
 
-    Выполняет: проверку «уже оплачено» → поиск ордера → валидацию payment_id →
-    rate-limiting → вызов API проверки → обработку succeeded/canceled/pending.
+    Выполняет: поиск ордера → проверку владельца → проверку «уже оплачено» →
+    валидацию payment_id → rate-limiting → вызов API проверки → обработку результата.
 
     Args:
         message: Объект сообщения (callback.message или Message из deep-link)
@@ -326,34 +435,46 @@ async def check_qr_payment_flow(
     """
     import time
     from database.requests import (
-        find_order_by_order_id, is_order_already_paid, update_payment_type
+        find_order_by_order_id, get_user_internal_id,
+        is_order_already_paid, update_payment_type
     )
     from bot.services.billing import complete_payment_flow
     from bot.keyboards.admin import home_only_kb
 
-    # 1. Уже оплачено?
-    if is_order_already_paid(order_id):
-        order = find_order_by_order_id(order_id)
-        if order:
-            await finalize_payment_ui(
-                message, state,
-                '✅ Оплата уже была обработана ранее.',
-                order, user_id=telegram_id
-            )
-        if callback:
-            await callback.answer()
-        return
-
-    # 2. Поиск ордера
-    order = find_order_by_order_id(order_id)
-    if not order:
+    async def _show_order_not_found() -> None:
         if callback:
             await callback.answer('❌ Ордер не найден', show_alert=True)
         else:
             await safe_edit_or_send(message, '❌ Ордер не найден', reply_markup=home_only_kb())
+
+    # 1. Поиск ордера
+    order = find_order_by_order_id(order_id)
+    if not order:
+        await _show_order_not_found()
         return
 
-    # 3. Валидация payment_id
+    # 2. Проверка владельца ордера
+    owner_user_id = get_user_internal_id(telegram_id)
+    if not owner_user_id or int(order.get('user_id') or 0) != int(owner_user_id):
+        logger.warning(
+            'Попытка проверить чужой QR-платёж: order=%s, telegram_id=%s, owner=%s',
+            order_id, telegram_id, order.get('user_id')
+        )
+        await _show_order_not_found()
+        return
+
+    # 3. Уже оплачено?
+    if order.get('status') == 'paid' or is_order_already_paid(order_id):
+        await finalize_payment_ui(
+            message, state,
+            '✅ Оплата уже была обработана ранее.',
+            order, user_id=telegram_id
+        )
+        if callback:
+            await callback.answer()
+        return
+
+    # 4. Валидация payment_id
     payment_id = order.get(payment_id_field)
     if not payment_id:
         if callback:
@@ -366,7 +487,7 @@ async def check_qr_payment_flow(
             )
         return
 
-    # 4. Rate-limiting
+    # 5. Rate-limiting
     if rate_limit_seconds > 0:
         state_data = await state.get_data()
         last_check_key = f'{rate_limit_prefix}_last_check_{order_id}'
@@ -383,11 +504,11 @@ async def check_qr_payment_flow(
             return
         await state.update_data({last_check_key: now})
 
-    # 5. Уведомление о проверке
+    # 6. Уведомление о проверке
     if callback:
         await callback.answer('🔍 Проверяем платёж...')
 
-    # 6. Вызов API проверки
+    # 7. Вызов API проверки
     try:
         check_arg = order_id if check_arg_is_order_id else payment_id
         status = await check_func(check_arg)
@@ -400,7 +521,7 @@ async def check_qr_payment_flow(
         )
         return
 
-    # 7. Обработка результата
+    # 8. Обработка результата
     if status == 'succeeded':
         update_payment_type(order_id, payment_type)
 

@@ -138,15 +138,26 @@ async def renew_platega_create(callback: CallbackQuery):
 @router.callback_query(F.data.startswith('check_platega:'))
 async def check_platega_payment(callback: CallbackQuery, state: FSMContext):
     """Проверяет статус Platega-платежа по нажатию «✅ Я оплатил»."""
+    await _run_platega_check(
+        callback.message, state,
+        order_id=callback.data.split(':', 1)[1],
+        telegram_id=callback.from_user.id,
+        callback=callback,
+    )
+
+
+async def _run_platega_check(message, state, order_id: str,
+                             telegram_id: int, callback=None) -> None:
+    """
+    Общая проверка Platega-платежа для кнопки «Я оплатил» и deep-link возврата.
+    """
     from bot.services.billing import check_platega_payment_status
 
-    order_id = callback.data.split(':', 1)[1]
-
     await check_qr_payment_flow(
-        message=callback.message,
+        message=message,
         state=state,
         order_id=order_id,
-        telegram_id=callback.from_user.id,
+        telegram_id=telegram_id,
         payment_type=_PLATEGA_TYPE,
         payment_id_field=_PLATEGA_RESULT_KEY,
         check_func=check_platega_payment_status,

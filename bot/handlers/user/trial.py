@@ -55,7 +55,12 @@ async def activate_trial_subscription(callback: CallbackQuery, state: FSMContext
         await callback.answer('❌ Тариф не найден', show_alert=True)
         return
 
-    (user, _) = get_or_create_user(user_id, callback.from_user.username)
+    (user, _) = get_or_create_user(
+        user_id,
+        callback.from_user.username,
+        first_name=getattr(callback.from_user, 'first_name', None),
+        last_name=getattr(callback.from_user, 'last_name', None),
+    )
     internal_user_id = user['id']
     mark_trial_used(internal_user_id)
     logger.info(f'Пользователь {user_id} активировал пробный период (тариф ID={tariff_id})')

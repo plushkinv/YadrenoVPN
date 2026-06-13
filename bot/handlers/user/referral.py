@@ -15,7 +15,6 @@ from database.requests import (
     get_user_internal_id,
     get_user_balance,
     ensure_user_referral_code,
-    get_active_referral_levels,
 )
 from bot.utils.text import escape_html
 
@@ -35,7 +34,7 @@ def format_price_compact(cents: int) -> str:
 def _build_stats_text(user_internal_id: int) -> str:
     """Формирует блок статистики для плейсхолдера %статистика%.
     
-    Включает таблицу по уровням и (при reward_type='balance') баланс.
+    Показывает только включённые уровни и (при reward_type='balance') баланс.
     
     Args:
         user_internal_id: Внутренний ID пользователя
@@ -44,7 +43,7 @@ def _build_stats_text(user_internal_id: int) -> str:
         HTML-текст блока статистики
     """
     reward_type = get_referral_reward_type()
-    active_levels = get_active_referral_levels()
+    levels = get_referral_levels()
     stats = get_referral_stats(user_internal_id)
     balance = get_user_balance(user_internal_id)
 
@@ -54,7 +53,16 @@ def _build_stats_text(user_internal_id: int) -> str:
     lines.append("📊 <b>Ваша статистика:</b>")
     lines.append("")
 
-    for level_num, percent in active_levels:
+    visible_levels = [
+        level for level in levels
+        if bool(level.get('enabled')) and level.get('level_number') in (1, 2, 3)
+    ]
+
+    if not visible_levels:
+        lines.append("Пока нет активных уровней реферальной программы.")
+    for level in visible_levels:
+        level_num = level['level_number']
+        percent = level['percent']
         level_stat = stats_by_level.get(level_num)
         count = level_stat['count'] if level_stat else 0
 
@@ -66,7 +74,7 @@ def _build_stats_text(user_internal_id: int) -> str:
             reward_display = escape_html(format_price_compact(total_reward))
 
         lines.append(
-            f"Уровень {escape_html(str(level_num))} "
+            f"✅ Уровень {escape_html(str(level_num))} "
             f"({escape_html(str(percent))}%): "
             f"{escape_html(str(count))} чел. — {reward_display}"
         )

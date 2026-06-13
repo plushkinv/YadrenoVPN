@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-@router.message(Command('mykeys'))
+@router.message(Command('mykeys', 'my_keys'))
 async def cmd_mykeys(message: Message, state: FSMContext):
     """Обработчик команды /mykeys - вызывает логику кнопки 'Мои ключи'."""
     if is_user_banned(message.from_user.id):

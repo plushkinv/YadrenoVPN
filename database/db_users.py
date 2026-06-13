@@ -22,6 +22,7 @@ __all__ = [
     'get_all_users_count',
     'get_users_stats',
     'get_all_users_paginated',
+    'get_user_by_id',
     'get_user_by_telegram_id',
     'get_user_by_username',
     'toggle_user_ban',
@@ -43,7 +44,12 @@ def _generate_referral_code() -> str:
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(8))
 
-def get_or_create_user(telegram_id: int, username: Optional[str] = None) -> tuple[Dict[str, Any], bool]:
+def get_or_create_user(
+    telegram_id: int,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+) -> tuple[Dict[str, Any], bool]:
     """
     Получает или создаёт пользователя.
     
@@ -64,12 +70,25 @@ def get_or_create_user(telegram_id: int, username: Optional[str] = None) -> tupl
         row = cursor.fetchone()
         
         if row:
-            if username and row['username'] != username:
+            user = dict(row)
+            updates = {}
+            if username and user.get('username') != username:
+                updates['username'] = username
+            if 'first_name' in user and first_name and user.get('first_name') != first_name:
+                updates['first_name'] = first_name
+            if 'last_name' in user and last_name and user.get('last_name') != last_name:
+                updates['last_name'] = last_name
+
+            if updates:
+                set_clause = ', '.join(f"{field} = ?" for field in updates)
+                params = list(updates.values()) + [telegram_id]
                 conn.execute(
-                    "UPDATE users SET username = ? WHERE telegram_id = ?",
-                    (username, telegram_id)
+                    f"UPDATE users SET {set_clause} WHERE telegram_id = ?",
+                    params
                 )
-            return dict(row), False
+                user.update(updates)
+
+            return user, False
         
         referral_code = _generate_referral_code()
         attempts = 0
@@ -80,9 +99,23 @@ def get_or_create_user(telegram_id: int, username: Optional[str] = None) -> tupl
             referral_code = _generate_referral_code()
             attempts += 1
         
+        user_columns = {
+            row['name']
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        fields = ['telegram_id', 'username', 'referral_code']
+        values = [telegram_id, username, referral_code]
+        if 'first_name' in user_columns:
+            fields.append('first_name')
+            values.append(first_name)
+        if 'last_name' in user_columns:
+            fields.append('last_name')
+            values.append(last_name)
+
+        placeholders = ', '.join('?' for _ in fields)
         cursor = conn.execute(
-            "INSERT INTO users (telegram_id, username, referral_code) VALUES (?, ?, ?)",
-            (telegram_id, username, referral_code)
+            f"INSERT INTO users ({', '.join(fields)}) VALUES ({placeholders})",
+            values
         )
         logger.info(f"Новый пользователь: {telegram_id} (@{username}), referral_code: {referral_code}")
         
@@ -90,6 +123,8 @@ def get_or_create_user(telegram_id: int, username: Optional[str] = None) -> tupl
             'id': cursor.lastrowid,
             'telegram_id': telegram_id,
             'username': username,
+            'first_name': first_name,
+            'last_name': last_name,
             'is_banned': 0,
             'is_bot_blocked': 0,
             'referral_code': referral_code,
@@ -337,6 +372,16 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
         users = [dict(row) for row in cursor.fetchall()]
         
         return users, total
+
+def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+    """Получает пользователя по внутреннему ID."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
 def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
     """

@@ -15,7 +15,7 @@ from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
 from bot.utils.text import safe_edit_or_send
 from bot.utils.message_editor import (
-    get_message_data, save_message_data, detect_message_type,
+    get_message_data, save_message_data, delete_message_photo, detect_message_type,
     editor_kb, editor_help_kb, send_editor_message,
 )
 
@@ -37,7 +37,7 @@ async def show_message_editor(
     Превью = сообщение ровно так, как оно будет выглядеть для пользователя.
     Без заголовков, рамок и инструкций.
     
-    Использует send_editor_message() для рендера — единый контракт MarkdownV2.
+    Использует send_editor_message() для рендера — единый контракт HTML.
     Сохраняет контекст в FSM data.
     
     Args:
@@ -54,13 +54,20 @@ async def show_message_editor(
     if allowed_types is None:
         allowed_types = ['text', 'photo', 'video', 'animation']
     
+    message_data = get_message_data(key)
+    can_delete_photo = bool(message_data.get('photo_file_id')) and 'photo' in allowed_types
+
     # Формируем клавиатуру редактора
-    kb = editor_kb(back_callback, has_help=bool(help_text))
+    kb = editor_kb(
+        back_callback,
+        has_help=bool(help_text),
+        can_delete_photo=can_delete_photo,
+    )
     
-    # Показываем превью через send_editor_message (единый MarkdownV2 helper)
+    # Показываем превью через send_editor_message (единый HTML helper)
     result = await send_editor_message(
         message,
-        key=key,
+        data=message_data,
         reply_markup=kb,
     )
     
@@ -115,9 +122,42 @@ async def show_editor_noop_alert(callback: CallbackQuery):
         
     await callback.answer(
         "📝 Чтобы изменить текст, просто отправьте боту новое сообщение.\n\n"
-        "Вы можете прикрепить фото/видео.",
+        "Вы можете прикрепить фото. Если картинка уже есть, новый текст сохранит её.",
         show_alert=True
     )
+
+
+@router.callback_query(F.data == "msg_editor_delete_photo")
+async def delete_editor_photo(callback: CallbackQuery, state: FSMContext):
+    """Удаляет картинку из текущего редактируемого сообщения."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    data = await state.get_data()
+    key = data.get('editing_key')
+    back_callback = data.get('back_callback')
+    help_text = data.get('help_text')
+    allowed_types = data.get('allowed_types', ['text', 'photo', 'video', 'animation'])
+
+    if not key:
+        await callback.answer("❌ Ошибка состояния", show_alert=True)
+        return
+
+    if 'photo' not in allowed_types:
+        await callback.answer()
+        return
+
+    delete_message_photo(key)
+
+    await show_message_editor(
+        callback.message, state,
+        key=key,
+        back_callback=back_callback,
+        help_text=help_text,
+        allowed_types=allowed_types,
+    )
+    await callback.answer()
 
 @router.callback_query(F.data == "msg_editor_back_to_preview")
 async def back_to_preview(callback: CallbackQuery, state: FSMContext):

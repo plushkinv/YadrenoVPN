@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 36
+LATEST_VERSION = 37
 
 
 def _my_keys_item_template() -> str:
@@ -114,6 +114,30 @@ def _home_only_page_buttons() -> str:
     return json.dumps([
         {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
     ], ensure_ascii=False)
+
+
+def _referral_new_ref_notification_text() -> str:
+    """Скрытый дефолт уведомления рефоводу о новом реферале."""
+    return (
+        "👥 <b>Новый реферал</b>\n\n"
+        "По вашей ссылке зарегистрировался пользователь.\n\n"
+        "👤 Имя: <b>%имя%</b>\n"
+        "🔗 Логин: %логин%\n"
+        "📊 Уровень: <b>%уровень%</b>"
+    )
+
+
+def _referral_purchase_notification_text() -> str:
+    """Скрытый дефолт уведомления рефоводу о покупке реферала."""
+    return (
+        "💳 <b>Покупка реферала</b>\n\n"
+        "Пользователь <b>%имя%</b> (%логин%) оплатил тариф.\n\n"
+        "🎫 Тариф: <b>%тариф%</b>\n"
+        "💵 Сумма: <b>%сумма%</b>\n"
+        "⏳ Срок: <b>%дней%</b>\n"
+        "🎁 Ваш бонус: <b>%вознаграждение%</b>\n"
+        "📊 Уровень: <b>%уровень%</b>"
+    )
 
 
 def _key_navigation_page_buttons() -> str:
@@ -348,6 +372,11 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('monthly_traffic_reset_enabled', '0'),
         ('referral_enabled', '0'),
         ('referral_reward_type', 'days'),
+        ('referral_new_ref_notifications_enabled', '0'),
+        ('referral_new_ref_notification_text', _referral_new_ref_notification_text()),
+        ('referral_purchase_notifications_enabled', '0'),
+        ('referral_purchase_notification_text', _referral_purchase_notification_text()),
+        ('referral_notification_levels', '1'),
         ('usd_rub_rate', '9500'),
         ('update_blocked', '0'),
         ('daily_tasks_time', '03:00'),
@@ -370,6 +399,8 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             telegram_id INTEGER NOT NULL UNIQUE,
             username TEXT,
+            first_name TEXT,
+            last_name TEXT,
             is_banned INTEGER DEFAULT 0,
             is_bot_blocked INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1229,6 +1260,32 @@ def migration_36(conn):
     logger.info("Миграция v36 применена: добавлена настройка display_timezone")
 
 
+def migration_37(conn):
+    """
+    Миграция v37: скрытые уведомления рефоводу и имя пользователя.
+
+    first_name/last_name нужны для плейсхолдера %имя% в уведомлениях.
+    Настройки уведомлений остаются скрытыми и меняются только через БД.
+    """
+    _add_column(conn, "users", "first_name TEXT")
+    _add_column(conn, "users", "last_name TEXT")
+
+    defaults = [
+        ('referral_new_ref_notifications_enabled', '0'),
+        ('referral_new_ref_notification_text', _referral_new_ref_notification_text()),
+        ('referral_purchase_notifications_enabled', '0'),
+        ('referral_purchase_notification_text', _referral_purchase_notification_text()),
+        ('referral_notification_levels', '1'),
+    ]
+    for key, value in defaults:
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
+    logger.info("Миграция v37 применена: добавлены скрытые уведомления рефералки")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -1245,6 +1302,7 @@ MIGRATIONS = {
     34: migration_34,
     35: migration_35,
     36: migration_36,
+    37: migration_37,
 }
 
 

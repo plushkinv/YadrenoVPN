@@ -18,6 +18,7 @@ from database.requests import (
     get_referral_reward_type,
     get_referral_conditions_text,
     get_referral_levels,
+    get_referral_notification_settings,
     update_referral_level,
     update_referral_setting,
 )
@@ -44,6 +45,7 @@ async def show_referral_menu(callback: CallbackQuery, state: FSMContext):
     enabled = is_referral_enabled()
     reward_type = get_referral_reward_type()
     levels = get_referral_levels()
+    notification_settings = get_referral_notification_settings()
     from bot.utils.message_editor import get_message_data
     conditions_data = get_message_data('referral', '')
     conditions_text = conditions_data.get('text', '')
@@ -69,6 +71,27 @@ async def show_referral_menu(callback: CallbackQuery, state: FSMContext):
         is_enabled = level['enabled']
         status = "✅" if is_enabled else "⚪"
         text += f"{status} Уровень {level_num}: {percent}%\n"
+
+    levels_text = ', '.join(str(level) for level in notification_settings['levels'])
+    new_ref_status = "Вкл" if notification_settings['new_ref_enabled'] else "Выкл"
+    purchase_status = "Вкл" if notification_settings['purchase_enabled'] else "Выкл"
+    text += (
+        "\n<b>Скрытые уведомления рефоводу:</b>\n"
+        f"👥 Уведомления о рефералах: <b>{new_ref_status}</b>\n"
+    )
+    if notification_settings['new_ref_enabled']:
+        new_ref_text_status = "задан" if notification_settings['new_ref_text_set'] else "не задан"
+        text += (
+            f"  Уровни: <b>{levels_text}</b>\n"
+            f"  Текст: <b>{new_ref_text_status}</b>\n"
+        )
+    text += f"💳 Уведомления о покупках: <b>{purchase_status}</b>\n"
+    if notification_settings['purchase_enabled']:
+        purchase_text_status = "задан" if notification_settings['purchase_text_set'] else "не задан"
+        text += (
+            f"  Уровни: <b>{levels_text}</b>\n"
+            f"  Текст: <b>{purchase_text_status}</b>\n"
+        )
     
     if conditions_text:
         text += f"\n📝 Текст условий задан\n"

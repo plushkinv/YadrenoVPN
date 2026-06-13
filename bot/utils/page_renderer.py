@@ -23,11 +23,27 @@ logger = logging.getLogger(__name__)
 MAX_BUTTONS_PER_ROW = 2
 
 
+def _page_image_value(row: Dict[str, Any]) -> Optional[str]:
+    """
+    Возвращает итоговую картинку страницы.
+
+    Для pages.image_custom используется три состояния:
+    - NULL: использовать image_default;
+    - пустая строка: админ явно отключил картинку;
+    - file_id: использовать кастомную картинку.
+    """
+    custom_image = row.get('image_custom')
+    if custom_image is not None:
+        return custom_image or None
+    return row.get('image_default')
+
+
 def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
     """
     Возвращает итоговые данные страницы с учётом кастомизации.
 
-    Текст и фото: custom если есть, иначе default.
+    Текст: custom если есть, иначе default.
+    Фото: image_custom если не NULL, иначе image_default; пустой image_custom отключает фото.
     Кнопки: мёрж buttons_default + buttons_custom по id.
 
     Args:
@@ -45,7 +61,7 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
 
     # Текст: custom → default
     text = row.get('text_custom') or row.get('text_default') or ''
-    image = row.get('image_custom') or row.get('image_default')
+    image = _page_image_value(row)
 
     # Кнопки: мёрж по id
     buttons = _merge_buttons_by_id(

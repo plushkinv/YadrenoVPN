@@ -161,7 +161,12 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
         await callback.answer('❌ Ошибка: тариф не определён', show_alert=True)
         return
     telegram_id = callback.from_user.id
-    (user, _) = get_or_create_user(telegram_id, callback.from_user.username)
+    (user, _) = get_or_create_user(
+        telegram_id,
+        callback.from_user.username,
+        first_name=getattr(callback.from_user, 'first_name', None),
+        last_name=getattr(callback.from_user, 'last_name', None),
+    )
     user_internal_id = user['id']
     tariff = get_tariff_by_id(tariff_id)
     if not tariff:

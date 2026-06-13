@@ -48,6 +48,31 @@ PAGE_KEYS = (
 )
 
 
+def _page_image_value(row: dict) -> Optional[str]:
+    """
+    Возвращает итоговую картинку страницы.
+
+    Для pages.image_custom используется три состояния:
+    - NULL: использовать image_default;
+    - пустая строка: админ явно отключил картинку;
+    - file_id: использовать кастомную картинку.
+    """
+    custom_image = row.get('image_custom')
+    if custom_image is not None:
+        return custom_image or None
+    return row.get('image_default')
+
+
+def _normalize_message_data(data: dict, default_text: str = '') -> dict:
+    """Дополняет данные сообщения ожидаемыми ключами для обратной совместимости."""
+    return {
+        'text': data.get('text', default_text),
+        'photo_file_id': data.get('photo_file_id'),
+        'video_file_id': data.get('video_file_id'),
+        'animation_file_id': data.get('animation_file_id'),
+    }
+
+
 def get_message_data(key: str, default_text: str = '') -> dict:
     """
     Загружает данные сообщения.
@@ -68,31 +93,31 @@ def get_message_data(key: str, default_text: str = '') -> dict:
         row = get_page(key)
         if row:
             text = row.get('text_custom') or row.get('text_default') or default_text
-            image = row.get('image_custom') or row.get('image_default')
+            image = _page_image_value(row)
             return {
                 'text': text,
                 'photo_file_id': image,
                 'video_file_id': None,
                 'animation_file_id': None,
             }
-        return {'text': default_text}
+        return _normalize_message_data({'text': default_text})
 
     # Старая логика: settings
     raw = get_setting(key)
     
     if raw is None:
-        return {'text': default_text}
+        return _normalize_message_data({'text': default_text})
     
     # Пробуем распарсить как JSON
     try:
         data = json.loads(raw)
         if isinstance(data, dict) and 'text' in data:
-            return data
+            return _normalize_message_data(data, default_text)
     except (json.JSONDecodeError, TypeError):
         pass
     
     # Старый формат — просто строка
-    return {'text': raw}
+    return _normalize_message_data({'text': raw})
 
 
 def save_message_data(key: str, message: Message, allowed_types: Optional[List[str]] = None) -> dict:
@@ -114,24 +139,31 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
         Сохранённый словарь данных
     """
     from bot.utils.text import get_message_text_for_storage
-    
+
+    current_data = get_message_data(key)
     data = {
-        'text': '',
-        'photo_file_id': None,
-        'video_file_id': None,
-        'animation_file_id': None,
+        'text': current_data.get('text', ''),
+        'photo_file_id': current_data.get('photo_file_id'),
+        'video_file_id': current_data.get('video_file_id'),
+        'animation_file_id': current_data.get('animation_file_id'),
     }
     
     # Определяем тип сообщения и извлекаем медиа
     if message.animation:
+        data['photo_file_id'] = None
+        data['video_file_id'] = None
         data['animation_file_id'] = message.animation.file_id
         # Для медиа используем caption
         data['text'] = get_message_text_for_storage(message, 'html') if message.caption else ''
     elif message.video:
+        data['photo_file_id'] = None
         data['video_file_id'] = message.video.file_id
+        data['animation_file_id'] = None
         data['text'] = get_message_text_for_storage(message, 'html') if message.caption else ''
     elif message.photo:
         data['photo_file_id'] = message.photo[-1].file_id
+        data['video_file_id'] = None
+        data['animation_file_id'] = None
         data['text'] = get_message_text_for_storage(message, 'html') if message.caption else ''
     elif message.text:
         data['text'] = get_message_text_for_storage(message, 'html')
@@ -140,13 +172,37 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
     if key in PAGE_KEYS:
         # Сохраняем в таблицу pages
         from database.requests import update_page_custom
-        update_page_custom(key, text=data['text'] or None, image=data['photo_file_id'])
+        if message.photo:
+            update_page_custom(key, text=data['text'] or None, image=data['photo_file_id'])
+        else:
+            update_page_custom(key, text=data['text'] or None)
         logger.info(f"Сообщение сохранено в pages: {key}")
     else:
         # Старая логика: settings
         set_setting(key, json.dumps(data, ensure_ascii=False))
         logger.info(f"Сообщение сохранено в settings: {key}")
     
+    return data
+
+
+def delete_message_photo(key: str) -> dict:
+    """
+    Явно удаляет картинку редактируемого сообщения, не меняя текст.
+
+    Для settings очищает photo_file_id в JSON. Для pages записывает пустую строку
+    в image_custom, чтобы не подтягивалась image_default.
+    """
+    data = get_message_data(key)
+    data['photo_file_id'] = None
+
+    if key in PAGE_KEYS:
+        from database.requests import update_page_custom
+        update_page_custom(key, image='')
+        logger.info(f"Картинка удалена из pages: {key}")
+    else:
+        set_setting(key, json.dumps(data, ensure_ascii=False))
+        logger.info(f"Картинка удалена из settings: {key}")
+
     return data
 
 
@@ -166,17 +222,23 @@ def detect_message_type(message: Message) -> str:
     return 'text'
 
 
-def editor_kb(back_callback: str, has_help: bool = False) -> InlineKeyboardMarkup:
+def editor_kb(
+    back_callback: str,
+    has_help: bool = False,
+    can_delete_photo: bool = False,
+) -> InlineKeyboardMarkup:
     """
     Клавиатура редактора сообщений.
     
     Раскладка:
     [⬅️ Назад]  [🈴 На главную]
+    [🗑 Удалить картинку]  # если картинка есть
     [📝 Отправьте новое сообщение ⬇️]
     
     Args:
         back_callback: callback_data для кнопки «Назад»
         has_help: Есть ли текст справки (меняет поведение кнопки)
+        can_delete_photo: Показывать ли кнопку удаления текущей картинки
     """
     builder = InlineKeyboardBuilder()
     
@@ -185,6 +247,14 @@ def editor_kb(back_callback: str, has_help: bool = False) -> InlineKeyboardMarku
         InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
         InlineKeyboardButton(text="🈴 На главную", callback_data="start"),
     )
+
+    if can_delete_photo:
+        builder.row(
+            InlineKeyboardButton(
+                text="🗑 Удалить картинку",
+                callback_data="msg_editor_delete_photo"
+            )
+        )
     
     # Нижний ряд: кнопка ввода
     if has_help:

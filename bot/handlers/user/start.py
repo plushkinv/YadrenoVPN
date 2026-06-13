@@ -118,19 +118,43 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     user_id = message.from_user.id
     username = message.from_user.username
     logger.info(f'CMD_START: User {user_id} started bot')
-    await state.clear()
 
-    (user, is_new) = get_or_create_user(user_id, username)
+    (user, is_new) = get_or_create_user(
+        user_id,
+        username,
+        first_name=getattr(message.from_user, 'first_name', None),
+        last_name=getattr(message.from_user, 'last_name', None),
+    )
     if user.get('is_banned'):
         await safe_edit_or_send(message, '⛔ <b>Доступ заблокирован</b>\n\nВаш аккаунт заблокирован. Обратитесь в поддержку.', force_new=True)
         return
 
     args = command.args
+    if args:
+        try:
+            from bot.handlers.user.payments.base import handle_payment_deeplink
+            if await handle_payment_deeplink(
+                message, state, args,
+                user_internal_id=user['id'],
+                telegram_id=message.from_user.id,
+            ):
+                return
+        except Exception as e:
+            logger.exception(f'Ошибка обработки платёжного deep-link: {e}')
+            await safe_edit_or_send(
+                message,
+                '❌ Произошла ошибка при проверке платежа.',
+                force_new=True,
+            )
+            return
+
+    await state.clear()
+
     if args and args.startswith('bill'):
         from bot.services.billing import process_crypto_payment
         from bot.handlers.user.payments.base import finalize_payment_ui
         try:
-            (success, text, order) = await process_crypto_payment(args, user_id=user['id'])
+            (success, text, order) = await process_crypto_payment(args, user_id=user['id'], bot=message.bot)
             if success and order:
                 # Уведомление администраторов об оплате
                 try:
@@ -152,50 +176,17 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
                 await safe_edit_or_send(message, '❌ Произошла ошибка при обработке платежа.', force_new=True)
         return
 
-    # Cardlink deep-link: пользователь вернулся по ссылке cl_Success/cl_Fail/cl_Result.
-    # Бот НЕ зачисляет платёж автоматически — а запускает ту же проверку, что и
-    # кнопка «✅ Я оплатил».
-    if args and args.startswith('cl_'):
-        from database.requests import find_latest_pending_cardlink_order_for_user
-        from bot.handlers.user.payments.cardlink import _run_cardlink_check
-
-        order = find_latest_pending_cardlink_order_for_user(user['id'])
-        if not order:
-            await safe_edit_or_send(
-                message,
-                '⚠️ <b>Активная оплата Cardlink не найдена</b>\n\n'
-                'Возможно, платёж уже обработан или ещё не создан.\n'
-                'Откройте «Купить ключ» и попробуйте снова.',
-                force_new=True
-            )
-            try:
-                await _render_main_page(message, force_new=True)
-            except Exception:
-                pass
-            return
-
-        try:
-            await _run_cardlink_check(
-                message, state,
-                order_id=order['order_id'],
-                telegram_id=message.from_user.id,
-                callback=None,
-            )
-        except Exception as e:
-            logger.exception(f'Ошибка обработки cl_ deep-link: {e}')
-            await safe_edit_or_send(
-                message,
-                '❌ Произошла ошибка при проверке платежа Cardlink.',
-                force_new=True
-            )
-        return
-
     if is_new and args and args.startswith('ref_'):
         ref_code = args[4:]
         referrer = get_user_by_referral_code(ref_code)
         if referrer and referrer['id'] != user['id']:
             if set_user_referrer(user['id'], referrer['id']):
                 logger.info(f"User {user_id} привязан к рефереру {referrer['telegram_id']}")
+                try:
+                    from bot.services.notifications import notify_referrers_new_referral
+                    await notify_referrers_new_referral(message.bot, user['id'])
+                except Exception as notify_err:
+                    logger.warning(f'Ошибка уведомления о новом реферале: {notify_err}')
 
     try:
         await _render_main_page(message, force_new=True)

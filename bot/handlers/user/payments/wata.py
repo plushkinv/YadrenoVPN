@@ -142,15 +142,26 @@ async def check_wata_payment(callback: CallbackQuery, state: FSMContext):
 
     WATA имеет лимит — не чаще одного запроса в 30 секунд.
     """
+    await _run_wata_check(
+        callback.message, state,
+        order_id=callback.data.split(':', 1)[1],
+        telegram_id=callback.from_user.id,
+        callback=callback,
+    )
+
+
+async def _run_wata_check(message, state, order_id: str,
+                          telegram_id: int, callback=None) -> None:
+    """
+    Общая проверка WATA-платежа для кнопки «Я оплатил» и deep-link возврата.
+    """
     from bot.services.billing import check_wata_payment_status
 
-    order_id = callback.data.split(':', 1)[1]
-
     await check_qr_payment_flow(
-        message=callback.message,
+        message=message,
         state=state,
         order_id=order_id,
-        telegram_id=callback.from_user.id,
+        telegram_id=telegram_id,
         payment_type=_WATA_TYPE,
         payment_id_field=_WATA_RESULT_KEY,
         check_func=check_wata_payment_status,

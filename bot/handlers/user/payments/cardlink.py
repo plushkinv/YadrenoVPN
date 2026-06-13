@@ -161,7 +161,8 @@ async def _run_cardlink_check(message, state, order_id: str,
     Общая логика проверки Cardlink-платежа.
 
     Используется как хендлером «✅ Я оплатил» (с callback), так и deep-link
-    переходом по cl_Success / cl_Fail / cl_Result (без callback).
+    возвратом pay_cardlink_{order_id}. Старые cl_Success / cl_Fail / cl_Result
+    обрабатываются как fallback через последний pending-ордер пользователя.
     """
     from bot.services.billing import check_cardlink_payment_status
 
