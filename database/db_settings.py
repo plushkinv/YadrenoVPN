@@ -22,6 +22,14 @@ __all__ = [
     'get_yadreno_admin_server_ip',
     'set_yadreno_admin_server_ip',
     'delete_yadreno_admin_server_ip',
+    'get_yadreno_admin_active_request_id',
+    'set_yadreno_admin_active_request_id',
+    'clear_yadreno_admin_active_request_id',
+    'get_yadreno_admin_last_request_id',
+    'set_yadreno_admin_last_request_id',
+    'clear_yadreno_admin_last_request_id',
+    'mark_yadreno_admin_tool_call_started',
+    'clear_yadreno_admin_tool_call_started',
     'is_crypto_enabled',
     'is_stars_enabled',
     'is_crypto_configured',
@@ -150,6 +158,8 @@ def set_display_timezone(value: str) -> str:
 
 YADRENO_ADMIN_API_KEY_SETTING = 'yadreno_admin_api_key'
 YADRENO_ADMIN_SERVER_IP_SETTING = 'yadreno_admin_server_ip'
+YADRENO_ADMIN_REQUEST_SETTING_PREFIX = 'yadreno_admin_request'
+YADRENO_ADMIN_TOOL_CALL_SETTING_PREFIX = 'yadreno_admin_tool_call'
 
 
 def get_yadreno_admin_api_key() -> Optional[str]:
@@ -180,6 +190,88 @@ def set_yadreno_admin_server_ip(server_ip: str) -> None:
 def delete_yadreno_admin_server_ip() -> bool:
     """Удаляет сохранённый публичный IP сервера Yadreno Admin из settings."""
     return delete_setting(YADRENO_ADMIN_SERVER_IP_SETTING)
+
+
+def _yadreno_admin_request_key(kind: str, telegram_id: int, topic_id: int) -> str:
+    """Ключ settings для request_id в lane Yadreno Admin."""
+    return (
+        f'{YADRENO_ADMIN_REQUEST_SETTING_PREFIX}:'
+        f'{kind}:{int(telegram_id)}:{int(topic_id)}'
+    )
+
+
+def _get_yadreno_admin_request_id(kind: str, telegram_id: int, topic_id: int) -> Optional[int]:
+    """Читает request_id Yadreno Admin из settings."""
+    raw = get_setting(_yadreno_admin_request_key(kind, telegram_id, topic_id))
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_yadreno_admin_active_request_id(telegram_id: int, topic_id: int) -> Optional[int]:
+    """Возвращает active request_id Yadreno Admin из settings."""
+    return _get_yadreno_admin_request_id('active', telegram_id, topic_id)
+
+
+def set_yadreno_admin_active_request_id(telegram_id: int, topic_id: int, request_id: int) -> None:
+    """Сохраняет active request_id Yadreno Admin в settings."""
+    set_setting(
+        _yadreno_admin_request_key('active', telegram_id, topic_id),
+        str(int(request_id)),
+    )
+
+
+def clear_yadreno_admin_active_request_id(telegram_id: int, topic_id: int) -> bool:
+    """Удаляет active request_id Yadreno Admin из settings."""
+    return delete_setting(_yadreno_admin_request_key('active', telegram_id, topic_id))
+
+
+def get_yadreno_admin_last_request_id(telegram_id: int, topic_id: int) -> Optional[int]:
+    """Возвращает last request_id Yadreno Admin из settings."""
+    return _get_yadreno_admin_request_id('last', telegram_id, topic_id)
+
+
+def set_yadreno_admin_last_request_id(telegram_id: int, topic_id: int, request_id: int) -> None:
+    """Сохраняет last request_id Yadreno Admin в settings."""
+    set_setting(
+        _yadreno_admin_request_key('last', telegram_id, topic_id),
+        str(int(request_id)),
+    )
+
+
+def clear_yadreno_admin_last_request_id(telegram_id: int, topic_id: int) -> bool:
+    """Удаляет last request_id Yadreno Admin из settings."""
+    return delete_setting(_yadreno_admin_request_key('last', telegram_id, topic_id))
+
+
+def _yadreno_admin_tool_call_key(request_id: int, tool_call_id: str) -> str:
+    """Ключ settings для локально начатого tool_call."""
+    return (
+        f'{YADRENO_ADMIN_TOOL_CALL_SETTING_PREFIX}:'
+        f'{int(request_id)}:{tool_call_id}'
+    )
+
+
+def mark_yadreno_admin_tool_call_started(request_id: int, tool_call_id: str) -> bool:
+    """
+    Помечает tool_call как начатый.
+
+    True = запись создана сейчас, можно выполнять.
+    False = запись уже была, повторно выполнять нельзя.
+    """
+    key = _yadreno_admin_tool_call_key(request_id, tool_call_id)
+    if get_setting(key):
+        return False
+    set_setting(key, datetime.datetime.utcnow().isoformat(timespec='seconds'))
+    return True
+
+
+def clear_yadreno_admin_tool_call_started(request_id: int, tool_call_id: str) -> bool:
+    """Снимает пометку started с tool_call после успешной отправки результата."""
+    return delete_setting(_yadreno_admin_tool_call_key(request_id, tool_call_id))
 
 def is_crypto_enabled() -> bool:
     """Проверяет, включены ли крипто-платежи."""

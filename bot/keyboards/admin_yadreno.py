@@ -42,17 +42,17 @@ def yadreno_admin_chat_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def yadreno_admin_agent_kb() -> InlineKeyboardMarkup:
+def yadreno_admin_agent_kb(topic_id: int = 0) -> InlineKeyboardMarkup:
     """Клавиатура сообщений агента."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
             text='❌ Отмена',
-            callback_data='admin_yadreno_cancel',
+            callback_data=f'admin_yadreno_cancel:{int(topic_id)}',
         ),
         InlineKeyboardButton(
             text='🔄 Ну чё там?',
-            callback_data='admin_yadreno_nudge',
+            callback_data=f'admin_yadreno_nudge:{int(topic_id)}',
         ),
     )
     return builder.as_markup()

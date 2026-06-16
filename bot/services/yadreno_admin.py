@@ -22,7 +22,15 @@ import aiohttp
 
 from config import RETRY_CONFIG
 from database.requests import (
+    clear_yadreno_admin_active_request_id,
+    clear_yadreno_admin_last_request_id,
+    clear_yadreno_admin_tool_call_started,
+    get_yadreno_admin_active_request_id,
+    get_yadreno_admin_last_request_id,
     get_yadreno_admin_server_ip,
+    mark_yadreno_admin_tool_call_started,
+    set_yadreno_admin_active_request_id,
+    set_yadreno_admin_last_request_id,
     set_yadreno_admin_server_ip,
 )
 
@@ -31,6 +39,9 @@ logger = logging.getLogger(__name__)
 HUB_URL = "https://admin.yadreno.ru"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TMP_DIR = PROJECT_ROOT / "tmp"
+UPLOAD_TMP_DIR = TMP_DIR / "yadreno_uploads"
+YADRENO_ADMIN_CHAT_TOPIC_ID = 0
+YADRENO_ADMIN_YAA_TOPIC_ID = 1001
 PROGRESS_EVENTS_CAPABILITY = "progress_events"
 SATELLITE_CAPABILITIES: tuple[str, ...] = (PROGRESS_EVENTS_CAPABILITY,)
 PUBLIC_IP_URLS = (
@@ -94,6 +105,15 @@ class YadrenoAdminProgressEvent:
 
 
 @dataclass
+class YadrenoAdminUpload:
+    """Файл для отправки в Yadreno Admin upload API."""
+
+    path: Path
+    filename: str
+    content_type: str = "application/octet-stream"
+
+
+@dataclass
 class YadrenoAdminLatest:
     """Последний non-destructive snapshot запроса."""
 
@@ -113,20 +133,78 @@ class YadrenoAdminNewChatResult:
 
 
 ProgressCallback = Callable[[YadrenoAdminProgressEvent], Awaitable[None]]
+RequestLaneKey = tuple[int, int]
 
-_request_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
-_active_requests: dict[int, int] = {}
-_last_requests: dict[int, int] = {}
+_request_locks: dict[RequestLaneKey, asyncio.Lock] = defaultdict(asyncio.Lock)
+_active_requests: dict[RequestLaneKey, int] = {}
+_last_requests: dict[RequestLaneKey, int] = {}
 
 
-def get_active_request_id(telegram_id: int) -> Optional[int]:
+def _lane_key(
+    telegram_id: int,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+) -> RequestLaneKey:
+    return int(telegram_id), int(topic_id)
+
+
+def get_active_request_id(
+    telegram_id: int,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+) -> Optional[int]:
     """Возвращает активный request_id администратора, если он есть."""
-    return _active_requests.get(telegram_id)
+    key = _lane_key(telegram_id, topic_id)
+    return _active_requests.get(key) or get_yadreno_admin_active_request_id(
+        telegram_id,
+        topic_id,
+    )
 
 
-def get_last_request_id(telegram_id: int) -> Optional[int]:
+def get_last_request_id(
+    telegram_id: int,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+) -> Optional[int]:
     """Возвращает последний request_id для ручного восстановления."""
-    return _last_requests.get(telegram_id)
+    key = _lane_key(telegram_id, topic_id)
+    return _last_requests.get(key) or get_yadreno_admin_last_request_id(
+        telegram_id,
+        topic_id,
+    )
+
+
+def is_local_request_active(
+    telegram_id: int,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+) -> bool:
+    """Проверяет, ведёт ли текущий процесс polling для lane."""
+    return _lane_key(telegram_id, topic_id) in _active_requests
+
+
+def _remember_request(
+    telegram_id: int,
+    topic_id: int,
+    request_id: int,
+    *,
+    active: bool,
+) -> None:
+    """Сохраняет request_id в памяти и settings для восстановления после рестарта."""
+    key = _lane_key(telegram_id, topic_id)
+    _last_requests[key] = request_id
+    set_yadreno_admin_last_request_id(telegram_id, topic_id, request_id)
+    if active:
+        _active_requests[key] = request_id
+        set_yadreno_admin_active_request_id(telegram_id, topic_id, request_id)
+
+
+def _clear_active_request(telegram_id: int, topic_id: int) -> None:
+    """Очищает active request_id в памяти и settings."""
+    _active_requests.pop(_lane_key(telegram_id, topic_id), None)
+    clear_yadreno_admin_active_request_id(telegram_id, topic_id)
+
+
+def _clear_last_request(telegram_id: int, topic_id: int) -> None:
+    """Очищает last request_id в памяти и settings."""
+    _last_requests.pop(_lane_key(telegram_id, topic_id), None)
+    clear_yadreno_admin_last_request_id(telegram_id, topic_id)
 
 
 def _reject_dangerous_shell(command: str) -> None:
@@ -257,6 +335,71 @@ async def _request_json(
             await asyncio.sleep(delay)
 
     raise YadrenoAdminError(f"Не удалось связаться с хабом Yadreno Admin: {last_error}")
+
+
+async def _request_multipart(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    path: str,
+    *,
+    fields: dict[str, Any],
+    uploads: list[YadrenoAdminUpload],
+    file_field: str,
+) -> tuple[int, Optional[dict]]:
+    """Делает multipart-запрос к upload API хаба с retry."""
+    headers = {"Authorization": f"Bearer {api_key}"}
+    delays = RETRY_CONFIG.get("delays", [1, 3, 9])
+    max_attempts = RETRY_CONFIG.get("max_attempts", 3)
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, max_attempts + 1):
+        handles = []
+        try:
+            form = aiohttp.FormData()
+            for key, value in fields.items():
+                if value is not None:
+                    form.add_field(key, str(value))
+            for upload in uploads:
+                handle = upload.path.open("rb")
+                handles.append(handle)
+                form.add_field(
+                    file_field,
+                    handle,
+                    filename=upload.filename,
+                    content_type=upload.content_type or "application/octet-stream",
+                )
+            async with session.post(
+                f"{HUB_URL}{path}",
+                headers=headers,
+                data=form,
+            ) as response:
+                if response.status >= 400:
+                    body = await response.text()
+                    raise YadrenoAdminError(
+                        f"Хаб вернул HTTP {response.status}: {body[:500]}"
+                    )
+                return response.status, await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
+            last_error = e
+            if attempt >= max_attempts:
+                break
+            delay = delays[min(attempt - 1, len(delays) - 1)]
+            logger.warning(
+                "Ошибка upload-запроса к Yadreno Admin (%s), попытка %s/%s: %s",
+                path,
+                attempt,
+                max_attempts,
+                e,
+            )
+            await asyncio.sleep(delay)
+        finally:
+            for handle in handles:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+
+    raise YadrenoAdminError(f"Не удалось загрузить файл в Yadreno Admin: {last_error}")
 
 
 async def _execute_shell(args: dict[str, Any]) -> dict[str, Optional[str]]:
@@ -555,6 +698,105 @@ async def _notify_progress(
         )
 
 
+async def _poll_until_final(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    *,
+    telegram_id: int,
+    topic_id: int,
+    request_id: int,
+    satellite_type: str | None = None,
+    server_ip: str = "",
+    progress_callback: Optional[ProgressCallback] = None,
+) -> YadrenoAdminFinal:
+    """Единый poll/tool/final цикл для text и upload запросов."""
+    _remember_request(telegram_id, topic_id, request_id, active=True)
+    logger.info(
+        "Yadreno Admin request accepted: admin=%s topic=%s request_id=%s satellite_type=%s server_ip=%s",
+        telegram_id,
+        topic_id,
+        request_id,
+        satellite_type,
+        server_ip,
+    )
+    final_received = False
+    try:
+        while True:
+            status_code, event = await _request_json(
+                session,
+                api_key,
+                "GET",
+                f"/api/v1/satellite/poll?request_id={request_id}&timeout=30",
+                allow_no_content=True,
+            )
+            if status_code == 204:
+                continue
+            if not event:
+                raise YadrenoAdminError("Хаб вернул пустое событие")
+
+            if event.get("event") == "tool_call":
+                tool_call_id = str(event.get("tool_call_id") or "")
+                tool_started_here = False
+                logger.info(
+                    "Yadreno Admin tool_call: admin=%s topic=%s request_id=%s tool_call_id=%s tool=%s",
+                    telegram_id,
+                    topic_id,
+                    request_id,
+                    tool_call_id,
+                    event.get("tool"),
+                )
+                if not tool_call_id:
+                    tool_result = {
+                        "result": "",
+                        "error": "tool_call without tool_call_id",
+                    }
+                elif not mark_yadreno_admin_tool_call_started(request_id, tool_call_id):
+                    tool_result = {
+                        "result": "",
+                        "error": (
+                            "Локальный сателлит был перезапущен во время выполнения "
+                            "этого tool_call. Результат неизвестен; проверь состояние "
+                            "новыми read-only командами и продолжай без повторения "
+                            "опасного действия."
+                        ),
+                    }
+                else:
+                    tool_started_here = True
+                    tool_result = await _run_tool_call(event)
+                await _request_json(
+                    session,
+                    api_key,
+                    "POST",
+                    "/api/v1/satellite/tool_result",
+                    json_payload={
+                        "request_id": request_id,
+                        "tool_call_id": tool_call_id,
+                        **tool_result,
+                    },
+                )
+                if tool_started_here:
+                    clear_yadreno_admin_tool_call_started(request_id, tool_call_id)
+                continue
+
+            event_type = event.get("event")
+            if event_type in {"status", "task_update"}:
+                await _notify_progress(event, progress_callback)
+                continue
+
+            if event_type == "final":
+                final_received = True
+                return YadrenoAdminFinal(
+                    content=event.get("content") or "",
+                    viewer_url=event.get("viewer_url"),
+                    request_id=request_id,
+                )
+
+            raise YadrenoAdminError(f"Неизвестное событие хаба: {event}")
+    finally:
+        if final_received:
+            _clear_active_request(telegram_id, topic_id)
+
+
 async def run_dialog(
     telegram_id: int,
     api_key: str,
@@ -566,10 +808,11 @@ async def run_dialog(
     """
     Выполняет полный цикл диалога с агентом Yadreno Admin.
 
-    Один администратор одновременно ведёт только один запрос: это защищает от
-    гонок и соответствует ограничению topic_id на стороне хаба.
+    Один администратор одновременно ведёт только один запрос в одном lane
+    Yadreno Admin. Обычный чат и /yaa используют разные topic_id.
     """
-    async with _request_locks[telegram_id]:
+    key = _lane_key(telegram_id, topic_id)
+    async with _request_locks[key]:
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             server_ip = await _get_server_ip(session)
@@ -594,70 +837,111 @@ async def run_dialog(
                 raise YadrenoAdminError(response_text)
 
             request_id = int(process_data["request_id"])
-            _active_requests[telegram_id] = request_id
-            _last_requests[telegram_id] = request_id
-            logger.info(
-                "Yadreno Admin request accepted: admin=%s request_id=%s satellite_type=%s server_ip=%s",
-                telegram_id,
-                request_id,
-                process_data.get("satellite_type"),
-                server_ip,
+            return await _poll_until_final(
+                session,
+                api_key,
+                telegram_id=telegram_id,
+                topic_id=topic_id,
+                request_id=request_id,
+                satellite_type=process_data.get("satellite_type"),
+                server_ip=server_ip,
+                progress_callback=progress_callback,
             )
-            try:
-                while True:
-                    status_code, event = await _request_json(
-                        session,
-                        api_key,
-                        "GET",
-                        f"/api/v1/satellite/poll?request_id={request_id}&timeout=30",
-                        allow_no_content=True,
-                    )
-                    if status_code == 204:
-                        continue
-                    if not event:
-                        raise YadrenoAdminError("Хаб вернул пустое событие")
 
-                    if event.get("event") == "tool_call":
-                        logger.info(
-                            "Yadreno Admin tool_call: admin=%s request_id=%s tool_call_id=%s tool=%s",
-                            telegram_id,
-                            request_id,
-                            event.get("tool_call_id"),
-                            event.get("tool"),
-                        )
-                        tool_result = await _run_tool_call(event)
-                        await _request_json(
-                            session,
-                            api_key,
-                            "POST",
-                            "/api/v1/satellite/tool_result",
-                            json_payload={
-                                "request_id": request_id,
-                                "tool_call_id": event["tool_call_id"],
-                                **tool_result,
-                            },
-                        )
-                        continue
 
-                    event_type = event.get("event")
-                    if event_type == "status":
-                        await _notify_progress(event, progress_callback)
-                        continue
+async def run_dialog_with_uploads(
+    telegram_id: int,
+    api_key: str,
+    message: str,
+    uploads: list[YadrenoAdminUpload],
+    *,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> YadrenoAdminFinal:
+    """Отправляет файлы в Yadreno Admin и ждёт финальный ответ агента."""
+    if not uploads:
+        return await run_dialog(
+            telegram_id,
+            api_key,
+            message,
+            topic_id=topic_id,
+            progress_callback=progress_callback,
+        )
 
-                    if event_type == "task_update":
-                        await _notify_progress(event, progress_callback)
-                        continue
+    key = _lane_key(telegram_id, topic_id)
+    async with _request_locks[key]:
+        timeout = aiohttp.ClientTimeout(total=70)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            server_ip = await _get_server_ip(session)
+            is_batch = len(uploads) > 1
+            path = (
+                "/api/v1/satellite/upload_batch"
+                if is_batch
+                else "/api/v1/satellite/upload"
+            )
+            _, upload_data = await _request_multipart(
+                session,
+                api_key,
+                path,
+                fields={
+                    "message": message,
+                    "topic_id": topic_id,
+                    "server_ip": server_ip,
+                    "capabilities": ",".join(SATELLITE_CAPABILITIES),
+                },
+                uploads=uploads,
+                file_field="files" if is_batch else "file",
+            )
+            if not upload_data:
+                raise YadrenoAdminError("Хаб вернул пустой ответ на upload")
 
-                    if event_type == "final":
-                        return YadrenoAdminFinal(
-                            content=event.get("content") or "",
-                            viewer_url=event.get("viewer_url"),
-                            request_id=request_id,
-                        )
+            status = upload_data.get("status")
+            if status != "accepted":
+                response_text = upload_data.get("response_text") or f"Загрузка отклонена: {status}"
+                raise YadrenoAdminError(response_text)
 
-                    raise YadrenoAdminError(f"Неизвестное событие хаба: {event}")
-            finally:
-                _active_requests.pop(telegram_id, None)
+            request_id = int(upload_data["request_id"])
+            return await _poll_until_final(
+                session,
+                api_key,
+                telegram_id=telegram_id,
+                topic_id=topic_id,
+                request_id=request_id,
+                satellite_type=upload_data.get("satellite_type"),
+                server_ip=server_ip,
+                progress_callback=progress_callback,
+            )
+
+
+async def resume_active_dialog(
+    telegram_id: int,
+    api_key: str,
+    *,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Optional[YadrenoAdminFinal]:
+    """Восстанавливает polling активного запроса после рестарта локального бота."""
+    request_id = get_active_request_id(telegram_id, topic_id)
+    if request_id is None:
+        return None
+
+    key = _lane_key(telegram_id, topic_id)
+    async with _request_locks[key]:
+        request_id = get_active_request_id(telegram_id, topic_id)
+        if request_id is None:
+            return None
+        timeout = aiohttp.ClientTimeout(total=70)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            server_ip = await _get_server_ip(session)
+            return await _poll_until_final(
+                session,
+                api_key,
+                telegram_id=telegram_id,
+                topic_id=topic_id,
+                request_id=request_id,
+                server_ip=server_ip,
+                progress_callback=progress_callback,
+            )
 
 
 def _latest_from_event(request_id: int, event: Optional[dict[str, Any]]) -> YadrenoAdminLatest:
@@ -698,9 +982,14 @@ def _latest_from_event(request_id: int, event: Optional[dict[str, Any]]) -> Yadr
 async def fetch_latest_dialog_event(
     telegram_id: int,
     api_key: str,
+    *,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> Optional[YadrenoAdminLatest]:
     """Читает последний snapshot через /latest, не consume-ит /poll."""
-    request_id = _active_requests.get(telegram_id) or _last_requests.get(telegram_id)
+    request_id = get_active_request_id(telegram_id, topic_id) or get_last_request_id(
+        telegram_id,
+        topic_id,
+    )
     if request_id is None:
         return None
 
@@ -715,17 +1004,20 @@ async def fetch_latest_dialog_event(
         )
     if status_code == 204:
         return YadrenoAdminLatest(request_id=request_id)
-    return _latest_from_event(request_id, event)
+    latest = _latest_from_event(request_id, event)
+    if latest.final is not None:
+        _clear_active_request(telegram_id, topic_id)
+    return latest
 
 
 async def start_new_chat(
     telegram_id: int,
     api_key: str,
     *,
-    topic_id: int = 0,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> YadrenoAdminNewChatResult:
     """Просит хаб закрыть активную satellite-сессию, если lane свободна."""
-    if _active_requests.get(telegram_id) is not None:
+    if get_active_request_id(telegram_id, topic_id) is not None:
         return YadrenoAdminNewChatResult(
             status="busy",
             response_text="Агент ещё работает. Дождитесь ответа или нажмите «Отмена».",
@@ -749,13 +1041,19 @@ async def start_new_chat(
         closed_session_id=data.get("closed_session_id"),
     )
     if result.status == "ok":
-        _last_requests.pop(telegram_id, None)
+        _clear_active_request(telegram_id, topic_id)
+        _clear_last_request(telegram_id, topic_id)
     return result
 
 
-async def cancel_active_dialog(telegram_id: int, api_key: str) -> bool:
+async def cancel_active_dialog(
+    telegram_id: int,
+    api_key: str,
+    *,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+) -> bool:
     """Отменяет активный запрос администратора, если он есть."""
-    request_id = _active_requests.get(telegram_id)
+    request_id = get_active_request_id(telegram_id, topic_id)
     if request_id is None:
         return False
 
@@ -766,7 +1064,13 @@ async def cancel_active_dialog(telegram_id: int, api_key: str) -> bool:
             api_key,
             "POST",
             "/api/v1/satellite/cancel",
-            json_payload={"request_id": request_id, "topic_id": 0},
+            json_payload={"request_id": request_id, "topic_id": topic_id},
         )
-    logger.info("Yadreno Admin request cancelled: admin=%s request_id=%s", telegram_id, request_id)
+    logger.info(
+        "Yadreno Admin request cancelled: admin=%s topic=%s request_id=%s",
+        telegram_id,
+        topic_id,
+        request_id,
+    )
+    _clear_active_request(telegram_id, topic_id)
     return True

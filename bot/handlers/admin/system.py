@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import sys
+from pathlib import Path
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, FSInputFile
 from aiogram.fsm.context import FSMContext
@@ -37,11 +38,21 @@ from bot.keyboards.admin import (
     stop_bot_confirm_kb,
     back_and_home_kb,
     admin_logs_menu_kb,
+    yadreno_admin_agent_kb,
+    yadreno_admin_no_key_kb,
 )
+from bot.services.yadreno_admin import (
+    YADRENO_ADMIN_CHAT_TOPIC_ID,
+    YadrenoAdminError,
+    YadrenoAdminUpload,
+    run_dialog_with_uploads,
+)
+from bot.states.admin_states import AdminStates
+from database.requests import get_yadreno_admin_api_key
 
 logger = logging.getLogger(__name__)
 
-from bot.utils.text import safe_edit_or_send
+from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock, set_update_blocked
 
 router = Router()
@@ -1058,6 +1069,71 @@ async def download_log_errors(callback: CallbackQuery, state: FSMContext):
         document=FSInputFile(error_log_path, filename="errors.log"),
         caption="⚠️ Лог ошибок и предупреждений"
     )
+
+
+@router.callback_query(F.data == "admin_send_log_to_yadreno")
+async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
+    """Отправляет bot.log в Yadreno Admin для анализа."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    api_key = get_yadreno_admin_api_key()
+    if not api_key:
+        await callback.answer()
+        await safe_edit_or_send(
+            callback.message,
+            "🤖 <b>Yadreno Admin</b>\n\nСначала укажите api_key.",
+            reply_markup=yadreno_admin_no_key_kb(),
+        )
+        return
+
+    log_path = Path("logs/bot.log")
+    if not log_path.exists():
+        await callback.answer("Файл логов не найден.", show_alert=True)
+        return
+
+    await callback.answer()
+    await state.set_state(AdminStates.yadreno_chat)
+    status_message = await safe_edit_or_send(
+        callback.message,
+        "🤖 <b>Yadreno Admin</b>\n\n⏳ Отправляю bot.log и запускаю анализ...",
+        reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+    )
+
+    from bot.handlers.admin.yadreno_admin import (
+        _YadrenoProgressRenderer,
+        _format_final_response,
+    )
+
+    progress = _YadrenoProgressRenderer(
+        status_message,
+        topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+    )
+    try:
+        final = await run_dialog_with_uploads(
+            callback.from_user.id,
+            api_key,
+            (
+                "Проанализируй приложенный полный лог bot.log. "
+                "Найди ошибки, предупреждения, вероятные причины и предложи конкретные действия."
+            ),
+            [YadrenoAdminUpload(log_path, "bot.log", "text/plain")],
+            topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+            progress_callback=progress.handle,
+        )
+        await safe_edit_or_send(
+            progress.final_target,
+            _format_final_response(final.content, final.viewer_url),
+            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+        )
+    except YadrenoAdminError as e:
+        await safe_edit_or_send(
+            progress.final_target,
+            f"❌ <b>Yadreno Admin недоступен</b>\n\n{escape_html(str(e))}",
+            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+        )
+
 
 @router.callback_query(F.data == "admin_clear_logs_confirm")
 async def confirm_clear_logs(callback: CallbackQuery, state: FSMContext):

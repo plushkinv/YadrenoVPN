@@ -62,6 +62,7 @@ def admin_logs_menu_kb() -> InlineKeyboardMarkup:
     """Меню скачивания логов."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='📄 Полный лог', callback_data='admin_download_log_full'), InlineKeyboardButton(text='⚠️ Ошибки', callback_data='admin_download_log_errors'))
+    builder.row(InlineKeyboardButton(text='📤 Отправить в Ядрёно Админ', callback_data='admin_send_log_to_yadreno'))
     builder.row(InlineKeyboardButton(text='🧹 Очистить логи', callback_data='admin_clear_logs_confirm'))
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
