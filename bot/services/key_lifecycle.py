@@ -70,3 +70,53 @@ async def renew_key_access(
         result['sync_stats'] = {'errors': 1, 'ok': 0}
 
     return result
+
+
+async def sync_user_keys_panel_access(telegram_id: int) -> Dict[str, Any]:
+    """
+    Синхронизирует доступ всех ключей пользователя с панелью после бана/разбана.
+
+    Сам статус бана остаётся в БД. sync_key_to_panel_state() перечитывает ключ
+    вместе с users.is_banned и выставляет enable на панели по актуальному состоянию.
+    """
+    from database.requests import get_user_by_telegram_id, get_user_vpn_keys
+    from bot.services.vpn_api import sync_key_to_panel_state
+
+    result: Dict[str, Any] = {
+        'user_found': False,
+        'keys_total': 0,
+        'synced': 0,
+        'errors': 0,
+        'details': [],
+    }
+
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        return result
+
+    result['user_found'] = True
+    keys = get_user_vpn_keys(user['id'])
+    result['keys_total'] = len(keys)
+
+    for key in keys:
+        key_id = key.get('id')
+        if not key_id:
+            continue
+
+        try:
+            stats = await sync_key_to_panel_state(key_id)
+            errors = int(stats.get('errors', 0) or 0)
+            if errors:
+                result['errors'] += errors
+            else:
+                result['synced'] += 1
+            result['details'].append({'key_id': key_id, 'stats': stats})
+        except Exception as e:
+            result['errors'] += 1
+            result['details'].append({'key_id': key_id, 'error': str(e)})
+            logger.warning(
+                f"sync_user_keys_panel_access: не удалось синхронизировать ключ "
+                f"{key_id} пользователя {telegram_id}: {e}"
+            )
+
+    return result

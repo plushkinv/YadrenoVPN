@@ -13,6 +13,7 @@ __all__ = [
     'get_setting',
     'set_setting',
     'delete_setting',
+    'is_update_notifications_enabled',
     'get_display_timezone',
     'set_display_timezone',
     'normalize_display_timezone',
@@ -54,6 +55,7 @@ __all__ = [
 
 DEFAULT_DISPLAY_TIMEZONE = 'Europe/Moscow'
 DISPLAY_TIMEZONE_SETTING = 'display_timezone'
+UPDATE_NOTIFICATIONS_ENABLED_SETTING = 'update_notifications_enabled'
 
 _TIMEZONE_ALIASES = {
     'москва': DEFAULT_DISPLAY_TIMEZONE,
@@ -113,6 +115,11 @@ def delete_setting(key: str) -> bool:
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
         return cursor.rowcount > 0
+
+
+def is_update_notifications_enabled() -> bool:
+    """Возвращает состояние скрытых уведомлений о новых версиях."""
+    return get_setting(UPDATE_NOTIFICATIONS_ENABLED_SETTING, '1') == '1'
 
 
 def normalize_display_timezone(value: Optional[str]) -> str:

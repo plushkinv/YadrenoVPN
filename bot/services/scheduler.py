@@ -26,7 +26,7 @@ from database.requests import (
     get_all_servers, get_users_stats, get_keys_stats,
     get_daily_payments_stats, get_new_users_count_today,
     get_setting, get_expiring_keys, is_notification_sent_today, log_notification_sent,
-    mark_user_bot_blocked
+    is_update_notifications_enabled, mark_user_bot_blocked
 )
 from bot.services.vpn_api import get_client_from_server_data, VPNAPIError, format_traffic
 from bot.utils.git_utils import check_for_updates
@@ -276,39 +276,68 @@ async def save_local_backup() -> None:
 
 def cleanup_old_backups() -> None:
     """
-    Удаляет папки с бэкапами старше BACKUP_RETENTION_DAYS (7 дней).
-    
-    Проверяет имена подпапок в формате YYYY-MM-DD и удаляет те,
-    чья дата старше порога хранения.
+    Рекурсивно удаляет любые файлы и ссылки старше срока хранения.
+
+    Имена и расширения не учитываются: каталог backup предназначен только
+    для временных резервных копий. Символические ссылки не обходятся.
+    После удаления файлов очищаются опустевшие подпапки.
     """
     if not os.path.exists(BACKUP_DIR):
         return
-    
-    cutoff_date = datetime.now() - timedelta(days=BACKUP_RETENTION_DAYS)
+
+    backup_root = os.path.abspath(BACKUP_DIR)
+    if os.path.islink(backup_root):
+        logger.error("Очистка backup отменена: корневой каталог является ссылкой")
+        return
+    cutoff_timestamp = (
+        datetime.now() - timedelta(days=BACKUP_RETENTION_DAYS)
+    ).timestamp()
     removed_count = 0
-    
+
     try:
-        for entry in os.listdir(BACKUP_DIR):
-            entry_path = os.path.join(BACKUP_DIR, entry)
-            if not os.path.isdir(entry_path):
+        for current_root, dirnames, filenames in os.walk(
+            backup_root,
+            topdown=False,
+            followlinks=False,
+        ):
+            current_root = os.path.abspath(current_root)
+            if os.path.commonpath([backup_root, current_root]) != backup_root:
+                logger.error("Пропущен путь за пределами backup: %s", current_root)
                 continue
-            
-            # Проверяем формат имени папки YYYY-MM-DD
-            try:
-                folder_date = datetime.strptime(entry, "%Y-%m-%d")
-            except ValueError:
-                continue  # Пропускаем папки с нестандартным именем
-            
-            if folder_date < cutoff_date:
-                shutil.rmtree(entry_path)
-                removed_count += 1
-                logger.info(f"Удалён старый бэкап: {entry}")
-        
+
+            for filename in filenames:
+                file_path = os.path.join(current_root, filename)
+                try:
+                    if os.lstat(file_path).st_mtime < cutoff_timestamp:
+                        os.unlink(file_path)
+                        removed_count += 1
+                        logger.info("Удалён старый бэкап: %s", file_path)
+                except FileNotFoundError:
+                    continue
+                except OSError as e:
+                    logger.warning("Не удалось удалить старый бэкап %s: %s", file_path, e)
+
+            for dirname in dirnames:
+                dir_path = os.path.join(current_root, dirname)
+                try:
+                    if os.path.islink(dir_path):
+                        if os.lstat(dir_path).st_mtime < cutoff_timestamp:
+                            os.unlink(dir_path)
+                            removed_count += 1
+                            logger.info("Удалена старая ссылка из backup: %s", dir_path)
+                        continue
+                    if not os.listdir(dir_path):
+                        os.rmdir(dir_path)
+                except FileNotFoundError:
+                    continue
+                except OSError as e:
+                    logger.warning("Не удалось очистить каталог бэкапа %s: %s", dir_path, e)
+
         if removed_count > 0:
-            logger.info(f"🗑️ Удалено старых бэкапов: {removed_count}")
-    
+            logger.info("🗑️ Удалено старых файлов и ссылок бэкапов: %s", removed_count)
+
     except Exception as e:
-        logger.error(f"Ошибка при очистке старых бэкапов: {e}")
+        logger.error(f"Ошибка при очистке локальных бэкапов: {e}")
 
 
 async def send_backup_archive(bot: Bot) -> None:
@@ -533,6 +562,10 @@ async def check_and_notify_updates(bot: Bot) -> None:
     Args:
         bot: Экземпляр бота
     """
+    if not is_update_notifications_enabled():
+        logger.info("🔕 Уведомления о новых версиях отключены, фоновая проверка пропущена")
+        return
+
     logger.info("🔍 Ежедневная проверка обновлений...")
     
     # Проверяем настроен ли GitHub URL

@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 37
+LATEST_VERSION = 38
 
 
 def _my_keys_item_template() -> str:
@@ -381,6 +381,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('update_blocked', '0'),
         ('daily_tasks_time', '03:00'),
         ('update_check_time', '12:00'),
+        ('update_notifications_enabled', '1'),
         ('display_timezone', 'Europe/Moscow'),
         ('my_keys_item_template', _my_keys_item_template()),
         # Режим работы бота для новых установок — Subscription
@@ -1286,6 +1287,17 @@ def migration_37(conn):
     logger.info("Миграция v37 применена: добавлены скрытые уведомления рефералки")
 
 
+def migration_38(conn):
+    """Миграция v38: скрытый переключатель уведомлений о новых версиях."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('update_notifications_enabled', '1')
+        """
+    )
+    logger.info("Миграция v38 применена: добавлена настройка уведомлений об обновлениях")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -1303,6 +1315,7 @@ MIGRATIONS = {
     35: migration_35,
     36: migration_36,
     37: migration_37,
+    38: migration_38,
 }
 
 

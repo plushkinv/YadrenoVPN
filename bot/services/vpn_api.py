@@ -465,7 +465,8 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
         mode = get_bot_mode()
         expiry_time_ms = _key_expiry_time_ms(key)
         traffic_limit = key.get('traffic_limit', 0) or 0
-        active = is_key_active(key) and not is_traffic_exhausted(key)
+        user_banned = bool(key.get('is_banned', 0))
+        active = is_key_active(key) and not is_traffic_exhausted(key) and not user_banned
         limit_ip = 1
         if key.get('tariff_id'):
             from database.db_tariffs import get_tariff_by_id

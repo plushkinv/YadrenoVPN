@@ -163,6 +163,7 @@ def _build_keyboard(
         action_type = btn.get('action_type', 'internal')
         action_value = btn.get('action_value')
         label = btn.get('label', '')
+        icon_custom_emoji_id = btn.get('icon_custom_emoji_id')
         is_hidden = btn.get('is_hidden', False)
         color = btn.get('color')
         row = btn.get('row', 0)
@@ -228,6 +229,7 @@ def _build_keyboard(
 
         resolved_buttons.append({
             'label': label,
+            'icon_custom_emoji_id': icon_custom_emoji_id,
             'callback_data': callback_data,
             'url': url,
             'style': _resolve_button_style(color),
@@ -263,6 +265,10 @@ def _build_keyboard(
                         InlineKeyboardButton(
                             text=btn['label'],
                             url=btn['url'],
+                            **(
+                                {'icon_custom_emoji_id': btn['icon_custom_emoji_id']}
+                                if btn['icon_custom_emoji_id'] else {}
+                            ),
                             **({'style': btn['style']} if btn['style'] else {}),
                         )
                     )
@@ -271,6 +277,10 @@ def _build_keyboard(
                         InlineKeyboardButton(
                             text=btn['label'],
                             callback_data=btn['callback_data'],
+                            **(
+                                {'icon_custom_emoji_id': btn['icon_custom_emoji_id']}
+                                if btn['icon_custom_emoji_id'] else {}
+                            ),
                             **({'style': btn['style']} if btn['style'] else {}),
                         )
                     )

@@ -13,6 +13,7 @@ from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.panel_email import get_panel_email_prefix
 from bot.states.admin_states import AdminStates
 from bot.keyboards.admin import users_menu_kb, users_list_kb, user_view_kb, user_ban_confirm_kb, key_view_kb, add_key_server_kb, add_key_inbound_kb, add_key_step_kb, add_key_confirm_kb, users_input_cancel_kb, key_action_cancel_kb, back_and_home_kb, home_only_kb
+from bot.services.key_lifecycle import sync_user_keys_panel_access
 from bot.services.vpn_api import get_client_from_server_data, VPNAPIError, format_traffic
 
 logger = logging.getLogger(__name__)
@@ -176,10 +177,24 @@ async def confirm_ban_toggle(callback: CallbackQuery, state: FSMContext):
     if new_status is None:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
-    if new_status:
-        await callback.answer('🚫 Пользователь заблокирован', show_alert=True)
-    else:
-        await callback.answer('✅ Пользователь разблокирован', show_alert=True)
+    action_text = 'заблокирован' if new_status else 'разблокирован'
+    icon = '🚫' if new_status else '✅'
+    try:
+        sync_result = await sync_user_keys_panel_access(telegram_id)
+        keys_total = int(sync_result.get('keys_total', 0) or 0)
+        synced = int(sync_result.get('synced', 0) or 0)
+        errors = int(sync_result.get('errors', 0) or 0)
+        if keys_total == 0:
+            panel_status = 'ключей нет'
+        elif errors:
+            panel_status = f'панель: {synced}/{keys_total}, ошибок: {errors}'
+        else:
+            panel_status = 'панель синхронизирована'
+    except Exception as e:
+        logger.warning(f"Не удалось синхронизировать панель после бана пользователя {telegram_id}: {e}")
+        panel_status = 'панель: ошибка синхронизации'
+
+    await callback.answer(f'{icon} Пользователь {action_text}. {panel_status}', show_alert=True)
     await _show_user_view_edit(callback, state, telegram_id)
 
 @router.callback_query(F.data.startswith('admin_user_coefficient:'))

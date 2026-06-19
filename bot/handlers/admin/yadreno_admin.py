@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -47,9 +48,9 @@ from bot.utils.text import (
     safe_edit_or_send,
 )
 from database.requests import (
+    create_bot_database_backup,
     get_display_timezone,
     get_setting,
-    get_page,
     get_yadreno_admin_api_key,
     set_yadreno_admin_server_ip,
     set_yadreno_admin_api_key,
@@ -708,43 +709,35 @@ def _cleanup_yadreno_uploads(uploads: list[YadrenoAdminUpload]) -> None:
             pass
 
 
-def _extract_yaa_attachment_context(message: Message) -> str:
-    """Возвращает контекст прикреплённого к /yaa медиа для агента."""
+def _extract_yaa_attachment_data(message: Message) -> dict[str, str] | None:
+    """Возвращает компактные данные прикреплённого к /yaa файла."""
     if message.photo:
         photo = message.photo[-1]
-        return (
-            "К исходной команде /yaa прикреплено изображение Telegram:\n"
-            "- media_type: photo\n"
-            f"- telegram_file_id: {photo.file_id}\n"
-            "- назначение: если задача просит поставить или заменить картинку страницы, "
-            "запиши этот telegram_file_id в pages.image_custom текущей страницы.\n"
-            "- скачивать картинку для установки на страницу не нужно; это уже готовый "
-            "Telegram file_id для отправки через Bot API.\n"
-        )
+        return {
+            "media_type": "photo",
+            "telegram_file_id": photo.file_id,
+            "usage": "ready_bot_api_file_id",
+        }
 
     document = message.document
     if document and (document.mime_type or "").startswith("image/"):
-        return (
-            "К исходной команде /yaa прикреплён image-документ Telegram:\n"
-            "- media_type: image_document\n"
-            f"- telegram_file_id: {document.file_id}\n"
-            f"- file_name: {document.file_name or ''}\n"
-            f"- mime_type: {document.mime_type or ''}\n"
-            "- назначение: если задача просит поставить или заменить картинку страницы, "
-            "запиши этот telegram_file_id в pages.image_custom текущей страницы.\n"
-            "- скачивать картинку для установки на страницу не нужно; это уже готовый "
-            "Telegram file_id для отправки через Bot API.\n"
-        )
+        return {
+            "media_type": "image_document",
+            "telegram_file_id": document.file_id,
+            "file_name": document.file_name or "",
+            "mime_type": document.mime_type or "",
+            "usage": "ready_bot_api_file_id",
+        }
 
     if document:
-        return (
-            "К исходной команде /yaa прикреплён файл, но это не изображение:\n"
-            f"- file_name: {document.file_name or ''}\n"
-            f"- mime_type: {document.mime_type or ''}\n"
-            "Не используй этот файл как image_custom.\n"
-        )
+        return {
+            "media_type": "document",
+            "file_name": document.file_name or "",
+            "mime_type": document.mime_type or "",
+            "usage": "not_page_image",
+        }
 
-    return ""
+    return None
 
 
 def _extract_chat_attachment_context(message: Message) -> str:
@@ -776,113 +769,49 @@ def _extract_chat_attachment_context(message: Message) -> str:
     return ""
 
 
-def _build_yaa_prompt(page_key: str, task: str, attachment_context: str = "") -> str:
-    """Формирует запрос агенту с точным контекстом страницы."""
-    row = get_page(page_key) or {}
-    page_data = get_page_data(page_key) or {}
-    display_timezone = get_display_timezone()
-    timezone_hint = (
-        "Скрытая настройка часового пояса отображения дат хранится в settings.display_timezone. "
-        "Если администратор просит изменить часовой пояс, обнови строку settings с key='display_timezone'. "
-        "Поддерживаются IANA-зоны и алиасы: Москва, МСК, UTC+3. "
-        f"Текущее значение: {display_timezone}. "
-        "Не меняй даты в таблицах users, vpn_keys и payments: они хранятся в UTC.\n\n"
-    )
-    placeholder_hint = ""
-    if page_key == 'key_delivery':
-        placeholder_hint = (
-            "Плейсхолдеры страницы key_delivery:\n"
-            "- %ключ% — ссылка или ключ в моноширинном виде для копирования.\n"
-            "- %ссылка% — чистая ссылка без code/pre; HTTP/HTTPS subscription-ссылка будет кликабельной в Telegram.\n\n"
-            "Медиа у key_delivery — динамический QR-код, pages.image_custom для этой страницы не используется.\n\n"
-        )
-    elif page_key == 'renew_payment':
-        placeholder_hint = (
-            "Плейсхолдеры страницы renew_payment:\n"
-            "- %имяключа% — название продлеваемого ключа, уже экранированное для HTML.\n\n"
-        )
-    elif page_key in {'my_keys', 'my_keys_empty'}:
-        from bot.utils.my_keys_page import (
-            DEFAULT_MY_KEYS_ITEM_TEMPLATE,
-            MY_KEYS_ITEM_TEMPLATE_SETTING,
-        )
+def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
+    """Извлекает аргумент команды, сохраняя Telegram HTML и custom emoji."""
+    formatted_message = get_message_text_for_storage(message, "html")
+    command_text = f"{command.prefix}{command.command}"
+    if command.mention:
+        command_text += f"@{command.mention}"
 
-        item_template = get_setting(
-            MY_KEYS_ITEM_TEMPLATE_SETTING,
-            DEFAULT_MY_KEYS_ITEM_TEMPLATE,
-        )
-        placeholder_hint = (
-            "Плейсхолдеры страницы my_keys:\n"
-            "- %списокключей% — готовый HTML-список ключей пользователя.\n\n"
-            "Формат одной записи списка хранится в скрытой настройке settings.my_keys_item_template. "
-            "Обычной админки для неё нет: если администратор просит изменить формат отображения ключей, "
-            "обнови именно строку settings с key='my_keys_item_template'.\n"
-            "Плейсхолдеры скрытого шаблона: %статус%, %имяключа%, %трафик%, %датаокончания%, "
-            "%сервер%, %инбаунд%, %протокол%, %id%.\n"
-            f"Текущее значение settings.my_keys_item_template: {item_template or ''}\n\n"
-        )
-    elif page_key == 'key_details':
-        placeholder_hint = (
-            "Плейсхолдеры страницы key_details:\n"
-            "- %информацияключа% — готовый HTML-блок с названием, статусом, сервером, протоколом, трафиком и сроком ключа.\n"
-            "- %историяопераций% — готовый HTML-блок истории оплат/операций; может быть пустым.\n\n"
-            "Кнопки управления конкретным ключом (показать, продлить, заменить, переименовать) "
-            "генерируются кодом как runtime-кнопки и не лежат в pages.buttons_*.\n\n"
-        )
-    elif page_key in {
-        'key_replace_server_select',
-        'key_replace_inbound_select',
-        'new_key_server_select',
-        'new_key_inbound_select',
-    }:
-        placeholder_hint = (
-            f"Плейсхолдеры страницы {page_key}:\n"
-            "- %данныеэкрана% — готовый HTML-блок с внутренними данными текущего шага.\n\n"
-            "Кнопки списков серверов/протоколов генерируются кодом как runtime-кнопки "
-            "и не лежат в pages.buttons_*.\n\n"
-        )
-    elif page_key == 'key_replace_confirm':
-        placeholder_hint = (
-            "Плейсхолдеры страницы key_replace_confirm:\n"
-            "- %данныезамены% — готовый HTML-блок с ключом, новым сервером и предупреждением.\n\n"
-            "Кнопки подтверждения/отмены генерируются кодом как runtime-кнопки "
-            "и не лежат в pages.buttons_*.\n\n"
-        )
-    elif page_key == 'key_rename_prompt':
-        placeholder_hint = (
-            "Плейсхолдеры страницы key_rename_prompt:\n"
-            "- %данныеключа% — готовый HTML-блок с текущим именем ключа.\n\n"
-            "Кнопка отмены генерируется кодом как runtime-кнопка и не лежит в pages.buttons_*.\n\n"
-        )
-    elif page_key in {'key_show_unconfigured', 'renew_payment_unavailable', 'new_key_no_servers'}:
-        placeholder_hint = (
-            f"Страница {page_key} не требует динамических плейсхолдеров. "
-            "Можно менять текст, картинку и статические кнопки из pages.buttons_*.\n\n"
-        )
-    attachment_block = (
-        f"\n{attachment_context}\n"
-        if attachment_context
-        else ""
-    )
+    if formatted_message.startswith(command_text):
+        return formatted_message[len(command_text):].strip()
+    return (command.args or "").strip()
+
+
+def _build_yaa_prompt(
+    page_key: str,
+    task_html: str,
+    backup_path: str,
+    attachment: dict[str, str] | None = None,
+) -> str:
+    """Формирует компактный JSON-контекст команды /yaa."""
+    page_data = get_page_data(page_key) or {}
+    context: dict[str, Any] = {
+        "source": "/yaa",
+        "page_key": page_key,
+        "database_path": "database/vpn_bot.db",
+        "backup": {
+            "created": True,
+            "path": backup_path,
+        },
+        "effective_page": {
+            "text": page_data.get("text") or "",
+            "image": page_data.get("image") or "",
+            "buttons": page_data.get("buttons") or [],
+        },
+        "task_format": "telegram_html",
+        "task_html": task_html,
+    }
+    if attachment:
+        context["attachment"] = attachment
+
     return (
-        "Команда /yaa вызвана администратором прямо на пользовательской странице VPN-бота.\n"
-        f"Текущая страница: {page_key}\n"
-        "Считай, что пользователь говорит именно про эту страницу, даже если не назвал её явно.\n\n"
-        f"{timezone_hint}"
-        f"{placeholder_hint}"
-        "Текущее состояние страницы в БД:\n"
-        f"- text_default: {row.get('text_default') or ''}\n"
-        f"- text_custom: {row.get('text_custom') or ''}\n"
-        f"- image_default: {row.get('image_default') or ''}\n"
-        f"- image_custom: {row.get('image_custom') or ''}\n"
-        f"- buttons_default: {row.get('buttons_default') or '[]'}\n"
-        f"- buttons_custom: {row.get('buttons_custom') or '[]'}\n\n"
-        "Фактически отображаемые данные после мёржа:\n"
-        f"- text: {page_data.get('text') or ''}\n"
-        f"- image: {page_data.get('image') or ''}\n"
-        f"- buttons: {json.dumps(page_data.get('buttons') or [], ensure_ascii=False)}\n\n"
-        f"{attachment_block}"
-        f"Задача администратора: {task}"
+        "Команда /yaa вызвана администратором прямо на пользовательской странице VPN-бота. "
+        "Служебный контекст:\n"
+        f"{json.dumps(context, ensure_ascii=False, separators=(',', ':'))}"
     )
 
 
@@ -892,8 +821,8 @@ async def handle_yaa_command(message: Message, command: CommandObject):
     if not is_admin(message.from_user.id):
         return
 
-    task = (command.args or "").strip()
-    if not task:
+    task_html = _extract_yaa_task_html(message, command)
+    if not (command.args or "").strip():
         await safe_edit_or_send(
             message,
             "🤖 <b>Yadreno Admin</b>\n\n"
@@ -924,9 +853,25 @@ async def handle_yaa_command(message: Message, command: CommandObject):
         )
         return
 
+    try:
+        backup_path = await asyncio.to_thread(create_bot_database_backup)
+    except Exception as e:
+        await safe_edit_or_send(
+            message,
+            "❌ <b>Не удалось создать резервную копию</b>\n\n"
+            f"Запрос агенту не отправлен: {escape_html(str(e))}",
+            force_new=True,
+        )
+        return
+
     before = _serialize_for_compare(_get_yaa_editable_state(page_context.page_key))
-    attachment_context = _extract_yaa_attachment_context(message)
-    prompt = _build_yaa_prompt(page_context.page_key, task, attachment_context)
+    attachment = _extract_yaa_attachment_data(message)
+    prompt = _build_yaa_prompt(
+        page_context.page_key,
+        task_html,
+        backup_path,
+        attachment,
+    )
     status_message = await safe_edit_or_send(
         message,
         "🤖 <b>Yadreno Admin</b>\n\n"
