@@ -9,6 +9,7 @@ import asyncio
 
 from .panels.base import VPNAPIError, BaseVPNClient
 from .panels.xui import XUIClient
+from bot.utils.inbounds import split_ignored_inbounds
 
 logger = logging.getLogger(__name__)
 
@@ -453,15 +454,34 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
 
         try:
             client = get_client_from_server_data(server_data)
-            inbounds = await client.get_inbounds()
+            all_inbounds = await client.get_inbounds(include_ignored=True)
         except Exception as e:
             logger.warning(f"ensure_subscription_keys: сервер {server_id} недоступен: {e}")
             return stats
 
-        if not inbounds:
+        if not all_inbounds:
             return stats
 
+        inbounds, ignored_inbounds = split_ignored_inbounds(all_inbounds)
+        all_presence = _parse_clients_by_email(all_inbounds, email)
         presence = _parse_clients_by_email(inbounds, email)
+
+        ignored_presence = _parse_clients_by_email(ignored_inbounds, email)
+        for inb_id, cl in sorted(ignored_presence.items()):
+            cid = _client_identifier(cl)
+            if not cid:
+                stats['errors'] += 1
+                continue
+            try:
+                await client.delete_client(inb_id, cid)
+                stats['deleted'] += 1
+            except Exception as e:
+                stats['errors'] += 1
+                logger.warning(
+                    f"ensure_subscription_keys: не удалось удалить скрытого клиента {email} "
+                    f"из inbound {inb_id} сервера {server_id}: {e}"
+                )
+
         mode = get_bot_mode()
         expiry_time_ms = _key_expiry_time_ms(key)
         traffic_limit = key.get('traffic_limit', 0) or 0
@@ -485,7 +505,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
             sub_id = key.get('sub_id')
             if not sub_id:
                 # Подхватим subId из существующего клиента на панели, если есть
-                for cl in presence.values():
+                for cl in all_presence.values():
                     existing = cl.get('subId')
                     if existing:
                         sub_id = existing
@@ -588,13 +608,47 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                     )
 
         else:  # mode == 'key'
-            if not presence and key.get('panel_inbound_id') and key.get('client_uuid'):
-                presence[int(key['panel_inbound_id'])] = {
-                    'email': email,
-                    'id': key.get('client_uuid'),
-                    'password': key.get('client_uuid'),
-                    'enable': active,
-                }
+            target_inbound_id = None
+            if key.get('panel_inbound_id') is not None:
+                try:
+                    target_inbound_id = int(key['panel_inbound_id'])
+                except (TypeError, ValueError):
+                    target_inbound_id = None
+
+            visible_inbound_ids = set()
+            for inb in inbounds:
+                try:
+                    visible_inbound_ids.add(int(inb['id']))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if not presence and target_inbound_id in visible_inbound_ids:
+                try:
+                    total_gb = int(traffic_limit / (1024 ** 3)) if traffic_limit > 0 else 0
+                    days_left = _key_days_left_for_add(key)
+                    flow = await client.get_inbound_flow(target_inbound_id)
+                    res = await client.add_client(
+                        inbound_id=target_inbound_id,
+                        email=email,
+                        total_gb=total_gb,
+                        expire_days=days_left if days_left > 0 else 365,
+                        limit_ip=limit_ip,
+                        enable=active,
+                        tg_id=str(key.get('telegram_id') or ''),
+                        flow=flow,
+                    )
+                    stats['created'] += 1
+                    presence[target_inbound_id] = {
+                        'email': email,
+                        'id': res['uuid'],
+                        'password': res['uuid'],
+                        'enable': active,
+                    }
+                except Exception as e:
+                    stats['errors'] += 1
+                    logger.warning(
+                        f"ensure_subscription_keys (key-mode): не удалось восстановить клиента {email} "
+                        f"в inbound {target_inbound_id} сервера {server_id}: {e}"
+                    )
 
             min_inb_id = min(presence.keys()) if presence else None
             if min_inb_id is not None and len(presence) > 1:

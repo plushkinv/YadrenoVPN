@@ -17,7 +17,7 @@ class BaseVPNClient(abc.ABC):
         pass
 
     @abstractmethod
-    async def get_inbounds(self) -> List[Dict[str, Any]]:
+    async def get_inbounds(self, include_ignored: bool = False) -> List[Dict[str, Any]]:
         pass
 
     @abstractmethod

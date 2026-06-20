@@ -30,6 +30,7 @@ SETTING_BASE_API = "/panel/api/setting"
 
 
 from .base import BaseVPNClient, VPNAPIError
+from bot.utils.inbounds import filter_visible_inbounds
 
 
 class StaleAPIProfileError(Exception):
@@ -485,9 +486,10 @@ class XUIClient(BaseVPNClient):
         inbound_id: Optional[int] = None,
         client_uuid: Optional[str] = None,
         email: Optional[str] = None,
+        include_ignored: bool = False,
     ) -> tuple:
         """Ищет клиента в /inbounds/list и возвращает (inbound, client)."""
-        inbounds = await self.get_inbounds()
+        inbounds = await self.get_inbounds(include_ignored=include_ignored)
         for inbound in inbounds:
             if inbound_id is not None and inbound.get("id") != inbound_id:
                 continue
@@ -953,10 +955,13 @@ class XUIClient(BaseVPNClient):
         await self._refresh_panel_metadata(force=True)
         return True
 
-    async def get_inbounds(self) -> List[Dict[str, Any]]:
+    async def get_inbounds(self, include_ignored: bool = False) -> List[Dict[str, Any]]:
         """
         Получает список подключений (Inbounds).
-        
+
+        Args:
+            include_ignored: True — вернуть также inbound'ы с префиксом --! в remark.
+
         Returns:
             Список inbound-подключений
         """
@@ -964,7 +969,14 @@ class XUIClient(BaseVPNClient):
         obj = result.get("obj", [])
         if not isinstance(obj, list):
             return []
-        return [self._normalize_inbound(inbound) for inbound in obj if isinstance(inbound, dict)]
+        inbounds = [
+            self._normalize_inbound(inbound)
+            for inbound in obj
+            if isinstance(inbound, dict)
+        ]
+        if include_ignored:
+            return inbounds
+        return filter_visible_inbounds(inbounds)
     
     async def get_server_status(self) -> Dict[str, Any]:
         """
@@ -1380,7 +1392,11 @@ class XUIClient(BaseVPNClient):
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
-            _, client = await self._find_panel_client(inbound_id=inbound_id, client_uuid=client_uuid)
+            _, client = await self._find_panel_client(
+                inbound_id=inbound_id,
+                client_uuid=client_uuid,
+                include_ignored=True,
+            )
             email = client.get("email") if isinstance(client, dict) else None
             if not email:
                 email = client_uuid
@@ -1430,7 +1446,7 @@ class XUIClient(BaseVPNClient):
             await self._request("POST", f"/panel/api/clients/del/{encoded_email}")
             return max(1, len(inbound_ids))
 
-        inbounds = await self.get_inbounds()
+        inbounds = await self.get_inbounds(include_ignored=True)
         deleted = 0
         for inbound in inbounds:
             try:
