@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 38
+LATEST_VERSION = 39
 
 
 def _my_keys_item_template() -> str:
@@ -589,9 +589,11 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             page_key         TEXT PRIMARY KEY,
             text_default     TEXT NOT NULL DEFAULT '',
             image_default    TEXT,
+            media_type_default TEXT,
             buttons_default  TEXT NOT NULL DEFAULT '[]',
             text_custom      TEXT,
             image_custom     TEXT,
+            media_type_custom TEXT,
             updated_at       TIMESTAMP,
             buttons_custom   TEXT
         )
@@ -1298,6 +1300,31 @@ def migration_38(conn):
     logger.info("Миграция v38 применена: добавлена настройка уведомлений об обновлениях")
 
 
+def migration_39(conn):
+    """Миграция v39: тип медиа для редактируемых страниц."""
+    _add_column(conn, "pages", "media_type_default TEXT")
+    _add_column(conn, "pages", "media_type_custom TEXT")
+    conn.execute(
+        """
+        UPDATE pages
+        SET media_type_default = 'photo'
+        WHERE image_default IS NOT NULL
+          AND image_default != ''
+          AND media_type_default IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE pages
+        SET media_type_custom = 'photo'
+        WHERE image_custom IS NOT NULL
+          AND image_custom != ''
+          AND media_type_custom IS NULL
+        """
+    )
+    logger.info("Миграция v39 применена: добавлены типы медиа для pages")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -1316,6 +1343,7 @@ MIGRATIONS = {
     36: migration_36,
     37: migration_37,
     38: migration_38,
+    39: migration_39,
 }
 
 

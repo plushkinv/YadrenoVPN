@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable
 
 from bot.utils.datetime_format import format_date_for_display
+from bot.utils.placeholders import apply_placeholder_replacements
 from bot.utils.text import escape_html
 
 MY_KEYS_ITEM_TEMPLATE_SETTING = 'my_keys_item_template'
@@ -38,10 +39,7 @@ def build_my_keys_item_text(
         '%id%': escape_html(str(key.get('id', ''))),
     }
 
-    result = template
-    for placeholder, value in replacements.items():
-        result = result.replace(placeholder, value)
-    return result
+    return apply_placeholder_replacements(template, replacements)
 
 
 def build_my_keys_list_text(items: Iterable[str]) -> str:

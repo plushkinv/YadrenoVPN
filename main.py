@@ -148,13 +148,15 @@ async def main():
     update_tasks = asyncio.create_task(run_update_check_scheduler(bot))
     # Запускаем планировщик синхронизации трафика (каждые 5 мин)
     traffic_tasks = asyncio.create_task(run_traffic_sync_scheduler(bot))
+    background_tasks = [daily_tasks, update_tasks, traffic_tasks]
     
     try:
         await dp.start_polling(bot)
     finally:
-        daily_tasks.cancel()
-        update_tasks.cancel()
-        traffic_tasks.cancel()
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+        await close_all_clients()
         await bot.session.close()
 
 

@@ -115,7 +115,7 @@ async def admin_trial_edit_text_start(callback: CallbackQuery, state: FSMContext
         callback.message, state,
         key='trial',
         back_callback='admin_trial',
-        allowed_types=['text', 'photo'],
+        allowed_types=['text', 'photo', 'video', 'animation'],
     )
     await callback.answer()
 

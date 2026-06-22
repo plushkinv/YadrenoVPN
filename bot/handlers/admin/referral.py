@@ -333,7 +333,7 @@ async def referral_conditions_start(callback: CallbackQuery, state: FSMContext):
         callback.message, state,
         key='referral',
         back_callback='admin_referral',
-        allowed_types=['text', 'photo'],
+        allowed_types=['text', 'photo', 'video', 'animation'],
         help_text=help_text,
     )
     await callback.answer()

@@ -50,12 +50,12 @@ PAGE_KEYS = (
 
 def _page_image_value(row: dict) -> Optional[str]:
     """
-    Возвращает итоговую картинку страницы.
+    Возвращает итоговый file_id медиа страницы.
 
     Для pages.image_custom используется три состояния:
     - NULL: использовать image_default;
-    - пустая строка: админ явно отключил картинку;
-    - file_id: использовать кастомную картинку.
+    - пустая строка: админ явно отключил медиа;
+    - file_id: использовать кастомное медиа.
     """
     custom_image = row.get('image_custom')
     if custom_image is not None:
@@ -63,14 +63,46 @@ def _page_image_value(row: dict) -> Optional[str]:
     return row.get('image_default')
 
 
+def _page_media_type_value(row: dict, image: Optional[str]) -> Optional[str]:
+    if not image:
+        return None
+    if row.get('image_custom') is not None:
+        media_type = row.get('media_type_custom')
+    else:
+        media_type = row.get('media_type_default')
+    return media_type if media_type in {'photo', 'video', 'animation'} else 'photo'
+
+
+def _media_from_parts(data: dict) -> tuple[Optional[str], Optional[str]]:
+    media_type = data.get('media_type')
+    media_file_id = data.get('media_file_id')
+    if media_file_id and media_type in {'photo', 'video', 'animation'}:
+        return media_file_id, media_type
+    if data.get('animation_file_id'):
+        return data.get('animation_file_id'), 'animation'
+    if data.get('video_file_id'):
+        return data.get('video_file_id'), 'video'
+    if data.get('photo_file_id'):
+        return data.get('photo_file_id'), 'photo'
+    return None, None
+
+
+def _with_media_fields(text: str, media_file_id: Optional[str], media_type: Optional[str]) -> dict:
+    media_type = media_type if media_type in {'photo', 'video', 'animation'} and media_file_id else None
+    return {
+        'text': text,
+        'photo_file_id': media_file_id if media_type == 'photo' else None,
+        'video_file_id': media_file_id if media_type == 'video' else None,
+        'animation_file_id': media_file_id if media_type == 'animation' else None,
+        'media_file_id': media_file_id if media_type else None,
+        'media_type': media_type,
+    }
+
+
 def _normalize_message_data(data: dict, default_text: str = '') -> dict:
     """Дополняет данные сообщения ожидаемыми ключами для обратной совместимости."""
-    return {
-        'text': data.get('text', default_text),
-        'photo_file_id': data.get('photo_file_id'),
-        'video_file_id': data.get('video_file_id'),
-        'animation_file_id': data.get('animation_file_id'),
-    }
+    media_file_id, media_type = _media_from_parts(data)
+    return _with_media_fields(data.get('text', default_text), media_file_id, media_type)
 
 
 def get_message_data(key: str, default_text: str = '') -> dict:
@@ -85,7 +117,8 @@ def get_message_data(key: str, default_text: str = '') -> dict:
         default_text: Текст по умолчанию если ключ не найден
         
     Returns:
-        Словарь с ключами: text, photo_file_id, video_file_id, animation_file_id
+        Словарь с ключами: text, photo_file_id, video_file_id, animation_file_id,
+        media_file_id, media_type
     """
     if key in PAGE_KEYS:
         # Читаем из таблицы pages
@@ -94,12 +127,8 @@ def get_message_data(key: str, default_text: str = '') -> dict:
         if row:
             text = row.get('text_custom') or row.get('text_default') or default_text
             image = _page_image_value(row)
-            return {
-                'text': text,
-                'photo_file_id': image,
-                'video_file_id': None,
-                'animation_file_id': None,
-            }
+            media_type = _page_media_type_value(row, image)
+            return _with_media_fields(text, image, media_type)
         return _normalize_message_data({'text': default_text})
 
     # Старая логика: settings
@@ -124,7 +153,8 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
     """
     Извлекает данные из входящего Telegram-сообщения и сохраняет.
     
-    Для ключей из PAGE_KEY_MAP — сохраняет в таблицу pages (text_custom, image_custom).
+    Для ключей из PAGE_KEY_MAP — сохраняет в таблицу pages
+    (text_custom, image_custom, media_type_custom).
     Для остальных — в settings как JSON (обратная совместимость).
     
     Использует get_message_text_for_storage() для текста (правило ТЗ).
@@ -141,29 +171,23 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
     from bot.utils.text import get_message_text_for_storage
 
     current_data = get_message_data(key)
-    data = {
-        'text': current_data.get('text', ''),
-        'photo_file_id': current_data.get('photo_file_id'),
-        'video_file_id': current_data.get('video_file_id'),
-        'animation_file_id': current_data.get('animation_file_id'),
-    }
+    current_media_file_id, current_media_type = _media_from_parts(current_data)
+    data = _with_media_fields(
+        current_data.get('text', ''),
+        current_media_file_id,
+        current_media_type,
+    )
     
     # Определяем тип сообщения и извлекаем медиа
     if message.animation:
-        data['photo_file_id'] = None
-        data['video_file_id'] = None
-        data['animation_file_id'] = message.animation.file_id
+        data.update(_with_media_fields(data.get('text', ''), message.animation.file_id, 'animation'))
         # Для медиа используем caption
         data['text'] = get_message_text_for_storage(message, 'html') if message.caption else ''
     elif message.video:
-        data['photo_file_id'] = None
-        data['video_file_id'] = message.video.file_id
-        data['animation_file_id'] = None
+        data.update(_with_media_fields(data.get('text', ''), message.video.file_id, 'video'))
         data['text'] = get_message_text_for_storage(message, 'html') if message.caption else ''
     elif message.photo:
-        data['photo_file_id'] = message.photo[-1].file_id
-        data['video_file_id'] = None
-        data['animation_file_id'] = None
+        data.update(_with_media_fields(data.get('text', ''), message.photo[-1].file_id, 'photo'))
         data['text'] = get_message_text_for_storage(message, 'html') if message.caption else ''
     elif message.text:
         data['text'] = get_message_text_for_storage(message, 'html')
@@ -172,8 +196,13 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
     if key in PAGE_KEYS:
         # Сохраняем в таблицу pages
         from database.requests import update_page_custom
-        if message.photo:
-            update_page_custom(key, text=data['text'] or None, image=data['photo_file_id'])
+        if message.photo or message.video or message.animation:
+            update_page_custom(
+                key,
+                text=data['text'] or None,
+                image=data['media_file_id'],
+                media_type=data['media_type'],
+            )
         else:
             update_page_custom(key, text=data['text'] or None)
         logger.info(f"Сообщение сохранено в pages: {key}")
@@ -185,25 +214,30 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
     return data
 
 
-def delete_message_photo(key: str) -> dict:
+def delete_message_media(key: str) -> dict:
     """
-    Явно удаляет картинку редактируемого сообщения, не меняя текст.
+    Явно удаляет медиа редактируемого сообщения, не меняя текст.
 
-    Для settings очищает photo_file_id в JSON. Для pages записывает пустую строку
-    в image_custom, чтобы не подтягивалась image_default.
+    Для settings очищает media-поля в JSON. Для pages записывает пустую строку
+    в image_custom, чтобы не подтягивалось дефолтное медиа.
     """
     data = get_message_data(key)
-    data['photo_file_id'] = None
+    data.update(_with_media_fields(data.get('text', ''), None, None))
 
     if key in PAGE_KEYS:
         from database.requests import update_page_custom
         update_page_custom(key, image='')
-        logger.info(f"Картинка удалена из pages: {key}")
+        logger.info(f"Медиа удалено из pages: {key}")
     else:
         set_setting(key, json.dumps(data, ensure_ascii=False))
-        logger.info(f"Картинка удалена из settings: {key}")
+        logger.info(f"Медиа удалено из settings: {key}")
 
     return data
+
+
+def delete_message_photo(key: str) -> dict:
+    """Обратная совместимость для старых импортов."""
+    return delete_message_media(key)
 
 
 def detect_message_type(message: Message) -> str:
@@ -226,20 +260,25 @@ def editor_kb(
     back_callback: str,
     has_help: bool = False,
     can_delete_photo: bool = False,
+    can_delete_media: bool = False,
 ) -> InlineKeyboardMarkup:
     """
     Клавиатура редактора сообщений.
     
     Раскладка:
     [⬅️ Назад]  [🈴 На главную]
-    [🗑 Удалить картинку]  # если картинка есть
+    [🗑 Удалить медиа]  # если медиа есть
     [📝 Отправьте новое сообщение ⬇️]
     
     Args:
         back_callback: callback_data для кнопки «Назад»
         has_help: Есть ли текст справки (меняет поведение кнопки)
-        can_delete_photo: Показывать ли кнопку удаления текущей картинки
+        can_delete_photo: Совместимость со старым названием флага удаления медиа
+        can_delete_media: Показывать ли кнопку удаления текущего медиа
     """
+    if can_delete_photo:
+        can_delete_media = True
+
     builder = InlineKeyboardBuilder()
     
     # Верхний ряд: Назад + На главную
@@ -248,11 +287,11 @@ def editor_kb(
         InlineKeyboardButton(text="🈴 На главную", callback_data="start"),
     )
 
-    if can_delete_photo:
+    if can_delete_media:
         builder.row(
             InlineKeyboardButton(
-                text="🗑 Удалить картинку",
-                callback_data="msg_editor_delete_photo"
+                text="🗑 Удалить медиа",
+                callback_data="msg_editor_delete_media"
             )
         )
     
@@ -328,22 +367,11 @@ async def send_editor_message(
     if not text:
         text = '(пусто)'
     
-    # Определяем медиа (приоритет: animation > video > photo)
-    # safe_edit_or_send поддерживает только photo, для video/animation — фоллбэк на текст
-    photo = data.get('photo_file_id')
-    animation = data.get('animation_file_id')
-    video = data.get('video_file_id')
-    
-    media_file_id = None
-    if animation:
-        text = f"{text}\n\n🎞 <i>(к сообщению прикреплена GIF)</i>"
-    elif video:
-        text = f"{text}\n\n🎬 <i>(к сообщению прикреплено видео)</i>"
-    elif photo:
-        media_file_id = photo
+    media_file_id, media_type = _media_from_parts(data)
     
     return await safe_edit_or_send(
         message, text,
         reply_markup=reply_markup,
-        photo=media_file_id,
+        media=media_file_id,
+        media_type=media_type,
     )

@@ -522,8 +522,6 @@ async def sync_db_to_panel(callback: CallbackQuery, state: FSMContext):
     
     await safe_edit_or_send(callback.message, result, reply_markup=back_and_home_kb('admin_users'))
 
-    await callback.answer()
-
 
 @router.callback_query(F.data == 'admin_sync_panel_to_db')
 async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
@@ -676,4 +674,3 @@ async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
     result += f"\n📊 Всего ключей: <b>{len(keys)}</b>"
     
     await safe_edit_or_send(callback.message, result, reply_markup=back_and_home_kb('admin_users'))
-    await callback.answer()

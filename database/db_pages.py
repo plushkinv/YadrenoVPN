@@ -1,7 +1,7 @@
 """
 Модуль работы со страницами пользователя.
 
-Таблица pages хранит текст, изображение и кнопки для каждого экрана.
+Таблица pages хранит текст, медиа и кнопки для каждого экрана.
 Кнопки хранятся в двух JSON-полях:
   - buttons_default — дефолты разработчика (обновляются только миграциями)
   - buttons_custom — кастомизация админа (обновляется через админ-панель)
@@ -44,6 +44,7 @@ def update_page_custom(
     page_key: str,
     text: Optional[str] = None,
     image: Optional[str] = None,
+    media_type: Optional[str] = None,
     buttons: Optional[str] = None,
 ) -> None:
     """
@@ -65,6 +66,11 @@ def update_page_custom(
     if image is not None:
         updates.append("image_custom = ?")
         params.append(image)
+        if image:
+            updates.append("media_type_custom = ?")
+            params.append(media_type if media_type in {'photo', 'video', 'animation'} else 'photo')
+        else:
+            updates.append("media_type_custom = NULL")
     if buttons is not None:
         updates.append("buttons_custom = ?")
         params.append(buttons)
@@ -87,7 +93,8 @@ def upsert_page_defaults(
     page_key: str,
     text: str,
     image: Optional[str],
-    buttons: str
+    buttons: str,
+    media_type: Optional[str] = None,
 ) -> None:
     """
     Вставляет или обновляет ТОЛЬКО дефолтные поля страницы.
@@ -97,17 +104,22 @@ def upsert_page_defaults(
     Args:
         page_key: Ключ страницы
         text: Дефолтный текст (HTML)
-        image: Дефолтный file_id изображения (или None)
+        image: Дефолтный file_id медиа (или None)
+        media_type: Тип дефолтного медиа: photo, video или animation
         buttons: JSON-строка массива кнопок
     """
+    normalized_media_type = media_type if media_type in {'photo', 'video', 'animation'} else None
+    if image and normalized_media_type is None:
+        normalized_media_type = 'photo'
+
     with get_db() as conn:
         # Пробуем вставить новую запись
         conn.execute(
             """
-            INSERT OR IGNORE INTO pages (page_key, text_default, image_default, buttons_default)
-            VALUES (?, ?, ?, ?)
+            INSERT OR IGNORE INTO pages (page_key, text_default, image_default, media_type_default, buttons_default)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (page_key, text, image, buttons)
+            (page_key, text, image, normalized_media_type, buttons)
         )
         # Обновляем *_default поля (для уже существующих записей)
         conn.execute(
@@ -115,9 +127,10 @@ def upsert_page_defaults(
             UPDATE pages
             SET text_default    = ?,
                 image_default   = ?,
+                media_type_default = ?,
                 buttons_default = ?
             WHERE page_key = ?
             """,
-            (text, image, buttons, page_key)
+            (text, image, normalized_media_type, buttons, page_key)
         )
     logger.info(f"Дефолты страницы обновлены: {page_key}")

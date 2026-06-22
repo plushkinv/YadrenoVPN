@@ -23,7 +23,7 @@ from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
 from bot.keyboards.admin import (
     broadcast_main_kb, broadcast_confirm_kb,
-    broadcast_notifications_kb, broadcast_back_kb,
+    broadcast_stop_kb, broadcast_notifications_kb, broadcast_back_kb,
     broadcast_notify_back_kb, home_only_kb,
     BROADCAST_FILTERS
 )
@@ -34,6 +34,15 @@ from bot.utils.text import safe_edit_or_send
 from bot.utils.delivery import is_bot_blocked_error
 
 router = Router()
+
+BROADCAST_IN_PROGRESS_KEY = 'broadcast_in_progress'
+BROADCAST_STOP_REQUESTED_KEY = 'broadcast_stop_requested'
+BROADCAST_STOP_REQUESTED = 'stop_requested'
+BROADCAST_STALE_RESET = 'stale_reset'
+BROADCAST_IDLE = 'idle'
+
+_broadcast_runtime_active = False
+_broadcast_state_lock = asyncio.Lock()
 
 
 # ============================================================================
@@ -67,12 +76,113 @@ def save_broadcast_message(text: str, photo_file_id: str | None = None) -> None:
 
 def is_broadcast_in_progress() -> bool:
     """Проверяет, идёт ли рассылка сейчас."""
-    return get_setting('broadcast_in_progress', '0') == '1'
+    return get_setting(BROADCAST_IN_PROGRESS_KEY, '0') == '1'
 
 
 def set_broadcast_in_progress(value: bool) -> None:
     """Устанавливает флаг рассылки."""
-    set_setting('broadcast_in_progress', '1' if value else '0')
+    set_setting(BROADCAST_IN_PROGRESS_KEY, '1' if value else '0')
+
+
+def is_broadcast_stop_requested() -> bool:
+    """Проверяет, запросил ли администратор остановку текущей рассылки."""
+    return get_setting(BROADCAST_STOP_REQUESTED_KEY, '0') == '1'
+
+
+def set_broadcast_stop_requested(value: bool) -> None:
+    """Устанавливает флаг мягкой остановки рассылки."""
+    set_setting(BROADCAST_STOP_REQUESTED_KEY, '1' if value else '0')
+
+
+def is_broadcast_runtime_active() -> bool:
+    """Возвращает True, если цикл рассылки жив в текущем процессе бота."""
+    return _broadcast_runtime_active
+
+
+def _set_broadcast_runtime_active(value: bool) -> None:
+    """Обновляет in-memory признак живой рассылки."""
+    global _broadcast_runtime_active
+    _broadcast_runtime_active = value
+
+
+def reset_broadcast_state() -> None:
+    """Сбрасывает все флаги состояния рассылки."""
+    set_broadcast_in_progress(False)
+    set_broadcast_stop_requested(False)
+
+
+async def try_mark_broadcast_started() -> bool:
+    """Атомарно резервирует право на запуск рассылки."""
+    async with _broadcast_state_lock:
+        if is_broadcast_runtime_active() or is_broadcast_in_progress():
+            return False
+
+        _set_broadcast_runtime_active(True)
+        set_broadcast_in_progress(True)
+        set_broadcast_stop_requested(False)
+        return True
+
+
+async def finish_broadcast_state() -> None:
+    """Снимает runtime-признак и сбрасывает флаги после завершения рассылки."""
+    async with _broadcast_state_lock:
+        _set_broadcast_runtime_active(False)
+        reset_broadcast_state()
+
+
+async def request_broadcast_stop_or_reset() -> str:
+    """
+    Запрашивает остановку живой рассылки или сбрасывает зависший DB-флаг.
+
+    Returns:
+        Один из BROADCAST_STOP_REQUESTED, BROADCAST_STALE_RESET, BROADCAST_IDLE.
+    """
+    async with _broadcast_state_lock:
+        if is_broadcast_runtime_active():
+            set_broadcast_stop_requested(True)
+            return BROADCAST_STOP_REQUESTED
+
+        if is_broadcast_in_progress() or is_broadcast_stop_requested():
+            reset_broadcast_state()
+            return BROADCAST_STALE_RESET
+
+        return BROADCAST_IDLE
+
+
+def get_broadcast_menu_text(in_progress: bool = False) -> str:
+    """Формирует текст главного экрана рассылки."""
+    text = (
+        "📢 <b>Рассылка</b>\n\n"
+        "Отправьте сообщение всем пользователям бота.\n\n"
+        "1️⃣ Отредактируйте сообщение\n"
+        "2️⃣ Выберите фильтр получателей\n"
+        "3️⃣ Нажмите «Начать рассылку»"
+    )
+
+    if in_progress:
+        text += "\n\n⏳ Сейчас идёт рассылка. Её можно остановить кнопкой ниже."
+
+    return text
+
+
+async def render_broadcast_menu(
+    message: Message,
+    current_filter: str | None = None,
+    force_new: bool = False,
+) -> None:
+    """Показывает актуальный главный экран рассылки."""
+    msg_data = get_broadcast_message()
+    has_message = msg_data is not None and msg_data.get('text')
+    current_filter = current_filter or get_setting('broadcast_filter', 'all')
+    in_progress = is_broadcast_in_progress()
+    user_count = count_users_for_broadcast(current_filter)
+
+    await safe_edit_or_send(
+        message,
+        get_broadcast_menu_text(in_progress),
+        reply_markup=broadcast_main_kb(has_message, current_filter, in_progress, user_count),
+        force_new=force_new,
+    )
 
 
 # ============================================================================
@@ -87,27 +197,7 @@ async def show_broadcast_menu(callback: CallbackQuery, state: FSMContext):
         return
     
     await state.set_state(AdminStates.broadcast_menu)
-    
-    # Получаем данные для отображения
-    msg_data = get_broadcast_message()
-    has_message = msg_data is not None and msg_data.get('text')
-    
-    current_filter = get_setting('broadcast_filter', 'all')
-    in_progress = is_broadcast_in_progress()
-    user_count = count_users_for_broadcast(current_filter)
-    
-    text = (
-        "📢 <b>Рассылка</b>\n\n"
-        "Отправьте сообщение всем пользователям бота.\n\n"
-        "1️⃣ Отредактируйте сообщение\n"
-        "2️⃣ Выберите фильтр получателей\n"
-        "3️⃣ Нажмите «Начать рассылку»"
-    )
-    
-    await safe_edit_or_send(callback.message, 
-        text,
-        reply_markup=broadcast_main_kb(has_message, current_filter, in_progress, user_count)
-    )
+    await render_broadcast_menu(callback.message)
     await callback.answer()
 
 
@@ -182,25 +272,7 @@ async def broadcast_save_message(message: Message, state: FSMContext):
     # Возвращаемся в меню рассылки
     await state.set_state(AdminStates.broadcast_menu)
     
-    msg_data = get_broadcast_message()
-    has_message = msg_data is not None
-    current_filter = get_setting('broadcast_filter', 'all')
-    in_progress = is_broadcast_in_progress()
-    user_count = count_users_for_broadcast(current_filter)
-    
-    text = (
-        "📢 <b>Рассылка</b>\n\n"
-        "Отправьте сообщение всем пользователям бота.\n\n"
-        "1️⃣ Отредактируйте сообщение\n"
-        "2️⃣ Выберите фильтр получателей\n"
-        "3️⃣ Нажмите «Начать рассылку»"
-    )
-    
-    await safe_edit_or_send(message,
-        text,
-        reply_markup=broadcast_main_kb(has_message, current_filter, in_progress, user_count),
-        force_new=True
-    )
+    await render_broadcast_menu(message, force_new=True)
 
 
 # ============================================================================
@@ -255,24 +327,7 @@ async def broadcast_set_filter(callback: CallbackQuery):
     
     set_setting('broadcast_filter', filter_key)
     
-    # Обновляем экран
-    msg_data = get_broadcast_message()
-    has_message = msg_data is not None and msg_data.get('text')
-    in_progress = is_broadcast_in_progress()
-    user_count = count_users_for_broadcast(filter_key)
-    
-    text = (
-        "📢 <b>Рассылка</b>\n\n"
-        "Отправьте сообщение всем пользователям бота.\n\n"
-        "1️⃣ Отредактируйте сообщение\n"
-        "2️⃣ Выберите фильтр получателей\n"
-        "3️⃣ Нажмите «Начать рассылку»"
-    )
-    
-    await safe_edit_or_send(callback.message, 
-        text,
-        reply_markup=broadcast_main_kb(has_message, filter_key, in_progress, user_count)
-    )
+    await render_broadcast_menu(callback.message, current_filter=filter_key)
     await callback.answer(f"Фильтр: {BROADCAST_FILTERS[filter_key]}")
 
 
@@ -327,7 +382,34 @@ async def broadcast_in_progress_callback(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
-    await callback.answer("⏳ Рассылка уже идёт, дождитесь завершения", show_alert=True)
+    await callback.answer("⏳ Рассылка уже идёт. Её можно остановить кнопкой ниже.", show_alert=True)
+
+
+@router.callback_query(F.data == "broadcast_stop")
+async def broadcast_stop(callback: CallbackQuery):
+    """Останавливает текущую рассылку или сбрасывает зависший флаг."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    result = await request_broadcast_stop_or_reset()
+
+    if result == BROADCAST_STOP_REQUESTED:
+        await safe_edit_or_send(
+            callback.message,
+            "🛑 <b>Остановка рассылки</b>\n\n"
+            "Остановка запрошена. Рассылка прекратится перед следующей отправкой.",
+        )
+        await callback.answer("🛑 Остановка запрошена")
+        return
+
+    if result == BROADCAST_STALE_RESET:
+        await render_broadcast_menu(callback.message)
+        await callback.answer("✅ Зависшая рассылка сброшена", show_alert=True)
+        return
+
+    await render_broadcast_menu(callback.message)
+    await callback.answer("ℹ️ Активной рассылки нет", show_alert=True)
 
 
 @router.callback_query(F.data == "broadcast_confirm")
@@ -337,8 +419,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
-    # Проверяем ещё раз
-    if is_broadcast_in_progress():
+    if is_broadcast_in_progress() or is_broadcast_runtime_active():
         await callback.answer("⏳ Рассылка уже идёт!", show_alert=True)
         return
     
@@ -354,72 +435,131 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         await callback.answer("❌ Нет получателей!", show_alert=True)
         return
     
-    # Устанавливаем флаг
-    set_broadcast_in_progress(True)
+    if not await try_mark_broadcast_started():
+        await callback.answer("⏳ Рассылка уже идёт!", show_alert=True)
+        return
     
     total = len(user_ids)
     sent = 0
     blocked = 0
     failed = 0
-    
-    # Начинаем рассылку
-    await safe_edit_or_send(callback.message, 
-        f"📤 <b>Рассылка запущена</b>\n\n"
-        f"Отправлено: 0/{total}\n"
-        f"🚫 Заблокировали бота: 0\n"
-        f"⚠️ Ошибки отправки: 0"
-    )
-    await callback.answer()
-    
+    stopped = False
+    unexpected_error = None
+    callback_answered = False
+
     text = msg_data.get('text', '')
     photo_file_id = msg_data.get('photo_file_id')
-    
-    for i, user_id in enumerate(user_ids):
-        try:
-            if photo_file_id:
-                await bot.send_photo(
-                    chat_id=user_id,
-                    photo=photo_file_id,
-                    caption=text,
-                    parse_mode="HTML"
-                )
-            else:
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=text,
-                    parse_mode="HTML"
-                )
-            sent += 1
-        except Exception as e:
-            if is_bot_blocked_error(e):
-                mark_user_bot_blocked(user_id)
-                blocked += 1
-            elif isinstance(e, TelegramBadRequest):
-                logger.warning(f"Ошибка отправки {user_id}: {e}")
-                failed += 1
-            else:
-                logger.error(f"Неожиданная ошибка отправки {user_id}: {e}")
-                failed += 1
-        # Обновляем прогресс каждые 10 сообщений
-        if (i + 1) % 10 == 0 or (i + 1) == total:
+
+    try:
+        await safe_edit_or_send(
+            callback.message,
+            f"📤 <b>Рассылка запущена</b>\n\n"
+            f"Отправлено: 0/{total}\n"
+            f"🚫 Заблокировали бота: 0\n"
+            f"⚠️ Ошибки отправки: 0",
+            reply_markup=broadcast_stop_kb(),
+        )
+        await callback.answer()
+        callback_answered = True
+
+        for user_id in user_ids:
+            if is_broadcast_stop_requested():
+                stopped = True
+                break
+
             try:
-                await safe_edit_or_send(callback.message, 
-                    f"📤 <b>Рассылка в процессе...</b>\n\n"
-                    f"Отправлено: {sent}/{total}\n"
-                    f"🚫 Заблокировали бота: {blocked}\n"
-                    f"⚠️ Ошибки отправки: {failed}"
-                )
-            except TelegramBadRequest:
-                pass  # Сообщение не изменилось
-        
-        # Задержка между сообщениями
-        await asyncio.sleep(0.5)
-    
-    # Сбрасываем флаг
-    set_broadcast_in_progress(False)
-    
-    # Итоговый отчёт
-    await safe_edit_or_send(callback.message, 
+                if photo_file_id:
+                    await bot.send_photo(
+                        chat_id=user_id,
+                        photo=photo_file_id,
+                        caption=text,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode="HTML"
+                    )
+                sent += 1
+            except Exception as e:
+                if is_bot_blocked_error(e):
+                    mark_user_bot_blocked(user_id)
+                    blocked += 1
+                elif isinstance(e, TelegramBadRequest):
+                    logger.warning(f"Ошибка отправки {user_id}: {e}")
+                    failed += 1
+                else:
+                    logger.error(f"Неожиданная ошибка отправки {user_id}: {e}")
+                    failed += 1
+
+            processed = sent + blocked + failed
+
+            # Обновляем прогресс каждые 10 обработанных получателей.
+            if processed % 10 == 0 or processed == total:
+                try:
+                    await safe_edit_or_send(
+                        callback.message,
+                        f"📤 <b>Рассылка в процессе...</b>\n\n"
+                        f"Отправлено: {sent}/{total}\n"
+                        f"🚫 Заблокировали бота: {blocked}\n"
+                        f"⚠️ Ошибки отправки: {failed}",
+                        reply_markup=broadcast_stop_kb(),
+                    )
+                except TelegramBadRequest:
+                    pass  # Сообщение не изменилось
+
+            if processed < total and is_broadcast_stop_requested():
+                stopped = True
+                break
+
+            if processed < total:
+                await asyncio.sleep(0.5)
+    except Exception as e:
+        unexpected_error = e
+        logger.exception("Техническая ошибка во время рассылки")
+    finally:
+        await finish_broadcast_state()
+
+    processed = sent + blocked + failed
+
+    if unexpected_error is not None:
+        if not callback_answered:
+            try:
+                await callback.answer("⚠️ Рассылка прервана технической ошибкой", show_alert=True)
+            except Exception:
+                pass
+
+        try:
+            await safe_edit_or_send(
+                callback.message,
+                f"⚠️ <b>Рассылка прервана технической ошибкой</b>\n\n"
+                f"📤 Отправлено: {sent}\n"
+                f"🚫 Заблокировали бота: {blocked}\n"
+                f"⚠️ Ошибки отправки: {failed}\n"
+                f"📌 Обработано: {processed}/{total}\n\n"
+                "Флаг рассылки сброшен, можно запустить новую рассылку.",
+                reply_markup=home_only_kb(),
+            )
+        except Exception as report_error:
+            logger.error(f"Не удалось показать отчёт о прерванной рассылке: {report_error}")
+        return
+
+    if stopped:
+        remaining = max(total - processed, 0)
+        await safe_edit_or_send(
+            callback.message,
+            f"🛑 <b>Рассылка остановлена</b>\n\n"
+            f"📤 Отправлено: {sent}\n"
+            f"🚫 Заблокировали бота: {blocked}\n"
+            f"⚠️ Ошибки отправки: {failed}\n"
+            f"⏸️ Не отправлено: {remaining}",
+            reply_markup=home_only_kb(),
+        )
+        return
+
+    await safe_edit_or_send(
+        callback.message,
         f"✅ <b>Рассылка завершена!</b>\n\n"
         f"📤 Отправлено: {sent}\n"
         f"🚫 Заблокировали бота: {blocked}\n"
@@ -542,7 +682,7 @@ async def broadcast_notify_text(callback: CallbackQuery, state: FSMContext):
             "• <code>%дней%</code> — количество дней до истечения\n"
             "• <code>%имяключа%</code> — имя ключа"
         ),
-        allowed_types=['text', 'photo'],
+        allowed_types=['text', 'photo', 'video', 'animation'],
     )
     await callback.answer()
 

@@ -395,7 +395,8 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
     """
     logger.info("⏳ Запуск проверки истекающих ключей...")
     try:
-        from bot.utils.text import escape_html
+        from bot.utils.placeholders import apply_placeholder_replacements
+        from bot.utils.text import escape_html, send_media_or_text
         days = int(get_setting('notification_days', '3'))
         from bot.utils.message_editor import get_message_data
         
@@ -407,7 +408,8 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
         )
         notification_data = get_message_data('notification_text', default_notification)
         notification_text = notification_data.get('text', default_notification)
-        notification_photo = notification_data.get('photo_file_id')
+        notification_media = notification_data.get('media_file_id')
+        notification_media_type = notification_data.get('media_type')
         
         expiring_keys = get_expiring_keys(days)
         sent_count = 0
@@ -423,11 +425,10 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
                 continue
             
             # Подстановка с экранированием динамических значений
-            text = notification_text.replace(
-                '%дней%', escape_html(str(days_left))
-            ).replace(
-                '%имяключа%', escape_html(str(keyname))
-            )
+            text = apply_placeholder_replacements(notification_text, {
+                '%дней%': escape_html(str(days_left)),
+                '%имяключа%': escape_html(str(keyname)),
+            })
             
             # Клавиатура с кнопками "Мои ключи" и "На главную"
             builder = InlineKeyboardBuilder()
@@ -436,21 +437,14 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
             kb = builder.as_markup()
             
             try:
-                if notification_photo:
-                    await bot.send_photo(
-                        chat_id=user_telegram_id,
-                        photo=notification_photo,
-                        caption=text,
-                        reply_markup=kb,
-                        parse_mode="HTML"
-                    )
-                else:
-                    await bot.send_message(
-                        chat_id=user_telegram_id,
-                        text=text,
-                        reply_markup=kb,
-                        parse_mode="HTML"
-                    )
+                await send_media_or_text(
+                    bot,
+                    chat_id=user_telegram_id,
+                    text=text,
+                    media=notification_media,
+                    media_type=notification_media_type,
+                    reply_markup=kb,
+                )
                 log_notification_sent(vpn_key_id)
                 sent_count += 1
             except Exception as e:

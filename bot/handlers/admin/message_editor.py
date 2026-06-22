@@ -15,7 +15,7 @@ from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
 from bot.utils.text import safe_edit_or_send
 from bot.utils.message_editor import (
-    get_message_data, save_message_data, delete_message_photo, detect_message_type,
+    get_message_data, save_message_data, delete_message_media, detect_message_type,
     editor_kb, editor_help_kb, send_editor_message,
 )
 
@@ -55,13 +55,14 @@ async def show_message_editor(
         allowed_types = ['text', 'photo', 'video', 'animation']
     
     message_data = get_message_data(key)
-    can_delete_photo = bool(message_data.get('photo_file_id')) and 'photo' in allowed_types
+    media_type = message_data.get('media_type')
+    can_delete_media = bool(message_data.get('media_file_id')) and media_type in allowed_types
 
     # Формируем клавиатуру редактора
     kb = editor_kb(
         back_callback,
         has_help=bool(help_text),
-        can_delete_photo=can_delete_photo,
+        can_delete_media=can_delete_media,
     )
     
     # Показываем превью через send_editor_message (единый HTML helper)
@@ -122,14 +123,14 @@ async def show_editor_noop_alert(callback: CallbackQuery):
         
     await callback.answer(
         "📝 Чтобы изменить текст, просто отправьте боту новое сообщение.\n\n"
-        "Вы можете прикрепить фото. Если картинка уже есть, новый текст сохранит её.",
+        "Вы можете прикрепить фото, видео или GIF. Если медиа уже есть, новый текст сохранит его.",
         show_alert=True
     )
 
 
-@router.callback_query(F.data == "msg_editor_delete_photo")
-async def delete_editor_photo(callback: CallbackQuery, state: FSMContext):
-    """Удаляет картинку из текущего редактируемого сообщения."""
+@router.callback_query((F.data == "msg_editor_delete_media") | (F.data == "msg_editor_delete_photo"))
+async def delete_editor_media(callback: CallbackQuery, state: FSMContext):
+    """Удаляет медиа из текущего редактируемого сообщения."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -144,11 +145,11 @@ async def delete_editor_photo(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Ошибка состояния", show_alert=True)
         return
 
-    if 'photo' not in allowed_types:
+    if not any(media_type in allowed_types for media_type in ['photo', 'video', 'animation']):
         await callback.answer()
         return
 
-    delete_message_photo(key)
+    delete_message_media(key)
 
     await show_message_editor(
         callback.message, state,

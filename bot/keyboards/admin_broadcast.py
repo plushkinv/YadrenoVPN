@@ -23,7 +23,7 @@ def broadcast_main_kb(has_message: bool, current_filter: str, broadcast_in_progr
         radio = '🔘' if filter_key == current_filter else '⚪'
         builder.row(InlineKeyboardButton(text=f'{radio} {filter_name}', callback_data=f'broadcast_filter:{filter_key}'))
     if broadcast_in_progress:
-        builder.row(InlineKeyboardButton(text='⏳ Рассылка в процессе...', callback_data='broadcast_in_progress'))
+        builder.row(InlineKeyboardButton(text='🛑 Остановить рассылку', callback_data='broadcast_stop'))
     else:
         builder.row(InlineKeyboardButton(text=f'🚀 Начать рассылку ({user_count} чел.)', callback_data='broadcast_start'))
     builder.row(InlineKeyboardButton(text='─────────────────', callback_data='noop'))
@@ -36,6 +36,12 @@ def broadcast_confirm_kb(user_count: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=f'✅ Да, разослать ({user_count} чел.)', callback_data='broadcast_confirm'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_broadcast'))
+    return builder.as_markup()
+
+def broadcast_stop_kb() -> InlineKeyboardMarkup:
+    """Клавиатура остановки текущей рассылки."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text='🛑 Остановить рассылку', callback_data='broadcast_stop'))
     return builder.as_markup()
 
 def broadcast_notifications_kb(days: int) -> InlineKeyboardMarkup:

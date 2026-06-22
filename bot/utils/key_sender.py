@@ -8,6 +8,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
 
 from bot.services.vpn_api import get_client
 from bot.utils.key_generator import generate_link, generate_json, generate_qr_code
+from bot.utils.placeholders import apply_placeholder_replacements
 from bot.utils.text import escape_html
 
 logger = logging.getLogger(__name__)
@@ -52,11 +53,7 @@ def format_key_plain_link(raw_value: str) -> str:
 def build_key_delivery_text(template: str, raw_value: str) -> str:
     """Подставляет плейсхолдеры выдачи ключа в редактируемый текст."""
     replacements = build_key_delivery_replacements(raw_value)
-    return (
-        template
-        .replace(KEY_COPY_PLACEHOLDER, replacements[KEY_COPY_PLACEHOLDER])
-        .replace(KEY_LINK_PLACEHOLDER, replacements[KEY_LINK_PLACEHOLDER])
-    )
+    return apply_placeholder_replacements(template, replacements)
 
 
 def build_key_delivery_replacements(raw_value: str) -> dict:

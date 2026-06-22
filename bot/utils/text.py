@@ -115,8 +115,8 @@ def prepare_telegram_method(method):
     """
     Подрезает поля text/caption у aiogram-метода перед отправкой в Telegram.
 
-    Это страховка для прямых вызовов bot.send_message/send_photo, которые не идут
-    через safe_edit_or_send().
+    Это страховка для прямых вызовов bot.send_message/send_photo/send_video/
+    send_animation, которые не идут через safe_edit_or_send().
     """
     updates = {}
 
@@ -172,11 +172,99 @@ def get_message_text_for_storage(
         return ""
 
 
+SUPPORTED_MEDIA_TYPES = {'photo', 'video', 'animation'}
+
+
+def normalize_media_type(media_type: Optional[str], *, media: object = None) -> Optional[str]:
+    """Возвращает поддерживаемый тип Telegram-медиа."""
+    if media is None:
+        return None
+    return media_type if media_type in SUPPORTED_MEDIA_TYPES else 'photo'
+
+
+def _input_media_for_type(media: object, media_type: str, caption: str):
+    if media_type == 'video':
+        return InputMediaVideo(media=media, caption=caption, parse_mode='HTML')
+    if media_type == 'animation':
+        return InputMediaAnimation(media=media, caption=caption, parse_mode='HTML')
+    return InputMediaPhoto(media=media, caption=caption, parse_mode='HTML')
+
+
+async def _answer_media(message: Message, media: object, media_type: str, text: str, reply_markup=None) -> Message:
+    if media_type == 'video':
+        return await message.answer_video(
+            video=media,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML',
+        )
+    if media_type == 'animation':
+        return await message.answer_animation(
+            animation=media,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML',
+        )
+    return await message.answer_photo(
+        photo=media,
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode='HTML',
+    )
+
+
+async def send_media_or_text(
+    bot,
+    *,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    media: Optional[Union[str, object]] = None,
+    media_type: Optional[str] = None,
+) -> Message:
+    """Отправляет обычное сообщение или медиа с HTML caption."""
+    normalized_media_type = normalize_media_type(media_type, media=media)
+    text = prepare_telegram_text(text, has_media=media is not None)
+
+    if media is None:
+        return await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML',
+        )
+    if normalized_media_type == 'video':
+        return await bot.send_video(
+            chat_id=chat_id,
+            video=media,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML',
+        )
+    if normalized_media_type == 'animation':
+        return await bot.send_animation(
+            chat_id=chat_id,
+            animation=media,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode='HTML',
+        )
+    return await bot.send_photo(
+        chat_id=chat_id,
+        photo=media,
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode='HTML',
+    )
+
+
 async def safe_edit_or_send(
     message: Message,
     text: str = None,
     reply_markup=None,
     photo: Optional[Union[str, object]] = None,
+    media: Optional[Union[str, object]] = None,
+    media_type: Optional[str] = None,
     show_web_page_preview: bool = False,
     force_new: bool = False,
 ) -> Message:
@@ -189,7 +277,7 @@ async def safe_edit_or_send(
     
     - текст → текст: edit_text
     - медиа → текст: удалить + answer (текст)
-    - текст → медиа: удалить + answer_photo
+    - текст → медиа: удалить + отправить нужный тип медиа
     - медиа → медиа: edit_media + edit_caption
     
     Обрабатывает ошибки Telegram API:
@@ -200,10 +288,17 @@ async def safe_edit_or_send(
         message: Сообщение для редактирования
         text: Текст сообщения (или caption для медиа)
         reply_markup: Клавиатура
-        photo: Фото (file_id, URL или InputFile). Если передано — отправляем медиа-сообщение
+        photo: Фото (file_id, URL или InputFile). Старый совместимый alias для media
+        media: Медиа (file_id, URL или InputFile)
+        media_type: Тип медиа: photo, video или animation
     """
+    if media is None and photo is not None:
+        media = photo
+        media_type = media_type or 'photo'
+
+    normalized_media_type = normalize_media_type(media_type, media=media)
     is_current_media = bool(message.photo or message.video or message.document or message.animation)
-    want_media = photo is not None
+    want_media = media is not None
     text = prepare_telegram_text(text, has_media=want_media)
     
     # Отключаем превью ссылок по умолчанию. Включаем только если show_web_page_preview=True
@@ -212,10 +307,7 @@ async def safe_edit_or_send(
     # Если requested force_new, просто отправляем новое сообщение без удаления старого
     if force_new:
         if want_media:
-            return await message.answer_photo(
-                photo=photo, caption=text,
-                reply_markup=reply_markup, parse_mode='HTML'
-            )
+            return await _answer_media(message, media, normalized_media_type, text, reply_markup)
         else:
             return await message.answer(
                 text=text, reply_markup=reply_markup, parse_mode='HTML',
@@ -225,20 +317,17 @@ async def safe_edit_or_send(
     try:
         if want_media and is_current_media:
             # Медиа → Медиа: редактируем media + caption
-            input_media = InputMediaPhoto(media=photo, caption=text, parse_mode='HTML')
+            input_media = _input_media_for_type(media, normalized_media_type, text)
             result = await message.edit_media(media=input_media, reply_markup=reply_markup)
             return result
             
         elif want_media and not is_current_media:
-            # Текст → Медиа: удаляем текст, отправляем фото
+            # Текст → Медиа: удаляем текст, отправляем нужный тип медиа
             try:
                 await message.delete()
             except Exception:
                 pass
-            return await message.answer_photo(
-                photo=photo, caption=text,
-                reply_markup=reply_markup, parse_mode='HTML'
-            )
+            return await _answer_media(message, media, normalized_media_type, text, reply_markup)
             
         elif not want_media and not is_current_media:
             # Текст → Текст: обычное редактирование
@@ -275,10 +364,7 @@ async def safe_edit_or_send(
             except Exception:
                 pass
             if want_media:
-                return await message.answer_photo(
-                    photo=photo, caption=text,
-                    reply_markup=reply_markup, parse_mode='HTML'
-                )
+                return await _answer_media(message, media, normalized_media_type, text, reply_markup)
             else:
                 return await message.answer(
                     text=text, reply_markup=reply_markup, parse_mode='HTML',

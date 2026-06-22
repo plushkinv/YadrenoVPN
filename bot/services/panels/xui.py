@@ -37,6 +37,10 @@ class StaleAPIProfileError(Exception):
     """Панель сменила профиль API; операцию нужно выбрать заново."""
 
 
+class TransientPanelError(VPNAPIError):
+    """Временная сетевая недоступность панели."""
+
+
 class XUIClient(BaseVPNClient):
     """
     Клиент для работы с API 3X-UI панели.
@@ -345,7 +349,7 @@ class XUIClient(BaseVPNClient):
                 except json.JSONDecodeError:
                     body = {}
                 return resp.status, body
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.debug(f"Raw API запрос {method} {endpoint} упал: {e}")
             return 0, {}
 
@@ -530,9 +534,10 @@ class XUIClient(BaseVPNClient):
                 # 404 или прочее — считаем v2.x
                 logger.debug(f"Probe /csrf-token вернул {resp.status}, считаем v2.x legacy режим")
                 return ('legacy', None)
+        except asyncio.TimeoutError as e:
+            raise TransientPanelError("Таймаут при проверке версии панели") from e
         except aiohttp.ClientError as e:
-            logger.debug(f"Probe /csrf-token упал ({e}), считаем v2.x legacy режим")
-            return ('legacy', None)
+            raise TransientPanelError(f"Ошибка подключения при проверке версии панели: {e}") from e
 
     async def _fetch_api_token(self) -> Optional[str]:
         """
@@ -642,6 +647,7 @@ class XUIClient(BaseVPNClient):
         Делает GET /panel/api/server/status с Authorization: Bearer.
         - 200 → токен валиден, переходим в режим 'bearer'.
         - 404/401 → токен невалиден (ротировали в панели).
+        - 0 → панель временно недоступна, токен не очищаем.
         - Прочее → считаем невалидным.
 
         Returns:
@@ -661,6 +667,8 @@ class XUIClient(BaseVPNClient):
         )
         if status == 200:
             return True
+        if status == 0:
+            raise TransientPanelError("Панель недоступна при проверке Bearer-токена")
         logger.info(f"Bearer-токен невалиден (HTTP {status}), нужно обновить")
         return False
 
@@ -816,14 +824,22 @@ class XUIClient(BaseVPNClient):
                     
                     raise VPNAPIError(f"HTTP {response.status}: {text[:100]}")
                     
-            except aiohttp.ClientError as e:
-                logger.warning(f"Ошибка подключения (попытка {attempt+1}): {e}")
+            except TransientPanelError as e:
+                logger.warning(f"Панель временно недоступна (попытка {attempt+1}/{attempts}): {e}")
+                await self._reset_session()
+                if attempt < attempts - 1:
+                    await asyncio.sleep(delays[min(attempt, len(delays) - 1)])
+                else:
+                    raise VPNAPIError(f"Панель недоступна: {e}")
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                reason = "таймаут подключения" if isinstance(e, asyncio.TimeoutError) else str(e)
+                logger.warning(f"Ошибка подключения (попытка {attempt+1}/{attempts}): {reason}")
                 # Сбрасываем сессию при ошибках подключения, чтобы пересоздать её
                 await self._reset_session()
                 if attempt < attempts - 1:
-                    await asyncio.sleep(delays[attempt])
+                    await asyncio.sleep(delays[min(attempt, len(delays) - 1)])
                 else:
-                    raise VPNAPIError(f"Ошибка подключения: {e}")
+                    raise VPNAPIError(f"Панель недоступна: {reason}")
             except StaleAPIProfileError:
                 raise
             except VPNAPIError:
@@ -880,13 +896,15 @@ class XUIClient(BaseVPNClient):
                     raise VPNAPIError("Ошибка CSRF при логине (HTTP 403). Возможно, панель v3.0+ требует X-CSRF-Token")
                 else:
                     raise VPNAPIError(f"HTTP {resp.status} при логине")
-        except aiohttp.ClientConnectorError:
-            raise VPNAPIError(
+        except aiohttp.ClientConnectorError as e:
+            raise TransientPanelError(
                 f"Не удалось подключиться к {self.server.get('protocol', 'https')}://"
                 f"{self.server['host']}:{self.server['port']}"
-            )
-        except asyncio.TimeoutError:
-            raise VPNAPIError("Таймаут при логине")
+            ) from e
+        except asyncio.TimeoutError as e:
+            raise TransientPanelError("Таймаут при логине") from e
+        except aiohttp.ClientError as e:
+            raise TransientPanelError(f"Ошибка подключения при логине: {e}") from e
         except json.JSONDecodeError:
             raise VPNAPIError("Некорректный ответ при логине")
 
@@ -2494,9 +2512,12 @@ class XUIClient(BaseVPNClient):
 
     async def close(self):
         """Закрывает сессию."""
-        if self.session:
+        if self.session and not self.session.closed:
             await self.session.close()
-            self.session = None
+        self.session = None
+        self.is_authenticated = False
+        self.cookie_authenticated = False
+        self.csrf_token = None
 
 
 # ============================================================================

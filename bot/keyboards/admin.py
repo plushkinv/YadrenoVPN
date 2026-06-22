@@ -56,6 +56,7 @@ __all__ = [
     'group_select_kb',
     'broadcast_main_kb',
     'broadcast_confirm_kb',
+    'broadcast_stop_kb',
     'broadcast_notifications_kb',
     'broadcast_back_kb',
     'broadcast_notify_back_kb',

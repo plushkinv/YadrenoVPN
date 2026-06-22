@@ -52,14 +52,16 @@ def get_client_from_server_data(server: Dict[str, Any]) -> BaseVPNClient:
     _clients[server_id] = client
     return client
 
-def invalidate_client_cache(server_id: int):
+async def invalidate_client_cache(server_id: int):
     """Инвалидирует сессию клиента."""
-    if server_id in _clients:
-        client = _clients[server_id]
-        import asyncio
-        asyncio.create_task(client.close())
-        del _clients[server_id]
-        logger.debug(f'Кэш клиента {server_id} очищен')
+    client = _clients.pop(server_id, None)
+    if not client:
+        return
+    try:
+        await client.close()
+    except Exception as e:
+        logger.error(f"Ошибка при закрытии клиента {server_id}: {e}")
+    logger.debug(f'Кэш клиента {server_id} очищен')
 
 def format_traffic(bytes_count: int) -> str:
     """Форматирует байты в читабельный вид."""
@@ -76,12 +78,13 @@ def format_traffic(bytes_count: int) -> str:
 
 async def close_all_clients():
     """Закрывает все открытые сессии клиентов."""
-    for client in list(_clients.values()):
+    clients = list(_clients.items())
+    _clients.clear()
+    for server_id, client in clients:
         try:
             await client.close()
         except Exception as e:
-            logger.error(f"Ошибка при закрытии клиента: {e}")
-    _clients.clear()
+            logger.error(f"Ошибка при закрытии клиента {server_id}: {e}")
 
 async def get_client(server_id: int) -> XUIClient:
     """

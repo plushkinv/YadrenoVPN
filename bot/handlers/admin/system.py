@@ -625,7 +625,7 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
         ),
     }
     
-    current_allowed_types = ['text'] if key == 'key_delivery' else ['text', 'photo']
+    current_allowed_types = ['text'] if key == 'key_delivery' else ['text', 'photo', 'video', 'animation']
     
     await show_message_editor(
         callback.message, state,

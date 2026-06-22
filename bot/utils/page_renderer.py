@@ -17,20 +17,29 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.utils.placeholders import apply_placeholder_replacements
+
 logger = logging.getLogger(__name__)
 
 # Максимальное количество кнопок в одном ряду
 MAX_BUTTONS_PER_ROW = 2
+PAGE_MEDIA_TYPES = {'photo', 'video', 'animation'}
+
+
+def _normalize_page_media_type(media_type: Optional[str], media_file_id: Optional[str]) -> Optional[str]:
+    if not media_file_id:
+        return None
+    return media_type if media_type in PAGE_MEDIA_TYPES else 'photo'
 
 
 def _page_image_value(row: Dict[str, Any]) -> Optional[str]:
     """
-    Возвращает итоговую картинку страницы.
+    Возвращает итоговый file_id медиа страницы.
 
     Для pages.image_custom используется три состояния:
     - NULL: использовать image_default;
-    - пустая строка: админ явно отключил картинку;
-    - file_id: использовать кастомную картинку.
+    - пустая строка: админ явно отключил медиа;
+    - file_id: использовать кастомное медиа.
     """
     custom_image = row.get('image_custom')
     if custom_image is not None:
@@ -38,19 +47,27 @@ def _page_image_value(row: Dict[str, Any]) -> Optional[str]:
     return row.get('image_default')
 
 
+def _page_media_type_value(row: Dict[str, Any], image: Optional[str]) -> Optional[str]:
+    if not image:
+        return None
+    if row.get('image_custom') is not None:
+        return _normalize_page_media_type(row.get('media_type_custom'), image)
+    return _normalize_page_media_type(row.get('media_type_default'), image)
+
+
 def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
     """
     Возвращает итоговые данные страницы с учётом кастомизации.
 
     Текст: custom если есть, иначе default.
-    Фото: image_custom если не NULL, иначе image_default; пустой image_custom отключает фото.
+    Медиа: image_custom если не NULL, иначе image_default; пустой image_custom отключает медиа.
     Кнопки: мёрж buttons_default + buttons_custom по id.
 
     Args:
         page_key: Ключ страницы в таблице pages
 
     Returns:
-        {"text": str, "image": str|None, "buttons": list[dict]}
+        {"text": str, "image": str|None, "media_type": str|None, "buttons": list[dict]}
         или None если страница не найдена
     """
     from database.requests import get_page
@@ -62,6 +79,7 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
     # Текст: custom → default
     text = row.get('text_custom') or row.get('text_default') or ''
     image = _page_image_value(row)
+    media_type = _page_media_type_value(row, image)
 
     # Кнопки: мёрж по id
     buttons = _merge_buttons_by_id(
@@ -72,6 +90,7 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
     return {
         "text": text,
         "image": image,
+        "media_type": media_type,
         "buttons": buttons,
     }
 
@@ -133,6 +152,100 @@ def _merge_buttons_by_id(
     merged.sort(key=lambda b: (b.get('row', 0), b.get('col', 0)))
 
     return merged
+
+
+def _merge_buttons_by_id_with_source(
+    buttons_default_json: str,
+    buttons_custom_json: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Мержит кнопки для /yaa-снимка и помечает источник каждой effective-кнопки.
+
+    Если у кнопки есть custom-версия, default не дублируется: агенту для правки
+    нужен текущий редактируемый вариант и понимание, откуда он взят.
+    """
+    defaults = _parse_buttons_json(buttons_default_json)
+    customs = _parse_buttons_json(buttons_custom_json)
+
+    custom_map = {btn.get('id'): btn for btn in customs if btn.get('id')}
+    used_custom_ids = set()
+    merged: List[Dict[str, Any]] = []
+
+    for btn in defaults:
+        btn_id = btn.get('id')
+        if btn_id and btn_id in custom_map:
+            item = dict(custom_map[btn_id])
+            item['source'] = 'custom'
+            merged.append(item)
+            used_custom_ids.add(btn_id)
+            continue
+
+        item = dict(btn)
+        item['source'] = 'default'
+        merged.append(item)
+
+    for btn in customs:
+        btn_id = btn.get('id')
+        if btn_id and btn_id not in used_custom_ids:
+            item = dict(btn)
+            item['source'] = 'custom'
+            merged.append(item)
+
+    merged.sort(key=lambda b: (b.get('row', 0), b.get('col', 0)))
+    return merged
+
+
+def _stored_text_value(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Возвращает компактное состояние текста страницы для /yaa."""
+    text_custom = row.get('text_custom')
+    if text_custom:
+        return {'source': 'custom', 'value': text_custom}
+    return {
+        'source': 'default',
+        'value': row.get('text_default') or '',
+        'custom': None,
+    }
+
+
+def _stored_image_value(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Возвращает компактное состояние медиа страницы для /yaa."""
+    image_custom = row.get('image_custom')
+    if image_custom is not None:
+        return {
+            'source': 'custom',
+            'value': image_custom,
+            'media_type': _normalize_page_media_type(row.get('media_type_custom'), image_custom),
+        }
+    image_default = row.get('image_default') or ''
+    return {
+        'source': 'default',
+        'value': image_default,
+        'media_type': _normalize_page_media_type(row.get('media_type_default'), image_default),
+        'custom': None,
+    }
+
+
+def get_page_stored_data(page_key: str) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает DB-first состояние страницы для /yaa без дубля default/custom.
+
+    Значения с custom показываются только как custom. Значения без custom
+    показываются как default с явным custom=None.
+    """
+    from database.requests import get_page
+
+    row = get_page(page_key)
+    if not row:
+        return None
+
+    return {
+        'text': _stored_text_value(row),
+        'image': _stored_image_value(row),
+        'buttons': _merge_buttons_by_id_with_source(
+            buttons_default_json=row.get('buttons_default', '[]'),
+            buttons_custom_json=row.get('buttons_custom'),
+        ),
+    }
 
 
 def _build_keyboard(
@@ -298,6 +411,104 @@ def _build_keyboard(
     return builder.as_markup()
 
 
+def _apply_text_replacements(
+    text: str,
+    text_replacements: Optional[Dict[str, str]],
+) -> str:
+    """Применяет HTML-подстановки страницы так же, как render_page()."""
+    rendered_text = text or ''
+    if text_replacements:
+        rendered_text = apply_placeholder_replacements(rendered_text, text_replacements)
+    return rendered_text or '(пусто)'
+
+
+def serialize_inline_button_rows(
+    rows: Optional[List[List[InlineKeyboardButton]]],
+) -> List[List[Dict[str, Any]]]:
+    """Сериализует inline-кнопки в компактный JSON-friendly формат."""
+    if not rows:
+        return []
+
+    serialized_rows: List[List[Dict[str, Any]]] = []
+    for row in rows:
+        serialized_row: List[Dict[str, Any]] = []
+        for button in row or []:
+            item: Dict[str, Any] = {
+                'label': getattr(button, 'text', '') or '',
+            }
+            callback_data = getattr(button, 'callback_data', None)
+            url = getattr(button, 'url', None)
+            style = getattr(button, 'style', None)
+            icon_custom_emoji_id = getattr(button, 'icon_custom_emoji_id', None)
+            if callback_data:
+                item['callback_data'] = callback_data
+            if url:
+                item['url'] = url
+            if style:
+                item['style'] = style
+            if icon_custom_emoji_id:
+                item['icon_custom_emoji_id'] = icon_custom_emoji_id
+            if item['label'] or len(item) > 1:
+                serialized_row.append(item)
+        if serialized_row:
+            serialized_rows.append(serialized_row)
+    return serialized_rows
+
+
+def serialize_inline_keyboard(
+    markup: Optional[InlineKeyboardMarkup],
+) -> List[List[Dict[str, Any]]]:
+    """Сериализует InlineKeyboardMarkup в компактные ряды кнопок."""
+    if markup is None:
+        return []
+    return serialize_inline_button_rows(getattr(markup, 'inline_keyboard', None))
+
+
+def build_visible_keyboard_snapshot(
+    buttons: Optional[List[Dict[str, Any]]],
+    visibility: Optional[Dict[str, bool]] = None,
+    context: Optional[Dict] = None,
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+    append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+) -> List[List[Dict[str, Any]]]:
+    """Собирает компактный read-only снимок видимой inline-клавиатуры."""
+    keyboard = _build_keyboard(
+        buttons=buttons or [],
+        visibility=visibility,
+        context=context,
+        prepend_buttons=prepend_buttons,
+        append_buttons=append_buttons,
+    )
+    return serialize_inline_keyboard(keyboard)
+
+
+def build_page_render_snapshot(
+    page_data: Optional[Dict[str, Any]],
+    visibility: Optional[Dict[str, bool]] = None,
+    context: Optional[Dict] = None,
+    text_replacements: Optional[Dict[str, str]] = None,
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+    append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+) -> Dict[str, Any]:
+    """Собирает фактически отрендеренный вид страницы для контекста /yaa."""
+    page_data = page_data or {}
+    return {
+        'text': _apply_text_replacements(
+            page_data.get('text') or '',
+            text_replacements,
+        ),
+        'image': page_data.get('image') or '',
+        'media_type': page_data.get('media_type') or '',
+        'keyboard': build_visible_keyboard_snapshot(
+            buttons=page_data.get('buttons') or [],
+            visibility=visibility,
+            context=context,
+            prepend_buttons=prepend_buttons,
+            append_buttons=append_buttons,
+        ),
+    }
+
+
 def _resolve_button_style(color: Optional[str]) -> Optional[str]:
     """
     Преобразует цвет из JSON кнопки в поддерживаемый Telegram style.
@@ -369,13 +580,7 @@ async def render_page(
         return
 
     # 2. Обработка текста
-    text = page_data["text"]
-    if text_replacements:
-        for placeholder, value in text_replacements.items():
-            text = text.replace(placeholder, value)
-
-    if not text:
-        text = '(пусто)'
+    text = _apply_text_replacements(page_data["text"], text_replacements)
 
     # 3. Собираем клавиатуру
     kb = _build_keyboard(
@@ -388,6 +593,7 @@ async def render_page(
 
     # 4. Определяем медиа
     image = page_data.get("image")
+    media_type = page_data.get("media_type")
 
     # 5. Отправляем/редактируем
     msg = target.message if isinstance(target, CallbackQuery) else target
@@ -395,7 +601,8 @@ async def render_page(
         msg,
         text,
         reply_markup=kb,
-        photo=image,
+        media=image,
+        media_type=media_type,
         force_new=force_new,
     )
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -41,7 +42,13 @@ from bot.services.yadreno_admin import (
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
-from bot.utils.page_renderer import get_page_data, render_page
+from bot.utils.page_renderer import (
+    build_visible_keyboard_snapshot,
+    get_page_data,
+    get_page_stored_data,
+    render_page,
+    serialize_inline_button_rows,
+)
 from bot.utils.text import (
     escape_html,
     get_message_text_for_storage,
@@ -57,6 +64,12 @@ from database.requests import (
 )
 
 router = Router()
+
+YAA_REDACTED_USER_KEY = "[redacted_user_key]"
+YAA_KEY_DELIVERY_PAGE = "key_delivery"
+YAA_KEY_DELIVERY_CONTEXT_RAW = "key_delivery_raw_value"
+YADRENO_ADMIN_UPLOAD_MAX_MB = 10
+YADRENO_ADMIN_UPLOAD_MAX_BYTES = YADRENO_ADMIN_UPLOAD_MAX_MB * 1024 * 1024
 
 
 def _missing_key_text() -> str:
@@ -655,8 +668,51 @@ def _safe_upload_filename(raw_name: str | None, fallback: str) -> str:
     return name or fallback
 
 
+def _is_gif_document(document: Any | None) -> bool:
+    """Проверяет, является ли Telegram document GIF-анимацией."""
+    if document is None:
+        return False
+    mime_type = (getattr(document, "mime_type", None) or "").lower()
+    file_name = (getattr(document, "file_name", None) or "").lower()
+    return mime_type == "image/gif" or file_name.endswith(".gif")
+
+
+def _is_metadata_only_media(message: Message) -> bool:
+    """Возвращает True для видео/GIF, которые не скачиваются агентом."""
+    return bool(message.video or message.animation or _is_gif_document(message.document))
+
+
+def _message_upload_size(message: Message) -> int | None:
+    """Возвращает размер uploadable-вложения без запроса get_file()."""
+    if message.photo:
+        return getattr(message.photo[-1], "file_size", None)
+    if message.document:
+        return getattr(message.document, "file_size", None)
+    return None
+
+
+def _format_upload_size(size_bytes: int) -> str:
+    """Форматирует размер файла для сообщения администратору."""
+    return f"{size_bytes / (1024 * 1024):.1f} МБ"
+
+
+def _ensure_upload_size_allowed(message: Message) -> None:
+    """Отклоняет uploadable-файлы больше локального лимита до get_file()."""
+    size_bytes = _message_upload_size(message)
+    if size_bytes is None or size_bytes <= YADRENO_ADMIN_UPLOAD_MAX_BYTES:
+        return
+
+    raise YadrenoAdminError(
+        "Файл слишком большой для анализа: "
+        f"{_format_upload_size(size_bytes)}. "
+        f"Лимит загрузки в Yadreno Admin — {YADRENO_ADMIN_UPLOAD_MAX_MB} МБ. "
+        "Видео и GIF для медиа страницы передаются без скачивания через Telegram file_id; "
+        "для анализа отправьте фото/скриншот или файл меньшего размера."
+    )
+
+
 def _message_upload_meta(message: Message) -> tuple[str, str, str] | None:
-    """Достаёт file_id, имя и MIME для photo/document."""
+    """Достаёт file_id, имя и MIME только для uploadable photo/document."""
     if message.photo:
         photo = message.photo[-1]
         filename = f"photo_{message.message_id}.jpg"
@@ -664,6 +720,8 @@ def _message_upload_meta(message: Message) -> tuple[str, str, str] | None:
 
     document = message.document
     if document:
+        if _is_gif_document(document):
+            return None
         filename = _safe_upload_filename(
             document.file_name,
             f"document_{message.message_id}",
@@ -681,13 +739,23 @@ async def _download_yadreno_upload(message: Message) -> list[YadrenoAdminUpload]
         return []
 
     file_id, filename, content_type = meta
+    _ensure_upload_size_allowed(message)
     UPLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)
     suffix = Path(filename).suffix or ".bin"
     local_path = UPLOAD_TMP_DIR / (
         f"{message.from_user.id}_{message.message_id}_{uuid.uuid4().hex}{suffix}"
     )
 
-    telegram_file = await message.bot.get_file(file_id)
+    try:
+        telegram_file = await message.bot.get_file(file_id)
+    except TelegramBadRequest as e:
+        if "file is too big" in str(e).lower():
+            raise YadrenoAdminError(
+                "Файл слишком большой для загрузки через Telegram Bot API. "
+                f"Лимит анализа в Yadreno Admin — {YADRENO_ADMIN_UPLOAD_MAX_MB} МБ. "
+                "Видео и GIF для медиа страницы передаются без скачивания через Telegram file_id."
+            ) from e
+        raise YadrenoAdminError(f"Telegram не дал скачать файл: {e}") from e
     if not telegram_file.file_path:
         raise YadrenoAdminError("Telegram не вернул путь к файлу")
     await message.bot.download_file(telegram_file.file_path, destination=local_path)
@@ -716,16 +784,53 @@ def _extract_yaa_attachment_data(message: Message) -> dict[str, str] | None:
         return {
             "media_type": "photo",
             "telegram_file_id": photo.file_id,
+            "page_media_type": "photo",
             "usage": "ready_bot_api_file_id",
         }
 
+    if message.video:
+        video = message.video
+        return {
+            "media_type": "video",
+            "telegram_file_id": video.file_id,
+            "file_name": getattr(video, "file_name", None) or "",
+            "mime_type": getattr(video, "mime_type", None) or "",
+            "page_media_type": "video",
+            "usage": "ready_bot_api_file_id",
+            "analysis_supported": "false",
+        }
+
+    if message.animation:
+        animation = message.animation
+        return {
+            "media_type": "animation",
+            "telegram_file_id": animation.file_id,
+            "file_name": getattr(animation, "file_name", None) or "",
+            "mime_type": getattr(animation, "mime_type", None) or "",
+            "page_media_type": "animation",
+            "usage": "ready_bot_api_file_id",
+            "analysis_supported": "false",
+        }
+
     document = message.document
+    if document and _is_gif_document(document):
+        return {
+            "media_type": "animation",
+            "telegram_file_id": document.file_id,
+            "file_name": document.file_name or "",
+            "mime_type": document.mime_type or "",
+            "page_media_type": "animation",
+            "usage": "ready_bot_api_file_id",
+            "analysis_supported": "false",
+        }
+
     if document and (document.mime_type or "").startswith("image/"):
         return {
             "media_type": "image_document",
             "telegram_file_id": document.file_id,
             "file_name": document.file_name or "",
             "mime_type": document.mime_type or "",
+            "page_media_type": "photo",
             "usage": "ready_bot_api_file_id",
         }
 
@@ -741,19 +846,60 @@ def _extract_yaa_attachment_data(message: Message) -> dict[str, str] | None:
 
 
 def _extract_chat_attachment_context(message: Message) -> str:
-    """Возвращает Telegram file_id картинки для обычного чата Yadreno Admin."""
+    """Возвращает контекст Telegram-вложения для обычного чата Yadreno Admin."""
     if message.photo:
         photo = message.photo[-1]
         return (
             "\n\nК сообщению прикреплено изображение Telegram:\n"
             "- media_type: photo\n"
             f"- telegram_file_id: {photo.file_id}\n"
-            "- Если пользователь просит поставить или заменить картинку страницы, "
-            "можно использовать этот telegram_file_id как готовое значение pages.image_custom. "
+            "- Если пользователь просит поставить или заменить медиа страницы, "
+            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='photo'. "
             "Если пользователь просит анализ, анализируй загруженный файл.\n"
         )
 
+    if message.video:
+        video = message.video
+        return (
+            "\n\nК сообщению прикреплено видео Telegram:\n"
+            "- media_type: video\n"
+            f"- telegram_file_id: {video.file_id}\n"
+            f"- file_name: {getattr(video, 'file_name', None) or ''}\n"
+            f"- mime_type: {getattr(video, 'mime_type', None) or ''}\n"
+            "- analysis_supported: false\n"
+            "- Если пользователь просит поставить или заменить медиа страницы, "
+            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='video'. "
+            "Видео не скачивается и не загружается на анализ; если нужен анализ, попроси скриншот или текстовое описание.\n"
+        )
+
+    if message.animation:
+        animation = message.animation
+        return (
+            "\n\nК сообщению прикреплена GIF/animation Telegram:\n"
+            "- media_type: animation\n"
+            f"- telegram_file_id: {animation.file_id}\n"
+            f"- file_name: {getattr(animation, 'file_name', None) or ''}\n"
+            f"- mime_type: {getattr(animation, 'mime_type', None) or ''}\n"
+            "- analysis_supported: false\n"
+            "- Если пользователь просит поставить или заменить медиа страницы, "
+            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='animation'. "
+            "GIF/animation не скачивается и не загружается на анализ; если нужен анализ, попроси скриншот или текстовое описание.\n"
+        )
+
     document = message.document
+    if document and _is_gif_document(document):
+        return (
+            "\n\nК сообщению прикреплена GIF/animation Telegram как document:\n"
+            "- media_type: animation\n"
+            f"- telegram_file_id: {document.file_id}\n"
+            f"- file_name: {document.file_name or ''}\n"
+            f"- mime_type: {document.mime_type or ''}\n"
+            "- analysis_supported: false\n"
+            "- Если пользователь просит поставить или заменить медиа страницы, "
+            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='animation'. "
+            "GIF/animation не скачивается и не загружается на анализ; если нужен анализ, попроси скриншот или текстовое описание.\n"
+        )
+
     if document and (document.mime_type or "").startswith("image/"):
         return (
             "\n\nК сообщению прикреплён image-документ Telegram:\n"
@@ -761,8 +907,8 @@ def _extract_chat_attachment_context(message: Message) -> str:
             f"- telegram_file_id: {document.file_id}\n"
             f"- file_name: {document.file_name or ''}\n"
             f"- mime_type: {document.mime_type or ''}\n"
-            "- Если пользователь просит поставить или заменить картинку страницы, "
-            "можно использовать этот telegram_file_id как готовое значение pages.image_custom. "
+            "- Если пользователь просит поставить или заменить медиа страницы, "
+            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='photo'. "
             "Если пользователь просит анализ, анализируй загруженный файл.\n"
         )
 
@@ -781,14 +927,58 @@ def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
     return (command.args or "").strip()
 
 
+def _redact_yaa_context(page_key: str, runtime_context: dict[str, Any] | None) -> dict[str, Any]:
+    """Возвращает runtime context без пользовательских ключей."""
+    result = dict(runtime_context or {})
+    if page_key == YAA_KEY_DELIVERY_PAGE and YAA_KEY_DELIVERY_CONTEXT_RAW in result:
+        result[YAA_KEY_DELIVERY_CONTEXT_RAW] = YAA_REDACTED_USER_KEY
+    return result
+
+
+def _build_yaa_runtime_context(page_key: str, page_context: Any | None) -> dict[str, Any]:
+    """Собирает runtime-часть контекста /yaa в JSON-friendly формате."""
+    if page_context is None:
+        return {}
+
+    runtime: dict[str, Any] = {}
+    visibility = dict(page_context.visibility or {})
+    context = _redact_yaa_context(page_key, page_context.context)
+    prepend_buttons = serialize_inline_button_rows(page_context.prepend_buttons)
+    append_buttons = serialize_inline_button_rows(page_context.append_buttons)
+
+    if visibility:
+        runtime["visibility"] = visibility
+    if context:
+        runtime["context"] = context
+    if prepend_buttons:
+        runtime["prepend_buttons"] = prepend_buttons
+    if append_buttons:
+        runtime["append_buttons"] = append_buttons
+
+    return runtime
+
+
 def _build_yaa_prompt(
     page_key: str,
     task_html: str,
     backup_path: str,
     attachment: dict[str, str] | None = None,
+    page_context: Any | None = None,
 ) -> str:
     """Формирует компактный JSON-контекст команды /yaa."""
-    page_data = get_page_data(page_key) or {}
+    stored_page = get_page_stored_data(page_key) or {
+        "text": {"source": "default", "value": "", "custom": None},
+        "image": {"source": "default", "value": "", "custom": None},
+        "buttons": [],
+    }
+    visibility = page_context.visibility if page_context else None
+    runtime_context = _redact_yaa_context(
+        page_key,
+        page_context.context if page_context else None,
+    )
+    prepend_buttons = page_context.prepend_buttons if page_context else None
+    append_buttons = page_context.append_buttons if page_context else None
+
     context: dict[str, Any] = {
         "source": "/yaa",
         "page_key": page_key,
@@ -797,11 +987,15 @@ def _build_yaa_prompt(
             "created": True,
             "path": backup_path,
         },
-        "effective_page": {
-            "text": page_data.get("text") or "",
-            "image": page_data.get("image") or "",
-            "buttons": page_data.get("buttons") or [],
-        },
+        "stored_page": stored_page,
+        "visible_keyboard": build_visible_keyboard_snapshot(
+            buttons=stored_page.get("buttons") or [],
+            visibility=visibility,
+            context=runtime_context,
+            prepend_buttons=prepend_buttons,
+            append_buttons=append_buttons,
+        ),
+        "runtime": _build_yaa_runtime_context(page_key, page_context),
         "task_format": "telegram_html",
         "task_html": task_html,
     }
@@ -811,7 +1005,8 @@ def _build_yaa_prompt(
     return (
         "Команда /yaa вызвана администратором прямо на пользовательской странице VPN-бота. "
         "Служебный контекст:\n"
-        f"{json.dumps(context, ensure_ascii=False, separators=(',', ':'))}"
+        f"Задача администратора: {task_html}\n"
+        f"{json.dumps(context, ensure_ascii=False, separators=(',', ':'), default=str)}"
     )
 
 
@@ -871,6 +1066,7 @@ async def handle_yaa_command(message: Message, command: CommandObject):
         task_html,
         backup_path,
         attachment,
+        page_context=page_context,
     )
     status_message = await safe_edit_or_send(
         message,
@@ -954,9 +1150,9 @@ async def handle_yaa_command(message: Message, command: CommandObject):
     )
 
 
-@router.message(AdminStates.yadreno_chat, F.photo | F.document)
+@router.message(AdminStates.yadreno_chat, F.photo | F.document | F.video | F.animation)
 async def handle_yadreno_chat_attachment(message: Message):
-    """Отправляет фото или документ в Yadreno Admin."""
+    """Отправляет фото, видео, GIF или документ в Yadreno Admin."""
     if not is_admin(message.from_user.id):
         return
 
@@ -970,18 +1166,37 @@ async def handle_yadreno_chat_attachment(message: Message):
         )
         return
 
-    prompt = get_message_text_for_storage(message, 'plain').strip()
+    raw_prompt = get_message_text_for_storage(message, 'plain').strip()
+    metadata_only = _is_metadata_only_media(message)
+    attachment_context = _extract_chat_attachment_context(message)
+    if metadata_only and not raw_prompt:
+        await safe_edit_or_send(
+            message,
+            "🤖 <b>Yadreno Admin</b>\n\n"
+            "Видео и GIF не отправляются на анализ. Добавьте подпись с задачей "
+            "или используйте <code>/yaa ...</code> на открытой странице, если нужно поставить это медиа.",
+            reply_markup=yadreno_admin_chat_kb(),
+            force_new=True,
+        )
+        return
+
+    prompt = raw_prompt
     if not prompt:
         prompt = (
             "Проанализируй приложенное изображение."
             if message.photo
             else "Проанализируй приложенный файл."
         )
-    prompt = f"{prompt}{_extract_chat_attachment_context(message)}"
+    prompt = f"{prompt}{attachment_context}"
+    status_text = (
+        "⏳ Передаю медиа агенту без скачивания..."
+        if metadata_only
+        else "⏳ Загружаю файл и запускаю агента..."
+    )
 
     thinking = await safe_edit_or_send(
         message,
-        "🤖 <b>Yadreno Admin</b>\n\n⏳ Загружаю файл и запускаю агента...",
+        f"🤖 <b>Yadreno Admin</b>\n\n{status_text}",
         reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
         force_new=True,
     )
@@ -993,16 +1208,25 @@ async def handle_yadreno_chat_attachment(message: Message):
     uploads: list[YadrenoAdminUpload] = []
     try:
         uploads = await _download_yadreno_upload(message)
-        if not uploads:
+        if uploads:
+            final = await run_dialog_with_uploads(
+                message.from_user.id,
+                api_key,
+                prompt,
+                uploads,
+                topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+                progress_callback=progress.handle,
+            )
+        elif metadata_only:
+            final = await run_dialog(
+                message.from_user.id,
+                api_key,
+                prompt,
+                topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+                progress_callback=progress.handle,
+            )
+        else:
             raise YadrenoAdminError("В сообщении нет поддерживаемого файла")
-        final = await run_dialog_with_uploads(
-            message.from_user.id,
-            api_key,
-            prompt,
-            uploads,
-            topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
-            progress_callback=progress.handle,
-        )
         await safe_edit_or_send(
             progress.final_target,
             _format_final_response(final.content, final.viewer_url),

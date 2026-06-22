@@ -11,6 +11,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
+from bot.utils.placeholders import apply_placeholder_replacements
 from bot.utils.text import escape_html
 
 logger = logging.getLogger(__name__)
@@ -151,10 +152,7 @@ def _format_referral_reward(event: Dict[str, Any]) -> str:
 
 def _apply_placeholders(template: str, replacements: Dict[str, str]) -> str:
     """Подставляет уже экранированные HTML-значения в шаблон."""
-    text = template
-    for placeholder, value in replacements.items():
-        text = text.replace(placeholder, value)
-    return text
+    return apply_placeholder_replacements(template, replacements)
 
 
 async def notify_referrers_new_referral(bot: Bot, referral_id: int) -> None:

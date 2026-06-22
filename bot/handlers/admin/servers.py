@@ -773,7 +773,7 @@ async def edit_server_value(message: Message, state: FSMContext):
         return
     
     # Сбрасываем кэш клиента (настройки изменились)
-    invalidate_client_cache(server_id)
+    await invalidate_client_cache(server_id)
     
     # Удаляем сообщение пользователя
     try:
@@ -832,7 +832,7 @@ async def toggle_server(callback: CallbackQuery, state: FSMContext):
         return
     
     # Сбрасываем кэш
-    invalidate_client_cache(server_id)
+    await invalidate_client_cache(server_id)
     
     status_text = "активирован 🟢" if new_status else "деактивирован 🔴"
     await callback.answer(f"Сервер {status_text}")
@@ -894,7 +894,7 @@ async def execute_delete_server(callback: CallbackQuery, state: FSMContext):
     
     if success:
         # Сбрасываем кэш
-        invalidate_client_cache(server_id)
+        await invalidate_client_cache(server_id)
         
         await safe_edit_or_send(callback.message, 
             f"✅ <b>Сервер удалён</b>\n\n"
