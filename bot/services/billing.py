@@ -14,6 +14,8 @@ import aiohttp
 import qrcode
 import io
 import math
+import asyncio
+from collections import defaultdict
 from typing import Optional, Dict, Any, Tuple
 
 from database.requests import (
@@ -38,6 +40,7 @@ WATA_API_URL = "https://api.wata.pro/api/h2h"
 PLATEGA_API_URL = "https://app.platega.io"
 PLATEGA_PAYMENT_METHOD_SBP = 2
 CARDLINK_API_URL = "https://cardlink.link"
+_payment_order_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Алфавит для Base62 кодирования
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -173,7 +176,40 @@ def parse_crypto_callback(start_param: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _get_order_payment_action(order: Optional[Dict[str, Any]]) -> str:
+    """Определяет тип операции по состоянию ордера до обработки оплаты."""
+    if order and order.get('vpn_key_id'):
+        return 'renewal'
+    return 'new_key'
+
+
+def _mark_order_runtime_flags(
+    order: Optional[Dict[str, Any]],
+    *,
+    processed_now: bool,
+    payment_action: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Добавляет служебные флаги, которые не сохраняются в БД."""
+    if order is not None:
+        order['_payment_processed_now'] = processed_now
+        order['_payment_action'] = payment_action or _get_order_payment_action(order)
+    return order
+
+
 async def process_payment_order(
+    order_id: str,
+    bot: Optional[Any] = None,
+    process_referrals: bool = True,
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    async with _payment_order_locks[order_id]:
+        return await _process_payment_order_unlocked(
+            order_id,
+            bot=bot,
+            process_referrals=process_referrals,
+        )
+
+
+async def _process_payment_order_unlocked(
     order_id: str,
     bot: Optional[Any] = None,
     process_referrals: bool = True,
@@ -194,21 +230,29 @@ async def process_payment_order(
     if is_order_already_paid(order_id):
         # Получаем ордер чтобы вернуть контекст
         order = find_order_by_order_id(order_id)
-        return True, "✅ Этот платёж уже был обработан ранее.", order
+        return True, "✅ Этот платёж уже был обработан ранее.", _mark_order_runtime_flags(
+            order,
+            processed_now=False,
+        )
 
     # 2. Поиск ордера
     order = find_order_by_order_id(order_id)
     if not order:
         logger.warning(f"Ордер не найден: {order_id}")
         return False, "⚠️ Ордер не найден. Обратитесь в поддержку.", None
+    payment_action = _get_order_payment_action(order)
     
     # 3. Закрываем ордер
     if not complete_order(order_id):
-        # Если статус уже paid, process_payment_order вызван повторно - обрабатываем как успех
-        if order['status'] == 'paid':
-             pass
-        else:
-             return False, "❌ Ошибка обновления статуса платежа.", order
+        # Если параллельный обработчик уже успел закрыть ордер, повторно побочные действия не выполняем.
+        fresh_order = find_order_by_order_id(order_id)
+        if fresh_order and fresh_order.get('status') == 'paid':
+            return True, "✅ Этот платёж уже был обработан ранее.", _mark_order_runtime_flags(
+                fresh_order,
+                processed_now=False,
+            )
+        return False, "❌ Ошибка обновления статуса платежа.", order
+    _mark_order_runtime_flags(order, processed_now=True, payment_action=payment_action)
     
     logger.info(f"Order {order_id} processed (paid)")
 
@@ -1332,34 +1376,38 @@ async def complete_payment_flow(
         if success and order:
             user_internal_id = order['user_id']
             days = order.get('period_days') or order.get('duration_days') or 30
-            
-            # Списание баланса при частичной оплате
-            if balance_to_deduct > 0:
-                async with user_locks[user_internal_id]:
-                    current_balance = get_user_balance(user_internal_id)
-                    actual_deduct = min(balance_to_deduct, current_balance)
-                    if actual_deduct > 0:
-                        deduct_from_balance(user_internal_id, actual_deduct)
-                        logger.info(
-                            f'Списано {actual_deduct} коп с баланса user '
-                            f'{user_internal_id} при частичной оплате ({payment_type})'
-                        )
-            
+            processed_now = order.get('_payment_processed_now', True)
+
+            if processed_now:
+                # Списание баланса при частичной оплате
+                if balance_to_deduct > 0:
+                    async with user_locks[user_internal_id]:
+                        current_balance = get_user_balance(user_internal_id)
+                        actual_deduct = min(balance_to_deduct, current_balance)
+                        if actual_deduct > 0:
+                            deduct_from_balance(user_internal_id, actual_deduct)
+                            logger.info(
+                                f'Списано {actual_deduct} коп с баланса user '
+                                f'{user_internal_id} при частичной оплате ({payment_type})'
+                            )
+
+                # Реферальное вознаграждение
+                await process_referral_reward(
+                    user_internal_id, days, referral_amount, payment_type,
+                    bot=message.bot, order=order
+                )
+
+                # Уведомление администраторов об оплате
+                try:
+                    from bot.services.notifications import notify_admins_payment
+                    await notify_admins_payment(message.bot, order)
+                except Exception as notify_err:
+                    logger.warning(f'Ошибка уведомления об оплате: {notify_err}')
+            else:
+                logger.info(f'Повторная обработка платежа {order_id}: побочные действия пропущены')
+
             # Очистка FSM данных о балансе
             await state.update_data(balance_to_deduct=0, remaining_cents=0)
-            
-            # Реферальное вознаграждение
-            await process_referral_reward(
-                user_internal_id, days, referral_amount, payment_type,
-                bot=message.bot, order=order
-            )
-            
-            # Уведомление администраторов об оплате
-            try:
-                from bot.services.notifications import notify_admins_payment
-                await notify_admins_payment(message.bot, order)
-            except Exception as notify_err:
-                logger.warning(f'Ошибка уведомления об оплате: {notify_err}')
             
             # Финализация UI
             await finalize_payment_ui(message, state, text, order, user_id=telegram_id)

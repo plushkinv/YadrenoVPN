@@ -491,18 +491,20 @@ async def sync_db_to_panel(callback: CallbackQuery, state: FSMContext):
         await safe_edit_or_send(callback.message, '✅ Нет активных ключей для синхронизации.')
         return
     
-    fixed = 0
+    processed = 0
     errors = 0
     created = 0
     updated = 0
+    skipped = 0
     
     for key in keys:
         try:
             stats = await sync_key_to_panel_state(key['id'])
             created += stats.get('created', 0)
             updated += stats.get('updated', 0)
+            skipped += stats.get('skipped', 0)
             if stats.get('ok'):
-                fixed += 1
+                processed += 1
             else:
                 errors += 1
                 logger.warning(f"Ключ {key['id']} синхронизирован не полностью: {stats}")
@@ -512,9 +514,10 @@ async def sync_db_to_panel(callback: CallbackQuery, state: FSMContext):
     
     result = (
         f"✅ <b>Выгрузка в панель завершена</b>\n\n"
-        f"📤 Отправлено: <b>{fixed}</b>\n"
-        f"🔧 Обновлено клиентов: <b>{updated}</b>\n"
+        f"📤 Обработано ключей: <b>{processed}</b>\n"
+        f"🔧 Обновлено записей: <b>{updated}</b>\n"
         f"➕ Создано клиентов: <b>{created}</b>\n"
+        f"⏭️ Без изменений: <b>{skipped}</b>\n"
     )
     if errors > 0:
         result += f"❌ Ошибок: <b>{errors}</b>\n"

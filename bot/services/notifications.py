@@ -65,6 +65,24 @@ def _format_payment_amount(order: Dict[str, Any]) -> str:
     return '—'
 
 
+def _get_payment_action(order: Dict[str, Any]) -> str:
+    """
+    Возвращает тип операции для уведомления.
+
+    Во время новой покупки биллинг создаёт черновик ключа и привязывает его к ордеру.
+    Поэтому для уже обработанного ордера нельзя определять тип только по vpn_key_id.
+    """
+    payment_type = order.get('payment_type', '')
+    if payment_type == 'trial':
+        return 'trial'
+
+    explicit_action = order.get('_payment_action')
+    if explicit_action in ('new_key', 'renewal', 'trial'):
+        return explicit_action
+
+    return 'renewal' if order.get('vpn_key_id') else 'new_key'
+
+
 def _get_action_text(order: Dict[str, Any]) -> str:
     """
     Определяет тип действия: новый ключ, продление, пробная.
@@ -75,15 +93,10 @@ def _get_action_text(order: Dict[str, Any]) -> str:
     Returns:
         Текст действия
     """
-    payment_type = order.get('payment_type', '')
-
-    if payment_type == 'trial':
+    action = _get_payment_action(order)
+    if action == 'trial':
         return '🎁 Пробная подписка'
-
-    # Если vpn_key_id существовал ДО обработки (ключ уже был) → продление
-    # Если vpn_key_id был NULL → новый ключ
-    vpn_key_id = order.get('vpn_key_id')
-    if vpn_key_id:
+    if action == 'renewal':
         return '🔄 Продление'
     return '🆕 Новый ключ'
 
@@ -348,14 +361,12 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
         amount_str = _format_payment_amount(order)
 
         # Действие
-        action_str = _get_action_text(order)
+        action = _get_payment_action(order)
 
         # Заголовок — зависит от действия
-        payment_type_for_header = order.get('payment_type', '')
-        vpn_key_id_for_header = order.get('vpn_key_id')
-        if payment_type_for_header == 'trial':
+        if action == 'trial':
             header = '🎁 <b>Пробная подписка</b>'
-        elif vpn_key_id_for_header:
+        elif action == 'renewal':
             header = '🔄 <b>Продление</b>'
         else:
             header = '💰 <b>Новая покупка</b>'
@@ -372,8 +383,8 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
         else:
             lines.append(f'👤 Пользователь: ID {user_id_internal or "?"}')
 
-        # Хост — показываем только если сервер уже выбран (при продлении)
-        if server_name != 'Не выбран':
+        # Хост показываем только для настоящего продления существующего ключа.
+        if action == 'renewal' and server_name != 'Не выбран':
             lines.append(f'🌐 Хост: {escape_html(server_name)}')
         lines.append(f'🎫 Тариф: {escape_html(tariff_name)}')
         lines.append(f'💳 Метод: {payment_label}')

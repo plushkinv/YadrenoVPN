@@ -215,6 +215,7 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
             _complete_order(bal_order_id)
             bal_order = find_order_by_order_id(bal_order_id)
             if bal_order:
+                bal_order['_payment_action'] = 'renewal'
                 await notify_admins_payment(callback.bot, bal_order)
         except Exception as notify_err:
             logger.warning(f'Ошибка уведомления о balance-продлении: {notify_err}')
@@ -231,6 +232,7 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
             from bot.services.notifications import notify_admins_payment
             bal_order = find_order_by_order_id(order_id)
             if bal_order:
+                bal_order['_payment_action'] = 'new_key'
                 await notify_admins_payment(callback.bot, bal_order)
         except Exception as notify_err:
             logger.warning(f'Ошибка уведомления о balance-покупке: {notify_err}')

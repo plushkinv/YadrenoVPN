@@ -1245,6 +1245,11 @@ class XUIClient(BaseVPNClient):
             record = await self._get_clients_api_record(email)
             if record:
                 existing_client, inbound_ids = self._split_clients_api_record(record)
+                existing_uuid = (
+                    existing_client.get("uuid")
+                    or self._client_identifier_from_entry(existing_client)
+                    or client_uuid
+                )
                 if inbound_id not in inbound_ids:
                     encoded_email = urllib.parse.quote(email, safe="")
                     await self._request(
@@ -1252,11 +1257,21 @@ class XUIClient(BaseVPNClient):
                         f"/panel/api/clients/{encoded_email}/attach",
                         data={"inboundIds": [inbound_id]},
                     )
-                existing_uuid = (
-                    existing_client.get("uuid")
-                    or self._client_identifier_from_entry(existing_client)
-                    or client_uuid
-                )
+                if flow and (existing_client.get("flow") or "") != flow:
+                    updated_client = self._build_client_payload_from_record(
+                        existing_client,
+                        fallback_email=email,
+                        fallback_uuid=existing_uuid,
+                    )
+                    updated_client["email"] = email
+                    updated_client["flow"] = flow
+                    encoded_email = urllib.parse.quote(email, safe="")
+                    await self._request(
+                        "POST",
+                        f"/panel/api/clients/update/{encoded_email}",
+                        data=updated_client,
+                    )
+                    existing_client["flow"] = flow
                 return {
                     "uuid": existing_uuid,
                     "email": email,
@@ -1873,6 +1888,7 @@ class XUIClient(BaseVPNClient):
         enable: Optional[bool] = None,
         sub_id: Optional[str] = None,
         limit_ip: Optional[int] = None,
+        flow: Optional[str] = None,
     ) -> bool:
         return await self._run_with_stale_profile_retry(
             lambda: self._update_client_full_impl(
@@ -1884,6 +1900,7 @@ class XUIClient(BaseVPNClient):
                 enable=enable,
                 sub_id=sub_id,
                 limit_ip=limit_ip,
+                flow=flow,
             )
         )
 
@@ -1897,6 +1914,7 @@ class XUIClient(BaseVPNClient):
         enable: Optional[bool] = None,
         sub_id: Optional[str] = None,
         limit_ip: Optional[int] = None,
+        flow: Optional[str] = None,
     ) -> bool:
         """
         Обновляет ВСЕ параметры клиента на панели данными из нашей БД.
@@ -1915,6 +1933,7 @@ class XUIClient(BaseVPNClient):
             enable: Явный статус клиента. None = сохранить текущее значение панели
             sub_id: Явный subscription ID. None = сохранить текущее значение панели
             limit_ip: Явный лимит устройств. None = сохранить текущее значение панели
+            flow: Явный flow. None = сохранить текущее значение панели
             
         Returns:
             True при успешном обновлении
@@ -1946,6 +1965,8 @@ class XUIClient(BaseVPNClient):
             updated_client["subId"] = updated_client.get("subId", "") if sub_id is None else sub_id
             updated_client["limitIp"] = updated_client.get("limitIp", 1) if limit_ip is None else limit_ip
             updated_client["reset"] = 0
+            if flow is not None:
+                updated_client["flow"] = flow
 
             encoded_email = urllib.parse.quote(email, safe="")
             await self._request(
@@ -1986,7 +2007,7 @@ class XUIClient(BaseVPNClient):
         updated_client = {
             "id": target_client.get('id', ''),
             "password": target_client.get('password', ''),
-            "flow": target_client.get('flow', ''),
+            "flow": target_client.get('flow', '') if flow is None else flow,
             "email": target_client.get('email', email),
             "limitIp": target_client.get('limitIp', 1) if limit_ip is None else limit_ip,
             "totalGB": total_gb_bytes,          # ← Из нашей БД!

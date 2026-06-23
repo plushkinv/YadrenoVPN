@@ -6,6 +6,7 @@ import logging
 import uuid as _uuid
 from typing import Optional, Dict, Any, List
 import asyncio
+import inspect
 
 from .panels.base import VPNAPIError, BaseVPNClient
 from .panels.xui import XUIClient
@@ -337,6 +338,126 @@ def _parse_clients_by_email(inbounds: List[Dict[str, Any]], email: str) -> Dict[
     return presence
 
 
+def _panel_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+    """Нормализует числовые поля клиента панели для сравнения."""
+    if value is None or value == '':
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _panel_bool(value: Any, default: bool = True) -> bool:
+    """Нормализует boolean-поля клиента панели для сравнения."""
+    if value is None or value == '':
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+def _client_needs_panel_update(
+    client: Dict[str, Any],
+    *,
+    expiry_time_ms: int,
+    total_gb_bytes: int,
+    enable: bool,
+    limit_ip: int,
+    sub_id: Optional[str] = None,
+    flow: Optional[str] = None,
+    compare_sub_id: bool = True,
+) -> bool:
+    """True, если клиент панели отличается от целевого состояния из БД."""
+    checks = (
+        (_panel_int(client.get('expiryTime')), int(expiry_time_ms)),
+        (_panel_int(client.get('totalGB')), int(total_gb_bytes)),
+        (_panel_int(client.get('limitIp')), int(limit_ip)),
+        (_panel_int(client.get('reset')), 0),
+    )
+    if any(current != expected for current, expected in checks):
+        return True
+    if _panel_bool(client.get('enable'), True) != bool(enable):
+        return True
+    if compare_sub_id and (client.get('subId') or '') != (sub_id or ''):
+        return True
+    if flow is not None and (client.get('flow') or '') != flow:
+        return True
+    return False
+
+
+def _client_uses_clients_api(client: BaseVPNClient) -> bool:
+    """True для first-class Clients API 3x-ui v3.1.0+."""
+    return getattr(client, 'api_profile', None) == 'clients_api'
+
+
+def _get_inbound_flow_from_data(inbound: Dict[str, Any]) -> Optional[str]:
+    """Определяет flow по уже загруженному inbound; None = данных не хватило."""
+    protocol = inbound.get('protocol', '')
+    if protocol != 'vless':
+        return ""
+    if 'streamSettings' not in inbound:
+        return None
+
+    try:
+        stream_raw = inbound.get('streamSettings', '{}')
+        stream = json.loads(stream_raw) if isinstance(stream_raw, str) else stream_raw
+        if not isinstance(stream, dict):
+            return None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    network = stream.get('network', 'tcp')
+    security = stream.get('security', 'none')
+    if network == 'tcp' and security in ('reality', 'tls'):
+        return 'xtls-rprx-vision'
+    return ""
+
+
+async def _get_inbound_flow_safe(
+    client: BaseVPNClient,
+    inbound_id: int,
+    server_id: Any,
+    inbound: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Возвращает flow inbound, не срывая всю синхронизацию при ошибке панели."""
+    if inbound is not None:
+        flow = _get_inbound_flow_from_data(inbound)
+        if flow is not None:
+            return flow
+
+    try:
+        result = client.get_inbound_flow(inbound_id)
+        if inspect.isawaitable(result):
+            result = await result
+        return result if isinstance(result, str) else ""
+    except Exception as e:
+        logger.warning(
+            f"ensure_subscription_keys: не удалось определить flow для inbound "
+            f"{inbound_id} сервера {server_id}: {e}"
+        )
+        return ""
+
+
+async def _get_first_required_flow(
+    client: BaseVPNClient,
+    inbounds: List[Dict[str, Any]],
+    server_id: Any,
+) -> str:
+    """Для clients_api выбирает общий flow, если он нужен любому видимому inbound."""
+    for inbound in inbounds:
+        try:
+            inbound_id = inbound['id']
+        except KeyError:
+            continue
+        flow = await _get_inbound_flow_safe(client, inbound_id, server_id, inbound)
+        if flow:
+            return flow
+    return ""
+
+
 async def push_key_to_panel(key_id: int, reset_traffic: bool = False) -> bool:
     """
     Совместимый алиас старой точки записи.
@@ -422,7 +543,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
 
     Returns:
         Словарь со статистикой: {'created', 'deleted', 'enabled', 'disabled',
-        'updated', 'reset', 'errors', 'ok'}
+        'updated', 'skipped', 'reset', 'errors', 'ok'}
     """
     stats = {
         'created': 0,
@@ -430,6 +551,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
         'enabled': 0,
         'disabled': 0,
         'updated': 0,
+        'skipped': 0,
         'reset': 0,
         'errors': 0,
         'ok': 0,
@@ -496,7 +618,8 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
             try:
                 tariff = get_tariff_by_id(key['tariff_id'])
                 if tariff:
-                    limit_ip = tariff.get('max_ips', 1)
+                    max_ips = tariff.get('max_ips', 1)
+                    limit_ip = max_ips if max_ips is not None else 1
             except Exception as e:
                 logger.warning(
                     f"ensure_subscription_keys: не удалось получить тариф "
@@ -521,12 +644,13 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
             # Параметры для add_client в отсутствующих inbound
             total_gb = int(traffic_limit / (1024 ** 3)) if traffic_limit > 0 else 0
             days_left = _key_days_left_for_add(key)
+            visible_inbounds_by_id = {inb.get('id'): inb for inb in inbounds}
 
             # Создаём в отсутствующих inbound
             missing = [inb for inb in inbounds if inb['id'] not in presence]
             for inb in missing:
                 try:
-                    flow = await client.get_inbound_flow(inb['id'])
+                    flow = await _get_inbound_flow_safe(client, inb['id'], server_id, inb)
                     res = await client.add_client(
                         inbound_id=inb['id'],
                         email=email,
@@ -545,6 +669,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                         'password': res['uuid'],
                         'subId': sub_id,
                         'enable': active,
+                        'flow': flow,
                     }
                 except Exception as e:
                     logger.warning(
@@ -571,44 +696,133 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
 
             # Сбрасываем трафик и выравниваем ВСЕ существующие клиенты подписки.
             target_enable = active
-            for inb_id, cl in sorted(presence.items()):
-                cid = _client_identifier(cl)
-                if not cid:
-                    stats['errors'] += 1
-                    continue
-                if reset_traffic:
-                    try:
-                        await client.reset_client_traffic(inb_id, email)
-                        stats['reset'] += 1
-                    except Exception as e:
-                        stats['errors'] += 1
-                        logger.warning(
-                            f"ensure_subscription_keys: не удалось сбросить трафик {email} "
-                            f"в inbound {inb_id}: {e}"
-                        )
-                try:
-                    await client.update_client_full(
-                        inbound_id=inb_id,
-                        client_uuid=cid,
-                        email=email,
+            uses_clients_api = _client_uses_clients_api(client)
+            clients_api_flow = (
+                await _get_first_required_flow(client, inbounds, server_id)
+                if uses_clients_api
+                else None
+            )
+
+            if uses_clients_api and presence:
+                sorted_presence = sorted(presence.items())
+                needs_update = [
+                    (inb_id, cl)
+                    for inb_id, cl in sorted_presence
+                    if _client_needs_panel_update(
+                        cl,
                         expiry_time_ms=expiry_time_ms,
                         total_gb_bytes=traffic_limit,
                         enable=target_enable,
                         sub_id=sub_id,
                         limit_ip=limit_ip,
+                        flow=clients_api_flow,
                     )
-                    stats['updated'] += 1
-                    if bool(cl.get('enable', True)) != target_enable:
+                ]
+
+                if reset_traffic:
+                    first_inb_id = sorted_presence[0][0]
+                    try:
+                        await client.reset_client_traffic(first_inb_id, email)
+                        stats['reset'] += 1
+                    except Exception as e:
+                        stats['errors'] += 1
+                        logger.warning(
+                            f"ensure_subscription_keys: не удалось сбросить трафик {email} "
+                            f"через clients API: {e}"
+                        )
+
+                if not needs_update:
+                    stats['skipped'] += len(sorted_presence)
+                else:
+                    first_inb_id, first_client = sorted_presence[0]
+                    first_cid = _client_identifier(first_client)
+                    try:
+                        await client.update_client_full(
+                            inbound_id=first_inb_id,
+                            client_uuid=first_cid,
+                            email=email,
+                            expiry_time_ms=expiry_time_ms,
+                            total_gb_bytes=traffic_limit,
+                            enable=target_enable,
+                            sub_id=sub_id,
+                            limit_ip=limit_ip,
+                            flow=clients_api_flow,
+                        )
+                        stats['updated'] += 1
+                        stats['skipped'] += len(sorted_presence) - len(needs_update)
+                        changed_enable = sum(
+                            1
+                            for _, cl in sorted_presence
+                            if _panel_bool(cl.get('enable'), True) != target_enable
+                        )
                         if target_enable:
-                            stats['enabled'] += 1
+                            stats['enabled'] += changed_enable
                         else:
-                            stats['disabled'] += 1
-                except Exception as e:
-                    stats['errors'] += 1
-                    logger.warning(
-                        f"ensure_subscription_keys: не удалось обновить клиента {email} "
-                        f"в inbound {inb_id} сервера {server_id}: {e}"
+                            stats['disabled'] += changed_enable
+                    except Exception as e:
+                        stats['errors'] += 1
+                        logger.warning(
+                            f"ensure_subscription_keys: не удалось обновить клиента {email} "
+                            f"через clients API сервера {server_id}: {e}"
+                        )
+            else:
+                for inb_id, cl in sorted(presence.items()):
+                    cid = _client_identifier(cl)
+                    if not cid:
+                        stats['errors'] += 1
+                        continue
+                    flow = await _get_inbound_flow_safe(
+                        client,
+                        inb_id,
+                        server_id,
+                        visible_inbounds_by_id.get(inb_id),
                     )
+                    needs_update = _client_needs_panel_update(
+                        cl,
+                        expiry_time_ms=expiry_time_ms,
+                        total_gb_bytes=traffic_limit,
+                        enable=target_enable,
+                        sub_id=sub_id,
+                        limit_ip=limit_ip,
+                        flow=flow,
+                    )
+                    if reset_traffic:
+                        try:
+                            await client.reset_client_traffic(inb_id, email)
+                            stats['reset'] += 1
+                        except Exception as e:
+                            stats['errors'] += 1
+                            logger.warning(
+                                f"ensure_subscription_keys: не удалось сбросить трафик {email} "
+                                f"в inbound {inb_id}: {e}"
+                            )
+                    if not needs_update:
+                        stats['skipped'] += 1
+                        continue
+                    try:
+                        await client.update_client_full(
+                            inbound_id=inb_id,
+                            client_uuid=cid,
+                            email=email,
+                            expiry_time_ms=expiry_time_ms,
+                            total_gb_bytes=traffic_limit,
+                            enable=target_enable,
+                            sub_id=sub_id,
+                            limit_ip=limit_ip,
+                            flow=flow,
+                        )
+                        stats['updated'] += 1
+                        if _panel_bool(cl.get('enable'), True) != target_enable:
+                            if target_enable:
+                                stats['enabled'] += 1
+                            else:
+                                stats['disabled'] += 1
+                    except Exception as e:
+                        stats['errors'] += 1
+                        logger.warning(
+                            f"ensure_subscription_keys: не удалось обновить клиента {email} "
+                            f"в inbound {inb_id} сервера {server_id}: {e}"
+                        )
 
         else:  # mode == 'key'
             target_inbound_id = None
@@ -628,7 +842,16 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                 try:
                     total_gb = int(traffic_limit / (1024 ** 3)) if traffic_limit > 0 else 0
                     days_left = _key_days_left_for_add(key)
-                    flow = await client.get_inbound_flow(target_inbound_id)
+                    target_inbound = next(
+                        (inb for inb in inbounds if inb.get('id') == target_inbound_id),
+                        None,
+                    )
+                    flow = await _get_inbound_flow_safe(
+                        client,
+                        target_inbound_id,
+                        server_id,
+                        target_inbound,
+                    )
                     res = await client.add_client(
                         inbound_id=target_inbound_id,
                         email=email,
@@ -645,6 +868,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                         'id': res['uuid'],
                         'password': res['uuid'],
                         'enable': active,
+                        'flow': flow,
                     }
                 except Exception as e:
                     stats['errors'] += 1
@@ -695,28 +919,45 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                             f"ensure_subscription_keys (key-mode): не удалось сбросить трафик "
                             f"{email} в inbound {min_inb_id}: {e}"
                         )
-                try:
-                    await client.update_client_full(
-                        inbound_id=min_inb_id,
-                        client_uuid=uuid_or_pwd,
-                        email=email,
-                        expiry_time_ms=expiry_time_ms,
-                        total_gb_bytes=traffic_limit,
-                        enable=active,
-                        limit_ip=limit_ip,
-                    )
-                    stats['updated'] += 1
-                    if bool(min_client.get('enable', True)) != active:
-                        if active:
-                            stats['enabled'] += 1
-                        else:
-                            stats['disabled'] += 1
-                except Exception as e:
-                    stats['errors'] += 1
-                    logger.warning(
-                        f"ensure_subscription_keys (key-mode): не удалось обновить клиента "
-                        f"{email} в inbound {min_inb_id}: {e}"
-                    )
+                min_inbound = next(
+                    (inb for inb in inbounds if inb.get('id') == min_inb_id),
+                    None,
+                )
+                flow = await _get_inbound_flow_safe(client, min_inb_id, server_id, min_inbound)
+                if not _client_needs_panel_update(
+                    min_client,
+                    expiry_time_ms=expiry_time_ms,
+                    total_gb_bytes=traffic_limit,
+                    enable=active,
+                    limit_ip=limit_ip,
+                    flow=flow,
+                    compare_sub_id=False,
+                ):
+                    stats['skipped'] += 1
+                else:
+                    try:
+                        await client.update_client_full(
+                            inbound_id=min_inb_id,
+                            client_uuid=uuid_or_pwd,
+                            email=email,
+                            expiry_time_ms=expiry_time_ms,
+                            total_gb_bytes=traffic_limit,
+                            enable=active,
+                            limit_ip=limit_ip,
+                            flow=flow,
+                        )
+                        stats['updated'] += 1
+                        if _panel_bool(min_client.get('enable'), True) != active:
+                            if active:
+                                stats['enabled'] += 1
+                            else:
+                                stats['disabled'] += 1
+                    except Exception as e:
+                        stats['errors'] += 1
+                        logger.warning(
+                            f"ensure_subscription_keys (key-mode): не удалось обновить клиента "
+                            f"{email} в inbound {min_inb_id}: {e}"
+                        )
 
     stats['ok'] = 1 if stats['errors'] == 0 else 0
     return stats
