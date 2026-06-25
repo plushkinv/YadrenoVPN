@@ -144,9 +144,9 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
         text += "⚪ <b>WATA (Карта/СБП)</b>\n"
 
     if platega:
-        text += "🟢 <b>Platega (СБП)</b>\n"
+        text += "🟢 <b>Platega</b>\n"
     else:
-        text += "⚪ <b>Platega (СБП)</b>\n"
+        text += "⚪ <b>Platega</b>\n"
 
     if cardlink:
         text += "🟢 <b>Cardlink (Карта/СБП)</b>\n"
@@ -1299,7 +1299,7 @@ async def wata_setup_token_handler(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# НАСТРOЙКА PLATEGA (СБП через REST API)
+# НАСТРOЙКА PLATEGA
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_platega")
@@ -1335,14 +1335,15 @@ async def show_platega_management_menu(callback: CallbackQuery, state: FSMContex
         secret_display = "❌ Не задан"
 
     text = (
-        "💸 <b>Оплата Platega (СБП)</b>\n\n"
-        "Приём платежей по Системе Быстрых Платежей через Platega.\n"
+        "💸 <b>Platega</b>\n\n"
+        "Приём платежей через Platega.\n"
         "Минимальная сумма платежа: <b>10 ₽</b>.\n\n"
         "📋 <b>Как получить доступ:</b>\n"
         "1. Напишите менеджеру <b>@platega_connect_manager</b>\n"
         "2. Скажите, что вы от <b>@plushkinva</b> — получите скидку на подключение.\n"
-        "3. После подключения скопируйте <b>Merchant ID</b> и <b>Secret</b> из ЛК.\n"
-        "4. Укажите их в кнопках ниже.\n\n"
+        "3. По умолчанию подключается <b>SBP</b>; другие методы оплаты подключаются через менеджера Platega.\n"
+        "4. После подключения скопируйте <b>Merchant ID</b> и <b>Secret</b> из ЛК.\n"
+        "5. Укажите их в кнопках ниже.\n\n"
         f"{status_emoji} Статус: <b>{status_text}</b>\n"
         f"🆔 Merchant ID: {merchant_display}\n"
         f"🔐 Secret: {secret_display}\n\n"

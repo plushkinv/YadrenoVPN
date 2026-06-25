@@ -13,7 +13,12 @@ from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.panel_email import get_panel_email_prefix
 from bot.states.admin_states import AdminStates
 from bot.keyboards.admin import users_menu_kb, users_list_kb, user_view_kb, user_ban_confirm_kb, key_view_kb, add_key_server_kb, add_key_inbound_kb, add_key_step_kb, add_key_confirm_kb, users_input_cancel_kb, key_action_cancel_kb, back_and_home_kb, home_only_kb
-from bot.services.vpn_api import get_client_from_server_data, VPNAPIError, format_traffic
+from bot.services.vpn_api import (
+    get_client_from_server_data,
+    VPNAPIError,
+    format_traffic,
+    get_key_traffic_snapshot,
+)
 from bot.handlers.admin.users_manage import format_user_display, _show_user_view_edit
 from bot.handlers.admin.users_list import show_users_menu
 
@@ -536,7 +541,6 @@ async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
     await callback.answer('📥 Запуск загрузки...')
     await safe_edit_or_send(callback.message, '⏳ <b>Загрузка данных из панели (Панель → БД)...</b>\n\nЭто может занять некоторое время.')
     
-    import json
     from database.requests import get_all_active_keys_with_server, get_all_servers
     from database.db_keys import update_key_traffic_limit, update_key_traffic
     from datetime import datetime
@@ -569,34 +573,16 @@ async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
             client = get_client_from_server_data(server)
             inbounds = await client.get_inbounds()
             
-            # Собираем данные из панели: email → {expiryTime, totalGB, up, down}
-            panel_map = {}
-            for inbound in inbounds:
-                settings = json.loads(inbound.get('settings', '{}'))
-                # Собираем трафик из clientStats
-                client_stats = {}
-                for stat in inbound.get('clientStats', []):
-                    client_stats[stat.get('email', '')] = {
-                        'up': stat.get('up', 0),
-                        'down': stat.get('down', 0)
-                    }
-                
-                for cl in settings.get('clients', []):
-                    email = cl.get('email', '')
-                    stats = client_stats.get(email, {'up': 0, 'down': 0})
-                    panel_map[email] = {
-                        'expiryTime': cl.get('expiryTime', 0),
-                        'totalGB': cl.get('totalGB', 0),
-                        'traffic_used': stats['up'] + stats['down']
-                    }
-            
             for key in server_keys:
                 email = key.get('panel_email')
-                if not email or email not in panel_map:
+                if not email:
                     skipped += 1
                     continue
                 
-                panel = panel_map[email]
+                panel = await get_key_traffic_snapshot(client, key, inbounds)
+                if not panel:
+                    skipped += 1
+                    continue
                 changed = False
                 
                 try:

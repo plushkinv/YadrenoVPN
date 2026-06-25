@@ -16,6 +16,8 @@ tmp/
 
 # База данных (создаётся автоматически при запуске)
 database/vpn_bot.db
+database/vpn_bot.db-wal
+database/vpn_bot.db-shm
 
 # Локальные бэкапы (создаются автоматически планировщиком)
 backup/

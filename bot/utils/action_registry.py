@@ -100,7 +100,7 @@ def _resolve_pay_wata(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_platega(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты через Platega (СБП)."""
+    """Кнопка оплаты через Platega."""
     from database.requests import is_platega_configured
 
     if not is_platega_configured():

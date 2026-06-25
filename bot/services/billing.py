@@ -38,7 +38,6 @@ USDT_TO_USD = 1.0
 YOOKASSA_API_URL = "https://api.yookassa.ru/v3/payments"
 WATA_API_URL = "https://api.wata.pro/api/h2h"
 PLATEGA_API_URL = "https://app.platega.io"
-PLATEGA_PAYMENT_METHOD_SBP = 2
 CARDLINK_API_URL = "https://cardlink.link"
 _payment_order_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -790,31 +789,33 @@ async def check_wata_payment_status(wata_link_id: str) -> str:
 
 
 # ============================================================================
-# PLATEGA — оплата СБП через REST API (https://app.platega.io)
+# PLATEGA — платёжная форма без заданного метода (https://app.platega.io)
 # ============================================================================
 
 async def create_platega_payment(
     amount_rub: float,
     order_id: str,
     description: str,
-    bot_name: str
+    bot_name: str,
+    user_telegram_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Создаёт транзакцию в Platega API.
 
-    POST https://app.platega.io/transaction/process
+    POST https://app.platega.io/v2/transaction/process
 
     Args:
         amount_rub: Сумма в рублях
         order_id: Наш внутренний order_id
         description: Описание платежа
-        bot_name: Username бота (для построения returnUrl)
+        bot_name: Username бота (для построения return)
+        user_telegram_id: Telegram ID плательщика для metadata.userId
 
     Returns:
         Словарь с ключами:
             - platega_transaction_id: ID транзакции в системе Platega
             - qr_image_data: PNG-байты QR-кода
-            - qr_url: Ссылка для оплаты (СБП)
+            - qr_url: Ссылка для оплаты
             - status: Статус платежа
 
     Raises:
@@ -828,21 +829,20 @@ async def create_platega_payment(
     return_url = build_payment_return_url(bot_name, 'platega', order_id)
     fail_url = return_url
 
-    # Platega требует id в формате UUID. Наш короткий order_id сохраняем в payload.
-    transaction_uuid = str(uuid.uuid4())
-
     payload = {
-        "paymentMethod": PLATEGA_PAYMENT_METHOD_SBP,
-        "id": transaction_uuid,
         "paymentDetails": {
             "amount": round(float(amount_rub), 2),
             "currency": "RUB",
         },
         "description": description[:255],
-        "returnUrl": return_url,
+        "return": return_url,
         "failedUrl": fail_url,
         "payload": order_id,
     }
+    if user_telegram_id is not None:
+        payload["metadata"] = {
+            "userId": str(user_telegram_id),
+        }
 
     headers = {
         "X-MerchantId": merchant_id,
@@ -851,7 +851,7 @@ async def create_platega_payment(
         "Accept": "application/json",
     }
 
-    url = f"{PLATEGA_API_URL}/transaction/process"
+    url = f"{PLATEGA_API_URL}/v2/transaction/process"
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, headers=headers) as response:

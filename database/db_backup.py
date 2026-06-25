@@ -9,19 +9,48 @@ from pathlib import Path
 from database import connection as db_connection
 
 
-__all__ = ["create_bot_database_backup"]
+__all__ = ["backup_bot_database_to", "create_bot_database_backup"]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKUP_DIR = PROJECT_ROOT / "backup"
 
 
-def create_bot_database_backup() -> str:
-    """Создаёт и проверяет SQLite-бэкап, возвращая путь от корня проекта."""
+def backup_bot_database_to(destination_path: str | Path) -> Path:
+    """Создаёт согласованную копию основной БД в указанный файл."""
     source_path = Path(db_connection.DB_PATH).resolve()
     if not source_path.is_file():
         raise FileNotFoundError(f"База данных не найдена: {source_path}")
 
+    backup_path = Path(destination_path).resolve()
+    if backup_path == source_path:
+        raise RuntimeError("Нельзя создавать резервную копию поверх рабочей базы")
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        backup_path.unlink(missing_ok=True)
+        source = db_connection.get_connection()
+        try:
+            with sqlite3.connect(backup_path) as target:
+                source.backup(target)
+                check_row = target.execute("PRAGMA quick_check").fetchone()
+                if not check_row or check_row[0] != "ok":
+                    raise RuntimeError("Проверка целостности резервной копии не пройдена")
+        finally:
+            source.close()
+    except Exception:
+        backup_path.unlink(missing_ok=True)
+        raise
+
+    if not backup_path.is_file() or backup_path.stat().st_size == 0:
+        backup_path.unlink(missing_ok=True)
+        raise RuntimeError("Создан пустой файл резервной копии")
+
+    return backup_path
+
+
+def create_bot_database_backup() -> str:
+    """Создаёт и проверяет SQLite-бэкап, возвращая путь от корня проекта."""
     project_root = PROJECT_ROOT.resolve()
     backup_dir = BACKUP_DIR.resolve()
     if backup_dir != project_root and project_root not in backup_dir.parents:
@@ -32,18 +61,5 @@ def create_bot_database_backup() -> str:
     if backup_path.parent != backup_dir:
         raise RuntimeError("Некорректный путь резервной копии")
 
-    try:
-        with sqlite3.connect(source_path) as source, sqlite3.connect(backup_path) as target:
-            source.backup(target)
-            check_row = target.execute("PRAGMA quick_check").fetchone()
-            if not check_row or check_row[0] != "ok":
-                raise RuntimeError("Проверка целостности резервной копии не пройдена")
-    except Exception:
-        backup_path.unlink(missing_ok=True)
-        raise
-
-    if not backup_path.is_file() or backup_path.stat().st_size == 0:
-        backup_path.unlink(missing_ok=True)
-        raise RuntimeError("Создан пустой файл резервной копии")
-
+    backup_bot_database_to(backup_path)
     return backup_path.relative_to(PROJECT_ROOT).as_posix()

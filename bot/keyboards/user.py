@@ -129,7 +129,7 @@ def buy_key_kb(
         order_id: ID созданного ордера (для оптимизации Stars/Cards)
         show_balance_button: Показывать ли кнопку «Использовать баланс»
         wata_enabled: Показывать ли кнопку оплаты WATA (Карта/СБП)
-        platega_enabled: Показывать ли кнопку оплаты Platega (СБП)
+        platega_enabled: Показывать ли кнопку оплаты Platega
         cardlink_enabled: Показывать ли кнопку оплаты Cardlink (Карта/СБП)
     """
     builder = InlineKeyboardBuilder()
@@ -169,7 +169,7 @@ def buy_key_kb(
     # Platega — переход к выбору тарифа
     if platega_enabled:
         builder.row(
-            InlineKeyboardButton(text="💸 Platega (СБП)", callback_data="pay_platega")
+            InlineKeyboardButton(text="💸 Platega", callback_data="pay_platega")
         )
 
     # Cardlink — переход к выбору тарифа

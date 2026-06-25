@@ -393,6 +393,213 @@ def _client_uses_clients_api(client: BaseVPNClient) -> bool:
     return getattr(client, 'api_profile', None) == 'clients_api'
 
 
+def _traffic_int(value: Any) -> Optional[int]:
+    """Нормализует числовые поля трафика из API панели."""
+    if value is None or value == '':
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_traffic_int(data: Dict[str, Any], fields: tuple, default: int = 0) -> int:
+    for field in fields:
+        value = _traffic_int(data.get(field))
+        if value is not None:
+            return value
+    return default
+
+
+def _traffic_used_from_record(data: Dict[str, Any]) -> Optional[int]:
+    up = _traffic_int(data.get('up'))
+    down = _traffic_int(data.get('down'))
+    if up is not None or down is not None:
+        return (up or 0) + (down or 0)
+
+    for field in (
+        'traffic_used',
+        'trafficUsed',
+        'usedTraffic',
+        'usedBytes',
+        'used_bytes',
+        'usedGB',
+        'used',
+        'consumedTraffic',
+        'consumed',
+    ):
+        value = _traffic_int(data.get(field))
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_global_traffic_stats(stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    data = dict(stats)
+    client_payload = stats.get('client')
+    if isinstance(client_payload, dict):
+        data.update(client_payload)
+
+    traffic_used = _traffic_used_from_record(data)
+    if traffic_used is None:
+        return None
+
+    return {
+        'traffic_used': traffic_used,
+        'totalGB': _first_traffic_int(
+            data,
+            ('total', 'totalGB', 'traffic_limit', 'trafficLimit'),
+            0,
+        ),
+        'expiryTime': _first_traffic_int(
+            data,
+            ('expiry_time', 'expiryTime', 'expire', 'expires_at'),
+            0,
+        ),
+        'source': data.get('source') or 'clients_api_global',
+    }
+
+
+def _ensure_traffic_entry(
+    stats_map: Dict[str, Dict[str, Any]],
+    email: str,
+) -> Dict[str, Any]:
+    if email not in stats_map:
+        stats_map[email] = {
+            'up': 0,
+            'down': 0,
+            'totalGB': 0,
+            'expiryTime': 0,
+            'has_client': False,
+            'has_stats': False,
+        }
+    return stats_map[email]
+
+
+def build_inbound_traffic_map(inbounds: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Собирает email -> traffic/meta из legacy inbound/clientStats."""
+    stats_map: Dict[str, Dict[str, Any]] = {}
+
+    for inbound in inbounds:
+        for stats in inbound.get('clientStats', []):
+            email = stats.get('email')
+            if not email:
+                continue
+            entry = _ensure_traffic_entry(stats_map, email)
+            entry['has_stats'] = True
+            entry['up'] += stats.get('up', 0) or 0
+            entry['down'] += stats.get('down', 0) or 0
+            entry['totalGB'] = max(
+                entry['totalGB'],
+                stats.get('total', 0) or stats.get('totalGB', 0) or 0,
+            )
+            entry['expiryTime'] = max(
+                entry['expiryTime'],
+                stats.get('expiryTime', 0) or stats.get('expiry_time', 0) or 0,
+            )
+
+        try:
+            settings_raw = inbound.get('settings', '{}')
+            settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+        except (json.JSONDecodeError, TypeError):
+            settings = {}
+
+        for panel_client in settings.get('clients', []) if isinstance(settings, dict) else []:
+            email = panel_client.get('email')
+            if not email:
+                continue
+            entry = _ensure_traffic_entry(stats_map, email)
+            entry['has_client'] = True
+            entry['totalGB'] = max(
+                entry['totalGB'],
+                panel_client.get('totalGB', 0) or 0,
+            )
+            entry['expiryTime'] = max(
+                entry['expiryTime'],
+                panel_client.get('expiryTime', 0) or 0,
+            )
+
+    return stats_map
+
+
+def _snapshot_from_inbound_entry(
+    key: Dict[str, Any],
+    entry: Dict[str, Any],
+) -> Dict[str, Any]:
+    used_on_server = (entry.get('up', 0) or 0) + (entry.get('down', 0) or 0)
+    total_on_server = entry.get('totalGB', 0) or 0
+    traffic_limit = key.get('traffic_limit', 0) or 0
+
+    if key.get('sub_id'):
+        traffic_used = used_on_server
+    elif traffic_limit > 0 and total_on_server > 0:
+        remaining_on_server = max(0, total_on_server - used_on_server)
+        traffic_used = max(0, traffic_limit - remaining_on_server)
+    else:
+        traffic_used = used_on_server
+
+    return {
+        'traffic_used': traffic_used,
+        'totalGB': total_on_server,
+        'expiryTime': entry.get('expiryTime', 0) or 0,
+        'source': 'inbound_aggregate',
+    }
+
+
+async def get_key_traffic_snapshot(
+    client: BaseVPNClient,
+    key: Dict[str, Any],
+    inbounds: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает нормализованный снимок трафика ключа.
+
+    Для subscription-клиентов на новых 3X-UI сначала используется общий
+    счётчик first-class client по email. Если он недоступен, применяется
+    legacy-агрегация по inbound/clientStats.
+    """
+    email = key.get('panel_email')
+    if not email:
+        return None
+
+    if key.get('sub_id'):
+        try:
+            try:
+                stats_result = client.get_client_stats(email, resolve_inbound=False)
+            except TypeError:
+                stats_result = client.get_client_stats(email)
+            stats = await stats_result if inspect.isawaitable(stats_result) else stats_result
+        except Exception as e:
+            logger.debug(f"get_key_traffic_snapshot: общий счётчик {email} недоступен: {e}")
+            stats = None
+
+        if isinstance(stats, dict):
+            source = str(stats.get('source') or '')
+            can_be_global = source.startswith('clients_api') or (
+                _client_uses_clients_api(client) and source != 'inbound_first'
+            )
+            if can_be_global:
+                snapshot = _normalize_global_traffic_stats(stats)
+                if snapshot:
+                    if inbounds is not None:
+                        entry = build_inbound_traffic_map(inbounds).get(email)
+                        if entry:
+                            if snapshot.get('totalGB', 0) == 0 and entry.get('totalGB', 0) > 0:
+                                snapshot['totalGB'] = entry['totalGB']
+                            if snapshot.get('expiryTime', 0) == 0 and entry.get('expiryTime', 0) > 0:
+                                snapshot['expiryTime'] = entry['expiryTime']
+                    snapshot['source'] = source or 'clients_api_global'
+                    return snapshot
+
+    if inbounds is None:
+        inbounds = await client.get_inbounds()
+
+    entry = build_inbound_traffic_map(inbounds).get(email)
+    if not entry:
+        return None
+    return _snapshot_from_inbound_entry(key, entry)
+
+
 def _get_inbound_flow_from_data(inbound: Dict[str, Any]) -> Optional[str]:
     """Определяет flow по уже загруженному inbound; None = данных не хватило."""
     protocol = inbound.get('protocol', '')
@@ -1003,5 +1210,5 @@ __all__ = [
     "push_key_to_panel", "restore_traffic_limit_in_db",
     "get_bot_mode", "is_subscription_mode",
     "ensure_subscription_keys_on_server", "sync_key_to_panel_state",
-    "get_subscription_url_for_key",
+    "get_subscription_url_for_key", "get_key_traffic_snapshot",
 ]

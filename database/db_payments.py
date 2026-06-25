@@ -370,7 +370,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         wata_row = cursor.fetchone()
 
-        # 6. Считаем Platega (СБП - Рубли)
+        # 6. Считаем Platega (Рубли)
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,

@@ -233,6 +233,7 @@ def format_qr_payment_text(
     qr_url: str,
     key_name: str = None,
     hint_text: str = None,
+    instruction_text: str = None,
 ) -> str:
     """
     Формирует текст сообщения с QR-кодом оплаты.
@@ -248,6 +249,8 @@ def format_qr_payment_text(
         qr_url: Ссылка на оплату
         key_name: Название ключа при продлении (уже экранировано); None для покупки
         hint_text: Пользовательская подсказка внизу; если None — стандартная
+        instruction_text: Пользовательская инструкция со ссылкой; поддерживает
+            плейсхолдер {payment_link}
     """
     lines = [f"{title}\n"]
 
@@ -262,10 +265,12 @@ def format_qr_payment_text(
     else:
         lines.append(f"⏳ <b>Срок:</b> {days} дней")
 
-    lines.append(
-        f"\nОтсканируйте QR код для перехода по "
-        f"<a href=\"{qr_url}\">ссылке на оплату</a>."
-    )
+    payment_link = f"<a href=\"{qr_url}\">ссылке на оплату</a>"
+    if instruction_text is None:
+        instruction_text = f"Отсканируйте QR код для перехода по {payment_link}."
+    else:
+        instruction_text = instruction_text.format(payment_link=payment_link)
+    lines.append(f"\n{instruction_text}")
 
     if hint_text is None:
         hint_text = 'После оплаты нажмите «✅ Я оплатил».'
@@ -291,6 +296,7 @@ async def create_qr_payment_flow(
     key: dict = None,
     vpn_key_id: int = None,
     hint_text: str = None,
+    instruction_text: str = None,
 ) -> None:
     """
     Универсальный flow создания QR-счёта для любого провайдера.
@@ -315,6 +321,7 @@ async def create_qr_payment_flow(
         key: Словарь ключа при продлении (None для покупки)
         vpn_key_id: ID ключа при продлении (None для покупки)
         hint_text: Пользовательская подсказка (None → стандартная)
+        instruction_text: Пользовательская инструкция со ссылкой на оплату
     """
     from database.requests import get_user_internal_id, create_pending_order
     from bot.keyboards.user import qr_payment_kb
@@ -348,10 +355,24 @@ async def create_qr_payment_flow(
             description = f"Покупка «{tariff['name']}» — {tariff['duration_days']} дней"
 
         # Вызов API провайдера
-        result = await create_func(
-            amount_rub=price_rub, order_id=order_id,
-            description=description, bot_name=bot_name
-        )
+        create_kwargs = {
+            'amount_rub': price_rub,
+            'order_id': order_id,
+            'description': description,
+            'bot_name': bot_name,
+        }
+        try:
+            import inspect
+            signature = inspect.signature(create_func)
+            accepts_kwargs = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in signature.parameters.values()
+            )
+            if accepts_kwargs or 'user_telegram_id' in signature.parameters:
+                create_kwargs['user_telegram_id'] = callback.from_user.id
+        except (TypeError, ValueError):
+            pass
+        result = await create_func(**create_kwargs)
         save_func(order_id, result[result_key])
 
         qr_image_data = result.get('qr_image_data')
@@ -374,6 +395,7 @@ async def create_qr_payment_flow(
             qr_url=qr_url,
             key_name=escape_html(key['display_name']) if key else None,
             hint_text=hint_text,
+            instruction_text=instruction_text,
         )
 
         # Отправка QR-фото

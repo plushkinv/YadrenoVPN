@@ -23,7 +23,7 @@ PAYMENT_TYPE_LABELS: Dict[str, str] = {
     'cards': '💳 Карта (TG Payments)',
     'yookassa_qr': '📱 ЮКасса (QR/СБП)',
     'wata': '🌊 WATA',
-    'platega': '💸 Platega (СБП)',
+    'platega': '💸 Platega',
     'cardlink': '🔗 Cardlink',
     'balance': '💎 Баланс',
     'trial': '🎁 Пробная подписка',

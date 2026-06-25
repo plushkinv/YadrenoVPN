@@ -41,7 +41,7 @@ class BaseVPNClient(abc.ABC):
         pass
 
     @abstractmethod
-    async def get_client_stats(self, email: str) -> Optional[Dict[str, Any]]:
+    async def get_client_stats(self, email: str, resolve_inbound: bool = True) -> Optional[Dict[str, Any]]:
         pass
 
     @abstractmethod

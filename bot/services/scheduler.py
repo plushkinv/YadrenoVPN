@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import os
-import shutil
+import tempfile
 import zipfile
 from datetime import datetime, time as dt_time, timedelta
 from io import BytesIO
@@ -28,7 +28,13 @@ from database.requests import (
     get_setting, get_expiring_keys, is_notification_sent_today, log_notification_sent,
     is_update_notifications_enabled, mark_user_bot_blocked
 )
-from bot.services.vpn_api import get_client_from_server_data, VPNAPIError, format_traffic
+from database.db_backup import backup_bot_database_to
+from bot.services.vpn_api import (
+    get_client_from_server_data,
+    VPNAPIError,
+    format_traffic,
+    get_key_traffic_snapshot,
+)
 from bot.utils.git_utils import check_for_updates
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock
 from bot.utils.delivery import is_bot_blocked_error
@@ -180,6 +186,7 @@ async def create_backup_archive() -> Optional[bytes]:
     Returns:
         Байты ZIP-архива или None при ошибке
     """
+    temp_bot_db_backup = None
     try:
         archive_buffer = BytesIO()
         
@@ -187,8 +194,16 @@ async def create_backup_archive() -> Optional[bytes]:
             # Добавляем базу данных бота
             bot_db_path = os.path.abspath(BOT_DB_PATH)
             if os.path.exists(bot_db_path):
-                zf.write(bot_db_path, 'vpn_bot.db')
-                logger.info(f"Добавлен в архив: vpn_bot.db ({os.path.getsize(bot_db_path)} байт)")
+                os.makedirs(BACKUP_DIR, exist_ok=True)
+                fd, temp_bot_db_backup = tempfile.mkstemp(
+                    prefix='vpn_bot_snapshot_',
+                    suffix='.db',
+                    dir=BACKUP_DIR,
+                )
+                os.close(fd)
+                snapshot_path = backup_bot_database_to(temp_bot_db_backup)
+                zf.write(snapshot_path, 'vpn_bot.db')
+                logger.info(f"Добавлен в архив: vpn_bot.db ({snapshot_path.stat().st_size} байт)")
             else:
                 logger.warning(f"База данных бота не найдена: {bot_db_path}")
             
@@ -220,6 +235,14 @@ async def create_backup_archive() -> Optional[bytes]:
     except Exception as e:
         logger.error(f"Ошибка при создании архива бэкапов: {e}")
         return None
+    finally:
+        if temp_bot_db_backup:
+            try:
+                os.unlink(temp_bot_db_backup)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.warning(f"Не удалось удалить временный бэкап БД бота {temp_bot_db_backup}: {e}")
 
 
 async def save_local_backup() -> None:
@@ -239,7 +262,7 @@ async def save_local_backup() -> None:
         bot_db_path = os.path.abspath(BOT_DB_PATH)
         if os.path.exists(bot_db_path):
             dest = os.path.join(day_dir, 'vpn_bot.db')
-            shutil.copy2(bot_db_path, dest)
+            backup_bot_database_to(dest)
             logger.info(f"Локальный бэкап: vpn_bot.db ({os.path.getsize(dest)} байт)")
         else:
             logger.warning(f"База данных бота не найдена: {bot_db_path}")
@@ -887,46 +910,10 @@ async def sync_traffic_stats(bot: Bot) -> None:
             client = get_client_from_server_data(server)
             inbounds = await client.get_inbounds()
 
-            # Строим словарь email -> агрегированные {total, up, down} по всем inbound
-            # В режиме subscription один клиент существует во всех inbound с одним
-            # email и subId — агрегация даёт реальный суммарный расход.
-            stats_map = {}
-            for inbound in inbounds:
-                for stats in inbound.get("clientStats", []):
-                    email = stats.get("email")
-                    if not email:
-                        continue
-                    if email not in stats_map:
-                        stats_map[email] = {'total': 0, 'up': 0, 'down': 0}
-                    stats_map[email]['up'] += stats.get('up', 0) or 0
-                    stats_map[email]['down'] += stats.get('down', 0) or 0
-                    # totalGB одинаковый на каждом inbound — берём максимум
-                    stats_map[email]['total'] = max(
-                        stats_map[email]['total'],
-                        stats.get('total', 0) or 0,
-                    )
-
-            # Сопоставляем с ключами
             for key in server_keys:
-                email = key.get('panel_email')
-                if email and email in stats_map:
-                    s = stats_map[email]
-                    used_on_server = s['up'] + s['down']
-                    total_on_server = s['total']
-                    traffic_limit = key.get('traffic_limit', 0) or 0
-                    sub_mode_key = bool(key.get('sub_id'))
-
-                    if sub_mode_key:
-                        # Subscription: прямая сумма up+down по всем inbound.
-                        # Формула «через остаток» здесь некорректна — totalGB
-                        # одинаковый на N inbound, но фактический расход общий.
-                        traffic_used = used_on_server
-                    elif traffic_limit > 0 and total_on_server > 0:
-                        # Legacy keys-mode: формула через остаток
-                        remaining_on_server = max(0, total_on_server - used_on_server)
-                        traffic_used = max(0, traffic_limit - remaining_on_server)
-                    else:
-                        traffic_used = used_on_server
+                snapshot = await get_key_traffic_snapshot(client, key, inbounds)
+                if snapshot:
+                    traffic_used = snapshot['traffic_used']
 
                     traffic_updates.append((traffic_used, key['id']))
                     key['_new_traffic_used'] = traffic_used

@@ -143,9 +143,9 @@ async def process_new_key_subscription_final(callback: CallbackQuery, state: FSM
         _tariff_data = get_tariff_by_id(order['tariff_id'])
         limit_gb = (_tariff_data.get('traffic_limit_gb', 0) or 0) if _tariff_data else 0
 
-        min_inbound_id = min(inb['id'] for inb in inbounds)
         first_uuid = None
-        created_count = 0
+        first_inbound_id = None
+        ready_count = 0
         for inb in inbounds:
             try:
                 flow = await client.get_inbound_flow(inb['id'])
@@ -160,22 +160,23 @@ async def process_new_key_subscription_final(callback: CallbackQuery, state: FSM
                     flow=flow,
                     sub_id=sub_id,
                 )
-                if inb['id'] == min_inbound_id:
+                if first_uuid is None or inb['id'] < first_inbound_id:
                     first_uuid = res['uuid']
-                created_count += 1
+                    first_inbound_id = inb['id']
+                ready_count += 1
             except Exception as e:
                 logger.warning(
                     f"subscription_final: не удалось создать клиента в inbound {inb['id']} "
                     f"(key_id={key_id}): {e}. Допустимо — синхронизатор доберёт позже."
                 )
 
-        if created_count == 0 or first_uuid is None:
+        if ready_count == 0 or first_uuid is None or first_inbound_id is None:
             raise RuntimeError('Не удалось создать ни одного клиента на сервере')
 
         update_vpn_key_config(
             key_id=key_id,
             server_id=server_id,
-            panel_inbound_id=min_inbound_id,
+            panel_inbound_id=first_inbound_id,
             panel_email=panel_email,
             client_uuid=first_uuid,
             sub_id=sub_id,

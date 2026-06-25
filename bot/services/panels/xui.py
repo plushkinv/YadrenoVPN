@@ -21,6 +21,7 @@ from config import RETRY_CONFIG
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PANEL_TIMEOUT_SECONDS = 15
 API_PROFILE_LEGACY = "legacy_inbounds"
 API_PROFILE_CLIENTS = "clients_api"
 BOT_API_TOKEN_NAME = "YadrenoVPN Bot"
@@ -104,7 +105,11 @@ class XUIClient(BaseVPNClient):
             # Unsafe=True важно для IP-адресов и самоподписанных сертификатов
             connector = aiohttp.TCPConnector(ssl=False)
             jar = aiohttp.CookieJar(unsafe=True)
-            timeout = aiohttp.ClientTimeout(total=5)
+            try:
+                timeout_seconds = float(RETRY_CONFIG.get("timeout_seconds", DEFAULT_PANEL_TIMEOUT_SECONDS))
+            except (TypeError, ValueError):
+                timeout_seconds = DEFAULT_PANEL_TIMEOUT_SECONDS
+            timeout = aiohttp.ClientTimeout(total=timeout_seconds)
             self.session = aiohttp.ClientSession(connector=connector, cookie_jar=jar, timeout=timeout)
             self.is_authenticated = False
             self.cookie_authenticated = False
@@ -208,6 +213,52 @@ class XUIClient(BaseVPNClient):
         if not isinstance(client, dict):
             return ""
         return client.get("id") or client.get("password") or client.get("auth") or ""
+
+    @classmethod
+    def _find_client_in_inbounds(
+        cls,
+        inbounds: List[Dict[str, Any]],
+        inbound_id: Optional[int] = None,
+        client_uuid: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> tuple:
+        """Ищет клиента в уже загруженном списке inbound без дополнительного запроса к панели."""
+        for inbound in inbounds or []:
+            if inbound_id is not None and inbound.get("id") != inbound_id:
+                continue
+            settings = cls._load_json_field(inbound.get("settings", "{}"))
+            for client in settings.get("clients", []):
+                if email and client.get("email") == email:
+                    return inbound, client
+                if client_uuid and cls._client_identifier_from_entry(client) == client_uuid:
+                    return inbound, client
+        return None, None
+
+    @classmethod
+    def _build_add_client_result(
+        cls,
+        client: Dict[str, Any],
+        inbound_id: int,
+        email: str,
+        fallback_uuid: str,
+        expire_time: int,
+        total_gb: int,
+        fallback_sub_id: str,
+    ) -> Dict[str, Any]:
+        """Собирает единый результат add_client из фактической записи панели."""
+        client_uuid = (
+            client.get("uuid")
+            or cls._client_identifier_from_entry(client)
+            or fallback_uuid
+        )
+        return {
+            "uuid": client_uuid,
+            "email": email,
+            "inbound_id": inbound_id,
+            "expire_time": client.get("expiryTime", expire_time),
+            "total_gb": total_gb,
+            "sub_id": client.get("subId") or fallback_sub_id,
+        }
 
     def _save_api_token(self, token: str) -> None:
         """Сохраняет Bearer-токен в объекте и БД."""
@@ -484,6 +535,54 @@ class XUIClient(BaseVPNClient):
             return None
         obj = result.get("obj")
         return obj if isinstance(obj, dict) else None
+
+    async def _recover_added_client(
+        self,
+        profile: str,
+        inbound_id: int,
+        email: str,
+        fallback_uuid: str,
+        expire_time: int,
+        total_gb: int,
+        fallback_sub_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Проверяет, успела ли панель создать клиента до сетевого сбоя."""
+        if profile == API_PROFILE_CLIENTS:
+            record = await self._get_clients_api_record(email, log_error=False)
+            if not record:
+                return None
+            client, inbound_ids = self._split_clients_api_record(record)
+            if inbound_id not in inbound_ids:
+                return None
+            return self._build_add_client_result(
+                client,
+                inbound_id,
+                email,
+                fallback_uuid,
+                expire_time,
+                total_gb,
+                fallback_sub_id,
+            )
+
+        try:
+            _, panel_client = await self._find_panel_client(
+                inbound_id=inbound_id,
+                email=email,
+            )
+        except Exception as e:
+            logger.debug(f"Не удалось проверить созданного клиента {email} после сбоя add_client: {e}")
+            return None
+        if not panel_client:
+            return None
+        return self._build_add_client_result(
+            panel_client,
+            inbound_id,
+            email,
+            fallback_uuid,
+            expire_time,
+            total_gb,
+            fallback_sub_id,
+        )
 
     async def _find_panel_client(
         self,
@@ -1171,10 +1270,25 @@ class XUIClient(BaseVPNClient):
         if expire_days <= 0:
             raise ValueError("Срок действия ключа должен быть больше 0 дней")
         profile = await self._ensure_api_profile()
+        try:
+            add_attempts = max(1, int(RETRY_CONFIG.get("max_attempts", 3)))
+        except (TypeError, ValueError):
+            add_attempts = 3
+        add_delays = RETRY_CONFIG.get("delays", [])
+
+        async def wait_before_next_attempt(attempt: int) -> None:
+            if attempt >= add_attempts - 1:
+                return
+            delay = 0
+            if add_delays:
+                delay = add_delays[min(attempt, len(add_delays) - 1)]
+            if delay:
+                await asyncio.sleep(delay)
 
         # Определяем протокол inbound для правильной структуры клиента
         protocol = ""
         method = ""
+        inbounds = []
         try:
             inbounds = await self.get_inbounds()
             for ib in inbounds:
@@ -1245,67 +1359,156 @@ class XUIClient(BaseVPNClient):
             record = await self._get_clients_api_record(email)
             if record:
                 existing_client, inbound_ids = self._split_clients_api_record(record)
-                existing_uuid = (
-                    existing_client.get("uuid")
-                    or self._client_identifier_from_entry(existing_client)
-                    or client_uuid
+                existing_result = self._build_add_client_result(
+                    existing_client,
+                    inbound_id,
+                    email,
+                    client_uuid,
+                    expire_time,
+                    total_gb,
+                    client_entry["subId"],
                 )
                 if inbound_id not in inbound_ids:
                     encoded_email = urllib.parse.quote(email, safe="")
-                    await self._request(
-                        "POST",
-                        f"/panel/api/clients/{encoded_email}/attach",
-                        data={"inboundIds": [inbound_id]},
-                    )
+                    for attempt in range(add_attempts):
+                        try:
+                            await self._request(
+                                "POST",
+                                f"/panel/api/clients/{encoded_email}/attach",
+                                data={"inboundIds": [inbound_id]},
+                                retry=False,
+                            )
+                            break
+                        except VPNAPIError:
+                            recovered = await self._recover_added_client(
+                                profile,
+                                inbound_id,
+                                email,
+                                client_uuid,
+                                expire_time,
+                                total_gb,
+                                client_entry["subId"],
+                            )
+                            if recovered:
+                                return recovered
+                            if attempt >= add_attempts - 1:
+                                raise
+                            await wait_before_next_attempt(attempt)
                 if flow and (existing_client.get("flow") or "") != flow:
                     updated_client = self._build_client_payload_from_record(
                         existing_client,
                         fallback_email=email,
-                        fallback_uuid=existing_uuid,
+                        fallback_uuid=existing_result["uuid"],
                     )
                     updated_client["email"] = email
                     updated_client["flow"] = flow
                     encoded_email = urllib.parse.quote(email, safe="")
-                    await self._request(
-                        "POST",
-                        f"/panel/api/clients/update/{encoded_email}",
-                        data=updated_client,
-                    )
+                    for attempt in range(add_attempts):
+                        try:
+                            await self._request(
+                                "POST",
+                                f"/panel/api/clients/update/{encoded_email}",
+                                data=updated_client,
+                                retry=False,
+                            )
+                            break
+                        except VPNAPIError:
+                            recovered = await self._recover_added_client(
+                                profile,
+                                inbound_id,
+                                email,
+                                client_uuid,
+                                expire_time,
+                                total_gb,
+                                client_entry["subId"],
+                            )
+                            if recovered:
+                                return recovered
+                            if attempt >= add_attempts - 1:
+                                raise
+                            await wait_before_next_attempt(attempt)
                     existing_client["flow"] = flow
-                return {
-                    "uuid": existing_uuid,
-                    "email": email,
-                    "inbound_id": inbound_id,
-                    "expire_time": existing_client.get("expiryTime", expire_time),
-                    "total_gb": total_gb,
-                    "sub_id": existing_client.get("subId") or client_entry["subId"],
-                }
+                return existing_result
 
             api_client_entry = dict(client_entry)
             api_client_entry["tgId"] = self._normalize_tg_id(tg_id)
-            await self._request(
-                "POST",
-                "/panel/api/clients/add",
-                data={"client": api_client_entry, "inboundIds": [inbound_id]},
-            )
+            for attempt in range(add_attempts):
+                try:
+                    await self._request(
+                        "POST",
+                        "/panel/api/clients/add",
+                        data={"client": api_client_entry, "inboundIds": [inbound_id]},
+                        retry=False,
+                    )
+                    break
+                except VPNAPIError:
+                    recovered = await self._recover_added_client(
+                        profile,
+                        inbound_id,
+                        email,
+                        client_uuid,
+                        expire_time,
+                        total_gb,
+                        client_entry["subId"],
+                    )
+                    if recovered:
+                        return recovered
+                    if attempt >= add_attempts - 1:
+                        raise
+                    await wait_before_next_attempt(attempt)
             created_record = await self._get_clients_api_record(email, log_error=False)
             if created_record:
                 created_client, _ = self._split_clients_api_record(created_record)
-                created_uuid = (
-                    created_client.get("uuid")
-                    or self._client_identifier_from_entry(created_client)
-                    or client_uuid
+                return self._build_add_client_result(
+                    created_client,
+                    inbound_id,
+                    email,
+                    client_uuid,
+                    expire_time,
+                    total_gb,
+                    client_entry["subId"],
                 )
-                return {
-                    "uuid": created_uuid,
-                    "email": email,
-                    "inbound_id": inbound_id,
-                    "expire_time": created_client.get("expiryTime", expire_time),
-                    "total_gb": total_gb,
-                    "sub_id": created_client.get("subId") or client_entry["subId"],
-                }
         else:
-            await self._request("POST", "/panel/api/inbounds/addClient", data=client_data)
+            _, existing_client = self._find_client_in_inbounds(
+                inbounds,
+                inbound_id=inbound_id,
+                email=email,
+            )
+            if existing_client:
+                return self._build_add_client_result(
+                    existing_client,
+                    inbound_id,
+                    email,
+                    client_uuid,
+                    expire_time,
+                    total_gb,
+                    client_entry["subId"],
+                )
+
+            for attempt in range(add_attempts):
+                try:
+                    await self._request(
+                        "POST",
+                        "/panel/api/inbounds/addClient",
+                        data=client_data,
+                        retry=False,
+                    )
+                    break
+                except VPNAPIError:
+                    recovered = await self._recover_added_client(
+                        profile,
+                        inbound_id,
+                        email,
+                        client_uuid,
+                        expire_time,
+                        total_gb,
+                        client_entry["subId"],
+                    )
+                    if recovered:
+                        return recovered
+                    if attempt >= add_attempts - 1:
+                        raise
+                    await wait_before_next_attempt(attempt)
 
         return {
             "uuid": client_uuid,
@@ -1346,7 +1549,96 @@ class XUIClient(BaseVPNClient):
             logger.warning(f"Error determining flow for inbound {inbound_id}: {e}")
         return ""
     
-    async def get_client_stats(self, email: str) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _traffic_int(value: Any) -> Optional[int]:
+        """Нормализует числовые поля трафика из разных версий API."""
+        if value is None or value == "":
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _first_traffic_int(cls, data: Dict[str, Any], fields: tuple, default: int = 0) -> int:
+        for field in fields:
+            value = cls._traffic_int(data.get(field))
+            if value is not None:
+                return value
+        return default
+
+    @classmethod
+    def _traffic_used_from_payload(cls, data: Dict[str, Any]) -> Optional[int]:
+        up = cls._traffic_int(data.get("up"))
+        down = cls._traffic_int(data.get("down"))
+        if up is not None or down is not None:
+            return (up or 0) + (down or 0)
+
+        for field in (
+            "traffic_used",
+            "trafficUsed",
+            "usedTraffic",
+            "usedBytes",
+            "used_bytes",
+            "usedGB",
+            "used",
+            "consumedTraffic",
+            "consumed",
+        ):
+            value = cls._traffic_int(data.get(field))
+            if value is not None:
+                return value
+        return None
+
+    @classmethod
+    def _normalize_client_traffic_payload(
+        cls,
+        payload: Any,
+        source: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Приводит ответы /clients/traffic и /clients/get к старому формату get_client_stats()."""
+        if not isinstance(payload, dict):
+            return None
+
+        data = dict(payload)
+        client_payload = payload.get("client")
+        if isinstance(client_payload, dict):
+            data.update(client_payload)
+
+        traffic_used = cls._traffic_used_from_payload(data)
+        if traffic_used is None:
+            return None
+
+        up = cls._traffic_int(data.get("up"))
+        down = cls._traffic_int(data.get("down"))
+        if up is None and down is None:
+            up = traffic_used
+            down = 0
+
+        return {
+            "up": up or 0,
+            "down": down or 0,
+            "traffic_used": traffic_used,
+            "total": cls._first_traffic_int(
+                data,
+                ("total", "totalGB", "traffic_limit", "trafficLimit"),
+                0,
+            ),
+            "protocol": data.get("protocol") or "vless",
+            "remark": data.get("remark") or "",
+            "expiry_time": cls._first_traffic_int(
+                data,
+                ("expiryTime", "expiry_time", "expire", "expires_at"),
+                0,
+            ),
+            "source": source,
+        }
+
+    async def get_client_stats(
+        self,
+        email: str,
+        resolve_inbound: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         """
         Получает статистику трафика и протокол конкретного клиента.
         
@@ -1364,44 +1656,59 @@ class XUIClient(BaseVPNClient):
             profile = await self._ensure_api_profile()
             if profile == API_PROFILE_CLIENTS:
                 encoded_email = urllib.parse.quote(email, safe="")
-                result = await self._request(
-                    "GET",
-                    f"/panel/api/clients/traffic/{encoded_email}",
-                    retry=False,
-                    log_error=False,
-                )
-                traffic = result.get("obj")
-                if isinstance(traffic, dict):
+                try:
+                    result = await self._request(
+                        "GET",
+                        f"/panel/api/clients/traffic/{encoded_email}",
+                        retry=False,
+                        log_error=False,
+                    )
+                    stats = self._normalize_client_traffic_payload(
+                        result.get("obj"),
+                        "clients_api_traffic",
+                    )
+                except VPNAPIError as e:
+                    logger.debug(f"/clients/traffic недоступен для {email}: {e}")
+                    stats = None
+
+                if not stats:
+                    record = await self._get_clients_api_record(email, log_error=False)
+                    stats = self._normalize_client_traffic_payload(
+                        record,
+                        "clients_api_client",
+                    )
+
+                if stats:
                     protocol = "vless"
                     remark = ""
-                    try:
-                        inbound, _ = await self._find_panel_client(email=email)
-                        if inbound:
-                            protocol = inbound.get("protocol", protocol)
-                            remark = inbound.get("remark", "")
-                    except Exception:
-                        pass
-                    return {
-                        "up": traffic.get("up", 0),
-                        "down": traffic.get("down", 0),
-                        "total": traffic.get("total", 0),
-                        "protocol": protocol,
-                        "remark": remark,
-                        "expiry_time": traffic.get("expiryTime", 0),
-                    }
+                    if resolve_inbound:
+                        try:
+                            inbound, _ = await self._find_panel_client(email=email)
+                            if inbound:
+                                protocol = inbound.get("protocol", protocol)
+                                remark = inbound.get("remark", "")
+                        except Exception:
+                            pass
+                    stats["protocol"] = protocol
+                    stats["remark"] = remark
+                    return stats
 
             inbounds = await self.get_inbounds()
             for inbound in inbounds:
                 client_stats = inbound.get("clientStats", [])
                 for stats in client_stats:
                     if stats.get("email") == email:
+                        up = stats.get("up", 0) or 0
+                        down = stats.get("down", 0) or 0
                         return {
-                            "up": stats.get("up", 0),
-                            "down": stats.get("down", 0),
+                            "up": up,
+                            "down": down,
+                            "traffic_used": up + down,
                             "total": stats.get("total", 0),
                             "protocol": inbound.get("protocol", "vless"),
                             "remark": inbound.get("remark", ""),
-                            "expiry_time": stats.get("expiryTime", 0)
+                            "expiry_time": stats.get("expiryTime", 0),
+                            "source": "inbound_first",
                         }
         except Exception as e:
             logger.warning(f"Ошибка получения статистики клиента {email}: {e}")

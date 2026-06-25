@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 39
+LATEST_VERSION = 41
 
 
 def _my_keys_item_template() -> str:
@@ -95,7 +95,7 @@ def _renew_payment_page_buttons() -> str:
         {"id": "btn_renew_pay_cards",   "label": "💳 TG payments",                "color": "secondary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_qr",      "label": "📱 ЮКасса (QR/СБП)",            "color": "secondary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_wata",    "label": "🌊 WATA (Карта/СБП)",           "color": "secondary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_platega", "label": "💸 Platega (СБП)",              "color": "secondary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_platega", "label": "💸 Platega",                    "color": "secondary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_cardlink", "label": "🔗 Cardlink (Карта/СБП)",      "color": "secondary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_demo",    "label": "🏦 Демо оплата (РФ карта)",     "color": "secondary",   "row": 7, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_balance", "label": "💎 Использовать баланс",        "color": "secondary",   "row": 8, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
@@ -875,7 +875,7 @@ def migration_23(conn):
 
 def migration_24(conn):
     """
-    Миграция v24: добавление платёжного метода Platega (СБП/Карта).
+    Миграция v24: добавление платёжного метода Platega.
 
     - Добавляет настройки platega_enabled, platega_merchant_id, platega_secret
     - Добавляет колонку platega_transaction_id в таблицу payments
@@ -917,7 +917,7 @@ def migration_24(conn):
                         break
                 buttons.append({
                     "id": "btn_pay_platega",
-                    "label": "💸 Оплата Platega (СБП)",
+                    "label": "💸 Platega",
                     "color": "primary",
                     "row": new_row,
                     "col": 0,
@@ -932,7 +932,7 @@ def migration_24(conn):
                         b['row'] = b['row'] + 1
                 buttons.append({
                     "id": "btn_pay_platega",
-                    "label": "💸 Оплата Platega (СБП)",
+                    "label": "💸 Platega",
                     "color": "primary",
                     "row": wata_row + 1,
                     "col": 0,
@@ -947,7 +947,7 @@ def migration_24(conn):
             )
             logger.info("Кнопка btn_pay_platega добавлена в дефолтную раскладку prepayment")
 
-    logger.info("Миграция v24 применена: добавлен платёжный метод Platega (СБП)")
+    logger.info("Миграция v24 применена: добавлен платёжный метод Platega")
 
 
 def migration_25(conn):
@@ -1325,6 +1325,106 @@ def migration_39(conn):
     logger.info("Миграция v39 применена: добавлены типы медиа для pages")
 
 
+def migration_40(conn):
+    """Миграция v40: индексы для роста базы и частых запросов."""
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username))")
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vpn_keys_user_expires "
+        "ON vpn_keys(user_id, expires_at DESC)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_server_id ON vpn_keys(server_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vpn_keys_panel_email_lower "
+        "ON vpn_keys(LOWER(panel_email))"
+    )
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_status_paid_at ON payments(status, paid_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_payments_key_status_paid_at "
+        "ON payments(vpn_key_id, status, paid_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_payments_yookassa_payment_id "
+        "ON payments(yookassa_payment_id)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_wata_link_id ON payments(wata_link_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_payments_platega_transaction_id "
+        "ON payments(platega_transaction_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_payments_cardlink_bill_id "
+        "ON payments(cardlink_bill_id)"
+    )
+    conn.execute("PRAGMA optimize")
+    logger.info("Миграция v40 применена: добавлены индексы для частых запросов")
+
+
+def _update_standard_button_label(conn, page_key: str, button_id: str, replacements: dict) -> int:
+    row = conn.execute(
+        "SELECT buttons_default FROM pages WHERE page_key = ?",
+        (page_key,),
+    ).fetchone()
+    if not row:
+        return 0
+
+    try:
+        buttons = json.loads(row["buttons_default"] or "[]")
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"Миграция v41: buttons_default страницы {page_key} не является JSON, пропускаем")
+        return 0
+
+    if not isinstance(buttons, list):
+        logger.warning(f"Миграция v41: buttons_default страницы {page_key} не является списком, пропускаем")
+        return 0
+
+    changed = 0
+    for button in buttons:
+        if not isinstance(button, dict) or button.get("id") != button_id:
+            continue
+
+        label = button.get("label")
+        if label in replacements:
+            button["label"] = replacements[label]
+            changed += 1
+
+    if changed:
+        conn.execute(
+            "UPDATE pages SET buttons_default = ? WHERE page_key = ?",
+            (json.dumps(buttons, ensure_ascii=False), page_key),
+        )
+
+    return changed
+
+
+def migration_41(conn):
+    """Миграция v41: нейтральные labels Platega без привязки к СБП."""
+    changed = 0
+    changed += _update_standard_button_label(
+        conn,
+        "prepayment",
+        "btn_pay_platega",
+        {
+            "💸 Оплата Platega (СБП)": "💸 Platega",
+            "💸 Platega (СБП)": "💸 Platega",
+        },
+    )
+    changed += _update_standard_button_label(
+        conn,
+        "renew_payment",
+        "btn_renew_pay_platega",
+        {
+            "💸 Platega (СБП)": "💸 Platega",
+            "💸 Оплата Platega (СБП)": "💸 Platega",
+        },
+    )
+    logger.info(f"Миграция v41 применена: обновлено стандартных labels Platega: {changed}")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -1344,6 +1444,8 @@ MIGRATIONS = {
     37: migration_37,
     38: migration_38,
     39: migration_39,
+    40: migration_40,
+    41: migration_41,
 }
 
 

@@ -11,13 +11,17 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # Конфигурация провайдера Platega
-_PLATEGA_TITLE = '💸 <b>Оплата Platega</b>'
+_PLATEGA_TITLE = '💸 <b>Platega</b>'
 _PLATEGA_TYPE = 'platega'
 _PLATEGA_ERROR = 'Platega'
 _PLATEGA_QR_FILE = 'platega.png'
 _PLATEGA_CHECK_PREFIX = 'check_platega'
 _PLATEGA_RESULT_KEY = 'platega_transaction_id'
 _PLATEGA_MIN_PRICE = 10
+_PLATEGA_INSTRUCTION = (
+    'Откройте {payment_link} или отсканируйте QR-код и выберите способ оплаты '
+    'на странице Platega.'
+)
 
 
 @router.callback_query(F.data == 'pay_platega')
@@ -39,8 +43,8 @@ async def pay_platega_select_tariff(callback: CallbackQuery):
         return
     await safe_edit_or_send(
         callback.message,
-        '💸 <b>Оплата Platega (СБП)</b>\n\nВыберите тариф:\n\n'
-        '<i>Оплата через СБП с помощью сервиса Platega.</i>',
+        '💸 <b>Platega</b>\n\nВыберите тариф:\n\n'
+        '<i>Способ оплаты выбирается на странице Platega.</i>',
         reply_markup=tariff_select_kb(rub_tariffs, is_platega=True)
     )
     await callback.answer()
@@ -73,6 +77,7 @@ async def platega_pay_create(callback: CallbackQuery):
         error_name=_PLATEGA_ERROR,
         qr_filename=_PLATEGA_QR_FILE,
         back_callback='pay_platega',
+        instruction_text=_PLATEGA_INSTRUCTION,
     )
 
 
@@ -95,7 +100,7 @@ async def renew_platega_select_tariff(callback: CallbackQuery):
         return
     await safe_edit_or_send(
         callback.message,
-        f"💸 <b>Оплата Platega (СБП)</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:",
+        f"💸 <b>Platega</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:",
         reply_markup=renew_tariff_select_kb(rub_tariffs, key_id, is_platega=True)
     )
     await callback.answer()
@@ -132,6 +137,7 @@ async def renew_platega_create(callback: CallbackQuery):
         qr_filename=_PLATEGA_QR_FILE,
         back_callback=f'renew_platega_tariff:{key_id}',
         key=key, vpn_key_id=key_id,
+        instruction_text=_PLATEGA_INSTRUCTION,
     )
 
 

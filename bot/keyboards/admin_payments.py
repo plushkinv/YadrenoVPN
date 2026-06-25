@@ -37,7 +37,7 @@ def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: b
     platega_status = '✅' if platega_enabled else '❌'
     builder.row(
         InlineKeyboardButton(text=f'🌊 WATA (Карта/СБП): {wata_status}', callback_data='admin_payments_wata'),
-        InlineKeyboardButton(text=f'💸 Platega (СБП): {platega_status}', callback_data='admin_payments_platega'),
+        InlineKeyboardButton(text=f'💸 Platega: {platega_status}', callback_data='admin_payments_platega'),
     )
     cardlink_status = '✅' if cardlink_enabled else '❌'
     demo_status = '✅' if demo_enabled else '❌'
