@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 41
+LATEST_VERSION = 42
 
 
 def _my_keys_item_template() -> str:
@@ -150,10 +150,17 @@ def _key_navigation_page_buttons() -> str:
 
 
 def _key_details_page_buttons() -> str:
-    """Статическая навигация карточки ключа."""
+    """Кнопки карточки ключа: действия и нижняя навигация."""
     return json.dumps([
-        {"id": "btn_my_keys",   "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_my_keys"},
-        {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+        {"id": "btn_key_show_key",          "label": "📋 Показать ключ",      "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "system",   "action_value": None},
+        {"id": "btn_key_show_subscription", "label": "📋 Показать подписку", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "system",   "action_value": None},
+        {"id": "btn_key_configure",         "label": "⚙️ Настроить",         "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "system",   "action_value": None},
+        {"id": "btn_key_renew",             "label": "📈 Продлить",          "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "system",   "action_value": None},
+        {"id": "btn_key_replace",           "label": "🔄 Заменить",          "color": "secondary", "row": 1, "col": 0, "is_hidden": False, "action_type": "system",   "action_value": None},
+        {"id": "btn_key_delete",            "label": "🗑 Удалить",           "color": "secondary", "row": 1, "col": 0, "is_hidden": False, "action_type": "system",   "action_value": None},
+        {"id": "btn_key_rename",            "label": "✏️ Переименовать",    "color": "secondary", "row": 1, "col": 1, "is_hidden": False, "action_type": "system",   "action_value": None},
+        {"id": "btn_my_keys",               "label": "🔑 Мои ключи",         "color": "secondary", "row": 2, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_my_keys"},
+        {"id": "btn_back_main",             "label": "🈴 На главную",        "color": "secondary", "row": 2, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
     ], ensure_ascii=False)
 
 
@@ -1425,6 +1432,71 @@ def migration_41(conn):
     logger.info(f"Миграция v41 применена: обновлено стандартных labels Platega: {changed}")
 
 
+def _move_key_details_custom_navigation_to_bottom(conn) -> int:
+    """Переносит старые кастомные кнопки навигации key_details в нижний ряд."""
+    row = conn.execute(
+        "SELECT buttons_custom FROM pages WHERE page_key = 'key_details'"
+    ).fetchone()
+    if not row or not row["buttons_custom"]:
+        return 0
+
+    try:
+        buttons = json.loads(row["buttons_custom"] or "[]")
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Миграция v42: buttons_custom страницы key_details не является JSON, пропускаем")
+        return 0
+
+    if not isinstance(buttons, list):
+        logger.warning("Миграция v42: buttons_custom страницы key_details не является списком, пропускаем")
+        return 0
+
+    changed = 0
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+
+        btn_id = button.get("id")
+        try:
+            current_row = int(button.get("row", 0))
+        except (TypeError, ValueError):
+            current_row = 0
+
+        if btn_id == "btn_my_keys" and current_row == 0:
+            button["row"] = 2
+            button["col"] = 0
+            changed += 1
+        elif btn_id == "btn_back_main" and current_row == 0:
+            button["row"] = 2
+            button["col"] = 1
+            changed += 1
+
+    if changed:
+        conn.execute(
+            "UPDATE pages SET buttons_custom = ? WHERE page_key = 'key_details'",
+            (json.dumps(buttons, ensure_ascii=False),),
+        )
+
+    return changed
+
+
+def migration_42(conn):
+    """Миграция v42: кнопки действий карточки ключа хранятся в pages."""
+    buttons_default = _key_details_page_buttons()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO pages (page_key, text_default, buttons_default)
+        VALUES ('key_details', ?, ?)
+        """,
+        (_key_details_page_text(), buttons_default),
+    )
+    conn.execute(
+        "UPDATE pages SET buttons_default = ? WHERE page_key = 'key_details'",
+        (buttons_default,),
+    )
+    moved = _move_key_details_custom_navigation_to_bottom(conn)
+    logger.info(f"Миграция v42 применена: key_details.buttons_default обновлён, перенесено custom-кнопок: {moved}")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -1446,6 +1518,7 @@ MIGRATIONS = {
     39: migration_39,
     40: migration_40,
     41: migration_41,
+    42: migration_42,
 }
 
 

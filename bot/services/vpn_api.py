@@ -77,6 +77,38 @@ def format_traffic(bytes_count: int) -> str:
     else:
         return f'{bytes_count / 1024 ** 4:.2f} TB'
 
+
+def _traffic_remaining_bytes(key: Dict[str, Any]) -> int:
+    """Возвращает остаток трафика по накопительному учёту БД."""
+    traffic_limit = key.get('traffic_limit', 0) or 0
+    if traffic_limit <= 0:
+        return 0
+    traffic_used = key.get('traffic_used', 0) or 0
+    return max(0, int(traffic_limit) - int(traffic_used))
+
+
+def calculate_panel_total_for_key(key: Dict[str, Any], panel_used_bytes: int = 0) -> int:
+    """
+    Считает рабочий totalGB панели для текущего состояния ключа.
+
+    В БД traffic_limit хранит общий купленный лимит, а traffic_used — общий
+    расход. Панель умеет хранить только счётчик текущего клиента, поэтому её
+    лимит равен текущему расходу панели плюс остаток по БД.
+    """
+    traffic_limit = key.get('traffic_limit', 0) or 0
+    if traffic_limit <= 0:
+        return 0
+    return max(0, int(panel_used_bytes or 0)) + _traffic_remaining_bytes(key)
+
+
+def _panel_total_gb_for_key(key: Dict[str, Any], panel_used_bytes: int = 0) -> int:
+    """Конвертирует рабочий лимит панели в целые ГБ для add_client()."""
+    total_bytes = calculate_panel_total_for_key(key, panel_used_bytes)
+    if total_bytes <= 0:
+        return 0
+    gb = 1024 ** 3
+    return int((total_bytes + gb - 1) // gb)
+
 async def close_all_clients():
     """Закрывает все открытые сессии клиентов."""
     clients = list(_clients.items())
@@ -434,7 +466,24 @@ def _traffic_used_from_record(data: Dict[str, Any]) -> Optional[int]:
     return None
 
 
-def _normalize_global_traffic_stats(stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _cumulative_traffic_used_from_panel(
+    key: Dict[str, Any],
+    used_on_server: int,
+    total_on_server: int,
+) -> int:
+    """Переводит счётчики панели в накопительный расход ключа из БД."""
+    traffic_limit = key.get('traffic_limit', 0) or 0
+    if traffic_limit > 0 and total_on_server > 0:
+        remaining_on_server = max(0, int(total_on_server) - int(used_on_server))
+        calculated = max(0, int(traffic_limit) - remaining_on_server)
+        return max(int(key.get('traffic_used', 0) or 0), calculated)
+    return max(int(key.get('traffic_used', 0) or 0), int(used_on_server))
+
+
+def _normalize_global_traffic_stats(
+    stats: Dict[str, Any],
+    key: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
     data = dict(stats)
     client_payload = stats.get('client')
     if isinstance(client_payload, dict):
@@ -444,13 +493,15 @@ def _normalize_global_traffic_stats(stats: Dict[str, Any]) -> Optional[Dict[str,
     if traffic_used is None:
         return None
 
+    total_gb = _first_traffic_int(
+        data,
+        ('total', 'totalGB', 'traffic_limit', 'trafficLimit'),
+        0,
+    )
     return {
-        'traffic_used': traffic_used,
-        'totalGB': _first_traffic_int(
-            data,
-            ('total', 'totalGB', 'traffic_limit', 'trafficLimit'),
-            0,
-        ),
+        'traffic_used': _cumulative_traffic_used_from_panel(key, traffic_used, total_gb),
+        'panel_traffic_used': traffic_used,
+        'totalGB': total_gb,
         'expiryTime': _first_traffic_int(
             data,
             ('expiry_time', 'expiryTime', 'expire', 'expires_at'),
@@ -522,24 +573,60 @@ def build_inbound_traffic_map(inbounds: List[Dict[str, Any]]) -> Dict[str, Dict[
     return stats_map
 
 
+def _build_inbound_usage_by_id(inbounds: List[Dict[str, Any]], email: str) -> Dict[int, int]:
+    """Собирает inbound_id -> up+down для указанного email."""
+    usage: Dict[int, int] = {}
+    for inbound in inbounds:
+        inbound_id = inbound.get('id')
+        if inbound_id is None:
+            continue
+        for stats in inbound.get('clientStats', []):
+            if stats.get('email') != email:
+                continue
+            usage[inbound_id] = (
+                usage.get(inbound_id, 0)
+                + (stats.get('up', 0) or 0)
+                + (stats.get('down', 0) or 0)
+            )
+    return usage
+
+
+async def _get_global_panel_used_safe(
+    client: BaseVPNClient,
+    email: str,
+    fallback_used: int,
+) -> int:
+    """Читает общий расход clients API, если он доступен."""
+    try:
+        try:
+            stats_result = client.get_client_stats(email, resolve_inbound=False)
+        except TypeError:
+            stats_result = client.get_client_stats(email)
+        stats = await stats_result if inspect.isawaitable(stats_result) else stats_result
+    except Exception as e:
+        logger.debug(f"_get_global_panel_used_safe: общий счётчик {email} недоступен: {e}")
+        return fallback_used
+
+    if not isinstance(stats, dict):
+        return fallback_used
+    used = _traffic_used_from_record(stats)
+    return fallback_used if used is None else used
+
+
 def _snapshot_from_inbound_entry(
     key: Dict[str, Any],
     entry: Dict[str, Any],
 ) -> Dict[str, Any]:
     used_on_server = (entry.get('up', 0) or 0) + (entry.get('down', 0) or 0)
     total_on_server = entry.get('totalGB', 0) or 0
-    traffic_limit = key.get('traffic_limit', 0) or 0
-
-    if key.get('sub_id'):
-        traffic_used = used_on_server
-    elif traffic_limit > 0 and total_on_server > 0:
-        remaining_on_server = max(0, total_on_server - used_on_server)
-        traffic_used = max(0, traffic_limit - remaining_on_server)
-    else:
-        traffic_used = used_on_server
 
     return {
-        'traffic_used': traffic_used,
+        'traffic_used': _cumulative_traffic_used_from_panel(
+            key,
+            used_on_server,
+            total_on_server,
+        ),
+        'panel_traffic_used': used_on_server,
         'totalGB': total_on_server,
         'expiryTime': entry.get('expiryTime', 0) or 0,
         'source': 'inbound_aggregate',
@@ -579,7 +666,7 @@ async def get_key_traffic_snapshot(
                 _client_uses_clients_api(client) and source != 'inbound_first'
             )
             if can_be_global:
-                snapshot = _normalize_global_traffic_stats(stats)
+                snapshot = _normalize_global_traffic_stats(stats, key)
                 if snapshot:
                     if inbounds is not None:
                         entry = build_inbound_traffic_map(inbounds).get(email)
@@ -833,6 +920,10 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                     f"{key.get('tariff_id')} для limitIp, используется 1: {e}"
                 )
 
+        traffic_entry = build_inbound_traffic_map(inbounds).get(email, {})
+        aggregate_panel_used = (traffic_entry.get('up', 0) or 0) + (traffic_entry.get('down', 0) or 0)
+        inbound_usage_by_id = _build_inbound_usage_by_id(inbounds, email)
+
         if mode == 'subscription':
             # Гарантируем sub_id у ключа
             sub_id = key.get('sub_id')
@@ -848,8 +939,18 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                 update_vpn_key_sub_id(key_id, sub_id)
                 key['sub_id'] = sub_id
 
+            uses_clients_api = _client_uses_clients_api(client)
+            subscription_panel_used = 0 if reset_traffic else aggregate_panel_used
+            if uses_clients_api and not reset_traffic:
+                subscription_panel_used = await _get_global_panel_used_safe(
+                    client,
+                    email,
+                    aggregate_panel_used,
+                )
+            target_total_bytes = calculate_panel_total_for_key(key, subscription_panel_used)
+
             # Параметры для add_client в отсутствующих inbound
-            total_gb = int(traffic_limit / (1024 ** 3)) if traffic_limit > 0 else 0
+            total_gb = _panel_total_gb_for_key(key, subscription_panel_used)
             days_left = _key_days_left_for_add(key)
             visible_inbounds_by_id = {inb.get('id'): inb for inb in inbounds}
 
@@ -877,6 +978,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                         'subId': sub_id,
                         'enable': active,
                         'flow': flow,
+                        'totalGB': target_total_bytes,
                     }
                 except Exception as e:
                     logger.warning(
@@ -903,7 +1005,6 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
 
             # Сбрасываем трафик и выравниваем ВСЕ существующие клиенты подписки.
             target_enable = active
-            uses_clients_api = _client_uses_clients_api(client)
             clients_api_flow = (
                 await _get_first_required_flow(client, inbounds, server_id)
                 if uses_clients_api
@@ -918,7 +1019,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                     if _client_needs_panel_update(
                         cl,
                         expiry_time_ms=expiry_time_ms,
-                        total_gb_bytes=traffic_limit,
+                        total_gb_bytes=target_total_bytes,
                         enable=target_enable,
                         sub_id=sub_id,
                         limit_ip=limit_ip,
@@ -949,7 +1050,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                             client_uuid=first_cid,
                             email=email,
                             expiry_time_ms=expiry_time_ms,
-                            total_gb_bytes=traffic_limit,
+                            total_gb_bytes=target_total_bytes,
                             enable=target_enable,
                             sub_id=sub_id,
                             limit_ip=limit_ip,
@@ -987,7 +1088,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                     needs_update = _client_needs_panel_update(
                         cl,
                         expiry_time_ms=expiry_time_ms,
-                        total_gb_bytes=traffic_limit,
+                        total_gb_bytes=target_total_bytes,
                         enable=target_enable,
                         sub_id=sub_id,
                         limit_ip=limit_ip,
@@ -1012,7 +1113,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                             client_uuid=cid,
                             email=email,
                             expiry_time_ms=expiry_time_ms,
-                            total_gb_bytes=traffic_limit,
+                            total_gb_bytes=target_total_bytes,
                             enable=target_enable,
                             sub_id=sub_id,
                             limit_ip=limit_ip,
@@ -1047,7 +1148,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                     continue
             if not presence and target_inbound_id in visible_inbound_ids:
                 try:
-                    total_gb = int(traffic_limit / (1024 ** 3)) if traffic_limit > 0 else 0
+                    total_gb = _panel_total_gb_for_key(key, 0)
                     days_left = _key_days_left_for_add(key)
                     target_inbound = next(
                         (inb for inb in inbounds if inb.get('id') == target_inbound_id),
@@ -1076,6 +1177,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                         'password': res['uuid'],
                         'enable': active,
                         'flow': flow,
+                        'totalGB': calculate_panel_total_for_key(key, 0),
                     }
                 except Exception as e:
                     stats['errors'] += 1
@@ -1131,10 +1233,12 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                     None,
                 )
                 flow = await _get_inbound_flow_safe(client, min_inb_id, server_id, min_inbound)
+                min_panel_used = 0 if reset_traffic else inbound_usage_by_id.get(min_inb_id, 0)
+                target_total_bytes = calculate_panel_total_for_key(key, min_panel_used)
                 if not _client_needs_panel_update(
                     min_client,
                     expiry_time_ms=expiry_time_ms,
-                    total_gb_bytes=traffic_limit,
+                    total_gb_bytes=target_total_bytes,
                     enable=active,
                     limit_ip=limit_ip,
                     flow=flow,
@@ -1148,7 +1252,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                             client_uuid=uuid_or_pwd,
                             email=email,
                             expiry_time_ms=expiry_time_ms,
-                            total_gb_bytes=traffic_limit,
+                            total_gb_bytes=target_total_bytes,
                             enable=active,
                             limit_ip=limit_ip,
                             flow=flow,
@@ -1205,6 +1309,7 @@ async def get_subscription_url_for_key(key: Dict[str, Any]) -> Optional[str]:
 
 __all__ = [
     "VPNAPIError", "get_client_from_server_data", "invalidate_client_cache",
+    "calculate_panel_total_for_key",
     "format_traffic", "close_all_clients", "get_client", "test_server_connection",
     "reset_key_traffic_if_active", "extend_key_on_server", "restore_key_traffic_limit",
     "push_key_to_panel", "restore_traffic_limit_in_db",

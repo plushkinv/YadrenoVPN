@@ -1,5 +1,6 @@
 import sqlite3
 import logging
+import json
 import secrets
 import string
 import datetime
@@ -26,11 +27,15 @@ __all__ = [
     'get_yadreno_admin_active_request_id',
     'set_yadreno_admin_active_request_id',
     'clear_yadreno_admin_active_request_id',
+    'list_yadreno_admin_active_requests',
     'get_yadreno_admin_last_request_id',
     'set_yadreno_admin_last_request_id',
     'clear_yadreno_admin_last_request_id',
     'mark_yadreno_admin_tool_call_started',
     'clear_yadreno_admin_tool_call_started',
+    'set_yadreno_admin_tool_runtime',
+    'clear_yadreno_admin_tool_runtime',
+    'list_yadreno_admin_tool_runtime',
     'is_crypto_enabled',
     'is_stars_enabled',
     'is_crypto_configured',
@@ -167,6 +172,7 @@ YADRENO_ADMIN_API_KEY_SETTING = 'yadreno_admin_api_key'
 YADRENO_ADMIN_SERVER_IP_SETTING = 'yadreno_admin_server_ip'
 YADRENO_ADMIN_REQUEST_SETTING_PREFIX = 'yadreno_admin_request'
 YADRENO_ADMIN_TOOL_CALL_SETTING_PREFIX = 'yadreno_admin_tool_call'
+YADRENO_ADMIN_TOOL_RUNTIME_SETTING_PREFIX = 'yadreno_admin_tool_runtime'
 
 
 def get_yadreno_admin_api_key() -> Optional[str]:
@@ -236,6 +242,32 @@ def clear_yadreno_admin_active_request_id(telegram_id: int, topic_id: int) -> bo
     return delete_setting(_yadreno_admin_request_key('active', telegram_id, topic_id))
 
 
+def list_yadreno_admin_active_requests() -> List[Dict[str, int]]:
+    """Возвращает все сохранённые active request_id по lane."""
+    prefix = f'{YADRENO_ADMIN_REQUEST_SETTING_PREFIX}:active:'
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key LIKE ?",
+            (f'{prefix}%',),
+        ).fetchall()
+
+    result: List[Dict[str, int]] = []
+    for row in rows:
+        suffix = str(row['key'])[len(prefix):]
+        parts = suffix.split(':')
+        if len(parts) != 2:
+            continue
+        try:
+            result.append({
+                'telegram_id': int(parts[0]),
+                'topic_id': int(parts[1]),
+                'request_id': int(row['value']),
+            })
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
 def get_yadreno_admin_last_request_id(telegram_id: int, topic_id: int) -> Optional[int]:
     """Возвращает last request_id Yadreno Admin из settings."""
     return _get_yadreno_admin_request_id('last', telegram_id, topic_id)
@@ -279,6 +311,78 @@ def mark_yadreno_admin_tool_call_started(request_id: int, tool_call_id: str) -> 
 def clear_yadreno_admin_tool_call_started(request_id: int, tool_call_id: str) -> bool:
     """Снимает пометку started с tool_call после успешной отправки результата."""
     return delete_setting(_yadreno_admin_tool_call_key(request_id, tool_call_id))
+
+
+def _yadreno_admin_tool_runtime_key(request_id: int, tool_call_id: str) -> str:
+    """Ключ settings для runtime-состояния выполняющегося tool_call."""
+    return (
+        f'{YADRENO_ADMIN_TOOL_RUNTIME_SETTING_PREFIX}:'
+        f'{int(request_id)}:{tool_call_id}'
+    )
+
+
+def set_yadreno_admin_tool_runtime(
+    request_id: int,
+    tool_call_id: str,
+    tool: str,
+    *,
+    topic_id: int = 0,
+    pid: Optional[int] = None,
+    started_at: Optional[str] = None,
+) -> None:
+    """Сохраняет локальный runtime-маркер tool_call для безопасной отмены."""
+    payload = {
+        'request_id': int(request_id),
+        'tool_call_id': str(tool_call_id),
+        'tool': str(tool),
+        'topic_id': int(topic_id),
+        'pid': int(pid) if pid is not None else None,
+        'started_at': started_at or datetime.datetime.utcnow().isoformat(timespec='seconds'),
+    }
+    set_setting(
+        _yadreno_admin_tool_runtime_key(request_id, tool_call_id),
+        json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
+    )
+
+
+def clear_yadreno_admin_tool_runtime(request_id: int, tool_call_id: str) -> bool:
+    """Удаляет runtime-маркер tool_call после нормальной отправки результата."""
+    return delete_setting(_yadreno_admin_tool_runtime_key(request_id, tool_call_id))
+
+
+def list_yadreno_admin_tool_runtime(
+    request_id: Optional[int] = None,
+    topic_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Возвращает runtime-маркеры локально выполняющихся tool_call."""
+    prefix = f'{YADRENO_ADMIN_TOOL_RUNTIME_SETTING_PREFIX}:'
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key LIKE ?",
+            (f'{prefix}%',),
+        ).fetchall()
+
+    result: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row['value'])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        try:
+            payload_request_id = int(payload.get('request_id') or 0)
+            payload_topic_id = int(payload.get('topic_id') or 0)
+        except (TypeError, ValueError):
+            continue
+        if request_id is not None and payload_request_id != int(request_id):
+            continue
+        if topic_id is not None and payload_topic_id != int(topic_id):
+            continue
+        payload['request_id'] = payload_request_id
+        payload['topic_id'] = payload_topic_id
+        result.append(payload)
+    return result
 
 def is_crypto_enabled() -> bool:
     """Проверяет, включены ли крипто-платежи."""

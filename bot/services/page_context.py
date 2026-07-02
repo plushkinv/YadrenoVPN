@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 from aiogram.types import InlineKeyboardButton, Message
 
+from bot.utils.custom_pages import custom_page_exists
+
 
 SUPPORTED_YAA_PAGE_KEYS = frozenset({
     'main',
@@ -52,6 +54,11 @@ class PageContext:
 _contexts: dict[int, PageContext] = {}
 
 
+def is_supported_yaa_page_key(page_key: str) -> bool:
+    """Проверяет, можно ли запоминать страницу для контекстной команды /yaa."""
+    return page_key in SUPPORTED_YAA_PAGE_KEYS or custom_page_exists(page_key)
+
+
 def remember_page_context(
     telegram_id: int,
     page_key: str,
@@ -63,7 +70,7 @@ def remember_page_context(
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> None:
     """Запоминает страницу администратора, если она поддерживает /yaa."""
-    if page_key not in SUPPORTED_YAA_PAGE_KEYS:
+    if not is_supported_yaa_page_key(page_key):
         return
     _contexts[telegram_id] = PageContext(
         page_key=page_key,

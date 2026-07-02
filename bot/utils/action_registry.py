@@ -290,6 +290,106 @@ def _resolve_renew_back(ctx: dict) -> Optional[dict]:
     return {"callback_data": f"key:{key_id}"}
 
 
+def _get_key_details_id(ctx: dict) -> Optional[str]:
+    """Возвращает key_id для кнопок карточки ключа."""
+    return _get_renew_key_id(ctx)
+
+
+def _key_details_is_active(ctx: dict) -> bool:
+    return bool(ctx.get('key_active'))
+
+
+def _key_details_is_unconfigured(ctx: dict) -> bool:
+    return bool(ctx.get('is_unconfigured'))
+
+
+def _key_details_traffic_exhausted(ctx: dict) -> bool:
+    return bool(ctx.get('traffic_exhausted'))
+
+
+def _resolve_key_show_key(ctx: dict) -> Optional[dict]:
+    """Кнопка показа обычного VPN-ключа."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id:
+        return None
+    if not _key_details_is_active(ctx):
+        return None
+    if _key_details_is_unconfigured(ctx) or _key_details_traffic_exhausted(ctx):
+        return None
+    if ctx.get('has_sub_id'):
+        return None
+
+    return {"callback_data": f"key_show:{key_id}"}
+
+
+def _resolve_key_show_subscription(ctx: dict) -> Optional[dict]:
+    """Кнопка показа subscription-ссылки."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id:
+        return None
+    if not _key_details_is_active(ctx):
+        return None
+    if _key_details_is_unconfigured(ctx) or _key_details_traffic_exhausted(ctx):
+        return None
+    if not ctx.get('has_sub_id'):
+        return None
+
+    return {"callback_data": f"key_show:{key_id}"}
+
+
+def _resolve_key_configure(ctx: dict) -> Optional[dict]:
+    """Кнопка настройки ещё не созданного на сервере ключа."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id:
+        return None
+    if not _key_details_is_active(ctx) or not _key_details_is_unconfigured(ctx):
+        return None
+
+    return {"callback_data": f"key_replace:{key_id}"}
+
+
+def _resolve_key_renew(ctx: dict) -> Optional[dict]:
+    """Кнопка продления ключа."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id:
+        return None
+
+    return {"callback_data": f"key_renew:{key_id}"}
+
+
+def _resolve_key_replace(ctx: dict) -> Optional[dict]:
+    """Кнопка замены активного настроенного ключа."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id:
+        return None
+    if not _key_details_is_active(ctx):
+        return None
+    if _key_details_is_unconfigured(ctx) or _key_details_traffic_exhausted(ctx):
+        return None
+
+    return {"callback_data": f"key_replace:{key_id}"}
+
+
+def _resolve_key_delete(ctx: dict) -> Optional[dict]:
+    """Кнопка удаления истёкшего или исчерпавшего трафик ключа."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id:
+        return None
+    if _key_details_is_active(ctx) and not _key_details_traffic_exhausted(ctx):
+        return None
+
+    return {"callback_data": f"key_delete:{key_id}"}
+
+
+def _resolve_key_rename(ctx: dict) -> Optional[dict]:
+    """Кнопка переименования ключа."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id:
+        return None
+
+    return {"callback_data": f"key_rename:{key_id}"}
+
+
 
 # Карта: button_id → handler
 SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
@@ -312,4 +412,11 @@ SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_renew_pay_demo": _resolve_renew_pay_demo,
     "btn_renew_pay_balance": _resolve_renew_pay_balance,
     "btn_renew_back": _resolve_renew_back,
+    "btn_key_show_key": _resolve_key_show_key,
+    "btn_key_show_subscription": _resolve_key_show_subscription,
+    "btn_key_configure": _resolve_key_configure,
+    "btn_key_renew": _resolve_key_renew,
+    "btn_key_replace": _resolve_key_replace,
+    "btn_key_delete": _resolve_key_delete,
+    "btn_key_rename": _resolve_key_rename,
 }

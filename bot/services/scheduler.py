@@ -30,6 +30,7 @@ from database.requests import (
 )
 from database.db_backup import backup_bot_database_to
 from bot.services.vpn_api import (
+    calculate_panel_total_for_key,
     get_client_from_server_data,
     VPNAPIError,
     format_traffic,
@@ -597,8 +598,6 @@ async def check_and_notify_updates(bot: Bot) -> None:
         logger.info("🔒 Обновления заблокированы, отправляем уведомление")
         msg = get_blocked_message()
         # Кнопка OK для закрытия уведомления
-        from aiogram.types import InlineKeyboardButton
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
         builder = InlineKeyboardBuilder()
         builder.row(InlineKeyboardButton(text="✅ OK", callback_data="dismiss_msg"))
         kb = builder.as_markup()
@@ -827,8 +826,13 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                     # Проверяем totalGB
                     traffic_limit = key.get('traffic_limit', 0) or 0
                     panel_total = panel['totalGB']
-                    if traffic_limit > 0 and (panel_total == 0 or abs(panel_total - traffic_limit) > 1024**3):
-                        needs_fix = True
+                    if traffic_limit > 0:
+                        snapshot = await get_key_traffic_snapshot(client, key, inbounds)
+                        panel_used = snapshot.get('panel_traffic_used', 0) if snapshot else 0
+                        panel_total = snapshot.get('totalGB', panel_total) if snapshot else panel_total
+                        expected_total = calculate_panel_total_for_key(key, panel_used)
+                        if panel_total == 0 or abs(panel_total - expected_total) > 1024**3:
+                            needs_fix = True
                     elif traffic_limit == 0 and panel_total > 0:
                         needs_fix = True
                     

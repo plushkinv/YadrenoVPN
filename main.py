@@ -86,6 +86,13 @@ async def on_startup(bot: Bot):
             except Exception as e:
                 logger.warning(f"Не удалось отправить уведомление о блокировке админу {admin_id}: {e}")
 
+    try:
+        from bot.services.yadreno_admin import recover_active_dialogs_on_startup
+
+        await recover_active_dialogs_on_startup(bot)
+    except Exception as e:
+        logger.warning(f"Не удалось запустить восстановление Yadreno Admin: {e}")
+
 
 async def on_shutdown(bot: Bot):
     """Действия при остановке бота."""

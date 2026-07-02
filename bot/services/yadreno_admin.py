@@ -25,13 +25,18 @@ from database.requests import (
     clear_yadreno_admin_active_request_id,
     clear_yadreno_admin_last_request_id,
     clear_yadreno_admin_tool_call_started,
+    clear_yadreno_admin_tool_runtime,
     get_yadreno_admin_active_request_id,
+    get_yadreno_admin_api_key,
     get_yadreno_admin_last_request_id,
     get_yadreno_admin_server_ip,
+    list_yadreno_admin_active_requests,
+    list_yadreno_admin_tool_runtime,
     mark_yadreno_admin_tool_call_started,
     set_yadreno_admin_active_request_id,
     set_yadreno_admin_last_request_id,
     set_yadreno_admin_server_ip,
+    set_yadreno_admin_tool_runtime,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,6 +126,7 @@ class YadrenoAdminLatest:
     event: str = ""
     final: Optional[YadrenoAdminFinal] = None
     progress: Optional[YadrenoAdminProgressEvent] = None
+    resume_allowed: bool = True
 
 
 @dataclass
@@ -132,12 +138,36 @@ class YadrenoAdminNewChatResult:
     closed_session_id: Optional[int] = None
 
 
+@dataclass
+class YadrenoAdminHubStatus:
+    """Состояние request/lane по данным hub /status."""
+
+    status: str
+    response_text: str = ""
+    request_id: Optional[int] = None
+    retry_after_sec: Optional[float] = None
+    local_tool_running: bool = False
+    local_tool_call_id: Optional[str] = None
+    resume_allowed: bool = False
+
+
+@dataclass
+class YadrenoAdminCancelResult:
+    """Результат умной отмены request/lane."""
+
+    status: str
+    response_text: str = ""
+    request_id: Optional[int] = None
+    retry_after_sec: Optional[float] = None
+
+
 ProgressCallback = Callable[[YadrenoAdminProgressEvent], Awaitable[None]]
 RequestLaneKey = tuple[int, int]
 
 _request_locks: dict[RequestLaneKey, asyncio.Lock] = defaultdict(asyncio.Lock)
 _active_requests: dict[RequestLaneKey, int] = {}
 _last_requests: dict[RequestLaneKey, int] = {}
+_running_tool_calls: dict[tuple[int, str], dict[str, Any]] = {}
 
 
 def _lane_key(
@@ -205,6 +235,125 @@ def _clear_last_request(telegram_id: int, topic_id: int) -> None:
     """Очищает last request_id в памяти и settings."""
     _last_requests.pop(_lane_key(telegram_id, topic_id), None)
     clear_yadreno_admin_last_request_id(telegram_id, topic_id)
+
+
+@dataclass(frozen=True)
+class _ToolRuntimeContext:
+    request_id: int
+    topic_id: int
+    tool_call_id: str
+    tool: str
+
+
+def _runtime_context_from_event(
+    event: dict[str, Any],
+    *,
+    topic_id: int,
+) -> Optional[_ToolRuntimeContext]:
+    tool_call_id = str(event.get("tool_call_id") or "")
+    if not tool_call_id:
+        return None
+    try:
+        request_id = int(event.get("request_id") or 0)
+    except (TypeError, ValueError):
+        request_id = 0
+    if request_id <= 0:
+        return None
+    return _ToolRuntimeContext(
+        request_id=request_id,
+        topic_id=int(topic_id),
+        tool_call_id=tool_call_id,
+        tool=str(event.get("tool") or ""),
+    )
+
+
+def _remember_tool_runtime(
+    runtime: Optional[_ToolRuntimeContext],
+    *,
+    pid: Optional[int] = None,
+) -> None:
+    """Сохраняет runtime-состояние локально выполняющегося tool_call."""
+    if runtime is None:
+        return
+    payload = {
+        "request_id": runtime.request_id,
+        "topic_id": runtime.topic_id,
+        "tool_call_id": runtime.tool_call_id,
+        "tool": runtime.tool,
+        "pid": int(pid) if pid is not None else None,
+    }
+    _running_tool_calls[(runtime.request_id, runtime.tool_call_id)] = payload
+    set_yadreno_admin_tool_runtime(
+        runtime.request_id,
+        runtime.tool_call_id,
+        runtime.tool,
+        topic_id=runtime.topic_id,
+        pid=pid,
+    )
+
+
+def _clear_tool_runtime(request_id: int, tool_call_id: str) -> None:
+    """Удаляет runtime-состояние завершённого локального tool_call."""
+    _running_tool_calls.pop((int(request_id), str(tool_call_id)), None)
+    clear_yadreno_admin_tool_runtime(request_id, tool_call_id)
+
+
+def _pid_is_running(pid: Any) -> bool:
+    """Best-effort проверка живости локального subprocess по pid."""
+    try:
+        value = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if value <= 0:
+        return False
+    try:
+        os.kill(value, 0)
+        return True
+    except OSError:
+        return False
+    except Exception:
+        return False
+
+
+def get_local_tool_diagnostics(
+    request_id: Optional[int],
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+) -> dict[str, Any]:
+    """Возвращает локальную диагностику running tool_call для hub /cancel."""
+    if request_id is None:
+        return {
+            "local_checked": True,
+            "local_tool_running": False,
+            "local_tool_call_id": None,
+        }
+
+    for payload in list(_running_tool_calls.values()):
+        if (
+            int(payload.get("request_id") or 0) == int(request_id)
+            and int(payload.get("topic_id") or 0) == int(topic_id)
+        ):
+            return {
+                "local_checked": True,
+                "local_tool_running": True,
+                "local_tool_call_id": str(payload.get("tool_call_id") or ""),
+            }
+
+    for payload in list_yadreno_admin_tool_runtime(request_id, topic_id):
+        tool_call_id = str(payload.get("tool_call_id") or "")
+        if _pid_is_running(payload.get("pid")):
+            return {
+                "local_checked": True,
+                "local_tool_running": True,
+                "local_tool_call_id": tool_call_id,
+            }
+        if tool_call_id:
+            clear_yadreno_admin_tool_runtime(request_id, tool_call_id)
+
+    return {
+        "local_checked": True,
+        "local_tool_running": False,
+        "local_tool_call_id": None,
+    }
 
 
 def _reject_dangerous_shell(command: str) -> None:
@@ -402,7 +551,10 @@ async def _request_multipart(
     raise YadrenoAdminError(f"Не удалось загрузить файл в Yadreno Admin: {last_error}")
 
 
-async def _execute_shell(args: dict[str, Any]) -> dict[str, Optional[str]]:
+async def _execute_shell(
+    args: dict[str, Any],
+    runtime: Optional[_ToolRuntimeContext] = None,
+) -> dict[str, Optional[str]]:
     """Исполняет satellite_execute на сервере, где запущен бот."""
     command = str(args.get("command", "")).strip()
     if not command:
@@ -431,6 +583,7 @@ async def _execute_shell(args: dict[str, Any]) -> dict[str, Optional[str]]:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+        _remember_tool_runtime(runtime, pid=process.pid)
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         output = (stdout or b"").decode("utf-8", errors="replace")
         output += (stderr or b"").decode("utf-8", errors="replace")
@@ -465,7 +618,10 @@ async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
         return {"result": "", "error": str(e)}
 
 
-async def _run_script(args: dict[str, Any]) -> dict[str, Optional[str]]:
+async def _run_script(
+    args: dict[str, Any],
+    runtime: Optional[_ToolRuntimeContext] = None,
+) -> dict[str, Optional[str]]:
     """Исполняет satellite_run_script через временный .sh в tmp/."""
     script_body = str(args.get("script_body", "")).strip()
     if not script_body:
@@ -499,6 +655,7 @@ async def _run_script(args: dict[str, Any]) -> dict[str, Optional[str]]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        _remember_tool_runtime(runtime, pid=process.pid)
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         output = (stdout or b"").decode("utf-8", errors="replace")
         output += (stderr or b"").decode("utf-8", errors="replace")
@@ -532,7 +689,10 @@ def _format_sql_rows(rows: list[sqlite3.Row] | list[tuple[Any, ...]], columns: l
     return "\n".join(lines)
 
 
-async def _execute_sqlite(args: dict[str, Any]) -> dict[str, Optional[str]]:
+async def _execute_sqlite(
+    args: dict[str, Any],
+    runtime: Optional[_ToolRuntimeContext] = None,
+) -> dict[str, Optional[str]]:
     """Исполняет sqlite-запрос по db_path/db_name."""
     db_path = str(args.get("db_path") or args.get("db_name") or "").strip()
     if not db_path:
@@ -563,7 +723,12 @@ async def _execute_sqlite(args: dict[str, Any]) -> dict[str, Optional[str]]:
     return await asyncio.to_thread(_run)
 
 
-async def _execute_sql_cli(args: dict[str, Any], binary_name: str, command_args: list[str]) -> dict[str, Optional[str]]:
+async def _execute_sql_cli(
+    args: dict[str, Any],
+    binary_name: str,
+    command_args: list[str],
+    runtime: Optional[_ToolRuntimeContext] = None,
+) -> dict[str, Optional[str]]:
     """
     Исполняет SQL через локальный CLI.
 
@@ -588,6 +753,7 @@ async def _execute_sql_cli(args: dict[str, Any], binary_name: str, command_args:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        _remember_tool_runtime(runtime, pid=process.pid)
         stdout, stderr = await asyncio.wait_for(
             process.communicate(query.encode("utf-8")),
             timeout=timeout,
@@ -608,23 +774,26 @@ async def _execute_sql_cli(args: dict[str, Any], binary_name: str, command_args:
         return {"result": "", "error": str(e)}
 
 
-async def _execute_sql(args: dict[str, Any]) -> dict[str, Optional[str]]:
+async def _execute_sql(
+    args: dict[str, Any],
+    runtime: Optional[_ToolRuntimeContext] = None,
+) -> dict[str, Optional[str]]:
     """Исполняет satellite_sql для sqlite/mysql/postgres."""
     db_type = str(args.get("db_type", "")).strip().lower()
     db_name = str(args.get("db_name", "")).strip()
 
     if db_type == "sqlite":
-        return await _execute_sqlite(args)
+        return await _execute_sqlite(args, runtime=runtime)
     if db_type == "mysql":
         command_args = ["--batch", "--raw"]
         if db_name:
             command_args.append(db_name)
-        return await _execute_sql_cli(args, "mysql", command_args)
+        return await _execute_sql_cli(args, "mysql", command_args, runtime=runtime)
     if db_type in {"postgres", "postgresql"}:
         command_args = ["--tuples-only", "--no-align"]
         if db_name:
             command_args.extend(["--dbname", db_name])
-        return await _execute_sql_cli(args, "psql", command_args)
+        return await _execute_sql_cli(args, "psql", command_args, runtime=runtime)
     return {"result": "", "error": f"unsupported db_type {db_type}"}
 
 
@@ -656,17 +825,23 @@ def _log_tool_audit(event: dict[str, Any], tool_result: dict[str, Optional[str]]
     )
 
 
-async def _run_tool_call(event: dict[str, Any]) -> dict[str, Optional[str]]:
+async def _run_tool_call(
+    event: dict[str, Any],
+    *,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+) -> dict[str, Optional[str]]:
     """Исполняет один tool_call хаба."""
     tool = event.get("tool")
+    runtime = _runtime_context_from_event(event, topic_id=topic_id)
+    _remember_tool_runtime(runtime)
     if tool == "satellite_execute":
-        result = await _execute_shell(event.get("args") or {})
+        result = await _execute_shell(event.get("args") or {}, runtime=runtime)
     elif tool == "satellite_write_file":
         result = await _write_file(event.get("args") or {})
     elif tool == "satellite_run_script":
-        result = await _run_script(event.get("args") or {})
+        result = await _run_script(event.get("args") or {}, runtime=runtime)
     elif tool == "satellite_sql":
-        result = await _execute_sql(event.get("args") or {})
+        result = await _execute_sql(event.get("args") or {}, runtime=runtime)
     else:
         result = {"result": "", "error": f"unknown tool {tool}"}
 
@@ -762,20 +937,25 @@ async def _poll_until_final(
                     }
                 else:
                     tool_started_here = True
-                    tool_result = await _run_tool_call(event)
-                await _request_json(
-                    session,
-                    api_key,
-                    "POST",
-                    "/api/v1/satellite/tool_result",
-                    json_payload={
-                        "request_id": request_id,
-                        "tool_call_id": tool_call_id,
-                        **tool_result,
-                    },
-                )
-                if tool_started_here:
-                    clear_yadreno_admin_tool_call_started(request_id, tool_call_id)
+                try:
+                    if tool_started_here:
+                        tool_result = await _run_tool_call(event, topic_id=topic_id)
+                    await _request_json(
+                        session,
+                        api_key,
+                        "POST",
+                        "/api/v1/satellite/tool_result",
+                        json_payload={
+                            "request_id": request_id,
+                            "tool_call_id": tool_call_id,
+                            **tool_result,
+                        },
+                    )
+                    if tool_started_here:
+                        clear_yadreno_admin_tool_call_started(request_id, tool_call_id)
+                finally:
+                    if tool_started_here:
+                        _clear_tool_runtime(request_id, tool_call_id)
                 continue
 
             event_type = event.get("event")
@@ -933,6 +1113,19 @@ async def resume_active_dialog(
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             server_ip = await _get_server_ip(session)
+            hub_status = await fetch_dialog_status(
+                telegram_id,
+                api_key,
+                topic_id=topic_id,
+                request_id=request_id,
+            )
+            if hub_status is None or hub_status.status == "idle":
+                return None
+            if not hub_status.resume_allowed:
+                raise YadrenoAdminError(
+                    hub_status.response_text
+                    or "Hub не подтвердил живую задачу для восстановления polling."
+                )
             return await _poll_until_final(
                 session,
                 api_key,
@@ -979,6 +1172,80 @@ def _latest_from_event(request_id: int, event: Optional[dict[str, Any]]) -> Yadr
     return YadrenoAdminLatest(request_id=request_id)
 
 
+def _status_from_data(
+    request_id: Optional[int],
+    data: Optional[dict[str, Any]],
+) -> YadrenoAdminHubStatus:
+    """Преобразует ответ hub /status в локальную структуру."""
+    if not data:
+        return YadrenoAdminHubStatus(status="unsafe_unknown", request_id=request_id)
+    status = str(data.get("status") or "unsafe_unknown")
+    return YadrenoAdminHubStatus(
+        status=status,
+        response_text=str(data.get("response_text") or ""),
+        request_id=data.get("request_id") or request_id,
+        retry_after_sec=data.get("retry_after_sec"),
+        local_tool_running=bool(data.get("local_tool_running")),
+        local_tool_call_id=data.get("local_tool_call_id"),
+        resume_allowed=status in {
+            "running",
+            "cancel_requested",
+            "accepted_running",
+        },
+    )
+
+
+def _latest_from_hub_status(
+    request_id: int,
+    hub_status: YadrenoAdminHubStatus,
+) -> YadrenoAdminLatest:
+    """Показывает read-only /status как progress-событие без запуска /poll."""
+    text = hub_status.response_text or "Состояние задачи пока не определено."
+    if hub_status.status in {"orphan_suspected", "orphan_confirmed"}:
+        text += "\n\nНажмите «Отмена», чтобы выполнить безопасную двухфазную проверку."
+    if hub_status.status == "unsafe_unknown":
+        text += "\n\nЛокальные флаги не очищены."
+    return YadrenoAdminLatest(
+        request_id=request_id,
+        event="hub_status",
+        progress=YadrenoAdminProgressEvent(
+            event="status",
+            content=text,
+            slot="hub_status",
+        ),
+        resume_allowed=hub_status.resume_allowed,
+    )
+
+
+async def fetch_dialog_status(
+    telegram_id: int,
+    api_key: str,
+    *,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+    request_id: Optional[int] = None,
+) -> Optional[YadrenoAdminHubStatus]:
+    """Читает hub /status и применяет безопасные локальные cleanup-решения."""
+    request_id = request_id or get_active_request_id(telegram_id, topic_id) or get_last_request_id(
+        telegram_id,
+        topic_id,
+    )
+    if request_id is None:
+        return None
+
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        _, data = await _request_json(
+            session,
+            api_key,
+            "GET",
+            f"/api/v1/satellite/status?topic_id={topic_id}&request_id={request_id}",
+        )
+    hub_status = _status_from_data(request_id, data)
+    if hub_status.status == "idle":
+        _clear_active_request(telegram_id, topic_id)
+    return hub_status
+
+
 async def fetch_latest_dialog_event(
     telegram_id: int,
     api_key: str,
@@ -993,6 +1260,13 @@ async def fetch_latest_dialog_event(
     if request_id is None:
         return None
 
+    hub_status = await fetch_dialog_status(
+        telegram_id,
+        api_key,
+        topic_id=topic_id,
+        request_id=request_id,
+    )
+
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         status_code, event = await _request_json(
@@ -1003,8 +1277,21 @@ async def fetch_latest_dialog_event(
             allow_no_content=True,
         )
     if status_code == 204:
-        return YadrenoAdminLatest(request_id=request_id)
+        if hub_status is not None and hub_status.status == "idle":
+            _clear_last_request(telegram_id, topic_id)
+            return None
+        if hub_status is not None and not hub_status.resume_allowed:
+            return _latest_from_hub_status(request_id, hub_status)
+        return YadrenoAdminLatest(
+            request_id=request_id,
+            resume_allowed=hub_status.resume_allowed if hub_status else True,
+        )
     latest = _latest_from_event(request_id, event)
+    if hub_status is not None and hub_status.status == "idle" and latest.final is None:
+        _clear_last_request(telegram_id, topic_id)
+        return None
+    if hub_status is not None:
+        latest.resume_allowed = hub_status.resume_allowed
     if latest.final is not None:
         _clear_active_request(telegram_id, topic_id)
     return latest
@@ -1017,12 +1304,6 @@ async def start_new_chat(
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> YadrenoAdminNewChatResult:
     """Просит хаб закрыть активную satellite-сессию, если lane свободна."""
-    if get_active_request_id(telegram_id, topic_id) is not None:
-        return YadrenoAdminNewChatResult(
-            status="busy",
-            response_text="Агент ещё работает. Дождитесь ответа или нажмите «Отмена».",
-        )
-
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         _, data = await _request_json(
@@ -1051,26 +1332,134 @@ async def cancel_active_dialog(
     api_key: str,
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
-) -> bool:
+) -> YadrenoAdminCancelResult:
     """Отменяет активный запрос администратора, если он есть."""
     request_id = get_active_request_id(telegram_id, topic_id)
     if request_id is None:
-        return False
+        return YadrenoAdminCancelResult(
+            status="idle",
+            response_text="Активного запроса нет.",
+        )
 
+    local_diag = get_local_tool_diagnostics(request_id, topic_id)
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        await _request_json(
+        _, data = await _request_json(
             session,
             api_key,
             "POST",
             "/api/v1/satellite/cancel",
-            json_payload={"request_id": request_id, "topic_id": topic_id},
+            json_payload={
+                "request_id": request_id,
+                "topic_id": topic_id,
+                **local_diag,
+            },
         )
+    hub_status = _status_from_data(request_id, data)
     logger.info(
-        "Yadreno Admin request cancelled: admin=%s topic=%s request_id=%s",
+        "Yadreno Admin cancel result: admin=%s topic=%s request_id=%s status=%s",
         telegram_id,
         topic_id,
         request_id,
+        hub_status.status,
     )
-    _clear_active_request(telegram_id, topic_id)
-    return True
+    if hub_status.status in {"orphan_cleared", "idle"}:
+        _clear_active_request(telegram_id, topic_id)
+        _clear_last_request(telegram_id, topic_id)
+    return YadrenoAdminCancelResult(
+        status=hub_status.status,
+        response_text=hub_status.response_text,
+        request_id=request_id,
+        retry_after_sec=hub_status.retry_after_sec,
+    )
+
+
+def _format_recovered_final(content: str, viewer_url: Optional[str]) -> str:
+    """Форматирует финал, доставленный фоновым startup recovery."""
+    response = content or "Готово."
+    if viewer_url:
+        from bot.utils.text import escape_html
+
+        response += f'\n\n<a href="{escape_html(viewer_url)}">Полная версия ответа</a>'
+    return response
+
+
+async def _recover_one_active_dialog_on_startup(
+    bot: Any,
+    api_key: str,
+    *,
+    telegram_id: int,
+    topic_id: int,
+    request_id: int,
+) -> None:
+    """Проверяет один active request после рестарта и продолжает только live-задачи."""
+    try:
+        hub_status = await fetch_dialog_status(
+            telegram_id,
+            api_key,
+            topic_id=topic_id,
+            request_id=request_id,
+        )
+        if hub_status is None or not hub_status.resume_allowed:
+            if hub_status is not None and hub_status.status == "idle":
+                latest = await fetch_latest_dialog_event(
+                    telegram_id,
+                    api_key,
+                    topic_id=topic_id,
+                )
+                if latest is not None and latest.final is not None:
+                    await bot.send_message(
+                        chat_id=telegram_id,
+                        text=_format_recovered_final(
+                            latest.final.content,
+                            latest.final.viewer_url,
+                        ),
+                        parse_mode="HTML",
+                    )
+            logger.info(
+                "Yadreno Admin startup recovery skipped: admin=%s topic=%s request_id=%s status=%s",
+                telegram_id,
+                topic_id,
+                request_id,
+                hub_status.status if hub_status else None,
+            )
+            return
+
+        final = await resume_active_dialog(
+            telegram_id,
+            api_key,
+            topic_id=topic_id,
+            progress_callback=None,
+        )
+        if final is None:
+            return
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=_format_recovered_final(final.content, final.viewer_url),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning(
+            "Yadreno Admin startup recovery failed: admin=%s topic=%s request_id=%s error=%s",
+            telegram_id,
+            topic_id,
+            request_id,
+            e,
+        )
+
+
+async def recover_active_dialogs_on_startup(bot: Any) -> None:
+    """Запускает best-effort восстановление live Yadreno Admin задач после рестарта."""
+    api_key = get_yadreno_admin_api_key()
+    if not api_key:
+        return
+    for item in list_yadreno_admin_active_requests():
+        asyncio.create_task(
+            _recover_one_active_dialog_on_startup(
+                bot,
+                api_key,
+                telegram_id=int(item["telegram_id"]),
+                topic_id=int(item["topic_id"]),
+                request_id=int(item["request_id"]),
+            )
+        )

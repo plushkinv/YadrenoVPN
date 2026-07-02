@@ -61,8 +61,9 @@ async def renew_key_access(
     else:
         result['traffic_restored'] = restore_traffic_limit_in_db(key_id)
 
+    panel_reset_traffic = reset_traffic and not tariff_id
     try:
-        sync_stats = await sync_key_to_panel_state(key_id, reset_traffic=reset_traffic)
+        sync_stats = await sync_key_to_panel_state(key_id, reset_traffic=panel_reset_traffic)
         result['sync_stats'] = sync_stats
         result['panel_synced'] = bool(sync_stats.get('ok')) and sync_stats.get('errors', 0) == 0
     except Exception as e:

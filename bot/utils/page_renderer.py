@@ -5,7 +5,7 @@
 Реализует трёхслойную систему видимости кнопок:
   1. buttons_default.is_hidden — дефолт разработчика
   2. buttons_custom (мёрж по id) — кастомизация админа
-  3. runtime — visibility dict (для internal) и system handlers (для system)
+  3. runtime — visibility dict (для internal), system handlers и page-переходы
 """
 import json
 import logging
@@ -331,6 +331,21 @@ def _build_keyboard(
                 logger.warning(f"Пустой action_value для url-кнопки '{btn_id}' — пропускаем")
                 continue
             url = action_value
+
+        elif action_type == 'page':
+            from bot.utils.custom_pages import build_custom_page_callback, custom_page_exists
+
+            if not action_value:
+                logger.warning(f"Пустой action_value для page-кнопки '{btn_id}' — пропускаем")
+                continue
+            if not custom_page_exists(action_value):
+                logger.warning(f"custom-страница '{action_value}' для кнопки '{btn_id}' не найдена или имеет неверный ключ — пропускаем")
+                continue
+
+            callback_data = build_custom_page_callback(action_value)
+            if not callback_data:
+                logger.warning(f"callback custom-страницы '{action_value}' для кнопки '{btn_id}' не помещается в лимит Telegram — пропускаем")
+                continue
 
         else:
             logger.warning(f"Неизвестный action_type '{action_type}' для кнопки '{btn_id}' — пропускаем")

@@ -290,16 +290,6 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
         await _show_yadreno_entry(callback, state)
         return
 
-    if get_active_request_id(
-        callback.from_user.id,
-        topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
-    ) is not None:
-        await callback.answer(
-            "Агент ещё работает. Дождитесь ответа или нажмите «Отмена».",
-            show_alert=True,
-        )
-        return
-
     try:
         result = await start_new_chat(
             callback.from_user.id,
@@ -312,7 +302,7 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
 
     if result.status == "busy":
         await callback.answer(
-            result.response_text or "Агент ещё работает.",
+            result.response_text or "Агент ещё работает. Нажмите «Отмена».",
             show_alert=True,
         )
         return
@@ -345,7 +335,7 @@ async def cancel_yadreno_dialog_button(callback: CallbackQuery):
         return
 
     try:
-        cancelled = await cancel_active_dialog(
+        cancel_result = await cancel_active_dialog(
             callback.from_user.id,
             api_key,
             topic_id=topic_id,
@@ -354,14 +344,46 @@ async def cancel_yadreno_dialog_button(callback: CallbackQuery):
         await callback.answer(str(e)[:180], show_alert=True)
         return
 
-    if not cancelled:
+    if cancel_result.status == "idle":
         await callback.answer("Активного запроса нет", show_alert=False)
+        return
+
+    if cancel_result.status == "orphan_cleared":
+        await safe_edit_or_send(
+            callback.message,
+            "🛑 <b>Запрос остановлен</b>\n\n"
+            "Хаб подтвердил, что задача уже не выполнялась, и безопасно снял зависший lock. "
+            "Можно начать новый диалог.",
+            reply_markup=yadreno_admin_chat_kb(),
+        )
+        await callback.answer("Зависший запрос очищен")
+        return
+
+    if cancel_result.status == "unsafe_unknown":
+        await safe_edit_or_send(
+            callback.message,
+            "⚠️ <b>Состояние не определено</b>\n\n"
+            f"{escape_html(cancel_result.response_text or 'Безопасно очистить запрос не удалось.')}",
+            reply_markup=yadreno_admin_agent_kb(topic_id),
+        )
+        await callback.answer("Lock не очищен", show_alert=True)
+        return
+
+    if cancel_result.status in {"orphan_suspected", "orphan_confirmed"}:
+        await safe_edit_or_send(
+            callback.message,
+            "⚠️ <b>Проверяю зависший запрос</b>\n\n"
+            f"{escape_html(cancel_result.response_text or 'Повторите отмену через несколько секунд.')}",
+            reply_markup=yadreno_admin_agent_kb(topic_id),
+        )
+        await callback.answer("Повторите отмену через пару секунд", show_alert=True)
         return
 
     await safe_edit_or_send(
         callback.message,
         "🛑 <b>Запрос отменяется</b>\n\n"
-        "Агент завершит работу на следующей итерации.",
+        "Хаб видит живую задачу. Агент завершит работу на ближайшей безопасной точке "
+        "и сам снимет lock.",
         reply_markup=yadreno_admin_agent_kb(topic_id),
     )
     await callback.answer("Отмена отправлена")
@@ -400,7 +422,7 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
             callback.from_user.id,
             topic_id=topic_id,
         )
-        if active_request_id is not None and not is_local_request_active(
+        if latest.resume_allowed and active_request_id is not None and not is_local_request_active(
             callback.from_user.id,
             topic_id=topic_id,
         ):
@@ -437,7 +459,7 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
         callback.from_user.id,
         topic_id=topic_id,
     )
-    if latest.final is None and active_request_id is not None and not is_local_request_active(
+    if latest.resume_allowed and latest.final is None and active_request_id is not None and not is_local_request_active(
         callback.from_user.id,
         topic_id=topic_id,
     ):

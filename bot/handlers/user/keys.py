@@ -161,9 +161,8 @@ async def my_keys_handler(callback: CallbackQuery):
 async def show_key_details(telegram_id: int, key_id: int, message, is_callback: bool = True, prepend_text: str=''):
     """Общая логика для показа деталей ключа."""
     from database.requests import get_key_details_for_user, get_key_payments_history, is_key_active, is_traffic_exhausted
-    from bot.keyboards.user import key_manage_kb
     from bot.services.vpn_api import format_traffic
-    from bot.utils.key_pages import build_key_details_replacements, keyboard_rows
+    from bot.utils.key_pages import build_key_details_replacements
     from bot.utils.page_renderer import render_page
     import logging
     logger = logging.getLogger(__name__)
@@ -222,20 +221,18 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
         protocol=protocol,
         prepend_html=prepend_text,
     )
-    kb = key_manage_kb(
-        key_id,
-        is_unconfigured=is_unconfigured,
-        is_active=key_active,
-        is_traffic_exhausted=traffic_exhausted,
-        has_sub_id=bool(key.get('sub_id')),
-        include_navigation=False,
-    )
     await render_page(
         message,
         page_key='key_details',
-        context={'telegram_id': telegram_id, 'key_id': key_id},
+        context={
+            'telegram_id': telegram_id,
+            'key_id': key_id,
+            'key_active': key_active,
+            'is_unconfigured': is_unconfigured,
+            'traffic_exhausted': traffic_exhausted,
+            'has_sub_id': bool(key.get('sub_id')),
+        },
         text_replacements=replacements,
-        prepend_buttons=keyboard_rows(kb),
         force_new=not is_callback,
     )
 
@@ -375,7 +372,7 @@ async def key_renew_select_payment(callback: CallbackQuery):
 @router.callback_query(F.data.startswith('key_replace:'))
 async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
     """Начало процедуры замены ключа."""
-    from database.requests import get_key_details_for_user, get_active_servers
+    from database.requests import get_key_details_for_user, get_active_servers, is_traffic_exhausted
     from bot.keyboards.user import replace_server_list_kb
     from bot.utils.key_pages import build_replace_server_select_data, keyboard_rows
     from bot.utils.groups import get_servers_for_key
@@ -388,6 +385,9 @@ async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
         return
     if not key['is_active']:
         await callback.answer('⏳ Срок действия ключа истёк.\nПродлите его перед заменой.', show_alert=True)
+        return
+    if is_traffic_exhausted(key):
+        await callback.answer('📊 Трафик закончился.\nПродлите ключ перед заменой.', show_alert=True)
         return
     tariff_id = key.get('tariff_id')
     servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
@@ -505,8 +505,14 @@ async def key_replace_inbound_handler(callback: CallbackQuery, state: FSMContext
 @router.callback_query(ReplaceKey.confirm, F.data == 'replace_confirm')
 async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
     """Выполнение замены ключа."""
-    from database.requests import get_key_details_for_user, get_server_by_id, update_vpn_key_connection
-    from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
+    from database.requests import get_key_details_for_user, get_server_by_id, update_key_traffic, update_vpn_key_connection
+    from bot.services.vpn_api import (
+        calculate_panel_total_for_key,
+        get_client,
+        get_key_traffic_snapshot,
+        VPNAPIError,
+        is_subscription_mode,
+    )
     from bot.handlers.admin.users_keys import generate_unique_email
     from bot.utils.key_sender import send_key_with_qr
     from bot.keyboards.user import key_issued_kb
@@ -528,10 +534,43 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
     is_same_server = current_key.get('server_id') == new_server_id
 
     try:
-        # === 1. Удаление старого ===
+        traffic_limit = current_key.get('traffic_limit', 0) or 0
+        traffic_used = current_key.get('traffic_used', 0) or 0
+        old_client = None
+
+        # === 1. Фиксация актуального трафика старого клиента ===
+        if current_key.get('server_id') and current_key.get('server_active') and current_key.get('panel_email'):
+            old_client = await get_client(current_key['server_id'])
+            if traffic_limit > 0:
+                try:
+                    old_inbounds = await old_client.get_inbounds()
+                    snapshot = await get_key_traffic_snapshot(old_client, current_key, old_inbounds)
+                    if not snapshot:
+                        raise VPNAPIError('панель не вернула счётчики трафика старого ключа')
+                    traffic_used = snapshot['traffic_used']
+                    update_key_traffic(key_id, traffic_used)
+                    current_key['traffic_used'] = traffic_used
+                    logger.info(
+                        f"Перед заменой ключа {key_id} зафиксирован трафик: "
+                        f"{traffic_used / 1024 ** 3:.1f} ГБ"
+                    )
+                except Exception as e:
+                    raise VPNAPIError(
+                        f'Не удалось обновить трафик старого ключа перед заменой: {e}'
+                    )
+
+        if traffic_limit > 0 and traffic_used >= traffic_limit:
+            await safe_edit_or_send(
+                callback.message,
+                '📊 <b>Трафик закончился</b>\n\nПродлите ключ, чтобы снова получить доступ к замене.',
+            )
+            return
+
+        # === 2. Удаление старого ===
         if current_key.get('server_id') and current_key.get('server_active') and current_key.get('panel_email'):
             try:
-                old_client = await get_client(current_key['server_id'])
+                if old_client is None:
+                    old_client = await get_client(current_key['server_id'])
                 if old_had_sub or subscription_mode:
                     # Удаляем всех клиентов с этим email на старом сервере
                     deleted = await old_client.delete_clients_by_email_on_server(current_key['panel_email'])
@@ -551,15 +590,14 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
                     else:
                         raise VPNAPIError(f'Не удалось удалить старый ключ: {error_msg}. Замена отменена во избежание дублей.')
 
-        # === 2. Подсчёт остатков ===
+        # === 3. Подсчёт остатков ===
         new_client = await get_client(new_server_id)
         user_fake_dict = {'telegram_id': telegram_id, 'username': current_key.get('username')}
         new_email = generate_unique_email(user_fake_dict)
-        traffic_limit = current_key.get('traffic_limit', 0) or 0
-        traffic_used = current_key.get('traffic_used', 0) or 0
         if traffic_limit > 0:
-            remaining_bytes = max(0, traffic_limit - traffic_used)
-            limit_gb = max(1, int(remaining_bytes / 1024 ** 3))
+            remaining_bytes = calculate_panel_total_for_key(current_key, 0)
+            gb = 1024 ** 3
+            limit_gb = int((remaining_bytes + gb - 1) // gb) if remaining_bytes > 0 else 0
         else:
             remaining_bytes = 0
             limit_gb = 0
@@ -579,7 +617,7 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
             if tariff:
                 limit_ip = tariff.get('max_ips', 1)
 
-        # === 3. Создание нового ===
+        # === 4. Создание нового ===
         if subscription_mode:
             inbounds = await new_client.get_inbounds()
             if not inbounds:
@@ -627,10 +665,8 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
                 client_uuid=new_uuid, sub_id=None,
             )
 
-        # === 4. Перенос трафика ===
+        # === 5. Перенос трафика ===
         if traffic_limit > 0:
-            from database.requests import bulk_update_traffic
-            bulk_update_traffic([(traffic_used, key_id)])
             logger.info(
                 f'Перенос трафика ключа {key_id}: остаток {remaining_bytes / 1024 ** 3:.1f} ГБ, '
                 f'полный тариф {traffic_limit / 1024 ** 3:.1f} ГБ, '

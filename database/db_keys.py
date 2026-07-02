@@ -433,27 +433,45 @@ def update_vpn_key_tariff_and_traffic_limit(
     traffic_limit_bytes: int
 ) -> bool:
     """
-    Применяет новый тариф к существующему ключу и начинает новый период трафика.
+    Применяет оплаченный тариф к существующему ключу и добавляет пакет трафика.
 
-    traffic_limit_bytes=0 означает безлимит и должен сохраняться как 0.
+    traffic_limit_bytes=0 означает покупку безлимита. Для перехода с безлимита
+    на лимитный тариф новый лимит становится traffic_used + купленный пакет,
+    чтобы пользователь получил полный новый остаток с текущего момента.
     """
     with get_db() as conn:
+        row = conn.execute("""
+            SELECT traffic_limit, traffic_used
+            FROM vpn_keys
+            WHERE id = ?
+        """, (key_id,)).fetchone()
+        if not row:
+            return False
+
+        current_limit = row['traffic_limit'] or 0
+        current_used = row['traffic_used'] or 0
+        if traffic_limit_bytes <= 0:
+            new_limit = 0
+        elif current_limit <= 0:
+            new_limit = current_used + traffic_limit_bytes
+        else:
+            new_limit = current_limit + traffic_limit_bytes
+
         cursor = conn.execute("""
             UPDATE vpn_keys
             SET tariff_id = ?,
                 traffic_limit = ?,
-                traffic_used = 0,
-                traffic_updated_at = NULL,
                 traffic_notified_pct = 100
             WHERE id = ?
-        """, (tariff_id, traffic_limit_bytes, key_id))
+        """, (tariff_id, new_limit, key_id))
         success = cursor.rowcount > 0
         if success:
-            limit_gb = traffic_limit_bytes / (1024 ** 3) if traffic_limit_bytes > 0 else 0
-            limit_text = f"{limit_gb:.1f} ГБ" if traffic_limit_bytes > 0 else "безлимит"
+            limit_gb = new_limit / (1024 ** 3) if new_limit > 0 else 0
+            limit_text = f"{limit_gb:.1f} ГБ" if new_limit > 0 else "безлимит"
+            added_gb = traffic_limit_bytes / (1024 ** 3) if traffic_limit_bytes > 0 else 0
             logger.info(
                 f"Ключ ID {key_id} переведён на тариф {tariff_id}, "
-                f"лимит трафика: {limit_text}"
+                f"добавлено: {added_gb:.1f} ГБ, накопительный лимит: {limit_text}"
             )
         return success
 

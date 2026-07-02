@@ -48,6 +48,15 @@ PAGE_KEYS = (
 )
 
 
+def _is_page_key(key: str) -> bool:
+    if key in PAGE_KEYS:
+        return True
+
+    from bot.utils.custom_pages import custom_page_exists
+
+    return custom_page_exists(key)
+
+
 def _page_image_value(row: dict) -> Optional[str]:
     """
     Возвращает итоговый file_id медиа страницы.
@@ -120,7 +129,7 @@ def get_message_data(key: str, default_text: str = '') -> dict:
         Словарь с ключами: text, photo_file_id, video_file_id, animation_file_id,
         media_file_id, media_type
     """
-    if key in PAGE_KEYS:
+    if _is_page_key(key):
         # Читаем из таблицы pages
         from database.requests import get_page
         row = get_page(key)
@@ -193,7 +202,7 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
         data['text'] = get_message_text_for_storage(message, 'html')
     
     # Проверяем, относится ли ключ к таблице pages
-    if key in PAGE_KEYS:
+    if _is_page_key(key):
         # Сохраняем в таблицу pages
         from database.requests import update_page_custom
         if message.photo or message.video or message.animation:
@@ -224,7 +233,7 @@ def delete_message_media(key: str) -> dict:
     data = get_message_data(key)
     data.update(_with_media_fields(data.get('text', ''), None, None))
 
-    if key in PAGE_KEYS:
+    if _is_page_key(key):
         from database.requests import update_page_custom
         update_page_custom(key, image='')
         logger.info(f"Медиа удалено из pages: {key}")

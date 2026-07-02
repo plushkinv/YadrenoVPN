@@ -4,6 +4,7 @@ from .start import router as start_router
 from .keys import router as keys_router
 from .trial import router as trial_router
 from .tariffs import router as tariffs_router
+from .custom_pages import router as custom_pages_router
 
 # These are packages/modules that were explicitly standalone
 from .referral import router as referral_router
@@ -18,6 +19,7 @@ router.callback_query.outer_middleware(ResetAdminPageContextMiddleware())
 router.include_router(payments_router)
 router.include_router(referral_router)
 router.include_router(start_router)
+router.include_router(custom_pages_router)
 router.include_router(keys_router)
 router.include_router(trial_router)
 router.include_router(tariffs_router)
