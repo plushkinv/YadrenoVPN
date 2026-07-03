@@ -11,8 +11,8 @@ def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: b
     Args:
         stars_enabled: Включены ли Telegram Stars
         crypto_enabled: Включены ли крипто-платежи
-        cards_enabled: Включена ли оплата картами (ЮКасса Telegram Payments)
-        qr_enabled: Включена ли прямая QR-оплата ЮКасса
+        cards_enabled: Включены ли TG payments (историческое внутреннее имя cards)
+        qr_enabled: Включена ли прямая оплата ЮКасса
         monthly_reset_enabled: Включён ли ежемесячный автосброс трафика
         demo_enabled: Включена ли демо-оплата
         wata_enabled: Включена ли оплата через WATA
@@ -24,26 +24,26 @@ def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: b
     stars_status = '✅' if stars_enabled else '❌'
     crypto_status = '✅' if crypto_enabled else '❌'
     builder.row(
-        InlineKeyboardButton(text=f'⭐ Telegram Stars: {stars_status}', callback_data='admin_payments_toggle_stars'),
-        InlineKeyboardButton(text=f'💰 Крипто-платежи: {crypto_status}', callback_data='admin_payments_toggle_crypto'),
+        InlineKeyboardButton(text=f'{stars_status} Telegram Stars', callback_data='admin_payments_toggle_stars'),
+        InlineKeyboardButton(text=f'{crypto_status} Крипто-платежи', callback_data='admin_payments_toggle_crypto'),
     )
     cards_status = '✅' if cards_enabled else '❌'
     qr_status = '✅' if qr_enabled else '❌'
     builder.row(
-        InlineKeyboardButton(text=f'📱 TG payments (ЮКасса): {cards_status}', callback_data='admin_payments_cards'),
-        InlineKeyboardButton(text=f'💳 ЮКасса (QR/СБП): {qr_status}', callback_data='admin_payments_qr'),
+        InlineKeyboardButton(text=f'{cards_status} TG payments', callback_data='admin_payments_cards'),
+        InlineKeyboardButton(text=f'{qr_status} ЮКасса', callback_data='admin_payments_qr'),
     )
     wata_status = '✅' if wata_enabled else '❌'
     platega_status = '✅' if platega_enabled else '❌'
     builder.row(
-        InlineKeyboardButton(text=f'🌊 WATA (Карта/СБП): {wata_status}', callback_data='admin_payments_wata'),
-        InlineKeyboardButton(text=f'💸 Platega: {platega_status}', callback_data='admin_payments_platega'),
+        InlineKeyboardButton(text=f'{wata_status} WATA', callback_data='admin_payments_wata'),
+        InlineKeyboardButton(text=f'{platega_status} Platega', callback_data='admin_payments_platega'),
     )
     cardlink_status = '✅' if cardlink_enabled else '❌'
     demo_status = '✅' if demo_enabled else '❌'
     builder.row(
-        InlineKeyboardButton(text=f'🔗 Cardlink (Карта/СБП): {cardlink_status}', callback_data='admin_payments_cardlink'),
-        InlineKeyboardButton(text=f'💳 Демо оплата (РФ): {demo_status}', callback_data='admin_payments_toggle_demo'),
+        InlineKeyboardButton(text=f'{cardlink_status} Cardlink', callback_data='admin_payments_cardlink'),
+        InlineKeyboardButton(text=f'{demo_status} Демо оплата (РФ)', callback_data='admin_payments_toggle_demo'),
     )
     notify_status = '✅' if notify_enabled else '❌'
     builder.row(InlineKeyboardButton(text=f'🔔 Сообщать об оплатах: {notify_status}', callback_data='admin_toggle_payment_notify'))
@@ -125,7 +125,7 @@ def crypto_setup_confirm_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def cards_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
-    """Клавиатура управления оплатой картами."""
+    """Клавиатура управления TG payments."""
     builder = InlineKeyboardBuilder()
     toggle_text = 'Выключить 🔴' if is_enabled else 'Включить 🟢'
     builder.row(InlineKeyboardButton(text=toggle_text, callback_data='admin_cards_mgmt_toggle'))

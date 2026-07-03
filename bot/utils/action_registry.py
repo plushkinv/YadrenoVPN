@@ -68,7 +68,7 @@ def _resolve_pay_stars(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_cards(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты картой (Telegram Payments)."""
+    """Кнопка TG payments (историческое внутреннее имя cards)."""
     from database.requests import is_cards_enabled
 
     if not is_cards_enabled():
@@ -80,7 +80,7 @@ def _resolve_pay_cards(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_qr(ctx: dict) -> Optional[dict]:
-    """Кнопка QR-оплаты (ЮКасса)."""
+    """Кнопка оплаты через ЮКассу."""
     from database.requests import is_yookassa_qr_configured
 
     if not is_yookassa_qr_configured():
@@ -90,7 +90,7 @@ def _resolve_pay_qr(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_wata(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты через WATA (карта/СБП)."""
+    """Кнопка оплаты через WATA."""
     from database.requests import is_wata_configured
 
     if not is_wata_configured():
@@ -110,7 +110,7 @@ def _resolve_pay_platega(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_cardlink(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты через Cardlink (Карта/СБП)."""
+    """Кнопка оплаты через Cardlink."""
     from database.requests import is_cardlink_configured
 
     if not is_cardlink_configured():

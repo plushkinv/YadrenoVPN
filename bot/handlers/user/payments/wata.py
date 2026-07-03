@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # Конфигурация провайдера WATA (общие параметры для create и check)
-_WATA_TITLE = '🌊 <b>Оплата WATA</b>'
+_WATA_TITLE = '🌊 <b>WATA</b>'
 _WATA_TYPE = 'wata'
 _WATA_ERROR = 'WATA'
 _WATA_QR_FILE = 'wata.png'
@@ -39,7 +39,7 @@ async def pay_wata_select_tariff(callback: CallbackQuery):
         return
     await safe_edit_or_send(
         callback.message,
-        '🌊 <b>Оплата WATA (Карта/СБП)</b>\n\nВыберите тариф:\n\n'
+        '🌊 <b>WATA</b>\n\nВыберите тариф:\n\n'
         '<i>Оплата банковской картой или СБП через сервис WATA.</i>',
         reply_markup=tariff_select_kb(rub_tariffs, is_wata=True)
     )
@@ -95,7 +95,7 @@ async def renew_wata_select_tariff(callback: CallbackQuery):
         return
     await safe_edit_or_send(
         callback.message,
-        f"🌊 <b>Оплата WATA (Карта/СБП)</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:",
+        f"🌊 <b>WATA</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:",
         reply_markup=renew_tariff_select_kb(rub_tariffs, key_id, is_wata=True)
     )
     await callback.answer()

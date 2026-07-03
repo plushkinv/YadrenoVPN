@@ -81,10 +81,22 @@ async def activate_trial_subscription(callback: CallbackQuery, state: FSMContext
     except Exception as notify_err:
         logger.warning(f'Ошибка уведомления о trial: {notify_err}')
 
-    await state.update_data(new_key_order_id=order_id, new_key_id=key_id)
+    await state.update_data(
+        new_key_order_id=order_id,
+        new_key_id=key_id,
+        new_key_owner_telegram_id=user_id,
+        new_key_owner_username=callback.from_user.username,
+    )
     await callback.answer()
     try:
         await callback.message.delete()
     except Exception:
         pass
-    await start_new_key_config(callback.message, state, order_id, key_id)
+    await start_new_key_config(
+        callback.message,
+        state,
+        order_id,
+        key_id,
+        owner_telegram_id=user_id,
+        owner_username=callback.from_user.username,
+    )

@@ -407,15 +407,15 @@ def is_crypto_configured() -> bool:
 
 
 def is_cards_enabled() -> bool:
-    """Проверяет, включена ли оплата картами (ЮКасса)."""
+    """Проверяет, включены ли TG payments."""
     return get_setting('cards_enabled', '0') == '1'
 
 def is_cards_configured() -> bool:
     """
-    Проверяет, настроена ли оплата картами.
+    Проверяет, настроены ли TG payments.
     
     Returns:
-        True если оплата картами включена И есть provider_token
+        True если TG payments включены И есть provider_token
     """
     if not is_cards_enabled():
         return False
@@ -423,15 +423,15 @@ def is_cards_configured() -> bool:
     return bool(token and token.strip())
 
 def is_yookassa_qr_enabled() -> bool:
-    """Проверяет, включена ли QR-оплата через ЮКассу."""
+    """Проверяет, включена ли прямая оплата через ЮКассу."""
     return get_setting('yookassa_qr_enabled', '0') == '1'
 
 def is_yookassa_qr_configured() -> bool:
     """
-    Проверяет, настроена ли QR-оплата через ЮКассу полностью.
+    Проверяет, настроена ли прямая оплата через ЮКассу полностью.
 
     Returns:
-        True если QR включена И есть shop_id и secret_key
+        True если ЮКасса включена И есть shop_id и secret_key
     """
     if not is_yookassa_qr_enabled():
         return False

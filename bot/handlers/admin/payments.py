@@ -128,20 +128,20 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
         text += "⚪ <b>Крипто (@Ya_SellerBot)</b>\n"
 
     if cards:
-        text += "🟢 <b>TG payments (ЮКасса Telegram Payments)</b>\n"
+        text += "🟢 <b>TG payments</b>\n"
     else:
-        text += "⚪ <b>TG payments (ЮКасса Telegram Payments)</b>\n"
+        text += "⚪ <b>TG payments</b>\n"
 
     if qr:
         shop_id = get_setting('yookassa_shop_id', '')
-        text += f"🟢 <b>ЮКасса (прямая/СБП)</b> | Shop ID: <code>{shop_id or '—'}</code>\n"
+        text += f"🟢 <b>ЮКасса</b> | Shop ID: <code>{shop_id or '—'}</code>\n"
     else:
-        text += "⚪ <b>ЮКасса (прямая/СБП)</b>\n"
+        text += "⚪ <b>ЮКасса</b>\n"
 
     if wata:
-        text += "🟢 <b>WATA (Карта/СБП)</b>\n"
+        text += "🟢 <b>WATA</b>\n"
     else:
-        text += "⚪ <b>WATA (Карта/СБП)</b>\n"
+        text += "⚪ <b>WATA</b>\n"
 
     if platega:
         text += "🟢 <b>Platega</b>\n"
@@ -149,9 +149,9 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
         text += "⚪ <b>Platega</b>\n"
 
     if cardlink:
-        text += "🟢 <b>Cardlink (Карта/СБП)</b>\n"
+        text += "🟢 <b>Cardlink</b>\n"
     else:
-        text += "⚪ <b>Cardlink (Карта/СБП)</b>\n"
+        text += "⚪ <b>Cardlink</b>\n"
 
     if demo:
         text += "🟢 <b>Демо оплата (РФ)</b>\n"
@@ -782,12 +782,12 @@ async def crypto_edit_done(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# УПРАВЛЕНИЕ ОПЛАТОЙ КАРТАМИ
+# УПРАВЛЕНИЕ TG PAYMENTS
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_cards")
 async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню управления оплатой картами (ЮКасса)."""
+    """Показывает меню управления TG payments."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -808,8 +808,8 @@ async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext)
         token_display = "Не установлен ❌"
     
     text = (
-        "💳 <b>Управление оплатой картами</b>\n\n"
-        "Для работы этого способа необходимо настроить провайдера ЮКасса.\n\n"
+        "💳 <b>TG payments</b>\n\n"
+        "Для работы этого способа необходимо настроить Telegram Payments через провайдера ЮКасса.\n\n"
         "❗️ <b>ШАГ 1: РЕГИСТРАЦИЯ</b>\n"
         "Обязательно <a href=\"https://yookassa.ru/joinups/?source=sva\">зарегистрируйте магазин в ЮКассе по этой ссылке</a>\n\n"
         "После проверки документов ЮКассой переходите к настройке токена.\n\n"
@@ -842,7 +842,7 @@ async def cards_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
     set_setting('cards_enabled', new_value)
     
     status = "включена ✅" if new_value == '1' else "выключена"
-    await callback.answer(f"Оплата картами {status}")
+    await callback.answer(f"TG payments {status}")
     
     # Обновляем меню
     await show_cards_management_menu(callback, state)
@@ -866,7 +866,7 @@ async def cards_mgmt_edit_token(callback: CallbackQuery, state: FSMContext):
         "<b>ШАГ 2: ПОЛУЧЕНИЕ ТОКЕНА В @BotFather</b>\n"
         "1. Отправьте команду <code>/mybots</code> и выберите бота.\n"
         "2. Нажмите <code>Payments</code> → <code>YooKassa</code>.\n"
-        "3. Подключите магазин в боте провайдера и **обязательно вернитесь в @BotFather**.\n"
+        "3. Подключите магазин в боте провайдера и <b>обязательно вернитесь в @BotFather</b>.\n"
         "4. В BotFather снова откройте <code>Payments</code>, там появится токен.\n\n"
         "Отправьте полученный токен ответом на это сообщение:"
     )
@@ -934,7 +934,7 @@ async def cards_setup_token_value(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# НАСТРОЙКА QR-ОПЛАТЫ ЮКАССА (прямой API)
+# НАСТРОЙКА ЮКАССЫ (прямой API)
 # ============================================================================
 
 def qr_management_kb(is_enabled: bool) -> "InlineKeyboardMarkup":
@@ -975,7 +975,7 @@ async def show_qr_management_menu(callback: CallbackQuery, state: FSMContext):
     secret_display = f"Установлен ✅ (<code>{secret_key[:4]}...{secret_key[-4:]}</code>)" if len(secret_key) >= 8 else "❌ Не задан"
 
     text = (
-        "📱 <b>QR-оплата ЮКасса (прямой API)</b>\n\n"
+        "📱 <b>ЮКасса</b>\n\n"
         "Позволяет принимать оплату картами и через СБП по QR-коду,\n"
         "без Telegram Payments.\n\n"
         "📋 <b>Как получить доступ:</b>\n"
@@ -1017,7 +1017,7 @@ async def qr_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
     set_setting('yookassa_qr_enabled', new_value)
 
     status = "включена ✅" if new_value == '1' else "выключена"
-    await callback.answer(f"QR-оплата {status}")
+    await callback.answer(f"ЮКасса {status}")
     await show_qr_management_menu(callback, state)
 
 
@@ -1152,7 +1152,7 @@ async def qr_setup_secret_key_handler(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# НАСТРОЙКА WATA (карта/СБП через REST API)
+# НАСТРОЙКА WATA
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_wata")
@@ -1178,7 +1178,7 @@ async def show_wata_management_menu(callback: CallbackQuery, state: FSMContext):
         token_display = "❌ Не задан"
 
     text = (
-        "🌊 <b>Оплата WATA (Карта/СБП)</b>\n\n"
+        "🌊 <b>WATA</b>\n\n"
         "Приём платежей через WATA — российский эквайринг (карты + СБП).\n"
         "Минимальная сумма платежа: <b>10 ₽</b>.\n\n"
         "📋 <b>Инструкция по подключению:</b>\n\n"
@@ -1510,7 +1510,7 @@ async def platega_setup_secret_handler(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# НАСТРOЙКА CARDLINK (Карта/СБП через REST API — cardlink.link)
+# НАСТРOЙКА CARDLINK
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_cardlink")
@@ -1553,7 +1553,7 @@ async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMConte
         bot_username = "your_bot"
 
     text = (
-        "🔗 <b>Оплата Cardlink (Карта/СБП)</b>\n\n"
+        "🔗 <b>Cardlink</b>\n\n"
         "Приём платежей картой и через СБП по прямой интеграции с "
         "<a href=\"https://cardlink.link/\">cardlink.link</a> "
         "(без webhook — проверка по кнопке «Я оплатил» и через возвратные ссылки).\n"

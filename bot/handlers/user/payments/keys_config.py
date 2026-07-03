@@ -29,10 +29,74 @@ def _target_user(target):
     return target.from_user
 
 
-def _target_with_message(target, message: Message):
+def _target_with_message(target, message: Message, from_user=None):
     if _is_callback_target(target):
         return target
-    return SimpleNamespace(message=message, from_user=_target_user(target))
+    return SimpleNamespace(message=message, from_user=from_user or _target_user(target))
+
+
+def _target_user_identity(target) -> tuple[int | None, str | None]:
+    """Возвращает Telegram ID и username из текущего target, если они есть."""
+    user = getattr(target, 'from_user', None)
+    if not user:
+        return None, None
+    return getattr(user, 'id', None), getattr(user, 'username', None)
+
+
+def _owner_from_order(order: dict | None) -> tuple[int | None, str | None]:
+    """Определяет владельца нового ключа по внутреннему пользователю заказа."""
+    if not order or not order.get('user_id'):
+        return None, None
+
+    try:
+        from database.requests import get_user_by_id
+
+        user = get_user_by_id(order['user_id'])
+    except Exception as e:
+        logger.warning(
+            "Не удалось получить владельца заказа %s по user_id=%s: %s",
+            order.get('order_id') if order else None,
+            order.get('user_id') if order else None,
+            e,
+        )
+        return None, None
+
+    if not user:
+        return None, None
+    return user.get('telegram_id'), user.get('username')
+
+
+def _resolve_new_key_owner(
+    target,
+    order: dict | None,
+    *,
+    owner_telegram_id: int | None = None,
+    owner_username: str | None = None,
+    state_data: dict | None = None,
+) -> tuple[int | None, str | None]:
+    """Выбирает владельца ключа: явный параметр/FSM, затем заказ, затем target."""
+    state_data = state_data or {}
+    telegram_id = owner_telegram_id or state_data.get('new_key_owner_telegram_id')
+    username = owner_username or state_data.get('new_key_owner_username')
+
+    if not telegram_id or not username:
+        order_telegram_id, order_username = _owner_from_order(order)
+        telegram_id = telegram_id or order_telegram_id
+        username = username or order_username
+
+    if not telegram_id or not username:
+        target_telegram_id, target_username = _target_user_identity(target)
+        telegram_id = telegram_id or target_telegram_id
+        username = username or target_username
+
+    return telegram_id, username
+
+
+def _owner_user_stub(telegram_id: int | None, username: str | None):
+    """Минимальный объект пользователя для рендера выдачи ключа."""
+    if not telegram_id:
+        return None
+    return SimpleNamespace(id=telegram_id, username=username)
 
 
 async def _safe_edit_target(target, text: str, **kwargs):
@@ -97,7 +161,14 @@ async def _continue_new_key_config(target, state: FSMContext, server: dict, *, f
         await _show_target_error(target, f'❌ Ошибка подключения: {e}')
 
 
-async def start_new_key_config(message: Message, state: FSMContext, order_id: str, key_id: int=None):
+async def start_new_key_config(
+    message: Message,
+    state: FSMContext,
+    order_id: str,
+    key_id: int = None,
+    owner_telegram_id: int | None = None,
+    owner_username: str | None = None,
+):
     """
     Запускает процесс настройки нового ключа (выбор сервера).
     Используется как для Stars, так и для Crypto.
@@ -109,6 +180,12 @@ async def start_new_key_config(message: Message, state: FSMContext, order_id: st
     from bot.utils.groups import get_servers_for_key
     from bot.utils.page_renderer import render_page
     order = find_order_by_order_id(order_id)
+    owner_telegram_id, owner_username = _resolve_new_key_owner(
+        message,
+        order,
+        owner_telegram_id=owner_telegram_id,
+        owner_username=owner_username,
+    )
     tariff_id = order.get('tariff_id') if order else None
     if tariff_id:
         servers = get_servers_for_key(tariff_id)
@@ -119,7 +196,12 @@ async def start_new_key_config(message: Message, state: FSMContext, order_id: st
         await render_page(message, page_key='new_key_no_servers', force_new=True)
         return
     await state.set_state(NewKeyConfig.waiting_for_server)
-    await state.update_data(new_key_order_id=order_id, new_key_id=key_id)
+    await state.update_data(
+        new_key_order_id=order_id,
+        new_key_id=key_id,
+        new_key_owner_telegram_id=owner_telegram_id,
+        new_key_owner_username=owner_username,
+    )
     if len(servers) == 1:
         logger.info(
             f"Автовыбор единственного сервера {servers[0]['id']} "
@@ -178,6 +260,19 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
         await _safe_edit_target(target, '❌ Ошибка: заказ не найден.')
         await state.clear()
         return
+    owner_telegram_id, owner_username = _resolve_new_key_owner(
+        target,
+        order,
+        state_data=data,
+    )
+    if not owner_telegram_id:
+        await _safe_edit_target(target, '❌ Ошибка: не удалось определить владельца ключа.')
+        await state.clear()
+        return
+    await state.update_data(
+        new_key_owner_telegram_id=owner_telegram_id,
+        new_key_owner_username=owner_username,
+    )
     if not key_id:
         if order['vpn_key_id']:
             key_id = order['vpn_key_id']
@@ -191,9 +286,8 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
     progress_message = await _safe_edit_target(target, '⏳ Настраиваем вашу подписку...')
 
     try:
-        user = _target_user(target)
-        telegram_id = user.id
-        username = user.username
+        telegram_id = owner_telegram_id
+        username = owner_username
         user_fake_dict = {'telegram_id': telegram_id, 'username': username}
         panel_email = generate_unique_email(user_fake_dict)
         sub_id = _uuid.uuid4().hex
@@ -253,7 +347,16 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
 
         await state.clear()
         new_key = get_key_details_for_user(key_id, telegram_id)
-        await send_key_with_qr(_target_with_message(target, progress_message), new_key, key_issued_kb(), is_new=True)
+        await send_key_with_qr(
+            _target_with_message(
+                target,
+                progress_message,
+                from_user=_owner_user_stub(telegram_id, username),
+            ),
+            new_key,
+            key_issued_kb(),
+            is_new=True,
+        )
     except Exception as e:
         logger.error(f'Ошибка настройки subscription-ключа (id={key_id}): {e}')
         await _safe_edit_target(target,
@@ -287,6 +390,19 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
         await _safe_edit_target(target, '❌ Ошибка: заказ не найден.')
         await state.clear()
         return
+    owner_telegram_id, owner_username = _resolve_new_key_owner(
+        target,
+        order,
+        state_data=data,
+    )
+    if not owner_telegram_id:
+        await _safe_edit_target(target, '❌ Ошибка: не удалось определить владельца ключа.')
+        await state.clear()
+        return
+    await state.update_data(
+        new_key_owner_telegram_id=owner_telegram_id,
+        new_key_owner_username=owner_username,
+    )
     if not key_id:
         if order['vpn_key_id']:
             key_id = order['vpn_key_id']
@@ -299,10 +415,8 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
             update_payment_key_id(order_id, key_id)
     progress_message = await _safe_edit_target(target, '⏳ Настраиваем ваш ключ...')
     try:
-        user_id = order['user_id']
-        user = _target_user(target)
-        telegram_id = user.id
-        username = user.username
+        telegram_id = owner_telegram_id
+        username = owner_username
         user_fake_dict = {'telegram_id': telegram_id, 'username': username}
         panel_email = generate_unique_email(user_fake_dict)
         client = await get_client(server_id)
@@ -318,7 +432,16 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
         update_payment_key_id(order_id, key_id)
         await state.clear()
         new_key = get_key_details_for_user(key_id, telegram_id)
-        await send_key_with_qr(_target_with_message(target, progress_message), new_key, key_issued_kb(), is_new=True)
+        await send_key_with_qr(
+            _target_with_message(
+                target,
+                progress_message,
+                from_user=_owner_user_stub(telegram_id, username),
+            ),
+            new_key,
+            key_issued_kb(),
+            is_new=True,
+        )
     except Exception as e:
         logger.error(f'Ошибка настройки ключа (id={key_id}): {e}')
         await _safe_edit_target(target, f'❌ Ошибка настройки ключа: {escape_html(str(e))}\nОбратитесь в поддержку, указав Order ID: ' + str(order_id))

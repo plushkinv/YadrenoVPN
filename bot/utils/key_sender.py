@@ -278,9 +278,13 @@ async def send_key_with_qr(
 
     try:
         # Проверяем наличие необходимых данных
+        if not key_data:
+            await _send_error(messageable, "Ключ не найден или не принадлежит пользователю", key_manage_markup)
+            return
+
         if not key_data.get('server_id') or not key_data.get('panel_email'):
-             await _send_error(messageable, "Неполные данные ключа", key_manage_markup)
-             return
+            await _send_error(messageable, "Неполные данные ключа", key_manage_markup)
+            return
 
         # === Subscription mode: выдаём subscription URL + QR этой ссылки ===
         if key_data.get('sub_id') and is_subscription_mode():

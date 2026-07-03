@@ -1345,8 +1345,8 @@ async def complete_payment_flow(
     4. Финализацию UI (выдача ключа / показ результата)
     
     Вызывается из:
-    - successful_payment_handler (Stars/Cards) — base.py
-    - check_yookassa_payment (QR/СБП) — yookassa.py
+    - successful_payment_handler (Stars/TG payments) — base.py
+    - check_yookassa_payment (ЮКасса) — yookassa.py
     
     Args:
         order_id: ID ордера

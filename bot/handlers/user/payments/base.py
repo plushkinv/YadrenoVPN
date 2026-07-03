@@ -128,11 +128,11 @@ def _format_price_compact(cents: int) -> str:
 
 def _is_cards_via_yookassa_direct() -> bool:
     """
-    Проверяет, используется ли оплата картами через ЮKassa напрямую (webhook).
+    Проверяет, используется ли прямой сценарий ЮKassa для доплаты.
     
     Returns:
-        True если карты через ЮKassa напрямую (минимум 1₽),
-        False если через Telegram Payments API (минимум ~100₽)
+        True если прямой сценарий ЮKassa доступен от 1 ₽,
+        False если используется Telegram Payments API с минимумом около 100 ₽
     """
     from database.requests import get_setting
     return get_setting('cards_via_yookassa_direct', '0') == '1'
@@ -145,7 +145,7 @@ async def pre_checkout_handler(pre_checkout: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def successful_payment_handler(message: Message, state: FSMContext):
     """
-    Обработка успешной оплаты Stars или Cards.
+    Обработка успешной оплаты Stars или TG payments.
     
     Делегирует общую post-payment логику в complete_payment_flow().
     """
@@ -198,7 +198,13 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
     logger.info(f'Result: is_draft={is_draft}')
     if is_draft:
         await safe_edit_or_send(message, text, force_new=True)
-        await start_new_key_config(message, state, order['order_id'], key_id)
+        await start_new_key_config(
+            message,
+            state,
+            order['order_id'],
+            key_id,
+            owner_telegram_id=user_id,
+        )
     else:
         from bot.handlers.user.keys import show_key_details
         await show_key_details(telegram_id=user_id, key_id=key_id, message=message, is_callback=False, prepend_text=text)
@@ -242,7 +248,7 @@ def format_qr_payment_text(
     достаточно поправить только здесь.
 
     Args:
-        title: Заголовок (напр. '📱 <b>QR-код для оплаты</b>')
+        title: Заголовок (напр. '📱 <b>ЮКасса</b>')
         tariff_name: Название тарифа (уже экранировано через escape_html)
         price_str: Отформатированная цена (напр. '100 ₽' или '50.00 ₽')
         days: Количество дней

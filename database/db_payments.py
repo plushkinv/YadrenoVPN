@@ -331,7 +331,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         stars_row = cursor.fetchone()
         
-        # 3. Считаем Карты (Cards - Рубли)
+        # 3. Считаем TG payments (исторический payment_type 'cards')
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
@@ -344,7 +344,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         cards_row = cursor.fetchone()
         
-        # 4. Считаем QR-оплату (ЮКасса QR/СБП - Рубли)
+        # 4. Считаем ЮКассу (исторический payment_type 'yookassa_qr')
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,

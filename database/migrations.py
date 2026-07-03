@@ -34,7 +34,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 42
+LATEST_VERSION = 43
 
 
 def _my_keys_item_template() -> str:
@@ -93,10 +93,10 @@ def _renew_payment_page_buttons() -> str:
         {"id": "btn_renew_pay_crypto",  "label": "🪙 Оплатить USDT",              "color": "secondary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_stars",   "label": "⭐ Оплатить звёздами",          "color": "secondary",   "row": 1, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_cards",   "label": "💳 TG payments",                "color": "secondary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_qr",      "label": "📱 ЮКасса (QR/СБП)",            "color": "secondary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_wata",    "label": "🌊 WATA (Карта/СБП)",           "color": "secondary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_qr",      "label": "📱 ЮКасса",                     "color": "secondary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_wata",    "label": "🌊 WATA",                       "color": "secondary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_platega", "label": "💸 Platega",                    "color": "secondary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-        {"id": "btn_renew_pay_cardlink", "label": "🔗 Cardlink (Карта/СБП)",      "color": "secondary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_renew_pay_cardlink", "label": "🔗 Cardlink",                  "color": "secondary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_demo",    "label": "🏦 Демо оплата (РФ карта)",     "color": "secondary",   "row": 7, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_balance", "label": "💎 Использовать баланс",        "color": "secondary",   "row": 8, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_back",        "label": "⬅️ Назад",                     "color": "secondary", "row": 9, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
@@ -677,12 +677,14 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             'buttons': json.dumps([
                 {"id": "btn_pay_crypto",  "label": "🪙 Оплатить USDT",          "color": "primary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
                 {"id": "btn_pay_stars",   "label": "⭐ Оплатить звёздами",      "color": "primary",   "row": 1, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_cards",   "label": "💳 Оплатить картой",        "color": "primary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_qr",      "label": "📱 QR-оплата (Карта/СБП)",  "color": "primary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_wata",    "label": "🌊 Оплата WATA (Карта/СБП)", "color": "primary",  "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_demo",    "label": "🏦 Демо оплата (РФ карта)", "color": "primary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_balance", "label": "💎 Использовать баланс",    "color": "primary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_back_main",   "label": "🈴 На главную",             "color": "secondary", "row": 7, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+                {"id": "btn_pay_cards",   "label": "💳 TG payments",           "color": "primary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+                {"id": "btn_pay_qr",      "label": "📱 ЮКасса",                "color": "primary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+                {"id": "btn_pay_wata",    "label": "🌊 WATA",                  "color": "primary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+                {"id": "btn_pay_platega", "label": "💸 Platega",               "color": "primary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+                {"id": "btn_pay_cardlink", "label": "🔗 Cardlink",             "color": "primary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+                {"id": "btn_pay_demo",    "label": "🏦 Демо оплата (РФ карта)", "color": "primary",   "row": 7, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+                {"id": "btn_pay_balance", "label": "💎 Использовать баланс",    "color": "primary",   "row": 8, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+                {"id": "btn_back_main",   "label": "🈴 На главную",             "color": "secondary", "row": 9, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
             ], ensure_ascii=False),
         },
         'renew_payment': {
@@ -847,7 +849,7 @@ def migration_23(conn):
                         break
                 buttons.append({
                     "id": "btn_pay_wata",
-                    "label": "🌊 Оплата WATA (Карта/СБП)",
+                    "label": "🌊 WATA",
                     "color": "primary",
                     "row": new_row,
                     "col": 0,
@@ -862,7 +864,7 @@ def migration_23(conn):
                         b['row'] = b['row'] + 1
                 buttons.append({
                     "id": "btn_pay_wata",
-                    "label": "🌊 Оплата WATA (Карта/СБП)",
+                    "label": "🌊 WATA",
                     "color": "primary",
                     "row": qr_row + 1,
                     "col": 0,
@@ -959,7 +961,7 @@ def migration_24(conn):
 
 def migration_25(conn):
     """
-    Миграция v25: добавление платёжного метода Cardlink (Карта/СБП, cardlink.link).
+    Миграция v25: добавление платёжного метода Cardlink (cardlink.link).
 
     - Добавляет настройки cardlink_enabled, cardlink_shop_id, cardlink_api_token
     - Добавляет колонку cardlink_bill_id в таблицу payments
@@ -1000,7 +1002,7 @@ def migration_25(conn):
                         break
                 buttons.append({
                     "id": "btn_pay_cardlink",
-                    "label": "🔗 Оплата Cardlink (Карта/СБП)",
+                    "label": "🔗 Cardlink",
                     "color": "primary",
                     "row": new_row,
                     "col": 0,
@@ -1014,7 +1016,7 @@ def migration_25(conn):
                         b['row'] = b['row'] + 1
                 buttons.append({
                     "id": "btn_pay_cardlink",
-                    "label": "🔗 Оплата Cardlink (Карта/СБП)",
+                    "label": "🔗 Cardlink",
                     "color": "primary",
                     "row": platega_row + 1,
                     "col": 0,
@@ -1029,7 +1031,7 @@ def migration_25(conn):
             )
             logger.info("Кнопка btn_pay_cardlink добавлена в дефолтную раскладку prepayment")
 
-    logger.info("Миграция v25 применена: добавлен платёжный метод Cardlink (Карта/СБП)")
+    logger.info("Миграция v25 применена: добавлен платёжный метод Cardlink")
 
 
 def migration_26(conn):
@@ -1497,6 +1499,98 @@ def migration_42(conn):
     logger.info(f"Миграция v42 применена: key_details.buttons_default обновлён, перенесено custom-кнопок: {moved}")
 
 
+def migration_43(conn):
+    """
+    Миграция v43: единые публичные названия платёжных методов.
+
+    Меняет только pages.buttons_default. Кастомные labels администраторов
+    в pages.buttons_custom не трогаются и продолжают иметь приоритет.
+    """
+    changed = 0
+
+    changed += _update_standard_button_label(
+        conn,
+        "prepayment",
+        "btn_pay_cards",
+        {
+            "💳 Оплатить картой": "💳 TG payments",
+            "💳 Оплата картой": "💳 TG payments",
+            "💳 Банковские карты (ЮКасса)": "💳 TG payments",
+        },
+    )
+    changed += _update_standard_button_label(
+        conn,
+        "prepayment",
+        "btn_pay_qr",
+        {
+            "📱 QR-оплата": "📱 ЮКасса",
+            "📱 QR-оплата (Карта/СБП)": "📱 ЮКасса",
+            "📱 ЮКасса (QR/СБП)": "📱 ЮКасса",
+            "💳 ЮКасса (QR/СБП)": "📱 ЮКасса",
+        },
+    )
+    changed += _update_standard_button_label(
+        conn,
+        "prepayment",
+        "btn_pay_wata",
+        {
+            "🌊 WATA (Карта/СБП)": "🌊 WATA",
+            "🌊 Оплата WATA (Карта/СБП)": "🌊 WATA",
+        },
+    )
+    changed += _update_standard_button_label(
+        conn,
+        "prepayment",
+        "btn_pay_cardlink",
+        {
+            "🔗 Cardlink (Карта/СБП)": "🔗 Cardlink",
+            "🔗 Оплата Cardlink (Карта/СБП)": "🔗 Cardlink",
+        },
+    )
+
+    changed += _update_standard_button_label(
+        conn,
+        "renew_payment",
+        "btn_renew_pay_cards",
+        {
+            "💳 Оплатить картой": "💳 TG payments",
+            "💳 Оплата картой": "💳 TG payments",
+            "💳 Банковские карты (ЮКасса)": "💳 TG payments",
+        },
+    )
+    changed += _update_standard_button_label(
+        conn,
+        "renew_payment",
+        "btn_renew_pay_qr",
+        {
+            "📱 QR-оплата": "📱 ЮКасса",
+            "📱 QR-оплата (Карта/СБП)": "📱 ЮКасса",
+            "📱 ЮКасса (QR/СБП)": "📱 ЮКасса",
+            "💳 ЮКасса (QR/СБП)": "📱 ЮКасса",
+        },
+    )
+    changed += _update_standard_button_label(
+        conn,
+        "renew_payment",
+        "btn_renew_pay_wata",
+        {
+            "🌊 WATA (Карта/СБП)": "🌊 WATA",
+            "🌊 Оплата WATA (Карта/СБП)": "🌊 WATA",
+        },
+    )
+    changed += _update_standard_button_label(
+        conn,
+        "renew_payment",
+        "btn_renew_pay_cardlink",
+        {
+            "🔗 Cardlink (Карта/СБП)": "🔗 Cardlink",
+            "🔗 Оплата Cardlink (Карта/СБП)": "🔗 Cardlink",
+        },
+    )
+
+    logger.info(f"Миграция v43 применена: обновлено стандартных labels оплат: {changed}")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -1519,6 +1613,7 @@ MIGRATIONS = {
     40: migration_40,
     41: migration_41,
     42: migration_42,
+    43: migration_43,
 }
 
 

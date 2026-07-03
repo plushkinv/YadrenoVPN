@@ -124,13 +124,13 @@ def buy_key_kb(
     Args:
         crypto_configured: Настроена ли крипто-оплата
         stars_enabled: Показывать ли кнопку оплаты Stars
-        cards_enabled: Показывать ли кнопку оплаты картой ЮКасса
-        yookassa_qr_enabled: Показывать ли кнопку QR-оплаты через ЮКассу
-        order_id: ID созданного ордера (для оптимизации Stars/Cards)
+        cards_enabled: Показывать ли кнопку TG payments (историческое внутреннее имя cards)
+        yookassa_qr_enabled: Показывать ли кнопку ЮКасса
+        order_id: ID созданного ордера (для оптимизации Stars/TG payments)
         show_balance_button: Показывать ли кнопку «Использовать баланс»
-        wata_enabled: Показывать ли кнопку оплаты WATA (Карта/СБП)
+        wata_enabled: Показывать ли кнопку оплаты WATA
         platega_enabled: Показывать ли кнопку оплаты Platega
-        cardlink_enabled: Показывать ли кнопку оплаты Cardlink (Карта/СБП)
+        cardlink_enabled: Показывать ли кнопку оплаты Cardlink
     """
     builder = InlineKeyboardBuilder()
 
@@ -147,23 +147,23 @@ def buy_key_kb(
             InlineKeyboardButton(text="⭐ Оплатить звёздами", callback_data=cb_data)
         )
 
-    # Карты (Telegram Payments) — переход к выбору тарифа
+    # TG payments (историческое внутреннее имя cards) — переход к выбору тарифа
     if cards_enabled:
         cb_data = f"pay_cards:{order_id}" if order_id else "pay_cards"
         builder.row(
             InlineKeyboardButton(text="💳 TG payments", callback_data=cb_data)
         )
 
-    # QR ЮКасса — переход к выбору тарифа
+    # ЮКасса — переход к выбору тарифа
     if yookassa_qr_enabled:
         builder.row(
-            InlineKeyboardButton(text="📱 ЮКасса (QR/СБП)", callback_data="pay_qr")
+            InlineKeyboardButton(text="📱 ЮКасса", callback_data="pay_qr")
         )
 
     # WATA — переход к выбору тарифа
     if wata_enabled:
         builder.row(
-            InlineKeyboardButton(text="🌊 WATA (Карта/СБП)", callback_data="pay_wata")
+            InlineKeyboardButton(text="🌊 WATA", callback_data="pay_wata")
         )
 
     # Platega — переход к выбору тарифа
@@ -175,7 +175,7 @@ def buy_key_kb(
     # Cardlink — переход к выбору тарифа
     if cardlink_enabled:
         builder.row(
-            InlineKeyboardButton(text="🔗 Cardlink (Карта/СБП)", callback_data="pay_cardlink")
+            InlineKeyboardButton(text="🔗 Cardlink", callback_data="pay_cardlink")
         )
 
     # Демо оплата (РФ) — переход к выбору тарифа
@@ -217,12 +217,12 @@ def balance_payment_kb(
     
     Показывается когда referral_reward_type='balance' и personal_balance > 0.
     
-    ВАЖНО: Только рублёвые методы доплаты (Cards/QR), без Stars/Crypto!
+    ВАЖНО: Только рублёвые методы доплаты (TG payments/ЮКасса), без Stars/Crypto!
     
     Логика минимальных сумм:
-    - QR (ЮKassa напрямую): минимум 1 ₽ — всегда доступен
-    - Card через Telegram Payments: минимум ~100 ₽ (10000 копеек)
-    - Card через ЮKassa напрямую (webhook): минимум 1 ₽
+    - ЮКасса напрямую: минимум 1 ₽ — всегда доступна при включённом методе
+    - TG payments через Telegram Payments: минимум ~100 ₽ (10000 копеек)
+    - Прямой сценарий ЮKassa для доплаты: минимум 1 ₽
     
     Args:
         tariff_id: ID выбранного тарифа
@@ -231,9 +231,9 @@ def balance_payment_kb(
         tariff_price_cents: Цена тарифа в копейках
         balance_to_deduct: Сколько будет списано с баланса
         remaining_cents: Сколько нужно доплатить
-        cards_enabled: Доступна ли оплата Картами
-        yookassa_qr_enabled: Доступна ли QR-оплата
-        cards_via_yookassa_direct: True если карты через ЮKassa напрямую (минимум 1₽),
+        cards_enabled: Доступна ли оплата TG payments
+        yookassa_qr_enabled: Доступна ли ЮКасса
+        cards_via_yookassa_direct: True если прямой сценарий ЮKassa доступен от 1 ₽,
                                    False если через Telegram Payments (минимум ~100₽)
     """
     builder = InlineKeyboardBuilder()
@@ -263,7 +263,7 @@ def balance_payment_kb(
         if 'card' in available_methods:
             builder.row(
                 InlineKeyboardButton(
-                    text="💳 Доплатить картой",
+                    text="💳 Доплатить через TG payments",
                     callback_data=f"pay_card_balance:{tariff_id}:{key_id if key_id else '0'}"
                 )
             )
@@ -271,7 +271,7 @@ def balance_payment_kb(
         if 'qr' in available_methods:
             builder.row(
                 InlineKeyboardButton(
-                    text="📱 Доплатить по QR (СБП)",
+                    text="📱 Доплатить через ЮКассу",
                     callback_data=f"pay_qr_balance:{tariff_id}:{key_id if key_id else '0'}"
                 )
             )

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 # Конфигурация провайдера Cardlink
-_CL_TITLE = '🔗 <b>Оплата Cardlink</b>'
+_CL_TITLE = '🔗 <b>Cardlink</b>'
 _CL_TYPE = 'cardlink'
 _CL_ERROR = 'Cardlink'
 _CL_QR_FILE = 'cardlink.png'
@@ -46,7 +46,7 @@ async def pay_cardlink_select_tariff(callback: CallbackQuery):
         return
     await safe_edit_or_send(
         callback.message,
-        '🔗 <b>Оплата Cardlink (Карта/СБП)</b>\n\nВыберите тариф:\n\n'
+        '🔗 <b>Cardlink</b>\n\nВыберите тариф:\n\n'
         '<i>Оплата банковской картой или СБП через сервис Cardlink.</i>',
         reply_markup=tariff_select_kb(rub_tariffs, is_cardlink=True)
     )
@@ -103,7 +103,7 @@ async def renew_cardlink_select_tariff(callback: CallbackQuery):
         return
     await safe_edit_or_send(
         callback.message,
-        f"🔗 <b>Оплата Cardlink (Карта/СБП)</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:",
+        f"🔗 <b>Cardlink</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:",
         reply_markup=renew_tariff_select_kb(rub_tariffs, key_id, is_cardlink=True)
     )
     await callback.answer()

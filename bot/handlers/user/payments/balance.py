@@ -243,7 +243,7 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('pay_card_balance:'))
 async def pay_card_balance_handler(callback: CallbackQuery, state: FSMContext):
     """
-    Частичная оплата: баланс + карта.
+    Частичная оплата: баланс + TG payments.
     
     Берёт данные из FSM state: balance_to_deduct, remaining_cents, tariff_id, key_id
     Создаёт инвойс на remaining_cents (не на полную цену тарифа!)
@@ -327,7 +327,7 @@ async def pay_card_balance_handler(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('pay_qr_balance:'))
 async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
     """
-    Частичная оплата: баланс + QR (СБП).
+    Частичная оплата: баланс + ЮКасса.
     
     Берёт данные из FSM state: balance_to_deduct, remaining_cents, tariff_id, key_id
     Создаёт инвойс на remaining_cents / 100 рублей (ЮKassa принимает рубли)
@@ -367,7 +367,7 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
     remaining_rub = remaining_cents / 100
     await state.update_data(balance_to_deduct=balance_to_deduct, tariff_price_cents=tariff_price_cents, tariff_id=tariff_id, key_id=key_id, remaining_cents=remaining_cents)
     (_, order_id) = create_pending_order(user_id=user_id, tariff_id=tariff_id, payment_type='yookassa_qr', vpn_key_id=key_id)
-    await safe_edit_or_send(callback.message, '⏳ Создаём QR-код для оплаты...')
+    await safe_edit_or_send(callback.message, '⏳ Создаём оплату через ЮКассу...')
     try:
         bot_info = await callback.bot.get_me()
         bot_name = bot_info.username
@@ -381,7 +381,7 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
             return
         from bot.handlers.user.payments.base import format_qr_payment_text
         text = format_qr_payment_text(
-            title='📱 <b>QR-код для оплаты</b>',
+            title='📱 <b>ЮКасса</b>',
             tariff_name=escape_html(tariff['name']),
             price_str=f"{remaining_rub:.2f} ₽",
             days=tariff['duration_days'],
@@ -392,5 +392,5 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
         await safe_edit_or_send(callback.message, text, photo=photo, reply_markup=yookassa_qr_kb(order_id, back_callback=back_cb, qr_url=qr_url), force_new=True)
     except (ValueError, RuntimeError) as e:
         logger.error(f'Ошибка создания QR ЮКасса: {e}')
-        await safe_edit_or_send(callback.message, f'❌ <b>Ошибка создания QR</b>\n\n<i>{escape_html(str(e))}</i>\n\nПопробуйте другой способ оплаты.', reply_markup=home_only_kb())
+        await safe_edit_or_send(callback.message, f'❌ <b>Ошибка ЮКассы</b>\n\n<i>{escape_html(str(e))}</i>\n\nПопробуйте другой способ оплаты.', reply_markup=home_only_kb())
     await callback.answer()

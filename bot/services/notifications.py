@@ -16,12 +16,13 @@ from bot.utils.text import escape_html
 
 logger = logging.getLogger(__name__)
 
-# Маппинг payment_type → человеко-понятное название
+# Маппинг payment_type → человеко-понятное название.
+# payment_type='cards' — историческое внутреннее имя для TG payments.
 PAYMENT_TYPE_LABELS: Dict[str, str] = {
     'stars': '⭐ Telegram Stars',
     'crypto': '💰 Крипто (USDT)',
-    'cards': '💳 Карта (TG Payments)',
-    'yookassa_qr': '📱 ЮКасса (QR/СБП)',
+    'cards': '💳 TG payments',
+    'yookassa_qr': '📱 ЮКасса',
     'wata': '🌊 WATA',
     'platega': '💸 Platega',
     'cardlink': '🔗 Cardlink',

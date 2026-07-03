@@ -14,23 +14,23 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-# Конфигурация QR-провайдера ЮКасса
-_YK_TITLE = '📱 <b>QR-код для оплаты</b>'
+# Конфигурация провайдера ЮКасса
+_YK_TITLE = '📱 <b>ЮКасса</b>'
 _YK_TYPE = 'yookassa_qr'
 _YK_ERROR = 'ЮКасса'
 _YK_QR_FILE = 'qr.png'
 _YK_CHECK_PREFIX = 'check_yookassa_qr'
 _YK_RESULT_KEY = 'yookassa_payment_id'
-_YK_LOADING = '⏳ Создаём QR-код для оплаты...'
+_YK_LOADING = '⏳ Создаём оплату через ЮКассу...'
 
 
 # ============================================================================
-# ОПЛАТА КАРТОЙ (Telegram Payments API — не трогаем)
+# TG PAYMENTS (историческое внутреннее имя cards)
 # ============================================================================
 
 @router.callback_query(F.data.startswith('pay_cards'))
 async def pay_cards_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты Картой (Новый ключ)."""
+    """Выбор тарифа для оплаты через TG payments (новый ключ)."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -39,15 +39,15 @@ async def pay_cards_select_tariff(callback: CallbackQuery):
         order_id = callback.data.split(':')[1]
     tariffs = get_all_tariffs(include_hidden=False)
     if not tariffs:
-        await safe_edit_or_send(callback.message, '💳 <b>Оплата картой</b>\n\n😔 Нет доступных тарифов.\n\nПопробуйте позже или обратитесь в поддержку.', reply_markup=home_only_kb())
+        await safe_edit_or_send(callback.message, '💳 <b>TG payments</b>\n\n😔 Нет доступных тарифов.\n\nПопробуйте позже или обратитесь в поддержку.', reply_markup=home_only_kb())
         await callback.answer()
         return
-    await safe_edit_or_send(callback.message, '💳 <b>Оплата картой</b>\n\nВыберите тариф:', reply_markup=tariff_select_kb(tariffs, order_id=order_id, is_cards=True))
+    await safe_edit_or_send(callback.message, '💳 <b>TG payments</b>\n\nВыберите тариф:', reply_markup=tariff_select_kb(tariffs, order_id=order_id, is_cards=True))
     await callback.answer()
 
 @router.callback_query(F.data.startswith('cards_pay:'))
 async def pay_cards_invoice(callback: CallbackQuery):
-    """Создание инвойса для оплаты Картой (Новый ключ)."""
+    """Создание инвойса для оплаты через TG payments (новый ключ)."""
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, get_user_internal_id, create_pending_order, update_order_tariff, get_setting
     parts = callback.data.split(':')
@@ -131,12 +131,12 @@ async def renew_cards_select_tariff(callback: CallbackQuery):
     if not tariffs:
         await callback.answer('Нет доступных тарифов', show_alert=True)
         return
-    await safe_edit_or_send(callback.message, f"💳 <b>Оплата картой</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:", reply_markup=renew_tariff_select_kb(tariffs, key_id, order_id=order_id, is_cards=True))
+    await safe_edit_or_send(callback.message, f"💳 <b>TG payments</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:", reply_markup=renew_tariff_select_kb(tariffs, key_id, order_id=order_id, is_cards=True))
     await callback.answer()
 
 @router.callback_query(F.data.startswith('renew_pay_cards:'))
 async def renew_cards_invoice(callback: CallbackQuery):
-    """Инвойс для продления (Картой)."""
+    """Инвойс для продления через TG payments."""
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, get_user_internal_id, create_pending_order, get_key_details_for_user, update_order_tariff, get_setting
     parts = callback.data.split(':')
@@ -204,22 +204,22 @@ async def renew_cards_invoice(callback: CallbackQuery):
 
 
 # ============================================================================
-# QR-ОПЛАТА ЮКАССА (refactored → общие функции base.py)
+# ЮКАССА (прямой API, refactored → общие функции base.py)
 # ============================================================================
 
 @router.callback_query(F.data == 'pay_qr')
 async def pay_qr_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для QR-оплаты (Новый ключ)."""
+    """Выбор тарифа для оплаты через ЮКассу (новый ключ)."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
     tariffs = get_all_tariffs(include_hidden=False)
     rub_tariffs = [t for t in tariffs if t.get('price_rub') and t['price_rub'] > 0]
     if not rub_tariffs:
-        await safe_edit_or_send(callback.message, '📱 <b>QR-оплата</b>\n\n😔 Для QR-оплаты не настроены цены в рублях.\nОбратитесь к администратору.', reply_markup=home_only_kb())
+        await safe_edit_or_send(callback.message, '📱 <b>ЮКасса</b>\n\n😔 Для оплаты через ЮКассу не настроены цены в рублях.\nОбратитесь к администратору.', reply_markup=home_only_kb())
         await callback.answer()
         return
-    await safe_edit_or_send(callback.message, '📱 <b>QR-оплата (Карта/СБП)</b>\n\nВыберите тариф:\n\n<i>Оплата через ЮКассу — поддерживает банковские карты и СБП.</i>', reply_markup=tariff_select_kb(rub_tariffs, is_qr=True))
+    await safe_edit_or_send(callback.message, '📱 <b>ЮКасса</b>\n\nВыберите тариф:\n\n<i>Оплата через ЮКассу — поддерживает банковские карты и СБП.</i>', reply_markup=tariff_select_kb(rub_tariffs, is_qr=True))
     await callback.answer()
 
 @router.callback_query(F.data.startswith('qr_pay:'))
@@ -303,7 +303,7 @@ async def _run_yookassa_check(message, state, order_id: str,
 
 @router.callback_query(F.data.startswith('renew_qr_tariff:'))
 async def renew_qr_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для QR-оплаты при продлении ключа."""
+    """Выбор тарифа для оплаты через ЮКассу при продлении ключа."""
     from database.requests import get_key_details_for_user
     from bot.keyboards.user import renew_tariff_select_kb
     from bot.utils.groups import get_tariffs_for_renewal
@@ -317,7 +317,7 @@ async def renew_qr_select_tariff(callback: CallbackQuery):
     if not rub_tariffs:
         await callback.answer('😔 Нет тарифов с ценой в рублях', show_alert=True)
         return
-    await safe_edit_or_send(callback.message, f"📱 <b>QR-оплата (Карта/СБП)</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:", reply_markup=renew_tariff_select_kb(rub_tariffs, key_id, is_qr=True))
+    await safe_edit_or_send(callback.message, f"📱 <b>ЮКасса</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:", reply_markup=renew_tariff_select_kb(rub_tariffs, key_id, is_qr=True))
     await callback.answer()
 
 @router.callback_query(F.data.startswith('renew_pay_qr:'))
