@@ -31,6 +31,10 @@ from database.requests import (
     toggle_server_group
 )
 from bot.utils.admin import is_admin
+from bot.services.admin_monitoring import (
+    build_servers_monitoring_text,
+    collect_admin_monitoring_snapshot,
+)
 from bot.services.vpn_api import (
     get_client_from_server_data,
     test_server_connection,
@@ -71,48 +75,9 @@ router = Router()
 
 
 async def get_servers_list_text() -> str:
-    """Формирует текст списка серверов со статистикой."""
-    servers = get_all_servers()
-    
-    if not servers:
-        return (
-            "🖥️ <b>Сервера</b>\n\n"
-            "Серверов пока нет.\n"
-            "Нажмите «➕ Добавить сервер» чтобы добавить первый!"
-        )
-    
-    lines = ["🖥️ <b>Сервера</b>\n"]
-    
-    for server in servers:
-        status_emoji = "🟢" if server['is_active'] else "🔴"
-        lines.append(f"{status_emoji} <b>{server['name']}</b> (<code>{server['host']}:{server['port']}</code>)")
-        
-        if server['is_active']:
-            try:
-                client = get_client_from_server_data(server)
-                stats = await client.get_stats()
-                
-                if stats.get('online'):
-                    traffic = format_traffic(stats.get('total_traffic_bytes', 0))
-                    active = stats.get('active_clients', 0)
-                    online = stats.get('online_clients', 0)
-                    
-                    cpu_text = ""
-                    if stats.get('cpu_percent') is not None:
-                        cpu_text = f" | 💻 {stats['cpu_percent']}% CPU"
-                    
-                    lines.append(f"   🔑 {online} онлайн | 📊 {traffic}{cpu_text}")
-                else:
-                    lines.append(f"   ⚠️ Недоступен")
-            except Exception as e:
-                logger.warning(f"Ошибка статистики {server['name']}: {e}")
-                lines.append(f"   ⚠️ Ошибка подключения")
-        else:
-            lines.append("   ⏸️ Деактивирован")
-        
-        lines.append("")
-    
-    return "\n".join(lines)
+    """Формирует подробный мониторинг панелей и нод."""
+    snapshot = await collect_admin_monitoring_snapshot()
+    return build_servers_monitoring_text(snapshot)
 
 
 async def render_server_view(message: Message, server_id: int, state: FSMContext):

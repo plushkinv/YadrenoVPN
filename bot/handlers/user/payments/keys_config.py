@@ -1,4 +1,5 @@
 import logging
+from types import SimpleNamespace
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, LabeledPrice, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -10,6 +11,91 @@ from config import ADMIN_IDS
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+
+def _is_callback_target(target) -> bool:
+    return isinstance(target, CallbackQuery) or (
+        not isinstance(target, Message)
+        and getattr(target, 'message', None) is not None
+        and getattr(target, 'from_user', None) is not None
+    )
+
+
+def _target_message(target):
+    return target.message if _is_callback_target(target) else target
+
+
+def _target_user(target):
+    return target.from_user
+
+
+def _target_with_message(target, message: Message):
+    if _is_callback_target(target):
+        return target
+    return SimpleNamespace(message=message, from_user=_target_user(target))
+
+
+async def _safe_edit_target(target, text: str, **kwargs):
+    force_new = kwargs.pop('force_new', False)
+    if not _is_callback_target(target):
+        force_new = True
+    return await safe_edit_or_send(
+        _target_message(target),
+        text,
+        force_new=force_new,
+        **kwargs,
+    )
+
+
+async def _show_target_error(target, text: str) -> None:
+    if _is_callback_target(target):
+        await target.answer(text, show_alert=True)
+        return
+    await _safe_edit_target(target, text)
+
+
+async def _answer_callback_if_needed(target, *args, **kwargs) -> None:
+    if _is_callback_target(target):
+        await target.answer(*args, **kwargs)
+
+
+async def _continue_new_key_config(target, state: FSMContext, server: dict, *, force_new: bool = False):
+    """Продолжает настройку ключа после ручного или автоматического выбора сервера."""
+    from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
+    from bot.keyboards.user import new_key_inbound_list_kb
+    from bot.states.user_states import NewKeyConfig
+    from bot.utils.key_pages import build_server_screen_data, keyboard_rows
+    from bot.utils.page_renderer import render_page
+
+    server_id = server['id']
+    await state.update_data(new_key_server_id=server_id)
+
+    # Subscription mode: выбор inbound не нужен — создаём ключ во всех inbound сразу.
+    if is_subscription_mode():
+        await process_new_key_subscription_final(target, state, server_id)
+        return
+
+    try:
+        client = await get_client(server_id)
+        inbounds = await client.get_inbounds()
+        if not inbounds:
+            await _show_target_error(target, '❌ На сервере нет доступных протоколов')
+            return
+        if len(inbounds) == 1:
+            await process_new_key_final(target, state, server_id, inbounds[0]['id'])
+            return
+        await state.set_state(NewKeyConfig.waiting_for_inbound)
+        await render_page(
+            target,
+            page_key='new_key_inbound_select',
+            text_replacements={'%данныеэкрана%': build_server_screen_data(server)},
+            prepend_buttons=keyboard_rows(new_key_inbound_list_kb(inbounds)),
+            force_new=force_new,
+        )
+        await _answer_callback_if_needed(target)
+    except VPNAPIError as e:
+        await _show_target_error(target, f'❌ Ошибка подключения: {e}')
+
 
 async def start_new_key_config(message: Message, state: FSMContext, order_id: str, key_id: int=None):
     """
@@ -34,6 +120,13 @@ async def start_new_key_config(message: Message, state: FSMContext, order_id: st
         return
     await state.set_state(NewKeyConfig.waiting_for_server)
     await state.update_data(new_key_order_id=order_id, new_key_id=key_id)
+    if len(servers) == 1:
+        logger.info(
+            f"Автовыбор единственного сервера {servers[0]['id']} "
+            f"для нового ключа (Order: {order_id})"
+        )
+        await _continue_new_key_config(message, state, servers[0], force_new=True)
+        return
     await render_page(
         message,
         page_key='new_key_server_select',
@@ -46,45 +139,15 @@ async def start_new_key_config(message: Message, state: FSMContext, order_id: st
 async def process_new_key_server_selection(callback: CallbackQuery, state: FSMContext):
     """Выбор сервера для нового ключа."""
     from database.requests import get_server_by_id
-    from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
-    from bot.keyboards.user import new_key_inbound_list_kb
-    from bot.states.user_states import NewKeyConfig
-    from bot.utils.key_pages import build_server_screen_data, keyboard_rows
-    from bot.utils.page_renderer import render_page
     server_id = int(callback.data.split(':')[1])
     server = get_server_by_id(server_id)
     if not server:
         await callback.answer('Сервер не найден', show_alert=True)
         return
-    await state.update_data(new_key_server_id=server_id)
-
-    # Subscription mode: выбор inbound не нужен — создаём ключ во всех inbound сразу
-    if is_subscription_mode():
-        await process_new_key_subscription_final(callback, state, server_id)
-        return
-
-    try:
-        client = await get_client(server_id)
-        inbounds = await client.get_inbounds()
-        if not inbounds:
-            await callback.answer('❌ На сервере нет доступных протоколов', show_alert=True)
-            return
-        if len(inbounds) == 1:
-            await process_new_key_final(callback, state, server_id, inbounds[0]['id'])
-            return
-        await state.set_state(NewKeyConfig.waiting_for_inbound)
-        await render_page(
-            callback,
-            page_key='new_key_inbound_select',
-            text_replacements={'%данныеэкрана%': build_server_screen_data(server)},
-            prepend_buttons=keyboard_rows(new_key_inbound_list_kb(inbounds)),
-        )
-    except VPNAPIError as e:
-        await callback.answer(f'❌ Ошибка подключения: {e}', show_alert=True)
-    await callback.answer()
+    await _continue_new_key_config(callback, state, server)
 
 
-async def process_new_key_subscription_final(callback: CallbackQuery, state: FSMContext, server_id: int):
+async def process_new_key_subscription_final(target, state: FSMContext, server_id: int):
     """
     Финальный этап создания ключа в режиме Subscription.
 
@@ -107,12 +170,12 @@ async def process_new_key_subscription_final(callback: CallbackQuery, state: FSM
     order_id = data.get('new_key_order_id')
     key_id = data.get('new_key_id')
     if not order_id:
-        await safe_edit_or_send(callback.message, '❌ Ошибка: потерян номер заказа.')
+        await _safe_edit_target(target, '❌ Ошибка: потерян номер заказа.')
         await state.clear()
         return
     order = find_order_by_order_id(order_id)
     if not order:
-        await safe_edit_or_send(callback.message, '❌ Ошибка: заказ не найден.')
+        await _safe_edit_target(target, '❌ Ошибка: заказ не найден.')
         await state.clear()
         return
     if not key_id:
@@ -125,11 +188,12 @@ async def process_new_key_subscription_final(callback: CallbackQuery, state: FSM
             key_id = create_initial_vpn_key(order['user_id'], order['tariff_id'], days, traffic_limit=traffic_limit_bytes)
             update_payment_key_id(order_id, key_id)
 
-    await safe_edit_or_send(callback.message, '⏳ Настраиваем вашу подписку...')
+    progress_message = await _safe_edit_target(target, '⏳ Настраиваем вашу подписку...')
 
     try:
-        telegram_id = callback.from_user.id
-        username = callback.from_user.username
+        user = _target_user(target)
+        telegram_id = user.id
+        username = user.username
         user_fake_dict = {'telegram_id': telegram_id, 'username': username}
         panel_email = generate_unique_email(user_fake_dict)
         sub_id = _uuid.uuid4().hex
@@ -189,10 +253,10 @@ async def process_new_key_subscription_final(callback: CallbackQuery, state: FSM
 
         await state.clear()
         new_key = get_key_details_for_user(key_id, telegram_id)
-        await send_key_with_qr(callback, new_key, key_issued_kb(), is_new=True)
+        await send_key_with_qr(_target_with_message(target, progress_message), new_key, key_issued_kb(), is_new=True)
     except Exception as e:
         logger.error(f'Ошибка настройки subscription-ключа (id={key_id}): {e}')
-        await safe_edit_or_send(callback.message,
+        await _safe_edit_target(target,
             f'❌ Ошибка настройки ключа: {escape_html(str(e))}\n'
             f'Обратитесь в поддержку, указав Order ID: {order_id}')
 
@@ -204,7 +268,7 @@ async def process_new_key_inbound_selection(callback: CallbackQuery, state: FSMC
     server_id = data.get('new_key_server_id')
     await process_new_key_final(callback, state, server_id, inbound_id)
 
-async def process_new_key_final(callback: CallbackQuery, state: FSMContext, server_id: int, inbound_id: int):
+async def process_new_key_final(target, state: FSMContext, server_id: int, inbound_id: int):
     """Финальный этап создания ключа."""
     from database.requests import get_server_by_id, update_vpn_key_config, update_payment_key_id, find_order_by_order_id, get_user_internal_id, get_key_details_for_user, create_initial_vpn_key
     from bot.services.vpn_api import get_client
@@ -215,12 +279,12 @@ async def process_new_key_final(callback: CallbackQuery, state: FSMContext, serv
     order_id = data.get('new_key_order_id')
     key_id = data.get('new_key_id')
     if not order_id:
-        await safe_edit_or_send(callback.message, '❌ Ошибка: потерян номер заказа.')
+        await _safe_edit_target(target, '❌ Ошибка: потерян номер заказа.')
         await state.clear()
         return
     order = find_order_by_order_id(order_id)
     if not order:
-        await safe_edit_or_send(callback.message, '❌ Ошибка: заказ не найден.')
+        await _safe_edit_target(target, '❌ Ошибка: заказ не найден.')
         await state.clear()
         return
     if not key_id:
@@ -233,11 +297,12 @@ async def process_new_key_final(callback: CallbackQuery, state: FSMContext, serv
             traffic_limit_bytes = (_tariff.get('traffic_limit_gb', 0) or 0) * 1024 ** 3 if _tariff else 0
             key_id = create_initial_vpn_key(order['user_id'], order['tariff_id'], days, traffic_limit=traffic_limit_bytes)
             update_payment_key_id(order_id, key_id)
-    await safe_edit_or_send(callback.message, '⏳ Настраиваем ваш ключ...')
+    progress_message = await _safe_edit_target(target, '⏳ Настраиваем ваш ключ...')
     try:
         user_id = order['user_id']
-        telegram_id = callback.from_user.id
-        username = callback.from_user.username
+        user = _target_user(target)
+        telegram_id = user.id
+        username = user.username
         user_fake_dict = {'telegram_id': telegram_id, 'username': username}
         panel_email = generate_unique_email(user_fake_dict)
         client = await get_client(server_id)
@@ -253,10 +318,10 @@ async def process_new_key_final(callback: CallbackQuery, state: FSMContext, serv
         update_payment_key_id(order_id, key_id)
         await state.clear()
         new_key = get_key_details_for_user(key_id, telegram_id)
-        await send_key_with_qr(callback, new_key, key_issued_kb(), is_new=True)
+        await send_key_with_qr(_target_with_message(target, progress_message), new_key, key_issued_kb(), is_new=True)
     except Exception as e:
         logger.error(f'Ошибка настройки ключа (id={key_id}): {e}')
-        await safe_edit_or_send(callback.message, f'❌ Ошибка настройки ключа: {escape_html(str(e))}\nОбратитесь в поддержку, указав Order ID: ' + str(order_id))
+        await _safe_edit_target(target, f'❌ Ошибка настройки ключа: {escape_html(str(e))}\nОбратитесь в поддержку, указав Order ID: ' + str(order_id))
 
 @router.callback_query(F.data == 'back_to_server_select')
 async def back_to_server_select(callback: CallbackQuery, state: FSMContext):

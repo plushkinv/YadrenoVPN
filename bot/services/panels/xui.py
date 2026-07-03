@@ -1182,6 +1182,32 @@ class XUIClient(BaseVPNClient):
             self._get_online_clients_count_impl
         )
 
+    async def get_nodes(self) -> List[Dict[str, Any]]:
+        """
+        Получает список нод, подключённых к мастер-панели 3X-UI.
+
+        Старые панели и панели без Node API возвращают 404. Для мониторинга это
+        не ошибка: у такой панели просто нет доступного списка нод.
+        """
+        try:
+            result = await self._request(
+                "GET",
+                "/panel/api/nodes/list",
+                retry=False,
+                log_error=False,
+            )
+        except VPNAPIError as e:
+            logger.debug(
+                f"get_nodes: Node API недоступен на панели "
+                f"{self.server.get('name', self.server_id)}: {e}"
+            )
+            return []
+
+        obj = result.get("obj", [])
+        if isinstance(obj, list):
+            return [node for node in obj if isinstance(node, dict)]
+        return []
+
     async def _get_online_clients_count_impl(self) -> int:
         """
         Получает количество пользователей онлайн.
