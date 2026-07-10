@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -26,6 +27,7 @@ from bot.services.page_context import get_page_context
 from bot.services.yadreno_admin import (
     UPLOAD_TMP_DIR,
     YADRENO_ADMIN_CHAT_TOPIC_ID,
+    YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID,
     YADRENO_ADMIN_YAA_TOPIC_ID,
     YadrenoAdminError,
     YadrenoAdminLatest,
@@ -81,10 +83,30 @@ YAA_KEY_DELIVERY_PLACEHOLDERS = frozenset({
 YADRENO_ADMIN_FSM_TOPIC_KEY = "yadreno_topic_id"
 YADRENO_ADMIN_ALLOWED_TOPIC_IDS = frozenset({
     YADRENO_ADMIN_CHAT_TOPIC_ID,
+    YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID,
     YADRENO_ADMIN_YAA_TOPIC_ID,
 })
 YADRENO_ADMIN_UPLOAD_MAX_MB = 10
 YADRENO_ADMIN_UPLOAD_MAX_BYTES = YADRENO_ADMIN_UPLOAD_MAX_MB * 1024 * 1024
+YADRENO_ADMIN_UPLOAD_MAX_FILES = 5
+YADRENO_ADMIN_ALBUM_DEBOUNCE_SEC = 1.0
+
+
+@dataclass
+class _YadrenoAlbumBuffer:
+    """Short-lived Telegram media group buffer for one Yadreno Admin turn."""
+
+    user_id: int
+    topic_id: int
+    api_key: str
+    media_group_id: str
+    first_message: Message
+    messages: list[Message] = field(default_factory=list)
+    flush_task: asyncio.Task | None = None
+
+
+_yadreno_album_buffers: dict[tuple[int, int, str], _YadrenoAlbumBuffer] = {}
+_yadreno_album_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
 
 
 def _missing_key_text() -> str:
@@ -107,6 +129,21 @@ def _chat_intro_text() -> str:
         "🤖 <b>Yadreno Admin</b>\n\n"
         "Напишите задачу обычным сообщением — агент сможет смотреть и менять этот сервер.\n\n"
         "Чтобы остановить текущий запрос, отправьте <code>/cancel</code>."
+    )
+
+
+def _customization_intro_text() -> str:
+    """Build the intro text for the separate YadrenoVPN customization chat."""
+    return (
+        "🛠 <b>Кастомизация YadrenoVPN</b>\n\n"
+        "Этот чат предназначен для настройки страниц, кнопок, текстов, медиа "
+        "и пользовательских расширений YadrenoVPN.\n\n"
+        "По умолчанию агент работает через безопасные слои кастомизации: "
+        "поля <code>*_custom</code>, штатные настройки, публичные API и "
+        "<code>custom_extensions/</code>. Изменение ядра проекта отключено "
+        "скрытой настройкой, если администратор явно не разрешил его.\n\n"
+        "Опишите, что нужно изменить. Для редактирования конкретной страницы "
+        "удобнее открыть её в боте и вызвать <code>/yaa</code> прямо оттуда."
     )
 
 
@@ -306,7 +343,31 @@ async def _show_yadreno_entry(target: Message | CallbackQuery, state: FSMContext
     await safe_edit_or_send(
         message,
         _chat_intro_text(),
-        reply_markup=yadreno_admin_chat_kb(),
+        reply_markup=yadreno_admin_chat_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+    )
+
+
+async def _show_yadreno_customization_entry(
+    target: Message | CallbackQuery,
+    state: FSMContext,
+) -> None:
+    """Open the separate YadrenoVPN customization lane."""
+    api_key = get_yadreno_admin_api_key()
+    message = target.message if isinstance(target, CallbackQuery) else target
+    if not api_key:
+        await state.clear()
+        await safe_edit_or_send(
+            message,
+            _missing_key_text(),
+            reply_markup=yadreno_admin_no_key_kb(),
+        )
+        return
+
+    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID)
+    await safe_edit_or_send(
+        message,
+        _customization_intro_text(),
+        reply_markup=yadreno_admin_chat_kb(YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID),
     )
 
 
@@ -320,7 +381,17 @@ async def show_yadreno_admin(callback: CallbackQuery, state: FSMContext):
     await _show_yadreno_entry(callback, state)
 
 
-@router.callback_query(F.data == "admin_yadreno_new_chat")
+@router.callback_query(F.data == "admin_yadreno_customization")
+async def show_yadreno_customization(callback: CallbackQuery, state: FSMContext):
+    """Open the separate YadrenoVPN customization section."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await callback.answer()
+    await _show_yadreno_customization_entry(callback, state)
+
+
+@router.callback_query(F.data.startswith("admin_yadreno_new_chat"))
 async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
     """Открывает новый чат, если агент сейчас не занят."""
     if not is_admin(callback.from_user.id):
@@ -337,7 +408,7 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
         result = await start_new_chat(
             callback.from_user.id,
             api_key,
-            topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+            topic_id=_callback_topic_id(callback.data, "admin_yadreno_new_chat"),
         )
     except YadrenoAdminError as e:
         await callback.answer(str(e)[:180], show_alert=True)
@@ -350,12 +421,13 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CHAT_TOPIC_ID)
+    topic_id = _callback_topic_id(callback.data, "admin_yadreno_new_chat")
+    await _activate_yadreno_chat_lane(state, topic_id)
     await safe_edit_or_send(
         callback.message,
         "🆕 <b>Новый чат открыт</b>\n\n"
         "Контекст сброшен. Напишите новую задачу обычным сообщением.",
-        reply_markup=yadreno_admin_chat_kb(),
+        reply_markup=yadreno_admin_chat_kb(topic_id),
     )
     await callback.answer("Новый чат открыт")
 
@@ -397,7 +469,7 @@ async def cancel_yadreno_dialog_button(callback: CallbackQuery):
             "🛑 <b>Запрос остановлен</b>\n\n"
             "Хаб подтвердил, что задача уже не выполнялась, и безопасно снял зависший lock. "
             "Можно начать новый диалог.",
-            reply_markup=yadreno_admin_chat_kb(),
+            reply_markup=yadreno_admin_chat_kb(topic_id),
         )
         await callback.answer("Зависший запрос очищен")
         return
@@ -607,7 +679,7 @@ async def save_yadreno_key(message: Message, state: FSMContext):
         "✅ <b>Ключ сохранён</b>\n\n"
         "Теперь можно писать задачи агенту обычными сообщениями."
         f"{ip_line}",
-        reply_markup=yadreno_admin_chat_kb(),
+        reply_markup=yadreno_admin_chat_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
         force_new=editing_message is None,
     )
 
@@ -982,6 +1054,177 @@ def _extract_chat_attachment_context(message: Message) -> str:
     return ""
 
 
+def _yadreno_album_key(message: Message, topic_id: int) -> tuple[int, int, str]:
+    """Build a stable key for one Telegram media group in one chat lane."""
+    return (
+        int(message.from_user.id),
+        topic_id,
+        str(message.media_group_id),
+    )
+
+
+def _yadreno_album_lock(key: tuple[int, int, str]) -> asyncio.Lock:
+    """Return the per-album lock without creating locks outside the event loop."""
+    lock = _yadreno_album_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _yadreno_album_locks[key] = lock
+    return lock
+
+
+def _message_prompt_text(message: Message) -> str:
+    """Return plain prompt/caption from a Telegram message."""
+    return get_message_text_for_storage(message, "plain").strip()
+
+
+def _build_yadreno_album_prompt(messages: list[Message]) -> str:
+    """Build one agent prompt from a Telegram media group."""
+    prompt = next((text for msg in messages if (text := _message_prompt_text(msg))), "")
+    if not prompt:
+        prompt = "Проанализируй приложенные изображения и файлы."
+        if all(_is_metadata_only_media(msg) for msg in messages):
+            prompt = (
+                "Пользователь прислал медиа без скачивания. "
+                "Используй только Telegram metadata ниже; содержимое видео/GIF не анализируется."
+            )
+
+    contexts: list[str] = []
+    for index, msg in enumerate(messages, 1):
+        context = _extract_chat_attachment_context(msg)
+        if context:
+            contexts.append(f"\n\n--- Attachment {index} ---{context}")
+    return f"{prompt}{''.join(contexts)}"
+
+
+async def _handle_yadreno_chat_album_item(
+    message: Message,
+    topic_id: int,
+    api_key: str,
+) -> None:
+    """Buffer one media-group item and schedule a single Yadreno Admin turn."""
+    key = _yadreno_album_key(message, topic_id)
+    lock = _yadreno_album_lock(key)
+    async with lock:
+        buffer = _yadreno_album_buffers.get(key)
+        if buffer is None:
+            buffer = _YadrenoAlbumBuffer(
+                user_id=message.from_user.id,
+                topic_id=topic_id,
+                api_key=api_key,
+                media_group_id=str(message.media_group_id),
+                first_message=message,
+            )
+            _yadreno_album_buffers[key] = buffer
+        buffer.api_key = api_key
+        buffer.messages.append(message)
+        if buffer.flush_task and not buffer.flush_task.done():
+            buffer.flush_task.cancel()
+        buffer.flush_task = asyncio.create_task(_flush_yadreno_album_after_delay(key))
+
+
+async def _flush_yadreno_album_after_delay(key: tuple[int, int, str]) -> None:
+    """Flush one buffered Telegram album after the debounce window."""
+    try:
+        await asyncio.sleep(YADRENO_ADMIN_ALBUM_DEBOUNCE_SEC)
+    except asyncio.CancelledError:
+        return
+
+    lock = _yadreno_album_locks.get(key)
+    if lock is None:
+        return
+    async with lock:
+        buffer = _yadreno_album_buffers.pop(key, None)
+
+    if buffer is None:
+        return
+
+    try:
+        await _process_yadreno_album_buffer(buffer)
+    finally:
+        if key not in _yadreno_album_buffers:
+            _yadreno_album_locks.pop(key, None)
+
+
+async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
+    """Download uploadable album files and run one Yadreno Admin request."""
+    prompt = _build_yadreno_album_prompt(buffer.messages)
+    thinking = await safe_edit_or_send(
+        buffer.first_message,
+        "🤖 <b>Yadreno Admin</b>\n\n⏳ Загружаю файлы и запускаю агента...",
+        reply_markup=yadreno_admin_agent_kb(buffer.topic_id),
+        force_new=True,
+    )
+    progress = _YadrenoProgressRenderer(
+        thinking,
+        topic_id=buffer.topic_id,
+    )
+
+    uploads: list[YadrenoAdminUpload] = []
+    overflow_count = 0
+    download_errors: list[str] = []
+    metadata_only = any(_is_metadata_only_media(msg) for msg in buffer.messages)
+
+    try:
+        for msg in buffer.messages:
+            if _message_upload_meta(msg) is None:
+                continue
+            if len(uploads) >= YADRENO_ADMIN_UPLOAD_MAX_FILES:
+                overflow_count += 1
+                continue
+            try:
+                uploads.extend(await _download_yadreno_upload(msg))
+            except YadrenoAdminError as e:
+                download_errors.append(str(e))
+
+        if download_errors:
+            prompt = (
+                f"{prompt}\n\nНекоторые файлы альбома не удалось скачать:\n"
+                + "\n".join(f"- {error}" for error in download_errors[:3])
+            )
+        if overflow_count:
+            prompt = (
+                f"{prompt}\n\nНе скачано файлов сверх локального лимита: "
+                f"{overflow_count}."
+            )
+
+        if uploads:
+            final = await run_dialog_with_uploads(
+                buffer.user_id,
+                buffer.api_key,
+                prompt,
+                uploads,
+                topic_id=buffer.topic_id,
+                progress_callback=progress.handle,
+                overflow_count=overflow_count,
+            )
+        elif metadata_only:
+            final = await run_dialog(
+                buffer.user_id,
+                buffer.api_key,
+                prompt,
+                topic_id=buffer.topic_id,
+                progress_callback=progress.handle,
+            )
+        elif download_errors:
+            raise YadrenoAdminError(download_errors[0])
+        else:
+            raise YadrenoAdminError("В альбоме нет поддерживаемых файлов")
+
+        await safe_edit_or_send(
+            progress.final_target,
+            _format_final_response(final.content, final.viewer_url),
+            reply_markup=yadreno_admin_agent_kb(buffer.topic_id),
+        )
+    except YadrenoAdminError as e:
+        await safe_edit_or_send(
+            progress.final_target,
+            f"❌ <b>Yadreno Admin недоступен</b>\n\n{escape_html(str(e))}",
+            reply_markup=yadreno_admin_agent_kb(buffer.topic_id),
+        )
+    finally:
+        _cleanup_yadreno_uploads(uploads)
+
+
 def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
     """Извлекает аргумент команды, сохраняя Telegram HTML и custom emoji."""
     formatted_message = get_message_text_for_storage(message, "html")
@@ -1311,6 +1554,10 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
         )
         return
 
+    if message.media_group_id:
+        await _handle_yadreno_chat_album_item(message, topic_id, api_key)
+        return
+
     raw_prompt = get_message_text_for_storage(message, 'plain').strip()
     metadata_only = _is_metadata_only_media(message)
     attachment_context = _extract_chat_attachment_context(message)
@@ -1320,7 +1567,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
             "🤖 <b>Yadreno Admin</b>\n\n"
             "Видео и GIF не отправляются на анализ. Добавьте подпись с задачей "
             "или используйте <code>/yaa ...</code> на открытой странице, если нужно поставить это медиа.",
-            reply_markup=yadreno_admin_chat_kb(),
+            reply_markup=yadreno_admin_chat_kb(topic_id),
             force_new=True,
         )
         return

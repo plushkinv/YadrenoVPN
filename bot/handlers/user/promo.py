@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from bot.states.user_states import PromoInput
 from bot.utils.page_renderer import render_page, render_page_text
 from bot.utils.text import escape_html, get_message_text_for_storage
-from database.requests import get_user_internal_id, is_base62_code
+from database.requests import get_user_internal_id, has_available_promo_codes, is_base62_code
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,16 @@ async def promo_enter_handler(callback: CallbackQuery, state: FSMContext):
             key_id = int(callback.data.split(":", 1)[1])
         except (TypeError, ValueError):
             key_id = None
+
+    if not has_available_promo_codes():
+        await render_promo_status_page(
+            callback,
+            title_html="🎟 <b>Промокод</b>",
+            body_text="Сейчас нет доступных промокодов или купонов. Вернитесь к оплате и выберите другой способ.",
+            append_buttons=_promo_return_kb(key_id).inline_keyboard,
+        )
+        await callback.answer()
+        return
 
     await state.update_data(
         promo_key_id=key_id,

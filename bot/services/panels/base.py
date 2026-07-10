@@ -1,10 +1,19 @@
 import abc
 from abc import abstractmethod
+from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 
 class VPNAPIError(Exception):
     """Ошибка при работе с VPN API."""
     pass
+
+@dataclass(frozen=True)
+class PanelDatabaseBackup:
+    """Скачанный backup-файл панели и его фактический формат."""
+
+    data: bytes
+    extension: str
+    db_kind: str
 
 class BaseVPNClient(abc.ABC):
     """Базовый клиент для работы с VPN-панелями."""
@@ -77,7 +86,7 @@ class BaseVPNClient(abc.ABC):
         pass
 
     @abstractmethod
-    async def get_database_backup(self) -> bytes:
+    async def get_database_backup(self) -> PanelDatabaseBackup:
         pass
 
     @abstractmethod

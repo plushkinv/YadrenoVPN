@@ -25,13 +25,13 @@ def yadreno_admin_no_key_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def yadreno_admin_chat_kb() -> InlineKeyboardMarkup:
+def yadreno_admin_chat_kb(topic_id: int = 0) -> InlineKeyboardMarkup:
     """Входная клавиатура чата с агентом."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
             text='🆕 Новый чат',
-            callback_data='admin_yadreno_new_chat',
+            callback_data=f'admin_yadreno_new_chat:{int(topic_id)}',
         ),
         InlineKeyboardButton(
             text='🔑 Заменить api_key',

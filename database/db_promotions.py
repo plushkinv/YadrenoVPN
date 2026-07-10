@@ -28,6 +28,7 @@ __all__ = [
     "get_promo_code_by_code",
     "get_promo_codes",
     "get_promo_code_availability",
+    "has_available_promo_codes",
     "update_promo_code",
     "set_promo_code_active",
     "set_user_active_promo_code",
@@ -312,6 +313,44 @@ def get_promo_code_availability(code: str, order_id: Optional[str] = None) -> Di
             ((code or "").strip(),),
         ).fetchone()
         return _availability_for_row(conn, dict(row) if row else None, order_id=order_id)
+
+
+def has_available_promo_codes() -> bool:
+    """Проверяет, есть ли хотя бы один доступный промокод или купон."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            WITH usage AS (
+                SELECT promo_code_id, COUNT(*) AS used_count
+                FROM promo_redemptions
+                WHERE status IN ('reserved', 'applied')
+                GROUP BY promo_code_id
+            ),
+            candidates AS (
+                SELECT
+                    pc.id,
+                    COALESCE(usage.used_count, 0) AS used_count,
+                    CASE
+                        WHEN pc.type = 'coupon' THEN 1
+                        WHEN pc.activation_limit IS NULL OR pc.activation_limit <= 0 THEN NULL
+                        ELSE pc.activation_limit
+                    END AS effective_limit
+                FROM promo_codes pc
+                LEFT JOIN usage ON usage.promo_code_id = pc.id
+                WHERE pc.is_active = 1
+                  AND (
+                      pc.expires_at IS NULL
+                      OR pc.expires_at = ''
+                      OR COALESCE(datetime(pc.expires_at) < CURRENT_TIMESTAMP, 0) = 0
+                  )
+            )
+            SELECT 1
+            FROM candidates
+            WHERE effective_limit IS NULL OR used_count < effective_limit
+            LIMIT 1
+            """
+        ).fetchone()
+        return row is not None
 
 
 def update_promo_code(

@@ -118,7 +118,7 @@ async def admin_placeholder(callback: CallbackQuery):
         await callback.answer()
         return
 
-    await callback.answer()
+    await callback.answer("Скоро будет больше полезных функций ;)")
 
 
 # ============================================================================

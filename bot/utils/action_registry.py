@@ -199,6 +199,11 @@ def _resolve_pay_balance(ctx: dict) -> Optional[dict]:
 
 def _resolve_enter_promo(ctx: dict) -> Optional[dict]:
     """Кнопка ввода промокода на странице покупки."""
+    from database.requests import has_available_promo_codes
+
+    if not has_available_promo_codes():
+        return None
+
     return {"callback_data": "promo_enter"}
 
 
@@ -363,9 +368,12 @@ def _resolve_renew_pay_ext(btn_id: str, ctx: dict) -> Optional[dict]:
 
 def _resolve_renew_enter_promo(ctx: dict) -> Optional[dict]:
     """Кнопка ввода промокода на странице продления."""
+    from database.requests import has_available_promo_codes
+
     key_id = _get_renew_key_id(ctx)
-    if not key_id:
+    if not key_id or not has_available_promo_codes():
         return None
+
     return {"callback_data": f"promo_enter:{key_id}"}
 
 

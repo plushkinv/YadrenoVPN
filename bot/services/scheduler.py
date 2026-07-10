@@ -14,9 +14,10 @@ import logging
 import os
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
 from io import BytesIO
-from typing import Optional
+from typing import Optional, Sequence
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, ReplyKeyboardRemove
@@ -36,9 +37,11 @@ from bot.services.vpn_api import (
     format_traffic,
     get_key_traffic_snapshot,
 )
+from bot.services.panels.base import PanelDatabaseBackup
 from bot.utils.git_utils import check_for_updates
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock
 from bot.utils.delivery import is_bot_blocked_error
+from bot.utils.text import escape_html
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -53,6 +56,112 @@ BACKUP_DIR = os.path.join(PROJECT_ROOT, 'backup')
 
 # Сколько дней хранить локальные бэкапы
 BACKUP_RETENTION_DAYS = 7
+
+
+@dataclass(frozen=True)
+class CollectedPanelBackup:
+    """Backup одной VPN-панели, скачанный один раз за суточный цикл."""
+
+    server_name: str
+    filename: str
+    backup: PanelDatabaseBackup
+
+
+@dataclass(frozen=True)
+class PanelBackupWarning:
+    """Ошибка скачивания backup конкретной VPN-панели."""
+
+    server_name: str
+    message: str
+
+
+@dataclass(frozen=True)
+class PanelBackupCollection:
+    """Результат сбора backup-ов активных VPN-панелей."""
+
+    backups: tuple[CollectedPanelBackup, ...]
+    warnings: tuple[PanelBackupWarning, ...]
+
+
+def _safe_panel_backup_filename(server_name: str, extension: str) -> str:
+    """Формирует имя файла panel backup по фактическому формату БД."""
+    safe_name = str(server_name or "server").replace(" ", "_")
+    safe_name = "".join("_" if ch in '<>:"/\\|?*' else ch for ch in safe_name).strip(" .")
+    if not safe_name:
+        safe_name = "server"
+    safe_extension = extension if extension.startswith(".") else f".{extension}"
+    return f"server_{safe_name}_x-ui{safe_extension}"
+
+
+def _short_panel_warning(message: str, limit: int = 140) -> str:
+    """Ограничивает текст ошибки для caption Telegram."""
+    text = " ".join(str(message or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit - 3]}..."
+
+
+async def collect_panel_database_backups() -> PanelBackupCollection:
+    """Скачивает backup активных VPN-панелей один раз за daily backup cycle."""
+    backups: list[CollectedPanelBackup] = []
+    warnings: list[PanelBackupWarning] = []
+
+    for server in get_all_servers():
+        if not server.get('is_active'):
+            continue
+
+        server_name = server.get('name') or f"server_{server.get('id', '')}".strip("_")
+        try:
+            client = get_client_from_server_data(server)
+            backup = await client.get_database_backup()
+            filename = _safe_panel_backup_filename(server_name, backup.extension)
+            backups.append(
+                CollectedPanelBackup(
+                    server_name=server_name,
+                    filename=filename,
+                    backup=backup,
+                )
+            )
+            logger.info(
+                "Скачан бэкап панели %s: %s (%s, %s байт)",
+                server_name,
+                filename,
+                backup.db_kind,
+                len(backup.data),
+            )
+        except VPNAPIError as e:
+            message = str(e)
+            logger.warning("Не удалось скачать бэкап панели %s: %s", server_name, message)
+            warnings.append(PanelBackupWarning(server_name=server_name, message=message))
+        except Exception as e:
+            message = f"{type(e).__name__}: {e}"
+            logger.warning("Ошибка при скачивании бэкапа панели %s: %s", server_name, message)
+            warnings.append(PanelBackupWarning(server_name=server_name, message=message))
+
+    return PanelBackupCollection(backups=tuple(backups), warnings=tuple(warnings))
+
+
+def build_backup_caption(today: str, panel_warnings: Sequence[PanelBackupWarning]) -> str:
+    """Собирает HTML-safe caption для Telegram-документа с backup-архивом."""
+    lines = [
+        f"📦 <b>Ежедневный бэкап за {escape_html(today)}</b>",
+        "",
+        "Содержит базу данных бота и доступные бэкапы VPN-панелей.",
+    ]
+    if panel_warnings:
+        lines.extend(["", "⚠️ <b>Предупреждения:</b>"])
+        visible_warnings = panel_warnings[:3]
+        for warning in visible_warnings:
+            lines.append(
+                "⚠️ Не удалось скачать бэкап панели "
+                f"{escape_html(warning.server_name)}: "
+                f"{escape_html(_short_panel_warning(warning.message))}"
+            )
+        hidden_count = len(panel_warnings) - len(visible_warnings)
+        if hidden_count > 0:
+            lines.append(f"⚠️ И ещё {hidden_count} ошибок panel backup; подробности в логах.")
+
+    return "\n".join(lines)
 
 
 async def collect_daily_stats() -> str:
@@ -176,19 +285,24 @@ async def send_daily_stats(bot: Bot) -> None:
         logger.error(f"Ошибка при отправке суточной статистики: {e}")
 
 
-async def create_backup_archive() -> Optional[bytes]:
+async def create_backup_archive(
+    panel_backups: Optional[PanelBackupCollection] = None,
+) -> Optional[bytes]:
     """
     Создаёт ZIP-архив с бэкапами.
     
     Включает:
     - vpn_bot.db — база данных бота
-    - server_NAME_x-ui.db — база каждого VPN-сервера
+    - server_NAME_x-ui.db/.dump — backup-файл каждой доступной VPN-панели
     
     Returns:
         Байты ZIP-архива или None при ошибке
     """
     temp_bot_db_backup = None
     try:
+        if panel_backups is None:
+            panel_backups = await collect_panel_database_backups()
+
         archive_buffer = BytesIO()
         
         with zipfile.ZipFile(archive_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -208,27 +322,17 @@ async def create_backup_archive() -> Optional[bytes]:
             else:
                 logger.warning(f"База данных бота не найдена: {bot_db_path}")
             
-            # Скачиваем и добавляем бэкапы VPN-серверов
-            servers = get_all_servers()
-            for server in servers:
-                if not server.get('is_active'):
-                    continue
-                    
+            # Добавляем уже скачанные backup-файлы VPN-панелей
+            for item in panel_backups.backups:
                 try:
-                    client = get_client_from_server_data(server)
-                    backup_data = await client.get_database_backup()
-                    
-                    # Имя файла: server_НАЗВАНИЕ_x-ui.db
-                    safe_name = server['name'].replace(' ', '_').replace('/', '_')
-                    filename = f"server_{safe_name}_x-ui.db"
-                    
-                    zf.writestr(filename, backup_data)
-                    logger.info(f"Добавлен в архив: {filename} ({len(backup_data)} байт)")
-                    
-                except VPNAPIError as e:
-                    logger.warning(f"Не удалось скачать бэкап сервера {server['name']}: {e}")
+                    zf.writestr(item.filename, item.backup.data)
+                    logger.info(
+                        f"Добавлен в архив: {item.filename} ({len(item.backup.data)} байт)"
+                    )
                 except Exception as e:
-                    logger.error(f"Ошибка при скачивании бэкапа сервера {server['name']}: {e}")
+                    logger.warning(
+                        f"Не удалось добавить бэкап панели {item.server_name} в архив: {e}"
+                    )
         
         archive_buffer.seek(0)
         return archive_buffer.read()
@@ -246,17 +350,22 @@ async def create_backup_archive() -> Optional[bytes]:
                 logger.warning(f"Не удалось удалить временный бэкап БД бота {temp_bot_db_backup}: {e}")
 
 
-async def save_local_backup() -> None:
+async def save_local_backup(
+    panel_backups: Optional[PanelBackupCollection] = None,
+) -> None:
     """
     Сохраняет локальные копии всех баз данных в папку backup/YYYY-MM-DD/.
     
-    Файлы хранятся неархивированными (.db) для прямого доступа
-    через sqlite3 из Python без необходимости распаковки.
+    Файлы панелей сохраняются по фактическому формату: SQLite .db
+    или PostgreSQL .dump.
     """
     today = datetime.now().strftime("%Y-%m-%d")
     day_dir = os.path.join(BACKUP_DIR, today)
     
     try:
+        if panel_backups is None:
+            panel_backups = await collect_panel_database_backups()
+
         os.makedirs(day_dir, exist_ok=True)
         
         # Сохраняем базу данных бота
@@ -268,29 +377,19 @@ async def save_local_backup() -> None:
         else:
             logger.warning(f"База данных бота не найдена: {bot_db_path}")
         
-        # Скачиваем базы VPN-серверов
-        servers = get_all_servers()
-        for server in servers:
-            if not server.get('is_active'):
-                continue
-            
+        # Сохраняем уже скачанные backup-файлы VPN-панелей
+        for item in panel_backups.backups:
             try:
-                client = get_client_from_server_data(server)
-                backup_data = await client.get_database_backup()
-                
-                safe_name = server['name'].replace(' ', '_').replace('/', '_')
-                filename = f"server_{safe_name}_x-ui.db"
-                dest = os.path.join(day_dir, filename)
+                dest = os.path.join(day_dir, item.filename)
                 
                 with open(dest, 'wb') as f:
-                    f.write(backup_data)
+                    f.write(item.backup.data)
                 
-                logger.info(f"Локальный бэкап: {filename} ({len(backup_data)} байт)")
-                
-            except VPNAPIError as e:
-                logger.warning(f"Не удалось скачать бэкап сервера {server['name']}: {e}")
+                logger.info(f"Локальный бэкап: {item.filename} ({len(item.backup.data)} байт)")
             except Exception as e:
-                logger.error(f"Ошибка при скачивании бэкапа сервера {server['name']}: {e}")
+                logger.warning(
+                    f"Не удалось сохранить локальный бэкап панели {item.server_name}: {e}"
+                )
         
         logger.info(f"✅ Локальные бэкапы сохранены в {day_dir}")
         
@@ -373,14 +472,16 @@ async def send_backup_archive(bot: Bot) -> None:
         bot: Экземпляр бота
     """
     try:
-        # Сохраняем локальные бэкапы (неархивированные .db файлы)
-        await save_local_backup()
+        panel_backups = await collect_panel_database_backups()
+
+        # Сохраняем локальные бэкапы из уже собранных данных
+        await save_local_backup(panel_backups)
         
         # Удаляем бэкапы старше 7 дней
         cleanup_old_backups()
         
         # Создаём ZIP-архив для отправки в Telegram
-        archive_data = await create_backup_archive()
+        archive_data = await create_backup_archive(panel_backups)
         
         if not archive_data:
             logger.error("Не удалось создать архив бэкапов")
@@ -389,6 +490,7 @@ async def send_backup_archive(bot: Bot) -> None:
         # Имя файла с датой
         today = datetime.now().strftime("%Y-%m-%d")
         filename = f"backup_{today}.zip"
+        caption = build_backup_caption(today, panel_backups.warnings)
         
         # Отправляем админам
         for admin_id in ADMIN_IDS:
@@ -396,7 +498,7 @@ async def send_backup_archive(bot: Bot) -> None:
                 await bot.send_document(
                     chat_id=admin_id,
                     document=BufferedInputFile(archive_data, filename=filename),
-                    caption=f"📦 <b>Ежедневный бэкап за {today}</b>\n\nСодержит базы данных бота и VPN-серверов.",
+                    caption=caption,
                     parse_mode="HTML",
                     reply_markup=ReplyKeyboardRemove()
                 )

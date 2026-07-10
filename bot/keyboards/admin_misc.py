@@ -2,6 +2,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
 
+from database.requests import is_yadreno_admin_customization_enabled
+
 def state_pair_buttons(
     is_left_active: bool,
     left_text: str,
@@ -72,6 +74,14 @@ def admin_main_menu_kb() -> InlineKeyboardMarkup:
             style='primary',
         )
     )
+    if is_yadreno_admin_customization_enabled():
+        builder.row(
+            InlineKeyboardButton(
+                text='🛠 Кастомизация YadrenoVPN',
+                callback_data='admin_yadreno_customization',
+                style='primary',
+            )
+        )
     builder.row(InlineKeyboardButton(text='🤍 Поддержка автора', callback_data='admin_author_support', style='success'))
     builder.row(home_button())
     return builder.as_markup()

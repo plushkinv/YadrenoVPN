@@ -35,7 +35,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
-LATEST_VERSION = 71
+LATEST_VERSION = 72
 
 
 def _my_keys_item_template() -> str:
@@ -2923,6 +2923,20 @@ def migration_71(conn):
     logger.info("Миграция v71 применена: key_operation_log и balance_operations готовы")
 
 
+def migration_72(conn):
+    """Migration v72: hidden Yadreno Admin customization/core policy settings."""
+    defaults = [
+        ('yadreno_admin_customization_enabled', '0'),
+        ('yadreno_admin_core_changes_enabled', '0'),
+    ]
+    for key, value in defaults:
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+    logger.info("Migration v72 applied: Yadreno Admin customization hidden settings ready")
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -2974,6 +2988,7 @@ MIGRATIONS = {
     69: migration_69,
     70: migration_70,
     71: migration_71,
+    72: migration_72,
 }
 
 

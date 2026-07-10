@@ -30,6 +30,7 @@ from database.requests import (
     get_yadreno_admin_api_key,
     get_yadreno_admin_last_request_id,
     get_yadreno_admin_server_ip,
+    is_yadreno_admin_core_changes_enabled,
     list_yadreno_admin_active_requests,
     list_yadreno_admin_tool_runtime,
     mark_yadreno_admin_tool_call_started,
@@ -47,6 +48,9 @@ TMP_DIR = PROJECT_ROOT / "tmp"
 UPLOAD_TMP_DIR = TMP_DIR / "yadreno_uploads"
 YADRENO_ADMIN_CHAT_TOPIC_ID = 0
 YADRENO_ADMIN_YAA_TOPIC_ID = 1001
+YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID = 1002
+YADRENO_ADMIN_DEFAULT_SKILL_ID = "yadreno_vpn"
+YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID = "yadreno_vpn_customization"
 PROGRESS_EVENTS_CAPABILITY = "progress_events"
 SATELLITE_CAPABILITIES: tuple[str, ...] = (PROGRESS_EVENTS_CAPABILITY,)
 PUBLIC_IP_URLS = (
@@ -81,6 +85,45 @@ _dangerous_shell_patterns: tuple[tuple[str, str], ...] = (
         "pipe curl/wget в shell",
     ),
 )
+_core_mutation_shell_patterns: tuple[tuple[str, str], ...] = (
+    (r"(^|[;&|]\s*)(sudo\s+)?(rm|mv|cp|install|touch|mkdir|rmdir)\b", "filesystem mutation"),
+    (r"(^|[;&|]\s*)(sudo\s+)?(chmod|chown|chgrp)\b", "permission mutation"),
+    (r"(^|[;&|]\s*)(sudo\s+)?(sed\s+-i|perl\s+-pi)\b", "in-place file edit"),
+    (r"(^|[;&|]\s*)(sudo\s+)?(apt|apt-get|pip|npm|yarn|pnpm)\b", "package mutation"),
+    (r"(^|[;&|]\s*)(sudo\s+)?systemctl\s+(start|stop|restart|reload|enable|disable)\b", "service mutation"),
+    (r"(^|[;&|]\s*)git\s+(checkout|reset|clean|pull|merge|apply|am)\b", "git worktree mutation"),
+    (r"(?:^|\s)(>|>>)\s*[^&]", "shell redirection write"),
+    (r"(^|[;&|]\s*)tee\s+", "tee write"),
+    (r"\.write_text\s*\(|\.write_bytes\s*\(|\bopen\s*\([^)]*,\s*['\"][wax]", "python file write"),
+)
+
+
+def is_yadreno_admin_customization_topic(topic_id: int) -> bool:
+    """Return True for Yadreno Admin lanes that use the customization skill."""
+    return int(topic_id) in {
+        YADRENO_ADMIN_YAA_TOPIC_ID,
+        YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID,
+    }
+
+
+def yadreno_admin_skill_id_for_topic(
+    topic_id: int,
+    requested_skill_id: Optional[str] = None,
+) -> str:
+    """Resolve the skill id sent to the hub for a local Yadreno Admin lane."""
+    requested = (requested_skill_id or "").strip()
+    if requested in {YADRENO_ADMIN_DEFAULT_SKILL_ID, YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID}:
+        return requested
+    if is_yadreno_admin_customization_topic(topic_id):
+        return YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID
+    return YADRENO_ADMIN_DEFAULT_SKILL_ID
+
+
+def _core_policy_for_skill(skill_id: str) -> Optional[bool]:
+    """Return the core-change policy payload for customization skill calls."""
+    if skill_id != YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID:
+        return None
+    return is_yadreno_admin_core_changes_enabled()
 
 
 class YadrenoAdminError(RuntimeError):
@@ -401,6 +444,83 @@ def _resolve_tool_path(raw_path: str) -> Path:
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     return path.resolve()
+
+
+def _is_inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _core_guard_enabled(topic_id: int) -> bool:
+    return (
+        is_yadreno_admin_customization_topic(topic_id)
+        and not is_yadreno_admin_core_changes_enabled()
+    )
+
+
+def _is_allowed_customization_write_path(path: Path) -> bool:
+    return _is_inside(path, PROJECT_ROOT / "custom_extensions")
+
+
+def _core_guard_reject_shell(command: str) -> Optional[str]:
+    for pattern, reason in _core_mutation_shell_patterns:
+        if re.search(pattern, command, flags=re.IGNORECASE | re.MULTILINE):
+            return f"core changes are disabled; rejected shell mutation: {reason}"
+    return None
+
+
+def _normalized_sql(query: str) -> str:
+    return " ".join(query.strip().rstrip(";").split())
+
+
+def _is_readonly_sql(query: str) -> bool:
+    normalized = _normalized_sql(query).lower()
+    return normalized.startswith(("select ", "pragma ", "with ", "explain "))
+
+
+def _is_allowed_page_custom_sql(query: str) -> bool:
+    normalized = _normalized_sql(query)
+    lowered = normalized.lower()
+    if not lowered.startswith("update pages set "):
+        return False
+    if " where " not in lowered:
+        return False
+    set_part = normalized[normalized.lower().find(" set ") + 5:normalized.lower().find(" where ")]
+    columns: list[str] = []
+    for part in set_part.split(","):
+        column = part.split("=", 1)[0].strip().strip('"`[]').lower()
+        if column:
+            columns.append(column)
+    allowed = {
+        "text_custom",
+        "image_custom",
+        "media_type_custom",
+        "buttons_custom",
+        "updated_at",
+    }
+    return bool(columns) and all(column in allowed for column in columns)
+
+
+def _is_allowed_settings_sql(query: str) -> bool:
+    normalized = _normalized_sql(query).lower()
+    if normalized.startswith("update settings set ") and " where " in normalized:
+        return True
+    if normalized.startswith("insert or replace into settings"):
+        return True
+    return False
+
+
+def _core_guard_reject_sql(query: str) -> Optional[str]:
+    if ";" in query.strip().rstrip(";"):
+        return "core changes are disabled; multiple SQL statements are rejected"
+    if _is_readonly_sql(query):
+        return None
+    if _is_allowed_page_custom_sql(query) or _is_allowed_settings_sql(query):
+        return None
+    return "core changes are disabled; rejected direct core SQL mutation"
 
 
 def _get_timeout(args: dict[str, Any], default: int = 60) -> int:
@@ -855,6 +975,41 @@ def _log_tool_audit(event: dict[str, Any], tool_result: dict[str, Optional[str]]
     )
 
 
+def _core_guard_reject_tool(
+    tool: str,
+    args: dict[str, Any],
+    *,
+    topic_id: int,
+) -> Optional[str]:
+    if not _core_guard_enabled(topic_id):
+        return None
+    if tool == "satellite_write_file":
+        raw_path = str(args.get("path", "")).strip()
+        if not raw_path:
+            return "core changes are disabled; empty write path rejected"
+        try:
+            path = _resolve_tool_path(raw_path)
+        except Exception as e:
+            return f"core changes are disabled; invalid write path: {e}"
+        if not _is_allowed_customization_write_path(path):
+            return (
+                "core changes are disabled; file writes are allowed only under "
+                "custom_extensions/"
+            )
+        return None
+    if tool == "satellite_execute":
+        return _core_guard_reject_shell(str(args.get("command", "")).strip())
+    if tool == "satellite_run_script":
+        script = str(args.get("script_body", "")).strip()
+        return (
+            _core_guard_reject_shell(script)
+            or "core changes are disabled; run_script is blocked in customization mode"
+        )
+    if tool == "satellite_sql":
+        return _core_guard_reject_sql(str(args.get("query", "")).strip())
+    return None
+
+
 async def _run_tool_call(
     event: dict[str, Any],
     *,
@@ -862,16 +1017,20 @@ async def _run_tool_call(
 ) -> dict[str, Optional[str]]:
     """Исполняет один tool_call хаба."""
     tool = event.get("tool")
+    args = event.get("args") or {}
     runtime = _runtime_context_from_event(event, topic_id=topic_id)
     _remember_tool_runtime(runtime)
-    if tool == "satellite_execute":
-        result = await _execute_shell(event.get("args") or {}, runtime=runtime)
+    guard_error = _core_guard_reject_tool(str(tool or ""), args, topic_id=topic_id)
+    if guard_error:
+        result = {"result": "", "error": guard_error}
+    elif tool == "satellite_execute":
+        result = await _execute_shell(args, runtime=runtime)
     elif tool == "satellite_write_file":
-        result = await _write_file(event.get("args") or {})
+        result = await _write_file(args)
     elif tool == "satellite_run_script":
-        result = await _run_script(event.get("args") or {}, runtime=runtime)
+        result = await _run_script(args, runtime=runtime)
     elif tool == "satellite_sql":
-        result = await _execute_sql(event.get("args") or {}, runtime=runtime)
+        result = await _execute_sql(args, runtime=runtime)
     else:
         result = {"result": "", "error": f"unknown tool {tool}"}
 
@@ -1013,6 +1172,7 @@ async def run_dialog(
     message: str,
     *,
     topic_id: int = 0,
+    skill_id: Optional[str] = None,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> YadrenoAdminFinal:
     """
@@ -1026,17 +1186,23 @@ async def run_dialog(
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             server_ip = await _get_server_ip(session)
+            effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
+            core_changes_allowed = _core_policy_for_skill(effective_skill_id)
+            payload: dict[str, Any] = {
+                "message": message,
+                "server_ip": server_ip,
+                "topic_id": topic_id,
+                "skill_id": effective_skill_id,
+                "capabilities": list(SATELLITE_CAPABILITIES),
+            }
+            if core_changes_allowed is not None:
+                payload["core_changes_allowed"] = core_changes_allowed
             _, process_data = await _request_json(
                 session,
                 api_key,
                 "POST",
                 "/api/v1/satellite/process",
-                json_payload={
-                    "message": message,
-                    "server_ip": server_ip,
-                    "topic_id": topic_id,
-                    "capabilities": list(SATELLITE_CAPABILITIES),
-                },
+                json_payload=payload,
             )
             if not process_data:
                 raise YadrenoAdminError("Хаб вернул пустой ответ на /process")
@@ -1066,7 +1232,9 @@ async def run_dialog_with_uploads(
     uploads: list[YadrenoAdminUpload],
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+    skill_id: Optional[str] = None,
     progress_callback: Optional[ProgressCallback] = None,
+    overflow_count: int = 0,
 ) -> YadrenoAdminFinal:
     """Отправляет файлы в Yadreno Admin и ждёт финальный ответ агента."""
     if not uploads:
@@ -1075,6 +1243,7 @@ async def run_dialog_with_uploads(
             api_key,
             message,
             topic_id=topic_id,
+            skill_id=skill_id,
             progress_callback=progress_callback,
         )
 
@@ -1083,22 +1252,30 @@ async def run_dialog_with_uploads(
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             server_ip = await _get_server_ip(session)
+            effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
+            core_changes_allowed = _core_policy_for_skill(effective_skill_id)
             is_batch = len(uploads) > 1
             path = (
                 "/api/v1/satellite/upload_batch"
                 if is_batch
                 else "/api/v1/satellite/upload"
             )
+            fields: dict[str, str | int] = {
+                "message": message,
+                "topic_id": topic_id,
+                "server_ip": server_ip,
+                "skill_id": effective_skill_id,
+                "capabilities": ",".join(SATELLITE_CAPABILITIES),
+            }
+            if core_changes_allowed is not None:
+                fields["core_changes_allowed"] = "true" if core_changes_allowed else "false"
+            if is_batch:
+                fields["overflow_count"] = overflow_count
             _, upload_data = await _request_multipart(
                 session,
                 api_key,
                 path,
-                fields={
-                    "message": message,
-                    "topic_id": topic_id,
-                    "server_ip": server_ip,
-                    "capabilities": ",".join(SATELLITE_CAPABILITIES),
-                },
+                fields=fields,
                 uploads=uploads,
                 file_field="files" if is_batch else "file",
             )
@@ -1332,16 +1509,18 @@ async def start_new_chat(
     api_key: str,
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+    skill_id: Optional[str] = None,
 ) -> YadrenoAdminNewChatResult:
     """Просит хаб закрыть активную satellite-сессию, если lane свободна."""
     timeout = aiohttp.ClientTimeout(total=20)
+    effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         _, data = await _request_json(
             session,
             api_key,
             "POST",
             "/api/v1/satellite/new_chat",
-            json_payload={"topic_id": topic_id},
+            json_payload={"topic_id": topic_id, "skill_id": effective_skill_id},
         )
     if not data:
         raise YadrenoAdminError("Хаб вернул пустой ответ на /new_chat")

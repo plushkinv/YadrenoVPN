@@ -30,7 +30,7 @@ SETTING_BASE_LEGACY = "/panel/setting"
 SETTING_BASE_API = "/panel/api/setting"
 
 
-from .base import BaseVPNClient, VPNAPIError
+from .base import BaseVPNClient, PanelDatabaseBackup, VPNAPIError
 from bot.utils.inbounds import filter_visible_inbounds
 
 
@@ -2657,14 +2657,23 @@ class XUIClient(BaseVPNClient):
 
         return None
 
-    async def get_database_backup(self) -> bytes:
+    @staticmethod
+    def _detect_database_backup(data: bytes) -> Optional[PanelDatabaseBackup]:
+        """Определяет формат backup-файла 3X-UI по сигнатуре."""
+        if data.startswith(b'SQLite format 3\x00'):
+            return PanelDatabaseBackup(data=data, extension=".db", db_kind="sqlite")
+        if data.startswith(b'PGDMP'):
+            return PanelDatabaseBackup(data=data, extension=".dump", db_kind="postgres")
+        return None
+
+    async def get_database_backup(self) -> PanelDatabaseBackup:
         """
         Скачивает резервную копию базы данных панели.
         
         Endpoint: GET /panel/api/server/getDb (или фолбэки)
         
         Returns:
-            Бинарные данные файла x-ui.db
+            PanelDatabaseBackup с байтами файла, расширением и типом БД
             
         Raises:
             VPNAPIError: При ошибке скачивания
@@ -2692,6 +2701,7 @@ class XUIClient(BaseVPNClient):
         ]
         
         last_status = None
+        last_response_preview = ""
         for endpoint in endpoints:
             url = f"{self.base_url}{endpoint}"
             endpoint_headers = dict(headers)
@@ -2709,19 +2719,35 @@ class XUIClient(BaseVPNClient):
                     last_status = response.status
                     if response.status == 200:
                         data = await response.read()
-                        
-                        # Проверяем, что скачался действительно SQLite файл
-                        # SQLite файлы всегда начинаются с байтов 'SQLite format 3\000'
-                        if data.startswith(b'SQLite format 3\x00'):
-                            logger.info(f"Скачан бэкап БД панели ({endpoint}): {len(data)} байт")
-                            return data
-                        else:
-                            text = data[:100].decode(errors='ignore')
-                            logger.debug(f"Endpoint {endpoint} вернул не БД, а: {text}...")
+                        backup = self._detect_database_backup(data)
+                        if backup:
+                            logger.info(
+                                f"Скачан бэкап БД панели ({endpoint}, {backup.db_kind}): "
+                                f"{len(data)} байт"
+                            )
+                            return backup
+
+                        last_response_preview = data[:160].decode(errors='ignore').strip()
+                        logger.debug(
+                            f"Endpoint {endpoint} вернул не backup-файл панели, а: "
+                            f"{last_response_preview}..."
+                        )
+                    else:
+                        data = await response.read()
+                        if data:
+                            last_response_preview = data[:160].decode(errors='ignore').strip()
             except aiohttp.ClientError as e:
                 logger.debug(f"Ошибка HTTP при проверке {endpoint}: {e}")
-                
-        raise VPNAPIError(f"Ошибка скачивания бэкапа: ни один endpoint не вернул файл БД. Последний HTTP статус: {last_status}")
+
+        details = f" Последний HTTP статус: {last_status}."
+        if last_response_preview:
+            details += f" Ответ панели: {last_response_preview[:120]}"
+        raise VPNAPIError(
+            "Ошибка скачивания бэкапа панели: ни один endpoint не вернул "
+            "SQLite .db или PostgreSQL .dump. Для PostgreSQL нужен 3X-UI v3.2.5+ "
+            "и установленный postgresql-client/pg_dump на сервере панели."
+            f"{details}"
+        )
 
     async def reset_client_traffic(self, inbound_id: int, email: str) -> bool:
         return await self._run_with_stale_profile_retry(
