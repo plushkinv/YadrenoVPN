@@ -1,6 +1,4 @@
 import logging
-import asyncio
-from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -8,7 +6,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramForbiddenError
 from config import ADMIN_IDS
 from database.requests import get_or_create_user, is_user_banned, get_setting, is_referral_enabled, get_user_by_referral_code, set_user_referrer
-from bot.utils.text import escape_html, safe_edit_or_send
+from bot.utils.text import escape_html
+from bot.utils.user_pages import render_access_blocked_page
 
 logger = logging.getLogger(__name__)
 
@@ -21,42 +20,41 @@ def _build_tariff_text() -> str:
     Returns:
         HTML-текст со списком тарифов и ценами, или пустая строка если нет тарифов
     """
-    from database.requests import (
-        get_all_tariffs, is_crypto_configured, is_stars_enabled,
-        is_cards_enabled, is_yookassa_qr_configured, is_demo_payment_enabled,
-        is_wata_configured, is_platega_configured, is_cardlink_configured,
+    from bot.utils.page_dynamic_data import build_tariff_text
+
+    return build_tariff_text()
+
+
+SHOW_ID_PAGE_KEY = 'show_id'
+
+
+async def _render_show_id_page(target, force_new: bool = False):
+    """Рендерит страницу показа Telegram ID через pages."""
+    from bot.utils.page_renderer import render_page
+
+    await render_page(target, page_key=SHOW_ID_PAGE_KEY, force_new=force_new)
+
+
+async def _show_start_payment_status(
+    message: Message,
+    *,
+    title_html: str,
+    body_html: str | None = None,
+    body_text: str | None = None,
+    reply_markup=None,
+) -> None:
+    """Показывает page-backed статус обработки платёжного /start."""
+    from bot.handlers.user.payments.status_page import show_payment_status_message
+
+    await show_payment_status_message(
+        message,
+        title_html=title_html,
+        body_html=body_html,
+        body_text=body_text,
+        payment_provider_title='Crypto',
+        reply_markup=reply_markup,
+        force_new=True,
     )
-
-    crypto_enabled = is_crypto_configured()
-    stars_enabled = is_stars_enabled()
-    cards_enabled = is_cards_enabled()
-    yookassa_qr_enabled = is_yookassa_qr_configured()
-    wata_enabled = is_wata_configured()
-    platega_enabled = is_platega_configured()
-    cardlink_enabled = is_cardlink_configured()
-    demo_enabled = is_demo_payment_enabled()
-
-    tariffs = get_all_tariffs()
-    if not tariffs:
-        return ''
-
-    lines = ['📋 <b>Тарифы:</b>']
-    for tariff in tariffs:
-        prices = []
-        if crypto_enabled:
-            price_usd = tariff['price_cents'] / 100
-            price_str = f'{price_usd:g}'.replace('.', ',')
-            prices.append(f'${escape_html(price_str)}')
-        if stars_enabled:
-            prices.append(f"{tariff['price_stars']} ⭐")
-        if (cards_enabled or yookassa_qr_enabled or wata_enabled
-                or platega_enabled or cardlink_enabled or demo_enabled
-            ) and tariff.get('price_rub', 0) > 0:
-            prices.append(f"{int(tariff['price_rub'])} ₽")
-        price_display = ' / '.join(prices) if prices else 'Цена не установлена'
-        lines.append(f"• {escape_html(tariff['name'])} — {price_display}")
-
-    return '\n'.join(lines)
 
 
 async def _render_main_page(target, force_new: bool = False):
@@ -126,7 +124,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         last_name=getattr(message.from_user, 'last_name', None),
     )
     if user.get('is_banned'):
-        await safe_edit_or_send(message, '⛔ <b>Доступ заблокирован</b>\n\nВаш аккаунт заблокирован. Обратитесь в поддержку.', force_new=True)
+        await render_access_blocked_page(message, force_new=True)
         return
 
     args = command.args
@@ -141,10 +139,10 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
                 return
         except Exception as e:
             logger.exception(f'Ошибка обработки платёжного deep-link: {e}')
-            await safe_edit_or_send(
+            await _show_start_payment_status(
                 message,
-                '❌ Произошла ошибка при проверке платежа.',
-                force_new=True,
+                title_html='❌ <b>Ошибка проверки платежа</b>',
+                body_text='Произошла ошибка при проверке платежа.',
             )
             return
 
@@ -165,17 +163,63 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
                         logging.getLogger(__name__).warning(f'Ошибка уведомления об оплате: {notify_err}')
                 await finalize_payment_ui(message, state, text, order, user_id=message.from_user.id)
             else:
-                await safe_edit_or_send(message, text, force_new=True)
+                await _show_start_payment_status(
+                    message,
+                    title_html='❌ <b>Платёж не обработан</b>',
+                    body_text=text,
+                )
         except Exception as e:
             from bot.errors import TariffNotFoundError
             if isinstance(e, TariffNotFoundError):
-                from bot.keyboards.user import support_kb
+                from bot.keyboards.support import support_contact_kb
                 support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
-                await safe_edit_or_send(message, str(e), reply_markup=support_kb(support_link), force_new=True)
+                await _show_start_payment_status(
+                    message,
+                    title_html='⚠️ <b>Тариф не найден</b>',
+                    body_text=str(e),
+                    reply_markup=support_contact_kb(support_link),
+                )
             else:
                 logger.exception(f'Ошибка обработки платежа: {e}')
-                await safe_edit_or_send(message, '❌ Произошла ошибка при обработке платежа.', force_new=True)
+                await _show_start_payment_status(
+                    message,
+                    title_html='❌ <b>Ошибка обработки платежа</b>',
+                    body_text='Произошла ошибка при обработке платежа.',
+                )
         return
+
+    if args and args.startswith('pr_'):
+        from bot.handlers.user.promo import render_promo_status_page
+        from bot.services.promotions import activate_promo_code_for_user
+        from database.requests import record_promo_link_visit
+
+        code = args[3:].strip()
+        promo_result = activate_promo_code_for_user(user['id'], code, allow_coupons=False)
+        if promo_result['ok']:
+            promo = promo_result['promo']
+            record_promo_link_visit(
+                promo_code_id=promo['id'],
+                code=promo['code'],
+                user_id=user['id'],
+                telegram_id=message.from_user.id,
+                start_param=args,
+            )
+            await render_promo_status_page(
+                message,
+                title_html="🎟 <b>Промокод сохранён</b>",
+                body_html=(
+                    f"Код <b>{escape_html(promo['code'])}</b> "
+                    "будет учтён при следующей оплате."
+                ),
+                force_new=True,
+            )
+        else:
+            await render_promo_status_page(
+                message,
+                title_html="⚠️ <b>Промо-ссылка недоступна</b>",
+                body_text=promo_result['message'],
+                force_new=True,
+            )
 
     if is_new and args and args.startswith('ref_'):
         ref_code = args[4:]
@@ -214,7 +258,7 @@ async def callback_start(callback: CallbackQuery, state: FSMContext):
 async def cmd_help(message: Message, state: FSMContext):
     """Обработчик команды /help - вызывает логику кнопки 'Справка'."""
     if is_user_banned(message.from_user.id):
-        await safe_edit_or_send(message, '⛔ <b>Доступ заблокирован</b>\n\nВаш аккаунт заблокирован. Обратитесь в поддержку.', force_new=True)
+        await render_access_blocked_page(message, force_new=True)
         return
     await state.clear()
     await _render_help_page(message)
@@ -223,12 +267,18 @@ async def cmd_help(message: Message, state: FSMContext):
 @router.message(Command('id'))
 async def cmd_id(message: Message):
     """Обработчик команды /id — показывает Telegram ID пользователя."""
-    user_id = message.from_user.id
-    text = (
-        f"🆔 <b>Ваш Telegram ID</b>\n\n"
-        f"<code>{user_id}</code>"
-    )
-    await safe_edit_or_send(message, text, force_new=True)
+    await _render_show_id_page(message, force_new=True)
+
+
+@router.callback_query(F.data == 'show_id')
+async def show_id_handler(callback: CallbackQuery):
+    """Показывает Telegram ID пользователя по кнопке конструктора страниц."""
+    if is_user_banned(callback.from_user.id):
+        await callback.answer('⛔ Доступ заблокирован', show_alert=True)
+        return
+
+    await _render_show_id_page(callback)
+    await callback.answer()
 
 
 async def _render_help_page(target):

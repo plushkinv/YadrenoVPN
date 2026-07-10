@@ -41,10 +41,10 @@ async def show_trial_menu(callback: CallbackQuery):
     if tariff_id:
         tariff = get_tariff_by_id(tariff_id)
         if tariff:
-            status = "🟢" if tariff['is_active'] else "🔴"
+            status = "🟢" if tariff['is_active'] else "⚪"
             tariff_name = f"{status} {tariff['name']} ({tariff['duration_days']} дн.)"
 
-    status_text = "✅ Включена" if enabled else "❌ Выключена"
+    status_text = "🟢 Включена" if enabled else "⚪ Выключена"
     tariff_text = tariff_name if tariff_name else "_не задан_"
 
     text = (
@@ -81,22 +81,40 @@ async def admin_trial_menu(callback: CallbackQuery):
 # ВКЛЮЧЕНИЕ / ВЫКЛЮЧЕНИЕ
 # ============================================================================
 
-@router.callback_query(F.data == "admin_trial_toggle")
-async def admin_trial_toggle(callback: CallbackQuery):
-    """Переключает статус пробной подписки."""
+async def _set_trial_enabled(callback: CallbackQuery, target_enabled: bool):
+    """Устанавливает состояние пробной подписки."""
     if not is_admin(callback.from_user.id):
         return
 
-    from database.requests import get_setting, set_setting, is_trial_enabled
+    from database.requests import set_setting, is_trial_enabled
 
     current = is_trial_enabled()
-    new_value = '0' if current else '1'
+    if current == target_enabled:
+        status = "уже включена" if target_enabled else "уже выключена"
+        await callback.answer(f"Пробная подписка {status}")
+        return
+
+    new_value = '1' if target_enabled else '0'
     set_setting('trial_enabled', new_value)
 
     action = "включена" if new_value == '1' else "выключена"
     logger.info(f"Пробная подписка {action} (admin: {callback.from_user.id})")
 
     await show_trial_menu(callback)
+
+
+@router.callback_query(F.data.startswith("admin_trial_set:"))
+async def admin_trial_set(callback: CallbackQuery):
+    """Включает или выключает пробную подписку выбранным состоянием."""
+    target_enabled = callback.data.rsplit(":", 1)[1] == "1"
+    await _set_trial_enabled(callback, target_enabled)
+
+
+@router.callback_query(F.data == "admin_trial_toggle")
+async def admin_trial_toggle(callback: CallbackQuery):
+    """Совместимый toggle для старых сообщений."""
+    from database.requests import is_trial_enabled
+    await _set_trial_enabled(callback, not is_trial_enabled())
 
 
 # ============================================================================
@@ -149,7 +167,7 @@ async def admin_trial_select_tariff(callback: CallbackQuery):
         "📋 <b>Выбор тарифа для пробной подписки</b>\n\n"
         "Выберите тариф, который будет выдаваться пользователям.\n"
         "Отображаются все тарифы, включая неактивные для покупки.\n\n"
-        "🟢 — активный тариф  |  🔴 — неактивный тариф\n"
+        "🟢 — активный тариф  |  ⚪ — неактивный тариф\n"
         "🔘 — текущий выбор",
         reply_markup=trial_tariff_select_kb(available, selected_id)
     )

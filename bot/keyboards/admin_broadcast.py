@@ -28,7 +28,7 @@ def broadcast_main_kb(has_message: bool, current_filter: str, broadcast_in_progr
         builder.row(InlineKeyboardButton(text=f'🚀 Начать рассылку ({user_count} чел.)', callback_data='broadcast_start'))
     builder.row(InlineKeyboardButton(text='─────────────────', callback_data='noop'))
     builder.row(InlineKeyboardButton(text='⏰ Настройки автоуведомлений', callback_data='broadcast_notifications'))
-    builder.row(back_button('admin_panel'), home_button())
+    builder.row(back_button('admin_marketing'), home_button())
     return builder.as_markup()
 
 def broadcast_confirm_kb(user_count: int) -> InlineKeyboardMarkup:

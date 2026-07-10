@@ -11,7 +11,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
-from bot.utils.placeholders import apply_placeholder_replacements
+from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
 from bot.utils.text import escape_html
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,21 @@ PAYMENT_TYPE_LABELS: Dict[str, str] = {
     'balance': '💎 Баланс',
     'trial': '🎁 Пробная подписка',
     'demo': '🧪 Демо',
+    'promo_free': '🎟 Промокод 100%',
 }
+
+
+def _payment_type_label(payment_type: str) -> str:
+    provider = None
+    try:
+        from bot.utils.payment_provider_registry import get_payment_provider_by_type
+
+        provider = get_payment_provider_by_type(payment_type)
+    except Exception:
+        provider = None
+    if provider is not None:
+        return provider.label
+    return PAYMENT_TYPE_LABELS.get(payment_type, payment_type)
 
 
 def _format_payment_amount(order: Dict[str, Any]) -> str:
@@ -45,20 +59,27 @@ def _format_payment_amount(order: Dict[str, Any]) -> str:
     payment_type = order.get('payment_type', '')
 
     if payment_type == 'crypto':
-        cents = order.get('amount_cents', 0) or 0
+        cents = order.get('final_amount_cents') if order.get('final_amount_cents') is not None else order.get('amount_cents', 0) or 0
         usd = cents / 100
         usd_str = f'{usd:g}'.replace('.', ',')
         return f'${usd_str} USDT'
 
     if payment_type == 'stars':
-        stars = order.get('amount_stars', 0) or 0
+        stars = order.get('final_amount_stars') if order.get('final_amount_stars') is not None else order.get('amount_stars', 0) or 0
         return f'{stars} ⭐'
 
-    if payment_type == 'trial':
+    if payment_type in ('trial', 'promo_free'):
         return 'Бесплатно'
 
     # Для рублёвых методов (cards, yookassa_qr, wata, platega, cardlink, balance, demo)
-    price_rub = order.get('price_rub', 0) or 0
+    if order.get('final_amount_cents') is not None:
+        price_rub = (order.get('final_amount_cents') or 0) / 100
+        price_str = f'{price_rub:g}'.replace('.', ',')
+        return f'{price_str} ₽'
+    if order.get('final_amount_cents') is not None:
+        price_rub = (order.get('final_amount_cents') or 0) / 100
+    else:
+        price_rub = order.get('price_rub', 0) or 0
     if price_rub > 0:
         price_str = f'{price_rub:g}'.replace('.', ',')
         return f'{price_str} ₽'
@@ -164,11 +185,6 @@ def _format_referral_reward(event: Dict[str, Any]) -> str:
     return f"{event.get('reward_days', 0) or 0} дн."
 
 
-def _apply_placeholders(template: str, replacements: Dict[str, str]) -> str:
-    """Подставляет уже экранированные HTML-значения в шаблон."""
-    return apply_placeholder_replacements(template, replacements)
-
-
 async def notify_referrers_new_referral(bot: Bot, referral_id: int) -> None:
     """
     Отправляет рефоводам скрытое уведомление о новом реферале.
@@ -210,13 +226,19 @@ async def notify_referrers_new_referral(bot: Bot, referral_id: int) -> None:
             if level in enabled_levels:
                 referrer = get_user_by_id(referrer_id)
                 if referrer and referrer.get('telegram_id'):
-                    replacements = {
-                        '%имя%': escape_html(_format_user_name(referral_user)),
-                        '%логин%': escape_html(_format_user_login(referral_user)),
-                        '%telegram_id%': escape_html(str(referral_user.get('telegram_id') or '')),
-                        '%уровень%': escape_html(str(level)),
-                    }
-                    text = _apply_placeholders(template, replacements)
+                    context = build_user_event_context(int(referrer['telegram_id']))
+                    context.update({
+                        'referral_name': _format_user_name(referral_user),
+                        'referral_login': _format_user_login(referral_user),
+                        'referral_telegram_id': str(referral_user.get('telegram_id') or ''),
+                        'referral_level': level,
+                    })
+                    text = render_event_placeholders(
+                        template,
+                        'referral_new_ref',
+                        context,
+                        mode='html',
+                    )
                     try:
                         await bot.send_message(referrer['telegram_id'], text, parse_mode='HTML')
                     except Exception as e:
@@ -283,17 +305,23 @@ async def notify_referrers_purchase(
             if not referrer or not referrer.get('telegram_id'):
                 continue
 
-            replacements = {
-                '%имя%': escape_html(_format_user_name(payer)),
-                '%логин%': escape_html(_format_user_login(payer)),
-                '%telegram_id%': escape_html(str((payer or {}).get('telegram_id') or '')),
-                '%уровень%': escape_html(str(level)),
-                '%тариф%': escape_html(str(tariff_name)),
-                '%сумма%': escape_html(_format_referral_purchase_amount(order, event)),
-                '%дней%': escape_html(f"{event.get('period_days', 0) or 0} дн."),
-                '%вознаграждение%': escape_html(_format_referral_reward(event)),
-            }
-            text = _apply_placeholders(template, replacements)
+            context = build_user_event_context(int(referrer['telegram_id']))
+            context.update({
+                'buyer_name': _format_user_name(payer),
+                'buyer_login': _format_user_login(payer),
+                'buyer_telegram_id': str((payer or {}).get('telegram_id') or ''),
+                'referral_level': level,
+                'payment_tariff_name': str(tariff_name),
+                'payment_amount_text': _format_referral_purchase_amount(order, event),
+                'payment_period_text': f"{event.get('period_days', 0) or 0} дн.",
+                'referral_reward_text': _format_referral_reward(event),
+            })
+            text = render_event_placeholders(
+                template,
+                'referral_purchase',
+                context,
+                mode='html',
+            )
 
             try:
                 await bot.send_message(referrer['telegram_id'], text, parse_mode='HTML')
@@ -356,7 +384,7 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
 
         # Тип оплаты
         payment_type = order.get('payment_type', '—')
-        payment_label = PAYMENT_TYPE_LABELS.get(payment_type, payment_type)
+        payment_label = _payment_type_label(payment_type)
 
         # Сумма
         amount_str = _format_payment_amount(order)
@@ -390,6 +418,11 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
         lines.append(f'🎫 Тариф: {escape_html(tariff_name)}')
         lines.append(f'💳 Метод: {payment_label}')
         lines.append(f'💵 Сумма: {amount_str}')
+        if order.get('promo_code'):
+            lines.append(
+                f"🎟 Промокод: {escape_html(str(order.get('promo_code')))} "
+                f"(-{int(order.get('discount_percent') or 0)}%)"
+            )
 
         text = '\n'.join(lines)
 

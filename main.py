@@ -57,6 +57,24 @@ async def on_startup(bot: Bot):
     
     # Применяем миграции БД
     run_migrations()
+
+    from bot.utils.custom_extensions import load_custom_extensions
+    extensions_result = load_custom_extensions()
+    if extensions_result.skipped:
+        logger.info("Custom extensions не загружены: %s", extensions_result.reason)
+    else:
+        logger.info(
+            "Custom extensions: загружено %s, ошибок %s",
+            len(extensions_result.loaded),
+            len(extensions_result.failed),
+        )
+
+    try:
+        from bot.services.custom_payment_webhooks import start_custom_payment_webhook_server
+
+        bot.custom_payment_webhook_server = await start_custom_payment_webhook_server(bot)
+    except Exception as e:
+        logger.warning(f"Не удалось запустить custom payment webhook server: {e}")
     
     # Информация о боте
     bot_info = await bot.get_me()
@@ -97,6 +115,13 @@ async def on_startup(bot: Bot):
 async def on_shutdown(bot: Bot):
     """Действия при остановке бота."""
     logger.info("🛑 Бот останавливается...")
+
+    webhook_server = getattr(bot, 'custom_payment_webhook_server', None)
+    if webhook_server is not None:
+        try:
+            await webhook_server.stop()
+        except Exception as e:
+            logger.warning(f"Не удалось остановить custom payment webhook server: {e}")
     
     # Закрываем все VPN API сессии
     await close_all_clients()

@@ -25,7 +25,6 @@ from database.requests import (
     get_cardlink_credentials,
     is_referral_enabled, get_referral_reward_type, get_active_referral_levels,
     get_user_referrer, get_user_referral_coefficient, get_user_balance,
-    add_to_balance, deduct_from_balance, add_days_to_first_active_key,
     update_referral_stat
 )
 from bot.services.exchange_rate import get_usd_rub_rate
@@ -255,6 +254,26 @@ async def _process_payment_order_unlocked(
     
     logger.info(f"Order {order_id} processed (paid)")
 
+    try:
+        from bot.services.promotions import apply_order_promotion_after_payment
+        apply_order_promotion_after_payment(order)
+    except Exception as promo_err:
+        logger.warning("Ошибка post-payment обработки промокода для order=%s: %s", order_id, promo_err)
+
+    async def _issue_auto_coupon_text() -> str:
+        try:
+            from bot.services.promotions import (
+                format_auto_coupon_text,
+                maybe_issue_auto_coupon_after_payment_async,
+            )
+            auto_coupon = await maybe_issue_auto_coupon_after_payment_async(order)
+            if auto_coupon:
+                order["_auto_coupon"] = auto_coupon
+                return format_auto_coupon_text(auto_coupon)
+        except Exception as coupon_err:
+            logger.warning("Не удалось выдать авто-купон для order=%s: %s", order_id, coupon_err)
+        return ""
+
     user_internal_id = order['user_id']
     days = order.get('period_days') or order.get('duration_days') or 30
 
@@ -276,11 +295,12 @@ async def _process_payment_order_unlocked(
 
             if process_referrals and order.get('payment_type') == 'crypto':
                 await process_referral_reward(
-                    user_internal_id, days, order.get('amount_cents', 0), 'crypto',
+                    user_internal_id, days, order.get('final_amount_cents') if order.get('final_amount_cents') is not None else order.get('amount_cents', 0), 'crypto',
                     bot=bot, order=order
                 )
             
-            return True, f"✅ Оплата прошла успешно!\n\nВаш ключ продлён на {days} дней.", order
+            post_payment_extra_text = await _issue_auto_coupon_text()
+            return True, f"✅ Оплата прошла успешно!\n\nВаш ключ продлён на {days} дней.{post_payment_extra_text}", order
         else:
             logger.error(f"Не удалось продлить ключ {order['vpn_key_id']} после оплаты!")
             return True, "✅ Оплата принята!\n\n⚠️ Возникла проблема с продлением. Мы разберёмся.", order
@@ -300,16 +320,35 @@ async def _process_payment_order_unlocked(
             
             update_payment_key_id(order_id, key_id)
             order['vpn_key_id'] = key_id
+            try:
+                from bot.services.key_lifecycle import emit_key_lifecycle_event_safe
+
+                await emit_key_lifecycle_event_safe(
+                    'key_created',
+                    {
+                        'key_id': key_id,
+                        'user_id': order['user_id'],
+                        'tariff_id': order['tariff_id'],
+                        'days': days,
+                        'traffic_limit': traffic_limit_bytes,
+                        'order_id': order_id,
+                        'payment_type': order.get('payment_type'),
+                        'source': 'payment',
+                    },
+                )
+            except Exception as hook_err:
+                logger.warning(f"Не удалось вызвать lifecycle hooks создания ключа {key_id}: {hook_err}")
             
             logger.info(f"Создан черновик ключа {key_id} для заказа {order_id}")
             
             if process_referrals and order.get('payment_type') == 'crypto':
                 await process_referral_reward(
-                    user_internal_id, days, order.get('amount_cents', 0), 'crypto',
+                    user_internal_id, days, order.get('final_amount_cents') if order.get('final_amount_cents') is not None else order.get('amount_cents', 0), 'crypto',
                     bot=bot, order=order
                 )
             
-            return True, "✅ Оплата прошла успешно!", order
+            post_payment_extra_text = await _issue_auto_coupon_text()
+            return True, "✅ Оплата прошла успешно!" + post_payment_extra_text, order
             
         except Exception as e:
             logger.error(f"Ошибка создания черновика ключа: {e}")
@@ -350,7 +389,7 @@ async def process_crypto_payment(
         from database.requests import get_tariff_by_id
         order_tariff = get_tariff_by_id(order['tariff_id'])
         if order_tariff:
-            expected_cents = order_tariff['price_cents']
+            expected_cents = order.get('final_amount_cents') if order.get('final_amount_cents') is not None else order_tariff['price_cents']
             received_cents = parsed.get('price', 0)
             if received_cents < expected_cents:
                 logger.error(f"Ордер {order_id}: Сумма платежа недостаточна. Ожидалось {expected_cents}, получено {received_cents}")
@@ -1226,6 +1265,9 @@ async def process_referral_reward(
         При оплате балансом реферальные вознаграждения НЕ начисляются,
         поэтому эта функция не вызывается для платежей балансом.
     """
+    if payment_type in ('balance', 'trial', 'promo_free') or amount_raw <= 0:
+        return []
+
     if not is_referral_enabled():
         return []
     
@@ -1240,8 +1282,6 @@ async def process_referral_reward(
     
     current_user_id = payer_id
     events = []
-    
-    from bot.services.user_locks import user_locks
     
     for level_num in (1, 2, 3):
         referrer_id = get_user_referrer(current_user_id)
@@ -1259,22 +1299,85 @@ async def process_referral_reward(
             base_reward = amount_rub_cents * (percent / 100)
             final_reward = int(base_reward * coefficient)
             final_reward = round(final_reward / 100) * 100
-            
-            if final_reward > 0:
-                async with user_locks[referrer_id]:
-                    add_to_balance(referrer_id, final_reward)
-            
             reward_days = 0
         else:
             base_days = period_days * (percent / 100)
             final_days = base_days * coefficient
             reward_days = math.ceil(final_days)
-            
-            if reward_days > 0:
-                if not add_days_to_first_active_key(referrer_id, reward_days):
-                    reward_days = 0
-            
             final_reward = 0
+
+        try:
+            from bot.utils.policy_registry import apply_referral_reward_policies
+
+            reward_decision = apply_referral_reward_policies(
+                {
+                    'reward_cents': final_reward,
+                    'reward_days': reward_days,
+                },
+                {
+                    'payer_id': payer_id,
+                    'referrer_id': referrer_id,
+                    'level': level_num,
+                    'reward_type': reward_type,
+                    'period_days': period_days,
+                    'amount_raw': amount_raw,
+                    'amount_rub_cents': amount_rub_cents,
+                    'payment_type': payment_type,
+                    'percent': percent,
+                    'coefficient': coefficient,
+                    'order': dict(order or {}),
+                },
+            )
+            final_reward = int(reward_decision.get('reward_cents') or 0)
+            reward_days = int(reward_decision.get('reward_days') or 0)
+            reward_policies = reward_decision.get('reward_policies') or []
+            reward_policy = reward_decision.get('reward_policy')
+        except Exception as policy_err:
+            logger.warning(f'Ошибка referral reward policy для user {payer_id}, level {level_num}: {policy_err}')
+            reward_policies = []
+            reward_policy = None
+
+        if final_reward > 0:
+            from bot.services.balance import credit_user_balance
+
+            balance_result = await credit_user_balance(
+                referrer_id,
+                final_reward,
+                source='referral_reward',
+                reason=f'Реферальное вознаграждение, уровень {level_num}',
+                reference_type='payment_order',
+                reference_id=str((order or {}).get('order_id') or ''),
+                metadata={
+                    'payer_id': payer_id,
+                    'level': level_num,
+                    'payment_type': payment_type,
+                    'reward_policy': reward_policy,
+                },
+            )
+            if not balance_result.get('ok'):
+                final_reward = 0
+
+        if reward_days > 0:
+            from bot.services.rewards import grant_days_to_first_active_key
+
+            days_result = await grant_days_to_first_active_key(
+                referrer_id,
+                reward_days,
+                source='referral_reward',
+                reason=f'Реферальное вознаграждение, уровень {level_num}',
+                reference_type='payment_order',
+                reference_id=str((order or {}).get('order_id') or ''),
+                metadata={
+                    'payer_id': payer_id,
+                    'level': level_num,
+                    'payment_type': payment_type,
+                    'reward_policy': reward_policy,
+                },
+            )
+            if not days_result.get('ok'):
+                reward_days = 0
+
+        applied_reward_type = 'balance' if final_reward > 0 else ('days' if reward_days > 0 else reward_type)
         
         update_referral_stat(
             referrer_id, payer_id, level_num,
@@ -1285,9 +1388,11 @@ async def process_referral_reward(
             'referrer_id': referrer_id,
             'payer_id': payer_id,
             'level': level_num,
-            'reward_type': reward_type,
+            'reward_type': applied_reward_type,
             'reward_cents': final_reward,
             'reward_days': reward_days,
+            'reward_policy': reward_policy,
+            'reward_policies': reward_policies,
             'period_days': period_days,
             'amount_raw': amount_raw,
             'amount_rub_cents': amount_rub_cents,
@@ -1327,6 +1432,25 @@ def calculate_balance_discount(user_id: int, tariff_price_cents: int) -> tuple[i
         return tariff_price_cents - balance, balance
 
 
+async def _show_complete_payment_status(
+    message,
+    *,
+    title_html: str,
+    body_text: str,
+    reply_markup=None,
+) -> None:
+    """Показывает page-backed статус общего post-payment flow."""
+    from bot.handlers.user.payments.status_page import show_payment_status_message
+
+    await show_payment_status_message(
+        message,
+        title_html=title_html,
+        body_text=body_text,
+        payment_provider_title='Payment',
+        reply_markup=reply_markup,
+    )
+
+
 async def complete_payment_flow(
     order_id: str,
     message,
@@ -1360,9 +1484,6 @@ async def complete_payment_flow(
             - 'yookassa_qr': копейки рублей
     """
     from bot.handlers.user.payments.base import finalize_payment_ui
-    from bot.keyboards.admin import home_only_kb
-    from bot.services.user_locks import user_locks
-    
     state_data = await state.get_data()
     balance_to_deduct = state_data.get('balance_to_deduct', 0)
     
@@ -1381,11 +1502,21 @@ async def complete_payment_flow(
             if processed_now:
                 # Списание баланса при частичной оплате
                 if balance_to_deduct > 0:
-                    async with user_locks[user_internal_id]:
-                        current_balance = get_user_balance(user_internal_id)
-                        actual_deduct = min(balance_to_deduct, current_balance)
-                        if actual_deduct > 0:
-                            deduct_from_balance(user_internal_id, actual_deduct)
+                    current_balance = get_user_balance(user_internal_id)
+                    actual_deduct = min(balance_to_deduct, current_balance)
+                    if actual_deduct > 0:
+                        from bot.services.balance import debit_user_balance
+
+                        deduct_result = await debit_user_balance(
+                            user_internal_id,
+                            actual_deduct,
+                            source='payment_balance',
+                            reason='Списание баланса при оплате тарифа',
+                            reference_type='payment_order',
+                            reference_id=str(order.get('order_id') or order_id),
+                            metadata={'payment_type': payment_type},
+                        )
+                        if deduct_result.get('ok'):
                             logger.info(
                                 f'Списано {actual_deduct} коп с баланса user '
                                 f'{user_internal_id} при частичной оплате ({payment_type})'
@@ -1412,15 +1543,31 @@ async def complete_payment_flow(
             # Финализация UI
             await finalize_payment_ui(message, state, text, order, user_id=telegram_id)
         else:
-            await message.answer(text, reply_markup=home_only_kb(), parse_mode='HTML')
+            from bot.keyboards.admin import home_only_kb
+
+            await _show_complete_payment_status(
+                message,
+                title_html='❌ <b>Платёж не обработан</b>',
+                body_text=text,
+                reply_markup=home_only_kb(),
+            )
     
     except Exception as e:
         from bot.errors import TariffNotFoundError
         if isinstance(e, TariffNotFoundError):
-            from bot.keyboards.user import support_kb
+            from bot.keyboards.support import support_contact_kb
             support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
-            await message.answer(str(e), reply_markup=support_kb(support_link), parse_mode='HTML')
+            await _show_complete_payment_status(
+                message,
+                title_html='⚠️ <b>Тариф не найден</b>',
+                body_text=str(e),
+                reply_markup=support_contact_kb(support_link),
+            )
         else:
             logger.exception(f'Ошибка обработки {payment_type} платежа: {e}')
-            await message.answer('❌ Произошла ошибка при обработке платежа.', parse_mode='HTML')
+            await _show_complete_payment_status(
+                message,
+                title_html='❌ <b>Ошибка обработки платежа</b>',
+                body_text='Произошла ошибка при обработке платежа.',
+            )
 

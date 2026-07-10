@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 from bot.utils.text import safe_edit_or_send
 from bot.utils.delivery import is_bot_blocked_error
+from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
 
 router = Router()
 
@@ -72,6 +73,12 @@ def save_broadcast_message(text: str, photo_file_id: str | None = None) -> None:
     """Сохраняет сообщение для рассылки."""
     data = {'text': text, 'photo_file_id': photo_file_id}
     set_setting('broadcast_message', json.dumps(data, ensure_ascii=False))
+
+
+def render_broadcast_message_text(text: str, telegram_id: int | None) -> str:
+    """Рендерит текст рассылки в event-контексте конкретного получателя."""
+    context = build_user_event_context(telegram_id)
+    return render_event_placeholders(text, 'broadcast', context, mode='html')
 
 
 def is_broadcast_in_progress() -> bool:
@@ -294,16 +301,21 @@ async def broadcast_preview(callback: CallbackQuery):
     
     await callback.answer("📤 Отправляю превью...")
     
+    preview_text = render_broadcast_message_text(
+        msg_data.get('text', ''),
+        callback.from_user.id,
+    )
+
     # Отправляем превью как отдельное сообщение
     if msg_data.get('photo_file_id'):
         await safe_edit_or_send(callback.message,
             photo=msg_data['photo_file_id'],
-            text=msg_data.get('text', ''),
+            text=preview_text,
             force_new=True
         )
     else:
         await safe_edit_or_send(callback.message,
-            text=msg_data['text'],
+            text=preview_text,
             force_new=True
         )
 
@@ -468,17 +480,18 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                 break
 
             try:
+                rendered_text = render_broadcast_message_text(text, int(user_id))
                 if photo_file_id:
                     await bot.send_photo(
                         chat_id=user_id,
                         photo=photo_file_id,
-                        caption=text,
+                        caption=rendered_text,
                         parse_mode="HTML"
                     )
                 else:
                     await bot.send_message(
                         chat_id=user_id,
-                        text=text,
+                        text=rendered_text,
                         parse_mode="HTML"
                     )
                 sent += 1
@@ -679,8 +692,8 @@ async def broadcast_notify_text(callback: CallbackQuery, state: FSMContext):
         help_text=(
             "📝 <b>Справка: Текст уведомления об истечении</b>\n\n"
             "Переменные:\n"
-            "• <code>%дней%</code> — количество дней до истечения\n"
-            "• <code>%имяключа%</code> — имя ключа"
+            "• <code>%ключ_дней_до_окончания%</code> — количество дней до истечения\n"
+            "• <code>%ключ_имя%</code> — имя ключа"
         ),
         allowed_types=['text', 'photo', 'video', 'animation'],
     )

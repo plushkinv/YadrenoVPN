@@ -83,15 +83,23 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
     from database.requests import get_key_payments_history
     payments_history = get_key_payments_history(key_id)
     if payments_history:
-        text += '\n💳 <b>История платежей:</b>\n'
+        text += '\n📜 <b>История операций:</b>\n'
         for p in payments_history:
             dt = format_datetime_for_display(p.get('paid_at'), fallback='?')
+            if p.get('history_type') == 'key_operation':
+                delta_days = int(p.get('delta_days') or 0)
+                reason_safe = escape_html(p.get('reason') or 'Начисление дней')
+                if delta_days > 0:
+                    text += f'• <code>{dt}</code>: {reason_safe} (+{delta_days} дн.)\n'
+                else:
+                    text += f'• <code>{dt}</code>: {reason_safe}\n'
+                continue
             amount = ''
-            if p['payment_type'] == 'crypto':
+            if p.get('payment_type') == 'crypto':
                 usd = p['amount_cents'] / 100
                 usd_str = f'{usd:g}'.replace('.', ',')
                 amount = f'${usd_str}'
-            elif p['payment_type'] == 'stars':
+            elif p.get('payment_type') == 'stars':
                 amount = f"{p['amount_stars']} ⭐"
             elif p.get('payment_type') in ('cards', 'yookassa_qr', 'wata', 'platega', 'cardlink', 'balance'):
                 rub = p.get('price_rub') or 0
@@ -102,7 +110,7 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
             tariff_safe = escape_html(p['tariff_name'] or 'Неизвестно')
             text += f'• <code>{dt}</code>: {amount} — {tariff_safe}\n'
     else:
-        text += '\n💳 <b>История платежей:</b> _пусто_\n'
+        text += '\n📜 <b>История операций:</b> пусто\n'
     user_telegram_id = key.get('telegram_id')
     await safe_edit_or_send(callback.message, text, reply_markup=key_view_kb(key_id, user_telegram_id))
     await callback.answer()

@@ -7,200 +7,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def main_menu_kb(is_admin: bool = False, show_trial: bool = False, show_referral: bool = False) -> InlineKeyboardMarkup:
-    """
-    Главное меню пользователя.
-    
-    Args:
-        is_admin: Показывать ли кнопку админ-панели
-        show_trial: Показывать ли кнопку «Пробная подписка»
-        show_referral: Показывать ли кнопку «Реферальная система»
-    """
-    builder = InlineKeyboardBuilder()
-    
-    builder.row(
-        InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"),
-        InlineKeyboardButton(text="💳 Купить ключ", callback_data="buy_key")
-    )
-    
-    if show_trial:
-        builder.row(
-            InlineKeyboardButton(text="🎁 Пробная подписка", callback_data="trial_subscription")
-        )
-    
-    if show_referral:
-        builder.row(
-            InlineKeyboardButton(text="🔗 Реферальная ссылка", callback_data="referral_system"),
-            InlineKeyboardButton(text="❓ Справка", callback_data="help")
-        )
-    else:
-        builder.row(
-            InlineKeyboardButton(text="❓ Справка", callback_data="help")
-        )
-    
-    if is_admin:
-        builder.row(
-            InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")
-        )
-    
-    return builder.as_markup()
-
-
-
-def help_kb(
-    news_link: str, 
-    support_link: str, 
-    news_hidden: bool = False, 
-    support_hidden: bool = False,
-    news_name: str = "Новости",
-    support_name: str = "Поддержка"
-) -> InlineKeyboardMarkup:
-    """
-    Клавиатура справки с внешними ссылками.
-    
-    Args:
-        news_link: Ссылка на канал новостей
-        support_link: Ссылка на чат поддержки
-        news_hidden: Скрыта ли кнопка новостей
-        support_hidden: Скрыта ли кнопка поддержки
-        news_name: Название кнопки новостей
-        support_name: Название кнопки поддержки
-    """
-    builder = InlineKeyboardBuilder()
-    
-    # Формируем ряд с кнопками-ссылками (только нескрытые)
-    visible_buttons = []
-    if not news_hidden:
-        visible_buttons.append(InlineKeyboardButton(text=f"📢 {news_name}", url=news_link))
-    if not support_hidden:
-        visible_buttons.append(InlineKeyboardButton(text=f"💬 {support_name}", url=support_link))
-    
-    if visible_buttons:
-        builder.row(*visible_buttons)
-    
-    # На главную
-    builder.row(
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    
-    return builder.as_markup()
-
-
-def support_kb(support_link: str) -> InlineKeyboardMarkup:
-    """
-    Клавиатура с кнопкой поддержки и возвратом на главную.
-    
-    Args:
-        support_link: Ссылка на поддержку
-    """
-    builder = InlineKeyboardBuilder()
-    
-    builder.row(
-        InlineKeyboardButton(text="💬 Support", url=support_link)
-    )
-    
-    builder.row(
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    
-    return builder.as_markup()
-
-
-def buy_key_kb(
-    crypto_configured: bool = False,
-    stars_enabled: bool = False,
-    cards_enabled: bool = False,
-    yookassa_qr_enabled: bool = False,
-    order_id: str = None,
-    show_balance_button: bool = False,
-    demo_enabled: bool = False,
-    wata_enabled: bool = False,
-    platega_enabled: bool = False,
-    cardlink_enabled: bool = False
-) -> InlineKeyboardMarkup:
-    """
-    Клавиатура для страницы «Купить ключ».
-
-    Args:
-        crypto_configured: Настроена ли крипто-оплата
-        stars_enabled: Показывать ли кнопку оплаты Stars
-        cards_enabled: Показывать ли кнопку TG payments (историческое внутреннее имя cards)
-        yookassa_qr_enabled: Показывать ли кнопку ЮКасса
-        order_id: ID созданного ордера (для оптимизации Stars/TG payments)
-        show_balance_button: Показывать ли кнопку «Использовать баланс»
-        wata_enabled: Показывать ли кнопку оплаты WATA
-        platega_enabled: Показывать ли кнопку оплаты Platega
-        cardlink_enabled: Показывать ли кнопку оплаты Cardlink
-    """
-    builder = InlineKeyboardBuilder()
-
-    # Кнопки оплаты (показываем только включённые методы)
-    # USDT
-    if crypto_configured:
-        cb_data = f"pay_crypto:{order_id}" if order_id else "pay_crypto"
-        builder.row(InlineKeyboardButton(text="🪙 Оплатить USDT", callback_data=cb_data))
-
-    # Stars — переход к выбору тарифа
-    if stars_enabled:
-        cb_data = f"pay_stars:{order_id}" if order_id else "pay_stars"
-        builder.row(
-            InlineKeyboardButton(text="⭐ Оплатить звёздами", callback_data=cb_data)
-        )
-
-    # TG payments (историческое внутреннее имя cards) — переход к выбору тарифа
-    if cards_enabled:
-        cb_data = f"pay_cards:{order_id}" if order_id else "pay_cards"
-        builder.row(
-            InlineKeyboardButton(text="💳 TG payments", callback_data=cb_data)
-        )
-
-    # ЮКасса — переход к выбору тарифа
-    if yookassa_qr_enabled:
-        builder.row(
-            InlineKeyboardButton(text="📱 ЮКасса", callback_data="pay_qr")
-        )
-
-    # WATA — переход к выбору тарифа
-    if wata_enabled:
-        builder.row(
-            InlineKeyboardButton(text="🌊 WATA", callback_data="pay_wata")
-        )
-
-    # Platega — переход к выбору тарифа
-    if platega_enabled:
-        builder.row(
-            InlineKeyboardButton(text="💸 Platega", callback_data="pay_platega")
-        )
-
-    # Cardlink — переход к выбору тарифа
-    if cardlink_enabled:
-        builder.row(
-            InlineKeyboardButton(text="🔗 Cardlink", callback_data="pay_cardlink")
-        )
-
-    # Демо оплата (РФ) — переход к выбору тарифа
-    if demo_enabled:
-        cb_data = f"demo_tariffs:{order_id}" if order_id else "demo_tariffs"
-        builder.row(
-            InlineKeyboardButton(text="🏦 Демо оплата (РФ карта)", callback_data=cb_data)
-        )
-
-    # Кнопка «Использовать баланс» — только при выполнении всех трёх условий
-    # (is_referral_enabled + reward_type='balance' + personal_balance > 0)
-    # На этом экране больше ничего про баланс не показывать
-    if show_balance_button:
-        builder.row(
-            InlineKeyboardButton(text="💎 Использовать баланс", callback_data="pay_use_balance")
-        )
-
-    # Кнопка «На главную» — последний ряд
-    builder.row(
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-
-    return builder.as_markup()
-
-
 def balance_payment_kb(
     tariff_id: int,
     key_id: int = None,
@@ -407,30 +213,6 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
     return builder.as_markup()
 
 
-def back_button_kb(back_callback: str = "start") -> InlineKeyboardMarkup:
-    """Клавиатура с кнопкой 'На главную'."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="🈴 На главную", callback_data=back_callback)
-    )
-    return builder.as_markup()
-
-
-def back_and_home_kb(back_callback: str) -> InlineKeyboardMarkup:
-    """
-    Клавиатура с кнопками 'Назад' и 'На главную'.
-    
-    Args:
-        back_callback: Callback для кнопки 'Назад'
-    """
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    return builder.as_markup()
-
-
 def cancel_kb(cancel_callback: str) -> InlineKeyboardMarkup:
     """
     Клавиатура с кнопкой 'Отмена'.
@@ -443,45 +225,6 @@ def cancel_kb(cancel_callback: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="❌ Отмена", callback_data=cancel_callback)
     )
     return builder.as_markup()
-
-
-def my_keys_list_kb(keys: list) -> InlineKeyboardMarkup:
-    """
-    Клавиатура со списком ключей пользователя.
-    
-    Args:
-        keys: Список ключей из get_user_keys_for_display()
-    """
-    builder = InlineKeyboardBuilder()
-    
-    for key in keys:
-        # Эмодзи статуса: 🟢 активен, 🔴 истёк, ⚪ выключен
-        if key['is_active']:
-            status_emoji = "🟢"
-        else:
-            status_emoji = "🔴"
-        
-        builder.row(
-            InlineKeyboardButton(
-                text=f"{status_emoji} {key['display_name']}",
-                callback_data=f"key:{key['id']}"
-            )
-        )
-    
-    # Кнопка «На главную» — последний ряд
-    builder.row(
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    
-    return builder.as_markup()
-
-
-def key_show_kb(key_id: int = None) -> InlineKeyboardMarkup:
-    """
-    Клавиатура на странице отображения ключа (QR-код).
-    Теперь универсальная.
-    """
-    return key_issued_kb()
 
 
 def renew_tariff_select_kb(tariffs: list, key_id: int, order_id: str = None, is_cards: bool = False, is_crypto: bool = False, is_balance: bool = False, is_qr: bool = False, is_demo: bool = False, is_wata: bool = False, is_platega: bool = False, is_cardlink: bool = False) -> InlineKeyboardMarkup:
@@ -588,6 +331,70 @@ def renew_tariff_select_kb(tariffs: list, key_id: int, order_id: str = None, is_
 # ЗАМЕНА КЛЮЧА
 # ============================================================================
 
+def custom_payment_tariff_select_kb(
+    tariffs: list,
+    provider_id: str,
+    *,
+    minimum_amount_cents: int = 0,
+    back_callback: str = "buy_key",
+) -> InlineKeyboardMarkup:
+    """Клавиатура выбора тарифа для кастомного платёжного провайдера."""
+    builder = InlineKeyboardBuilder()
+    min_rub = minimum_amount_cents / 100
+
+    for tariff in tariffs:
+        price_rub = float(tariff.get('price_rub') or 0)
+        if price_rub <= 0 or price_rub < min_rub:
+            continue
+        builder.row(
+            InlineKeyboardButton(
+                text=f"💳 {tariff['name']} — {_format_rub_button_price(price_rub)}",
+                callback_data=f"pet:{provider_id}:{tariff['id']}",
+            )
+        )
+
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
+        InlineKeyboardButton(text="🈴 На главную", callback_data="start"),
+    )
+    return builder.as_markup()
+
+
+def custom_payment_renew_tariff_select_kb(
+    tariffs: list,
+    provider_id: str,
+    key_id: int,
+    *,
+    minimum_amount_cents: int = 0,
+) -> InlineKeyboardMarkup:
+    """Клавиатура выбора тарифа продления для кастомного платёжного провайдера."""
+    builder = InlineKeyboardBuilder()
+    min_rub = minimum_amount_cents / 100
+
+    for tariff in tariffs:
+        price_rub = float(tariff.get('price_rub') or 0)
+        if price_rub <= 0 or price_rub < min_rub:
+            continue
+        builder.row(
+            InlineKeyboardButton(
+                text=f"💳 {tariff['name']} — {_format_rub_button_price(price_rub)}",
+                callback_data=f"ret:{provider_id}:{key_id}:{tariff['id']}",
+            )
+        )
+
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=f"key_renew:{key_id}"),
+        InlineKeyboardButton(text="🈴 На главную", callback_data="start"),
+    )
+    return builder.as_markup()
+
+
+def _format_rub_button_price(price_rub: float) -> str:
+    if float(price_rub).is_integer():
+        return f"{int(price_rub)} ₽"
+    return f"{price_rub:g} ₽".replace('.', ',')
+
+
 def replace_server_list_kb(servers: list, key_id: int) -> InlineKeyboardMarkup:
     """
     Клавиатура выбора сервера для замены ключа.
@@ -674,7 +481,7 @@ def replace_confirm_kb(key_id: int) -> InlineKeyboardMarkup:
 # НОВЫЙ КЛЮЧ (ПОСЛЕ ОПЛАТЫ)
 # ============================================================================
 
-def new_key_server_list_kb(servers: list, include_home: bool = True) -> InlineKeyboardMarkup:
+def new_key_server_list_kb(servers: list) -> InlineKeyboardMarkup:
     """
     Клавиатура выбора сервера для создания нового ключа.
     
@@ -693,15 +500,7 @@ def new_key_server_list_kb(servers: list, include_home: bool = True) -> InlineKe
                 callback_data=f"new_key_server:{server['id']}"
             )
         )
-    
-    if include_home:
-        # Кнопка «На главную» — на случай если передумал (ключ можно создать потом через поддержку,
-        # но логика бота пока этого не предусматривает -> pending order останется paid но без vpn_key_id.
-        # TODO: Реализовать "досоздание" ключа позже.
-        builder.row(
-            InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-        )
-    
+
     return builder.as_markup()
 
 
@@ -730,48 +529,6 @@ def new_key_inbound_list_kb(inbounds: list) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_server_select") # спец. callback для возврата
     )
     
-    return builder.as_markup()
-
-
-def key_issued_kb() -> InlineKeyboardMarkup:
-    """
-    Универсальная клавиатура после выдачи или при показе ключа (QR-код).
-    
-    Layout:
-    1. Инструкция | Мои ключи
-    2. На главную
-    """
-    builder = InlineKeyboardBuilder()
-    
-    # Первый ряд
-    builder.row(
-        InlineKeyboardButton(text="📄 Инструкция", callback_data="help"),
-        InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys")
-    )
-    
-    # Второй ряд
-    builder.row(
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    
-    return builder.as_markup()
-
-
-def trial_sub_kb() -> InlineKeyboardMarkup:
-    """
-    Клавиатура экрана «Пробная подписка».
-
-    Две кнопки:
-    - Активировать (trial_activate)
-    - На главную (start)
-    """
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="✅ Активировать", callback_data="trial_activate")
-    )
-    builder.row(
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
     return builder.as_markup()
 
 
@@ -828,16 +585,4 @@ def platega_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = N
 def cardlink_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
     """Алиас → qr_payment_kb(check_prefix='check_cardlink')."""
     return qr_payment_kb(order_id, 'check_cardlink', back_callback, qr_url)
-
-
-
-def referral_menu_kb() -> InlineKeyboardMarkup:
-    """Клавиатура для раздела реферальной системы."""
-    builder = InlineKeyboardBuilder()
-    
-    builder.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="start"),
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start")
-    )
-    return builder.as_markup()
 

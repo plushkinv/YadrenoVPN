@@ -419,15 +419,15 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
     """
     logger.info("⏳ Запуск проверки истекающих ключей...")
     try:
-        from bot.utils.placeholders import apply_placeholder_replacements
-        from bot.utils.text import escape_html, send_media_or_text
+        from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
+        from bot.utils.text import send_media_or_text
         days = int(get_setting('notification_days', '3'))
         from bot.utils.message_editor import get_message_data
         
         # Дефолтный текст в HTML
         default_notification = (
-            '⚠️ <b>Ваш VPN-ключ %имяключа% скоро истекает!</b>\n\n'
-            'Через %дней% дней закончится срок действия вашего ключа.\n\n'
+            '⚠️ <b>Ваш VPN-ключ %ключ_имя% скоро истекает!</b>\n\n'
+            'Через %ключ_дней_до_окончания% дней закончится срок действия вашего ключа.\n\n'
             'Продлите подписку, чтобы сохранить доступ к VPN без перерыва!'
         )
         notification_data = get_message_data('notification_text', default_notification)
@@ -448,11 +448,17 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
             if is_notification_sent_today(vpn_key_id):
                 continue
             
-            # Подстановка с экранированием динамических значений
-            text = apply_placeholder_replacements(notification_text, {
-                '%дней%': escape_html(str(days_left)),
-                '%имяключа%': escape_html(str(keyname)),
+            event_context = build_user_event_context(user_telegram_id)
+            event_context.update({
+                'key_name': keyname,
+                'key_days_left': days_left,
             })
+            text = render_event_placeholders(
+                notification_text,
+                'key_expiring',
+                event_context,
+                mode='html',
+            )
             
             # Клавиатура с кнопками "Мои ключи" и "На главную"
             builder = InlineKeyboardBuilder()
@@ -934,7 +940,7 @@ async def sync_traffic_stats(bot: Bot) -> None:
     # Проверяем пороги уведомлений
     notification_text_template = get_setting(
         'traffic_notification_text',
-        '⚠️ По ключу <b>{keyname}</b> осталось {percent}% трафика ({used} из {limit})'
+        '⚠️ По ключу <b>%ключ_имя%</b> осталось %ключ_трафик_процент_остатка%% трафика (%ключ_трафик_использовано% из %ключ_трафик_лимит%)'
     )
     
     for key in keys:
@@ -964,11 +970,22 @@ async def sync_traffic_stats(bot: Bot) -> None:
                     else:
                         keyname = f"Ключ #{key['id']}"
                     
-                    msg = notification_text_template.format(
-                        keyname=keyname,
-                        percent=threshold,
-                        used=format_traffic(traffic_used),
-                        limit=format_traffic(traffic_limit)
+                    from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
+
+                    event_context = build_user_event_context(int(telegram_id))
+                    event_context.update(
+                        {
+                            'key_name': keyname,
+                            'key_traffic_remaining_percent': threshold,
+                            'key_traffic_used_text': format_traffic(traffic_used),
+                            'key_traffic_limit_text': format_traffic(traffic_limit),
+                        }
+                    )
+                    msg = render_event_placeholders(
+                        notification_text_template,
+                        'key_traffic_low',
+                        event_context,
+                        mode='html',
                     )
                     
                     try:
@@ -1061,6 +1078,25 @@ async def run_traffic_sync_scheduler(bot: Bot) -> None:
     while True:
         try:
             await sync_traffic_stats(bot)
+            try:
+                from bot.services.key_lifecycle import process_expired_key_lifecycle_events
+
+                await process_expired_key_lifecycle_events()
+            except Exception as e:
+                logger.error(f"Ошибка обработки key_expired lifecycle events: {e}")
+            try:
+                from bot.services.custom_payments import auto_check_custom_payment_orders
+
+                payment_summary = await auto_check_custom_payment_orders(bot=bot, limit=25)
+                if (
+                    payment_summary.get('checked')
+                    or payment_summary.get('completed')
+                    or payment_summary.get('canceled')
+                    or payment_summary.get('errors')
+                ):
+                    logger.info("Custom payment auto-check: %s", payment_summary)
+            except Exception as e:
+                logger.error(f"Ошибка автопроверки custom payment providers: {e}")
             cycle += 1
             # Раз в 6 циклов (≈30 мин) — материализация subscription-состояния
             if cycle % 6 == 0:

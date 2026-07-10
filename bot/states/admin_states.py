@@ -60,6 +60,16 @@ class AdminStates(StatesGroup):
     referral_level_edit = State()    # Редактирование уровня
     waiting_balance_amount = State()    # Ввод суммы баланса
     waiting_coefficient = State()        # Ввод коэффициента
+    support_waiting_message = State()    # Ввод сообщения пользователю/ответа в поддержку
+    promocode_add_code = State()
+    promocode_add_discount = State()
+    promocode_add_expires = State()
+    promocode_add_limit = State()
+    promocode_edit_value = State()
+    coupon_setting_value = State()
+    coupon_generate_discount = State()
+    coupon_generate_lifetime = State()
+    coupon_generate_count = State()
     
     # ========== Редактирование сообщений (универсальный редактор) ==========
     waiting_for_message = State()    # Ожидание нового сообщения (единое для всех редакторов)

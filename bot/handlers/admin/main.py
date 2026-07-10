@@ -13,7 +13,7 @@ from bot.services.admin_monitoring import (
     collect_admin_monitoring_snapshot,
 )
 from bot.states.admin_states import AdminStates
-from bot.keyboards.admin import admin_main_menu_kb, author_support_kb
+from bot.keyboards.admin import admin_main_menu_kb, author_support_kb, marketing_menu_kb
 from bot.utils.admin import is_admin
 from bot.utils.text import safe_edit_or_send
 
@@ -83,6 +83,42 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
     except TelegramBadRequest as e:
         if "is not modified" not in str(e):
             logger.error(f"Ошибка при обновлении меню: {e}")
+
+
+# ============================================================================
+# РАЗДЕЛ МАРКЕТИНГА
+# ============================================================================
+
+@router.callback_query(F.data == "admin_marketing")
+async def show_marketing_menu(callback: CallbackQuery, state: FSMContext):
+    """Показывает меню маркетинговых инструментов."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.admin_menu)
+
+    text = (
+        "📣 <b>Маркетинг</b>\n\n"
+        "Выберите инструмент:"
+    )
+
+    await safe_edit_or_send(
+        callback.message,
+        text,
+        reply_markup=marketing_menu_kb()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_placeholder")
+async def admin_placeholder(callback: CallbackQuery):
+    """Заглушка для временно пустой кнопки в главном меню."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    await callback.answer()
 
 
 # ============================================================================

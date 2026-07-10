@@ -2,7 +2,7 @@ import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
-from bot.utils.text import safe_edit_or_send
+from bot.utils.user_pages import render_access_blocked_page
 from database.requests import is_user_banned
 
 logger = logging.getLogger(__name__)
@@ -14,14 +14,14 @@ router = Router()
 async def cmd_buy(message: Message):
     """Обработчик команды /buy — открывает страницу покупки ключа."""
     if is_user_banned(message.from_user.id):
-        await safe_edit_or_send(message, '⛔ <b>Доступ заблокирован</b>\n\nВаш аккаунт заблокирован. Обратитесь в поддержку.', force_new=True)
+        await render_access_blocked_page(message, force_new=True)
         return
     await _render_buy_page(message)
 
 
 async def _render_buy_page(target):
     """Рендерит страницу покупки ключа.
-    
+
     Args:
         target: Message или CallbackQuery
     """
@@ -33,7 +33,6 @@ async def _render_buy_page(target):
         get_user_internal_id, create_pending_order,
     )
     from bot.utils.page_renderer import render_page
-    from bot.keyboards.admin import home_only_kb
 
     if isinstance(target, CallbackQuery):
         telegram_id = target.from_user.id
@@ -51,11 +50,9 @@ async def _render_buy_page(target):
 
     # Проверка: хотя бы один способ оплаты настроен
     if not crypto_configured and not stars_enabled and not cards_enabled and not yookassa_qr and not wata_enabled and not platega_enabled and not cardlink_enabled and not demo_enabled:
-        msg = target.message if isinstance(target, CallbackQuery) else target
-        await safe_edit_or_send(
-            msg,
-            '💳 <b>Купить ключ</b>\n\n😔 К сожалению, сейчас оплата недоступна.\n\nПопробуйте позже или обратитесь в поддержку.',
-            reply_markup=home_only_kb(),
+        await render_page(
+            target,
+            page_key='prepayment_unavailable',
             force_new=isinstance(target, Message),
         )
         return
@@ -84,4 +81,4 @@ async def _render_buy_page(target):
 async def buy_key_handler(callback: CallbackQuery):
     """Страница «Купить ключ» с условиями и способами оплаты."""
     await _render_buy_page(callback)
-    await callback.answer()
+    await callback.answer()

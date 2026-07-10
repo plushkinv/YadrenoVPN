@@ -29,14 +29,14 @@ def tariffs_list_kb(tariffs: List[Dict[str, Any]], include_hidden: bool=True) ->
             g_name = groups.get(g_id, 'Основная')
             builder.row(InlineKeyboardButton(text=f'📂⬇ {g_name}', callback_data='noop'))
             for tariff in t_list:
-                status_emoji = '🟢' if tariff.get('is_active') else '🔴'
+                status_emoji = '🟢' if tariff.get('is_active') else '⚪'
                 price = tariff['price_cents'] / 100
                 price_str = f'{price:g}'.replace('.', ',')
                 text = f"  {status_emoji} {tariff['name']} — ${price_str}"
                 builder.row(InlineKeyboardButton(text=text, callback_data=f"admin_tariff_view:{tariff['id']}"))
     else:
         for tariff in tariffs:
-            status_emoji = '🟢' if tariff.get('is_active') else '🔴'
+            status_emoji = '🟢' if tariff.get('is_active') else '⚪'
             price = tariff['price_cents'] / 100
             price_str = f'{price:g}'.replace('.', ',')
             text = f"{status_emoji} {tariff['name']} — ${price_str}"

@@ -5,11 +5,13 @@
 Реализует трёхслойную систему видимости кнопок:
   1. buttons_default.is_hidden — дефолт разработчика
   2. buttons_custom (мёрж по id) — кастомизация админа
-  3. runtime — visibility dict (для internal), system handlers и page-переходы
+  3. runtime — visibility dict по button id, system handlers и page/route-переходы
 """
 import json
 import logging
+from collections.abc import Mapping
 from typing import Optional, Dict, List, Any
+from urllib.parse import urlparse
 
 from aiogram.types import (
     Message, CallbackQuery,
@@ -17,7 +19,11 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.utils.placeholders import apply_placeholder_replacements
+from bot.utils.placeholders import apply_page_placeholders, contains_placeholder
+from bot.utils.page_placeholder_context import (
+    enrich_page_placeholder_context,
+    enrich_page_placeholder_context_sync,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,15 +101,36 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def _parse_buttons_json(raw: Optional[str]) -> List[Dict]:
+def _parse_buttons_json(raw: Optional[str]) -> List[Dict[str, Any]]:
     """Безопасный парсинг JSON массива кнопок."""
     if not raw:
         return []
     try:
         result = json.loads(raw)
-        return result if isinstance(result, list) else []
+        if not isinstance(result, list):
+            return []
+        return [item for item in result if isinstance(item, dict)]
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+def _valid_button_id(raw_button_id: Any) -> bool:
+    return isinstance(raw_button_id, str) and bool(raw_button_id.strip())
+
+
+def _button_position_value(raw_value: Any) -> Optional[int]:
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        return None
+    return raw_value
+
+
+def _button_sort_key(button: Dict[str, Any]) -> tuple[int, int]:
+    row = _button_position_value(button.get('row', 0))
+    col = _button_position_value(button.get('col', 0))
+    return (
+        row if row is not None else 10_000,
+        col if col is not None else 10_000,
+    )
 
 
 def _merge_buttons_by_id(
@@ -128,7 +155,7 @@ def _merge_buttons_by_id(
         return defaults
 
     # Индексируем custom-кнопки по id
-    custom_map = {btn.get('id'): btn for btn in customs if btn.get('id')}
+    custom_map = {btn.get('id'): btn for btn in customs if _valid_button_id(btn.get('id'))}
     used_custom_ids = set()
 
     merged = []
@@ -145,11 +172,11 @@ def _merge_buttons_by_id(
     # Добавленные админом кнопки (нет в default)
     for btn in customs:
         btn_id = btn.get('id')
-        if btn_id and btn_id not in used_custom_ids:
+        if _valid_button_id(btn_id) and btn_id not in used_custom_ids:
             merged.append(btn)
 
     # Сортировка по (row, col)
-    merged.sort(key=lambda b: (b.get('row', 0), b.get('col', 0)))
+    merged.sort(key=_button_sort_key)
 
     return merged
 
@@ -167,7 +194,7 @@ def _merge_buttons_by_id_with_source(
     defaults = _parse_buttons_json(buttons_default_json)
     customs = _parse_buttons_json(buttons_custom_json)
 
-    custom_map = {btn.get('id'): btn for btn in customs if btn.get('id')}
+    custom_map = {btn.get('id'): btn for btn in customs if _valid_button_id(btn.get('id'))}
     used_custom_ids = set()
     merged: List[Dict[str, Any]] = []
 
@@ -186,12 +213,12 @@ def _merge_buttons_by_id_with_source(
 
     for btn in customs:
         btn_id = btn.get('id')
-        if btn_id and btn_id not in used_custom_ids:
+        if _valid_button_id(btn_id) and btn_id not in used_custom_ids:
             item = dict(btn)
             item['source'] = 'custom'
             merged.append(item)
 
-    merged.sort(key=lambda b: (b.get('row', 0), b.get('col', 0)))
+    merged.sort(key=_button_sort_key)
     return merged
 
 
@@ -252,6 +279,7 @@ def _build_keyboard(
     buttons: List[Dict],
     visibility: Optional[Dict[str, bool]],
     context: Optional[Dict],
+    text_replacements: Optional[Dict[str, str]],
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]],
     append_buttons: Optional[List[List[InlineKeyboardButton]]],
 ) -> InlineKeyboardMarkup:
@@ -261,29 +289,91 @@ def _build_keyboard(
     Применяет слой 3 (runtime): visibility dict и system handlers.
     Правила размещения: по row, max 2 кнопки в ряд, фолбэк при коллизиях.
     """
-    from bot.utils.action_registry import ACTION_REGISTRY, SYSTEM_BUTTONS
+    from bot.utils.action_registry import (
+        ACTION_REGISTRY,
+        SYSTEM_BUTTONS,
+        normalize_callback_data,
+        resolve_system_button,
+    )
 
-    if visibility is None:
-        visibility = {}
-    if context is None:
-        context = {}
+    visibility, invalid_visibility_ids = _normalize_runtime_visibility(visibility)
+    context = _normalize_context_mapping(context)
+
+    def render_label(raw_label: Any, btn_id: str) -> Optional[str]:
+        if not isinstance(raw_label, str):
+            logger.warning("Label кнопки '%s' должен быть строкой — пропускаем", btn_id)
+            return None
+        rendered = apply_page_placeholders(
+            raw_label,
+            text_replacements,
+            context,
+            mode='button_label',
+        ).strip()
+        if not rendered:
+            logger.warning("Пустой label после подстановки для кнопки '%s' — пропускаем", btn_id)
+            return None
+        return rendered
+
+    def require_string_value(raw_value: Any, field_name: str, btn_id: str) -> Optional[str]:
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            logger.warning("Поле %s кнопки '%s' должно быть непустой строкой — пропускаем", field_name, btn_id)
+            return None
+        return raw_value
+
+    def render_url(raw_url: Any, btn_id: str) -> Optional[str]:
+        rendered = apply_page_placeholders(
+            raw_url,
+            text_replacements,
+            context,
+            mode='url',
+        ).strip()
+        if not rendered:
+            logger.warning("Пустой URL после подстановки для кнопки '%s' — пропускаем", btn_id)
+            return None
+        if contains_placeholder(rendered):
+            logger.warning("URL кнопки '%s' содержит неизвестный плейсхолдер — пропускаем", btn_id)
+            return None
+        if not _is_allowed_button_url(rendered):
+            logger.warning("URL кнопки '%s' не прошёл проверку схемы — пропускаем", btn_id)
+            return None
+        return rendered
 
     # Обрабатываем каждую кнопку: определяем action, label, hidden
     resolved_buttons: List[Dict] = []
 
     for btn in buttons:
+        if not isinstance(btn, Mapping):
+            logger.warning("Кнопка страницы должна быть JSON-объектом — пропускаем")
+            continue
         btn_id = btn.get('id', '')
+        if not _valid_button_id(btn_id):
+            logger.warning("id кнопки страницы должен быть непустой строкой — пропускаем")
+            continue
         action_type = btn.get('action_type', 'internal')
+        if not isinstance(action_type, str):
+            logger.warning("action_type кнопки '%s' должен быть строкой — пропускаем", btn_id)
+            continue
         action_value = btn.get('action_value')
         label = btn.get('label', '')
         icon_custom_emoji_id = btn.get('icon_custom_emoji_id')
+        if icon_custom_emoji_id is not None and not isinstance(icon_custom_emoji_id, str):
+            logger.warning("icon_custom_emoji_id кнопки '%s' должен быть строкой — игнорируем", btn_id)
+            icon_custom_emoji_id = None
         is_hidden = btn.get('is_hidden', False)
+        if not isinstance(is_hidden, bool):
+            logger.warning("is_hidden кнопки '%s' должен быть bool — скрываем кнопку", btn_id)
+            is_hidden = True
         color = btn.get('color')
-        row = btn.get('row', 0)
-        col = btn.get('col', 0)
+        row = _button_position_value(btn.get('row', 0))
+        col = _button_position_value(btn.get('col', 0))
+        if row is None or col is None:
+            logger.warning("row/col кнопки '%s' должны быть int — пропускаем", btn_id)
+            continue
 
-        # Слой 3: visibility dict (для internal-кнопок)
-        if btn_id in visibility:
+        # Слой 3: visibility dict по button id для всех action_type.
+        if btn_id in invalid_visibility_ids:
+            is_hidden = True
+        elif btn_id in visibility:
             is_hidden = not visibility[btn_id]
 
         # Обработка по типу
@@ -291,13 +381,14 @@ def _build_keyboard(
         url = None
 
         if action_type == 'system':
-            handler = SYSTEM_BUTTONS.get(btn_id)
-            if handler is None:
+            if btn_id not in SYSTEM_BUTTONS and not (
+                btn_id.startswith('btn_pay_ext_') or btn_id.startswith('btn_renew_pay_ext_')
+            ):
                 logger.warning(f"System handler не найден для кнопки '{btn_id}' — пропускаем")
                 continue
 
             try:
-                result = handler(context)
+                result = resolve_system_button(btn_id, context)
             except Exception as e:
                 logger.error(f"Ошибка system handler '{btn_id}': {e}")
                 continue
@@ -314,29 +405,42 @@ def _build_keyboard(
             # System handler может скрыть кнопку
             if result.get('hidden', False):
                 continue
+            if url:
+                url = render_url(url, btn_id)
+                if not url:
+                    continue
 
         elif action_type == 'internal':
-            if not action_value:
-                logger.warning(f"Пустой action_value для internal-кнопки '{btn_id}' — пропускаем")
+            action_value = require_string_value(action_value, 'action_value', btn_id)
+            if action_value is None:
                 continue
 
             cb = ACTION_REGISTRY.get(action_value)
             if cb is None:
                 logger.warning(f"action_value '{action_value}' не найден в ACTION_REGISTRY — пропускаем")
                 continue
-            callback_data = cb
+            try:
+                callback_data = normalize_callback_data(
+                    cb,
+                    f"callback_data action_value '{action_value}'",
+                )
+            except ValueError as e:
+                logger.warning("Некорректный callback_data для action_value '%s': %s", action_value, e)
+                continue
 
         elif action_type == 'url':
-            if not action_value:
-                logger.warning(f"Пустой action_value для url-кнопки '{btn_id}' — пропускаем")
+            action_value = require_string_value(action_value, 'action_value', btn_id)
+            if action_value is None:
                 continue
-            url = action_value
+            url = render_url(action_value, btn_id)
+            if not url:
+                continue
 
         elif action_type == 'page':
             from bot.utils.custom_pages import build_custom_page_callback, custom_page_exists
 
-            if not action_value:
-                logger.warning(f"Пустой action_value для page-кнопки '{btn_id}' — пропускаем")
+            action_value = require_string_value(action_value, 'action_value', btn_id)
+            if action_value is None:
                 continue
             if not custom_page_exists(action_value):
                 logger.warning(f"custom-страница '{action_value}' для кнопки '{btn_id}' не найдена или имеет неверный ключ — пропускаем")
@@ -347,6 +451,21 @@ def _build_keyboard(
                 logger.warning(f"callback custom-страницы '{action_value}' для кнопки '{btn_id}' не помещается в лимит Telegram — пропускаем")
                 continue
 
+        elif action_type == 'route':
+            from bot.utils.page_routes import build_page_route_callback, page_route_exists
+
+            action_value = require_string_value(action_value, 'action_value', btn_id)
+            if action_value is None:
+                continue
+            if not page_route_exists(action_value):
+                logger.warning(f"route '{action_value}' для кнопки '{btn_id}' не найден или выключен — пропускаем")
+                continue
+
+            callback_data = build_page_route_callback(action_value)
+            if not callback_data:
+                logger.warning(f"callback route '{action_value}' для кнопки '{btn_id}' не помещается в лимит Telegram — пропускаем")
+                continue
+
         else:
             logger.warning(f"Неизвестный action_type '{action_type}' для кнопки '{btn_id}' — пропускаем")
             continue
@@ -355,8 +474,12 @@ def _build_keyboard(
         if is_hidden:
             continue
 
+        rendered_label = render_label(label, btn_id)
+        if rendered_label is None:
+            continue
+
         resolved_buttons.append({
-            'label': label,
+            'label': rendered_label,
             'icon_custom_emoji_id': icon_custom_emoji_id,
             'callback_data': callback_data,
             'url': url,
@@ -426,15 +549,117 @@ def _build_keyboard(
     return builder.as_markup()
 
 
+def _normalize_runtime_visibility(raw_visibility: Optional[Dict[str, bool]]) -> tuple[Dict[str, bool], set[str]]:
+    """Нормализует runtime visibility: не-bool override безопасно скрывает кнопку."""
+    if raw_visibility is None:
+        return {}, set()
+    if not isinstance(raw_visibility, Mapping):
+        logger.warning("Runtime visibility должен быть mapping — игнорируем")
+        return {}, set()
+
+    visibility: Dict[str, bool] = {}
+    invalid_ids: set[str] = set()
+    for button_id, visible in raw_visibility.items():
+        if not isinstance(button_id, str):
+            logger.warning("Runtime visibility содержит нестроковый button_id: %r", button_id)
+            continue
+        if not isinstance(visible, bool):
+            logger.warning("Runtime visibility для кнопки '%s' должен быть bool — скрываем кнопку", button_id)
+            invalid_ids.add(button_id)
+            continue
+        visibility[button_id] = visible
+    return visibility, invalid_ids
+
+
+def _is_allowed_button_url(url: str) -> bool:
+    """Разрешает только безопасные схемы URL-кнопок после подстановки."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {'http', 'https', 'tg'}:
+        return False
+    if parsed.scheme in {'http', 'https'} and not parsed.netloc:
+        return False
+    if parsed.scheme == 'tg' and (not url.startswith('tg://') or not parsed.netloc):
+        return False
+    return True
+
+
+def _normalize_context_mapping(context: Optional[Mapping[str, Any]], field_name: str = 'context') -> Dict[str, Any]:
+    if context is None:
+        return {}
+    if not isinstance(context, Mapping):
+        raise ValueError(f"{field_name} должен быть mapping")
+    return dict(context)
+
+
+def _snapshot_page_key(context: Mapping[str, Any]) -> str:
+    page_key = context.get('page_key')
+    if page_key is None:
+        return ''
+    if not isinstance(page_key, str):
+        raise ValueError("context.page_key должен быть строкой")
+    return page_key
+
+
+def _normalize_snapshot_buttons(buttons: Optional[List[Dict[str, Any]]]) -> List[Any]:
+    if buttons is None:
+        return []
+    if not isinstance(buttons, list):
+        raise ValueError("buttons должен быть list или None")
+    return buttons
+
+
+def _normalize_snapshot_page_data(page_data: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    if page_data is None:
+        return {}
+    if not isinstance(page_data, Mapping):
+        raise ValueError("page_data должен быть mapping или None")
+    return dict(page_data)
+
+
 def _apply_text_replacements(
     text: str,
     text_replacements: Optional[Dict[str, str]],
+    context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Применяет HTML-подстановки страницы так же, как render_page()."""
-    rendered_text = text or ''
-    if text_replacements:
-        rendered_text = apply_placeholder_replacements(rendered_text, text_replacements)
+    rendered_text = apply_page_placeholders(
+        text or '',
+        text_replacements,
+        _normalize_context_mapping(context),
+        mode='html',
+    )
     return rendered_text or '(пусто)'
+
+
+def render_page_text(
+    page_key: str,
+    context: Optional[Dict[str, Any]] = None,
+    text_replacements: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """
+    Рендерит только текст страницы без отправки сообщения и без клавиатуры.
+
+    Нужен для технических экранов, где текст уже хранится в pages, но отправка
+    остаётся специальной: например оплата по QR с фото и runtime-клавиатурой.
+    """
+    page_data = get_page_data(page_key)
+    if page_data is None:
+        return None
+
+    render_context: Dict[str, Any] = {'page_key': page_key}
+    render_context.update(_normalize_context_mapping(context))
+    render_context = enrich_page_placeholder_context_sync(
+        page_key,
+        page_data,
+        render_context,
+        text_replacements,
+    )
+
+    return _apply_text_replacements(
+        page_data.get('text') or '',
+        text_replacements,
+        render_context,
+    )
 
 
 def serialize_inline_button_rows(
@@ -483,14 +708,24 @@ def build_visible_keyboard_snapshot(
     buttons: Optional[List[Dict[str, Any]]],
     visibility: Optional[Dict[str, bool]] = None,
     context: Optional[Dict] = None,
+    text_replacements: Optional[Dict[str, str]] = None,
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> List[List[Dict[str, Any]]]:
     """Собирает компактный read-only снимок видимой inline-клавиатуры."""
+    render_context: Dict[str, Any] = _normalize_context_mapping(context)
+    normalized_buttons = _normalize_snapshot_buttons(buttons)
+    render_context = enrich_page_placeholder_context_sync(
+        _snapshot_page_key(render_context),
+        {'text': '', 'buttons': normalized_buttons},
+        render_context,
+        text_replacements,
+    )
     keyboard = _build_keyboard(
-        buttons=buttons or [],
+        buttons=normalized_buttons,
         visibility=visibility,
-        context=context,
+        context=render_context,
+        text_replacements=text_replacements,
         prepend_buttons=prepend_buttons,
         append_buttons=append_buttons,
     )
@@ -506,18 +741,28 @@ def build_page_render_snapshot(
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> Dict[str, Any]:
     """Собирает фактически отрендеренный вид страницы для контекста /yaa."""
-    page_data = page_data or {}
+    page_data = _normalize_snapshot_page_data(page_data)
+    page_buttons = _normalize_snapshot_buttons(page_data.get('buttons'))
+    render_context: Dict[str, Any] = _normalize_context_mapping(context)
+    render_context = enrich_page_placeholder_context_sync(
+        _snapshot_page_key(render_context),
+        page_data,
+        render_context,
+        text_replacements,
+    )
     return {
         'text': _apply_text_replacements(
             page_data.get('text') or '',
             text_replacements,
+            render_context,
         ),
         'image': page_data.get('image') or '',
         'media_type': page_data.get('media_type') or '',
         'keyboard': build_visible_keyboard_snapshot(
-            buttons=page_data.get('buttons') or [],
+            buttons=page_buttons,
             visibility=visibility,
-            context=context,
+            context=render_context,
+            text_replacements=text_replacements,
             prepend_buttons=prepend_buttons,
             append_buttons=append_buttons,
         ),
@@ -530,6 +775,8 @@ def _resolve_button_style(color: Optional[str]) -> Optional[str]:
 
     secondary — это обычный стиль клиента Telegram, его не передаём явно.
     """
+    if not isinstance(color, str):
+        return None
     if color in {'primary', 'success', 'danger'}:
         return color
     return None
@@ -539,6 +786,7 @@ def build_page_keyboard(
     page_key: str,
     visibility: Optional[Dict[str, bool]] = None,
     context: Optional[Dict] = None,
+    text_replacements: Optional[Dict[str, str]] = None,
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> Optional[InlineKeyboardMarkup]:
@@ -547,13 +795,62 @@ def build_page_keyboard(
     if page_data is None:
         return None
 
+    render_context = {'page_key': page_key}
+    render_context.update(_normalize_context_mapping(context))
+    render_context = enrich_page_placeholder_context_sync(
+        page_key,
+        page_data,
+        render_context,
+        text_replacements,
+    )
+
     return _build_keyboard(
         buttons=page_data["buttons"],
         visibility=visibility,
-        context=context,
+        context=render_context,
+        text_replacements=text_replacements,
         prepend_buttons=prepend_buttons,
         append_buttons=append_buttons,
     )
+
+
+def _target_viewer_id(target) -> Optional[int]:
+    if isinstance(target, CallbackQuery):
+        return target.from_user.id
+    user = getattr(target, 'from_user', None)
+    if user and not getattr(user, 'is_bot', False):
+        return user.id
+    chat = getattr(target, 'chat', None)
+    if chat and getattr(chat, 'type', None) == 'private':
+        return chat.id
+    return None
+
+
+def _target_bot_username(target) -> str:
+    bot = getattr(target, 'bot', None)
+    if bot is None and isinstance(target, CallbackQuery):
+        bot = getattr(target.message, 'bot', None)
+    return (
+        getattr(bot, 'my_username', None)
+        or getattr(bot, 'username', None)
+        or ''
+    )
+
+
+def _build_render_context(
+    target,
+    page_key: str,
+    context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    render_context: Dict[str, Any] = {'page_key': page_key}
+    viewer_id = _target_viewer_id(target)
+    if viewer_id:
+        render_context['telegram_id'] = viewer_id
+    bot_username = _target_bot_username(target)
+    if bot_username:
+        render_context['bot_username'] = bot_username
+    render_context.update(_normalize_context_mapping(context))
+    return render_context
 
 
 async def render_page(
@@ -565,18 +862,18 @@ async def render_page(
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     force_new: bool = False,
-) -> None:
+) -> Optional[Message]:
     """
     Получает страницу из БД и отправляет/редактирует сообщение.
 
     Args:
         target: Message или CallbackQuery (определяет send vs edit)
         page_key: Ключ страницы в таблице pages
-        visibility: Переопределение видимости для internal-кнопок
+        visibility: Переопределение видимости по button id
                     {button_id: True/False}. True = показать, False = скрыть
         context: Контекст для system-кнопок (order_id, telegram_id, ...)
-        text_replacements: Словарь плейсхолдеров для подстановки в текст
-                          {"%тарифы%": "<b>Тарифы:</b>...", "%ключ%": "<pre>...</pre>"}
+        text_replacements: Словарь canonical-плейсхолдеров для подстановки
+                          {"%тарифы%": "<b>Тарифы:</b>...", "%ключ_имя%": "Основной"}
         prepend_buttons: Доп. ряды кнопок перед кнопками страницы
                        Список списков InlineKeyboardButton
         append_buttons: Доп. ряды кнопок вне БД (например, «Админ-панель»)
@@ -592,16 +889,25 @@ async def render_page(
         logger.error(f"Страница '{page_key}' не найдена в БД")
         msg = target.message if isinstance(target, CallbackQuery) else target
         await safe_edit_or_send(msg, "⚠️ Страница не настроена")
-        return
+        return None
+
+    render_context = _build_render_context(target, page_key, context)
+    render_context = await enrich_page_placeholder_context(
+        page_key,
+        page_data,
+        render_context,
+        text_replacements,
+    )
 
     # 2. Обработка текста
-    text = _apply_text_replacements(page_data["text"], text_replacements)
+    text = _apply_text_replacements(page_data["text"], text_replacements, render_context)
 
     # 3. Собираем клавиатуру
     kb = _build_keyboard(
         buttons=page_data["buttons"],
         visibility=visibility,
-        context=context,
+        context=render_context,
+        text_replacements=text_replacements,
         prepend_buttons=prepend_buttons,
         append_buttons=append_buttons,
     )
@@ -640,10 +946,12 @@ async def render_page(
                 page_key=page_key,
                 message=rendered_message,
                 visibility=visibility,
-                context=context,
+                context=render_context,
                 text_replacements=text_replacements,
                 prepend_buttons=prepend_buttons,
                 append_buttons=append_buttons,
             )
     except Exception as e:
         logger.warning("Не удалось сохранить контекст страницы для /yaa: %s", e)
+
+    return rendered_message

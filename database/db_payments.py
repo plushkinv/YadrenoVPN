@@ -15,19 +15,19 @@ from .db_settings import get_setting, set_setting
 DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT = (
     "👥 <b>Новый реферал</b>\n\n"
     "По вашей ссылке зарегистрировался пользователь.\n\n"
-    "👤 Имя: <b>%имя%</b>\n"
-    "🔗 Логин: %логин%\n"
-    "📊 Уровень: <b>%уровень%</b>"
+    "👤 Имя: <b>%реферал_имя%</b>\n"
+    "🔗 Логин: %реферал_логин%\n"
+    "📊 Уровень: <b>%реферальный_уровень%</b>"
 )
 
 DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT = (
     "💳 <b>Покупка реферала</b>\n\n"
-    "Пользователь <b>%имя%</b> (%логин%) оплатил тариф.\n\n"
-    "🎫 Тариф: <b>%тариф%</b>\n"
-    "💵 Сумма: <b>%сумма%</b>\n"
-    "⏳ Срок: <b>%дней%</b>\n"
-    "🎁 Ваш бонус: <b>%вознаграждение%</b>\n"
-    "📊 Уровень: <b>%уровень%</b>"
+    "Пользователь <b>%покупатель_имя%</b> (%покупатель_логин%) оплатил тариф.\n\n"
+    "🎫 Тариф: <b>%платеж_тариф%</b>\n"
+    "💵 Сумма: <b>%платеж_сумма%</b>\n"
+    "⏳ Срок: <b>%платеж_срок%</b>\n"
+    "🎁 Ваш бонус: <b>%реферальное_вознаграждение%</b>\n"
+    "📊 Уровень: <b>%реферальный_уровень%</b>"
 )
 
 
@@ -274,9 +274,9 @@ def get_user_payments_stats(user_id: int) -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as total_payments,
-                COALESCE(SUM(CASE WHEN payment_type = 'crypto' THEN amount_cents ELSE 0 END), 0) as total_amount_cents,
-                COALESCE(SUM(CASE WHEN payment_type = 'stars' THEN amount_stars ELSE 0 END), 0) as total_amount_stars,
-                COALESCE(SUM(CASE WHEN payment_type IN ('cards', 'yookassa_qr', 'wata', 'platega', 'cardlink', 'balance') THEN t.price_rub ELSE 0 END), 0) as total_amount_rub,
+                COALESCE(SUM(CASE WHEN payment_type = 'crypto' THEN COALESCE(final_amount_cents, amount_cents, 0) ELSE 0 END), 0) as total_amount_cents,
+                COALESCE(SUM(CASE WHEN payment_type = 'stars' THEN COALESCE(final_amount_stars, amount_stars, 0) ELSE 0 END), 0) as total_amount_stars,
+                COALESCE(SUM(CASE WHEN payment_type IN ('cards', 'yookassa_qr', 'wata', 'platega', 'cardlink', 'balance') THEN COALESCE(final_amount_cents, t.price_rub * 100, 0) ELSE 0 END), 0) / 100.0 as total_amount_rub,
                 MAX(paid_at) as last_payment_at
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
@@ -311,7 +311,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
-                COALESCE(SUM(amount_cents), 0) as total_cents
+                COALESCE(SUM(COALESCE(final_amount_cents, amount_cents, 0)), 0) as total_cents
             FROM payments
             WHERE status = 'paid' 
             AND payment_type = 'crypto'
@@ -323,7 +323,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
-                COALESCE(SUM(amount_stars), 0) as total_stars
+                COALESCE(SUM(COALESCE(final_amount_stars, amount_stars, 0)), 0) as total_stars
             FROM payments
             WHERE status = 'paid' 
             AND payment_type = 'stars'
@@ -335,7 +335,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
-                COALESCE(SUM(t.price_rub), 0) as total_rub
+                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid' 
@@ -348,7 +348,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
-                COALESCE(SUM(t.price_rub), 0) as total_rub
+                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid'
@@ -361,7 +361,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
-                COALESCE(SUM(t.price_rub), 0) as total_rub
+                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid'
@@ -374,7 +374,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
-                COALESCE(SUM(t.price_rub), 0) as total_rub
+                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid'
@@ -387,7 +387,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
-                COALESCE(SUM(t.price_rub), 0) as total_rub
+                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid'
@@ -430,16 +430,23 @@ def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
         Список платежей, отсортированный по дате (по убыванию).
     """
     with get_db() as conn:
+        from database.db_business_operations import create_business_operation_tables, get_key_operation_history
+
+        create_business_operation_tables(conn)
         cursor = conn.execute("""
             SELECT 
                 p.id, p.paid_at, p.payment_type, p.amount_cents, p.amount_stars,
-                t.name as tariff_name, t.price_rub
+                p.final_amount_cents, p.final_amount_stars, p.promo_code,
+                t.name as tariff_name, t.price_rub,
+                'payment' AS history_type
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.vpn_key_id = ? AND p.status = 'paid'
             ORDER BY p.paid_at DESC
         """, (key_id,))
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+    rows.extend(get_key_operation_history(key_id))
+    return _sort_key_history_rows(rows)
 
 def _int_to_base62(num: int) -> str:
     """
@@ -704,14 +711,23 @@ def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
         Список платежей с названиями тарифов
     """
     with get_db() as conn:
+        from database.db_business_operations import create_business_operation_tables, get_key_operation_history
+
+        create_business_operation_tables(conn)
         cursor = conn.execute("""
-            SELECT p.*, t.name as tariff_name, t.price_rub
+            SELECT p.*, t.name as tariff_name, t.price_rub, 'payment' AS history_type
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.vpn_key_id = ? AND p.status = 'paid'
             ORDER BY p.paid_at DESC
         """, (key_id,))
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+    rows.extend(get_key_operation_history(key_id))
+    return _sort_key_history_rows(rows)
+
+
+def _sort_key_history_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(rows, key=lambda row: str(row.get('paid_at') or ''), reverse=True)
 
 def get_referral_levels() -> List[Dict[str, Any]]:
     """

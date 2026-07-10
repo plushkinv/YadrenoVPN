@@ -8,6 +8,7 @@ import json
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -68,6 +69,20 @@ router = Router()
 YAA_REDACTED_USER_KEY = "[redacted_user_key]"
 YAA_KEY_DELIVERY_PAGE = "key_delivery"
 YAA_KEY_DELIVERY_CONTEXT_RAW = "key_delivery_raw_value"
+YAA_KEY_DELIVERY_CONTEXT_KEYS = frozenset({
+    YAA_KEY_DELIVERY_CONTEXT_RAW,
+    "key_raw_value",
+})
+YAA_KEY_DELIVERY_PLACEHOLDERS = frozenset({
+    "%ключ_для_копирования%".casefold(),
+    "%ключ_ссылка%".casefold(),
+    "%ключ_ссылка_url%".casefold(),
+})
+YADRENO_ADMIN_FSM_TOPIC_KEY = "yadreno_topic_id"
+YADRENO_ADMIN_ALLOWED_TOPIC_IDS = frozenset({
+    YADRENO_ADMIN_CHAT_TOPIC_ID,
+    YADRENO_ADMIN_YAA_TOPIC_ID,
+})
 YADRENO_ADMIN_UPLOAD_MAX_MB = 10
 YADRENO_ADMIN_UPLOAD_MAX_BYTES = YADRENO_ADMIN_UPLOAD_MAX_MB * 1024 * 1024
 
@@ -136,6 +151,34 @@ def _callback_topic_id(data: str | None, prefix: str) -> int:
         return int(suffix)
     except (TypeError, ValueError):
         return YADRENO_ADMIN_CHAT_TOPIC_ID
+
+
+def _normalize_yadreno_topic_id(raw_topic_id: Any) -> int:
+    """Возвращает разрешённый topic_id чата агента."""
+    try:
+        topic_id = int(raw_topic_id)
+    except (TypeError, ValueError):
+        return YADRENO_ADMIN_CHAT_TOPIC_ID
+    if topic_id in YADRENO_ADMIN_ALLOWED_TOPIC_IDS:
+        return topic_id
+    return YADRENO_ADMIN_CHAT_TOPIC_ID
+
+
+async def _activate_yadreno_chat_lane(
+    state: FSMContext,
+    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+) -> int:
+    """Переводит администратора в чат агента и запоминает активную lane."""
+    normalized_topic_id = _normalize_yadreno_topic_id(topic_id)
+    await state.set_state(AdminStates.yadreno_chat)
+    await state.update_data(**{YADRENO_ADMIN_FSM_TOPIC_KEY: normalized_topic_id})
+    return normalized_topic_id
+
+
+async def _current_yadreno_chat_topic_id(state: FSMContext) -> int:
+    """Читает активную lane чата агента из FSM."""
+    data = await state.get_data()
+    return _normalize_yadreno_topic_id(data.get(YADRENO_ADMIN_FSM_TOPIC_KEY))
 
 
 class _YadrenoProgressRenderer:
@@ -259,7 +302,7 @@ async def _show_yadreno_entry(target: Message | CallbackQuery, state: FSMContext
         )
         return
 
-    await state.set_state(AdminStates.yadreno_chat)
+    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CHAT_TOPIC_ID)
     await safe_edit_or_send(
         message,
         _chat_intro_text(),
@@ -307,7 +350,7 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    await state.set_state(AdminStates.yadreno_chat)
+    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CHAT_TOPIC_ID)
     await safe_edit_or_send(
         callback.message,
         "🆕 <b>Новый чат открыт</b>\n\n"
@@ -552,7 +595,7 @@ async def save_yadreno_key(message: Message, state: FSMContext):
     server_ip = await detect_public_server_ip(use_cache=False)
     set_yadreno_admin_server_ip(server_ip)
 
-    await state.set_state(AdminStates.yadreno_chat)
+    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CHAT_TOPIC_ID)
     target = editing_message or message
     ip_line = (
         f"\n\n🌐 IP сервера: <code>{escape_html(server_ip)}</code>"
@@ -570,10 +613,11 @@ async def save_yadreno_key(message: Message, state: FSMContext):
 
 
 @router.message(Command("cancel"), AdminStates.yadreno_chat)
-async def cancel_yadreno_dialog(message: Message):
+async def cancel_yadreno_dialog(message: Message, state: FSMContext):
     """Отменяет текущий запрос агента."""
     if not is_admin(message.from_user.id):
         return
+    topic_id = await _current_yadreno_chat_topic_id(state)
     api_key = get_yadreno_admin_api_key()
     if not api_key:
         await safe_edit_or_send(
@@ -588,7 +632,7 @@ async def cancel_yadreno_dialog(message: Message):
         cancelled = await cancel_active_dialog(
             message.from_user.id,
             api_key,
-            topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+            topic_id=topic_id,
         )
     except YadrenoAdminError as e:
         await safe_edit_or_send(
@@ -607,17 +651,18 @@ async def cancel_yadreno_dialog(message: Message):
     await safe_edit_or_send(
         message,
         text,
-        reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+        reply_markup=yadreno_admin_agent_kb(topic_id),
         force_new=True,
     )
 
 
 @router.message(AdminStates.yadreno_chat, F.text, ~F.text.startswith('/'))
-async def handle_yadreno_chat_message(message: Message):
+async def handle_yadreno_chat_message(message: Message, state: FSMContext):
     """Отправляет сообщение администратора агенту и показывает ответ."""
     if not is_admin(message.from_user.id):
         return
 
+    topic_id = await _current_yadreno_chat_topic_id(state)
     api_key = get_yadreno_admin_api_key()
     if not api_key:
         await safe_edit_or_send(
@@ -632,31 +677,31 @@ async def handle_yadreno_chat_message(message: Message):
     thinking = await safe_edit_or_send(
         message,
         "🤖 <b>Yadreno Admin</b>\n\n⏳ Думаю...",
-        reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+        reply_markup=yadreno_admin_agent_kb(topic_id),
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(
         thinking,
-        topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+        topic_id=topic_id,
     )
     try:
         final = await run_dialog(
             message.from_user.id,
             api_key,
             text,
-            topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+            topic_id=topic_id,
             progress_callback=progress.handle,
         )
         await safe_edit_or_send(
             progress.final_target,
             _format_final_response(final.content, final.viewer_url),
-            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+            reply_markup=yadreno_admin_agent_kb(topic_id),
         )
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
             f"❌ <b>Yadreno Admin недоступен</b>\n\n{escape_html(str(e))}",
-            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+            reply_markup=yadreno_admin_agent_kb(topic_id),
         )
 
 
@@ -952,9 +997,48 @@ def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
 def _redact_yaa_context(page_key: str, runtime_context: dict[str, Any] | None) -> dict[str, Any]:
     """Возвращает runtime context без пользовательских ключей."""
     result = dict(runtime_context or {})
-    if page_key == YAA_KEY_DELIVERY_PAGE and YAA_KEY_DELIVERY_CONTEXT_RAW in result:
-        result[YAA_KEY_DELIVERY_CONTEXT_RAW] = YAA_REDACTED_USER_KEY
+    if page_key == YAA_KEY_DELIVERY_PAGE:
+        for key in YAA_KEY_DELIVERY_CONTEXT_KEYS:
+            if key in result:
+                result[key] = YAA_REDACTED_USER_KEY
     return result
+
+
+def _redact_yaa_text_replacements(
+    page_key: str,
+    text_replacements: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Возвращает подстановки без пользовательских ключей для read-only снимков."""
+    if not text_replacements:
+        return None
+    result = dict(text_replacements)
+    if page_key == YAA_KEY_DELIVERY_PAGE:
+        for placeholder in list(result.keys()):
+            if str(placeholder).casefold() in YAA_KEY_DELIVERY_PLACEHOLDERS:
+                result[placeholder] = YAA_REDACTED_USER_KEY
+    return result
+
+
+def _redact_yaa_visible_keyboard_urls(
+    page_key: str,
+    rows: list[list[dict[str, Any]]],
+) -> list[list[dict[str, Any]]]:
+    """Делает redacted-значение в URL-снимках читаемым для агента."""
+    if page_key != YAA_KEY_DELIVERY_PAGE or not rows:
+        return rows
+
+    encoded_redacted = quote(YAA_REDACTED_USER_KEY, safe='')
+    normalized_rows: list[list[dict[str, Any]]] = []
+    for row in rows:
+        normalized_row: list[dict[str, Any]] = []
+        for button in row:
+            item = dict(button)
+            url = item.get("url")
+            if isinstance(url, str):
+                item["url"] = url.replace(encoded_redacted, YAA_REDACTED_USER_KEY)
+            normalized_row.append(item)
+        normalized_rows.append(normalized_row)
+    return normalized_rows
 
 
 def _build_yaa_runtime_context(page_key: str, page_context: Any | None) -> dict[str, Any]:
@@ -1000,6 +1084,18 @@ def _build_yaa_prompt(
     )
     prepend_buttons = page_context.prepend_buttons if page_context else None
     append_buttons = page_context.append_buttons if page_context else None
+    visible_keyboard = build_visible_keyboard_snapshot(
+        buttons=stored_page.get("buttons") or [],
+        visibility=visibility,
+        context=runtime_context,
+        text_replacements=_redact_yaa_text_replacements(
+            page_key,
+            page_context.text_replacements if page_context else None,
+        ),
+        prepend_buttons=prepend_buttons,
+        append_buttons=append_buttons,
+    )
+    visible_keyboard = _redact_yaa_visible_keyboard_urls(page_key, visible_keyboard)
 
     context: dict[str, Any] = {
         "source": "/yaa",
@@ -1010,13 +1106,7 @@ def _build_yaa_prompt(
             "path": backup_path,
         },
         "stored_page": stored_page,
-        "visible_keyboard": build_visible_keyboard_snapshot(
-            buttons=stored_page.get("buttons") or [],
-            visibility=visibility,
-            context=runtime_context,
-            prepend_buttons=prepend_buttons,
-            append_buttons=append_buttons,
-        ),
+        "visible_keyboard": visible_keyboard,
         "runtime": _build_yaa_runtime_context(page_key, page_context),
         "task_format": "telegram_html",
         "task_html": task_html,
@@ -1033,7 +1123,7 @@ def _build_yaa_prompt(
 
 
 @router.message(Command("yaa"))
-async def handle_yaa_command(message: Message, command: CommandObject):
+async def handle_yaa_command(message: Message, command: CommandObject, state: FSMContext):
     """Контекстная команда администратора с пользовательской страницы."""
     if not is_admin(message.from_user.id):
         return
@@ -1144,6 +1234,36 @@ async def handle_yaa_command(message: Message, command: CommandObject):
 
             if await rerender_key_delivery_page_context(page_context, message.from_user.id):
                 return
+        if page_context.page_key == 'qr_payment':
+            from bot.handlers.user.payments.base import rerender_qr_payment_page_context
+
+            if await rerender_qr_payment_page_context(page_context, message.from_user.id):
+                return
+        if page_context.page_key == 'crypto_payment':
+            from bot.handlers.user.payments.crypto import rerender_crypto_payment_page_context
+
+            if await rerender_crypto_payment_page_context(page_context, message.from_user.id):
+                return
+        if page_context.page_key == 'balance_payment':
+            from bot.handlers.user.payments.balance import rerender_balance_payment_page_context
+
+            if await rerender_balance_payment_page_context(page_context, message.from_user.id):
+                return
+        if page_context.page_key == 'demo_payment':
+            from bot.handlers.user.payments.demo import rerender_demo_payment_page_context
+
+            if await rerender_demo_payment_page_context(page_context, message.from_user.id):
+                return
+        if page_context.page_key == 'payment_tariff_select':
+            from bot.handlers.user.payments.tariff_select_page import rerender_payment_tariff_select_page_context
+
+            if await rerender_payment_tariff_select_page_context(page_context, message.from_user.id):
+                return
+        if page_context.page_key == 'payment_status':
+            from bot.handlers.user.payments.status_page import rerender_payment_status_page_context
+
+            if await rerender_payment_status_page_context(page_context, message.from_user.id):
+                return
         if page_context.page_key in {'my_keys', 'my_keys_empty'}:
             from bot.handlers.user.keys import rerender_my_keys_page_context
 
@@ -1165,19 +1285,22 @@ async def handle_yaa_command(message: Message, command: CommandObject):
         )
         return
 
+    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_YAA_TOPIC_ID)
     await safe_edit_or_send(
         progress.final_target,
-        _format_final_response(final.content, final.viewer_url),
+        _format_final_response(final.content, final.viewer_url)
+        + "\n\nМожно ответить обычным сообщением, без <code>/yaa</code>.",
         reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_YAA_TOPIC_ID),
     )
 
 
 @router.message(AdminStates.yadreno_chat, F.photo | F.document | F.video | F.animation)
-async def handle_yadreno_chat_attachment(message: Message):
+async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
     """Отправляет фото, видео, GIF или документ в Yadreno Admin."""
     if not is_admin(message.from_user.id):
         return
 
+    topic_id = await _current_yadreno_chat_topic_id(state)
     api_key = get_yadreno_admin_api_key()
     if not api_key:
         await safe_edit_or_send(
@@ -1219,12 +1342,12 @@ async def handle_yadreno_chat_attachment(message: Message):
     thinking = await safe_edit_or_send(
         message,
         f"🤖 <b>Yadreno Admin</b>\n\n{status_text}",
-        reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+        reply_markup=yadreno_admin_agent_kb(topic_id),
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(
         thinking,
-        topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+        topic_id=topic_id,
     )
 
     uploads: list[YadrenoAdminUpload] = []
@@ -1236,7 +1359,7 @@ async def handle_yadreno_chat_attachment(message: Message):
                 api_key,
                 prompt,
                 uploads,
-                topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+                topic_id=topic_id,
                 progress_callback=progress.handle,
             )
         elif metadata_only:
@@ -1244,7 +1367,7 @@ async def handle_yadreno_chat_attachment(message: Message):
                 message.from_user.id,
                 api_key,
                 prompt,
-                topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+                topic_id=topic_id,
                 progress_callback=progress.handle,
             )
         else:
@@ -1252,13 +1375,13 @@ async def handle_yadreno_chat_attachment(message: Message):
         await safe_edit_or_send(
             progress.final_target,
             _format_final_response(final.content, final.viewer_url),
-            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+            reply_markup=yadreno_admin_agent_kb(topic_id),
         )
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
             f"❌ <b>Yadreno Admin недоступен</b>\n\n{escape_html(str(e))}",
-            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+            reply_markup=yadreno_admin_agent_kb(topic_id),
         )
     finally:
         _cleanup_yadreno_uploads(uploads)

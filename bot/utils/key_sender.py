@@ -2,19 +2,20 @@
 Утилита для отправки VPN-ключей пользователю.
 """
 import logging
-from typing import Optional
+from typing import Mapping, Optional
 
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
 
 from bot.services.vpn_api import get_client
 from bot.utils.key_generator import generate_link, generate_json, generate_qr_code
-from bot.utils.placeholders import apply_placeholder_replacements
+from bot.utils.placeholders import apply_page_placeholders
 from bot.utils.text import escape_html
 
 logger = logging.getLogger(__name__)
 
-KEY_COPY_PLACEHOLDER = '%ключ%'
-KEY_LINK_PLACEHOLDER = '%ссылка%'
+KEY_COPY_PLACEHOLDER = '%ключ_для_копирования%'
+KEY_LINK_PLACEHOLDER = '%ключ_ссылка%'
+KEY_LINK_URL_PLACEHOLDER = '%ключ_ссылка_url%'
 KEY_DELIVERY_PAGE = 'key_delivery'
 KEY_DELIVERY_CONTEXT_RAW = 'key_delivery_raw_value'
 KEY_DELIVERY_CONTEXT_KIND = 'key_delivery_kind'
@@ -50,10 +51,36 @@ def format_key_plain_link(raw_value: str) -> str:
     return escape_html(raw_value)
 
 
-def build_key_delivery_text(template: str, raw_value: str) -> str:
+def build_key_delivery_text(
+    template: str,
+    raw_value: str,
+    context: Optional[Mapping[str, object]] = None,
+) -> str:
     """Подставляет плейсхолдеры выдачи ключа в редактируемый текст."""
+    render_context = dict(context or {})
+    render_context.update({
+        KEY_DELIVERY_CONTEXT_RAW: raw_value,
+        'page_key': KEY_DELIVERY_PAGE,
+    })
     replacements = build_key_delivery_replacements(raw_value)
-    return apply_placeholder_replacements(template, replacements)
+    try:
+        from bot.utils.page_placeholder_context import enrich_page_placeholder_context_sync
+
+        render_context = enrich_page_placeholder_context_sync(
+            KEY_DELIVERY_PAGE,
+            {'text': template, 'buttons': []},
+            render_context,
+            replacements,
+        )
+    except Exception as e:
+        logger.warning("Не удалось дополнить context страницы выдачи ключа: %s", e)
+
+    return apply_page_placeholders(
+        template,
+        replacements,
+        render_context,
+        mode='html',
+    )
 
 
 def build_key_delivery_replacements(raw_value: str) -> dict:
@@ -100,30 +127,94 @@ def _get_target_message(messageable) -> Optional[Message]:
 def _get_viewer_id(messageable) -> Optional[int]:
     """Возвращает Telegram ID пользователя, который видит страницу."""
     user = getattr(messageable, 'from_user', None)
-    return user.id if user else None
+    if user and not getattr(user, 'is_bot', False):
+        return user.id
+    message = getattr(messageable, 'message', None)
+    message_user = getattr(message, 'from_user', None)
+    if message_user and not getattr(message_user, 'is_bot', False):
+        return message_user.id
+    chat = getattr(messageable, 'chat', None) or getattr(message, 'chat', None)
+    if chat and getattr(chat, 'type', None) == 'private':
+        return chat.id
+    return None
+
+
+def _get_bot_username(messageable) -> str:
+    """Возвращает username бота для плейсхолдеров страницы выдачи ключа."""
+    bot = getattr(messageable, 'bot', None)
+    if bot is None:
+        message = getattr(messageable, 'message', None)
+        bot = getattr(message, 'bot', None)
+    return (
+        getattr(bot, 'my_username', None)
+        or getattr(bot, 'username', None)
+        or ''
+    )
 
 
 def _get_key_delivery_markup(
     fallback_markup: Optional[InlineKeyboardMarkup],
+    raw_value: str,
+    viewer_id: Optional[int] = None,
+    bot_username: str = '',
 ) -> Optional[InlineKeyboardMarkup]:
     """Берёт клавиатуру страницы из БД, если она доступна, иначе использует fallback."""
     try:
         from bot.utils.page_renderer import build_page_keyboard
 
-        markup = build_page_keyboard(KEY_DELIVERY_PAGE)
+        render_context = {
+            KEY_DELIVERY_CONTEXT_RAW: raw_value,
+            'page_key': KEY_DELIVERY_PAGE,
+        }
+        if viewer_id:
+            render_context['telegram_id'] = viewer_id
+        if bot_username:
+            render_context['bot_username'] = bot_username
+
+        markup = build_page_keyboard(
+            KEY_DELIVERY_PAGE,
+            context=render_context,
+            text_replacements=build_key_delivery_replacements(raw_value),
+        )
         return markup or fallback_markup
     except Exception as e:
         logger.warning("Не удалось собрать клавиатуру страницы выдачи ключа: %s", e)
         return fallback_markup
 
 
-def _build_key_delivery_caption(raw_value: str, is_new: bool, kind: str) -> str:
+def _get_json_document_markup(
+    fallback_markup: Optional[InlineKeyboardMarkup],
+    raw_value: str,
+    viewer_id: Optional[int] = None,
+    bot_username: str = '',
+) -> Optional[InlineKeyboardMarkup]:
+    """Возвращает page-backed кнопки выдачи ключа для JSON-файла."""
+    return _get_key_delivery_markup(
+        fallback_markup,
+        raw_value,
+        viewer_id=viewer_id,
+        bot_username=bot_username,
+    )
+
+
+def _build_key_delivery_caption(
+    raw_value: str,
+    is_new: bool,
+    kind: str,
+    viewer_id: Optional[int] = None,
+    bot_username: str = '',
+) -> str:
     """Собирает caption выдачи ключа/подписки с учётом лимита Telegram."""
     from bot.utils.message_editor import get_message_data
 
     delivery_data = get_message_data(KEY_DELIVERY_PAGE, DEFAULT_KEY_DELIVERY_TEXT)
     base_caption = delivery_data.get('text', DEFAULT_KEY_DELIVERY_TEXT)
-    caption = build_key_delivery_text(base_caption, raw_value)
+    context = {}
+    if viewer_id:
+        context['telegram_id'] = viewer_id
+    if bot_username:
+        context['bot_username'] = bot_username
+    caption = build_key_delivery_text(base_caption, raw_value, context)
 
     if len(caption) <= 1024:
         return caption
@@ -152,11 +243,19 @@ async def _render_key_delivery_photo(
     reply_markup: Optional[InlineKeyboardMarkup],
     is_new: bool,
     kind: str,
+    viewer_id: Optional[int] = None,
+    bot_username: str = '',
 ) -> Message:
     """Отправляет или редактирует QR-фото страницы выдачи ключа."""
     from bot.utils.text import safe_edit_or_send
 
-    caption = _build_key_delivery_caption(raw_value, is_new, kind)
+    caption = _build_key_delivery_caption(
+        raw_value,
+        is_new,
+        kind,
+        viewer_id=viewer_id,
+        bot_username=bot_username,
+    )
     filename = "subscription_qr.png" if kind == 'subscription' else "qrcode.png"
     photo = BufferedInputFile(generate_qr_code(raw_value), filename=filename)
 
@@ -175,6 +274,7 @@ def _remember_key_delivery_context(
     is_new: bool,
     kind: str,
     attach_markup: bool,
+    bot_username: str = '',
 ) -> None:
     """Запоминает страницу выдачи ключа для контекстной команды /yaa."""
     if not viewer_id:
@@ -187,16 +287,22 @@ def _remember_key_delivery_context(
         if viewer_id not in ADMIN_IDS:
             return
 
+        render_context = {
+            'page_key': KEY_DELIVERY_PAGE,
+            'telegram_id': viewer_id,
+            KEY_DELIVERY_CONTEXT_RAW: raw_value,
+            KEY_DELIVERY_CONTEXT_KIND: kind,
+            KEY_DELIVERY_CONTEXT_IS_NEW: is_new,
+            KEY_DELIVERY_CONTEXT_ATTACH_MARKUP: attach_markup,
+        }
+        if bot_username:
+            render_context['bot_username'] = bot_username
+
         remember_page_context(
             viewer_id,
             page_key=KEY_DELIVERY_PAGE,
             message=rendered_message,
-            context={
-                KEY_DELIVERY_CONTEXT_RAW: raw_value,
-                KEY_DELIVERY_CONTEXT_KIND: kind,
-                KEY_DELIVERY_CONTEXT_IS_NEW: is_new,
-                KEY_DELIVERY_CONTEXT_ATTACH_MARKUP: attach_markup,
-            },
+            context=render_context,
             text_replacements=build_key_delivery_replacements(raw_value),
         )
     except Exception as e:
@@ -217,21 +323,34 @@ async def render_key_delivery_page(
     if target_message is None:
         raise ValueError("Не удалось определить сообщение для выдачи ключа")
 
-    reply_markup = _get_key_delivery_markup(key_manage_markup) if attach_markup else None
+    resolved_viewer_id = viewer_id if viewer_id is not None else _get_viewer_id(messageable)
+    bot_username = _get_bot_username(messageable)
+    reply_markup = (
+        _get_key_delivery_markup(
+            key_manage_markup,
+            raw_value,
+            viewer_id=resolved_viewer_id,
+            bot_username=bot_username,
+        )
+        if attach_markup else None
+    )
     rendered_message = await _render_key_delivery_photo(
         target_message=target_message,
         raw_value=raw_value,
         reply_markup=reply_markup,
         is_new=is_new,
         kind=kind,
+        viewer_id=resolved_viewer_id,
+        bot_username=bot_username,
     )
     _remember_key_delivery_context(
-        viewer_id=viewer_id if viewer_id is not None else _get_viewer_id(messageable),
+        viewer_id=resolved_viewer_id,
         rendered_message=rendered_message,
         raw_value=raw_value,
         is_new=is_new,
         kind=kind,
         attach_markup=attach_markup,
+        bot_username=bot_username,
     )
     return rendered_message
 
@@ -319,21 +438,22 @@ async def send_key_with_qr(
             
         if not config:
             # Если не удалось получить конфиг (например, сервер недоступен),
-            # отправляем просто UUID (как раньше)
+            # показываем UUID через page-backed статус без генерации некорректного QR.
             uuid = key_data.get('client_uuid', 'Unknown')
-            text = (
-                f"📋 <b>Ваш VPN-ключ</b>\n\n"
-                f"{format_key_copy_value(uuid)}\n\n"
-                "☝️ Нажмите на ключ, чтобы скопировать.\n"
-                "⚠️ Не удалось получить полную конфигурацию (сервер недоступен).\n"
-                "Попробуйте позже."
-            )
-            await _send_text(messageable, text, key_manage_markup)
+            await _send_partial_key_config_fallback(messageable, uuid, key_manage_markup)
             return
 
         # 2. Генерируем данные
         logger.info(f"Generating key for {key_data.get('panel_email')} (protocol: {config.get('protocol', 'vless')})")
         link = generate_link(config)
+        viewer_id = _get_viewer_id(messageable)
+        bot_username = _get_bot_username(messageable)
+        json_document_markup = _get_json_document_markup(
+            key_manage_markup,
+            link,
+            viewer_id=viewer_id,
+            bot_username=bot_username,
+        )
             
         json_config = generate_json(config)
         # 3. Отправляем страницу выдачи ключа как QR-фото.
@@ -359,7 +479,7 @@ async def send_key_with_qr(
         await answer_func(
             document=config_file,
             caption="📂 <b>Файл конфигурации</b> (для ручного импорта)",
-            reply_markup=key_manage_markup,
+            reply_markup=json_document_markup,
             parse_mode="HTML"
         )
 
@@ -370,27 +490,62 @@ async def send_key_with_qr(
 
 async def _send_error(messageable, text, markup):
     """Отправляет сообщение об ошибке."""
-    from bot.utils.text import safe_edit_or_send
-    msg_text = f"❌ {text}"
+    from bot.utils.key_status_page import render_key_status_page
+
+    append_buttons = getattr(markup, 'inline_keyboard', None) if markup else None
     # Определяем Message для safe_edit_or_send
     if hasattr(messageable, 'text') or hasattr(messageable, 'photo'):
         # Это Message
-        await safe_edit_or_send(messageable, msg_text, reply_markup=markup)
+        await render_key_status_page(
+            messageable,
+            title_html='❌ <b>Ошибка выдачи ключа</b>',
+            body_text=text,
+            append_buttons=append_buttons,
+        )
     elif hasattr(messageable, 'message'):
         # Это CallbackQuery
-        await safe_edit_or_send(messageable.message, msg_text, reply_markup=markup)
+        await render_key_status_page(
+            messageable.message,
+            title_html='❌ <b>Ошибка выдачи ключа</b>',
+            body_text=text,
+            append_buttons=append_buttons,
+        )
     else:
         func = messageable.answer if hasattr(messageable, 'answer') else messageable.message.answer
-        await func(msg_text, reply_markup=markup)
+        await func(f"❌ {text}", reply_markup=markup)
 
 
-async def _send_text(messageable, text, markup):
-    """Отправляет текстовое сообщение (fallback при отсутствии фото). HTML."""
-    from bot.utils.text import safe_edit_or_send
+async def _send_partial_key_config_fallback(messageable, raw_value: str, markup):
+    """Показывает UUID ключа, если полный конфиг временно недоступен."""
+    from bot.utils.key_status_page import render_key_status_page
+
+    body_html = (
+        f"👇 <b>UUID ключа:</b>\n"
+        f"{format_key_copy_value(raw_value)}\n\n"
+        "☝️ Нажмите на ключ, чтобы скопировать.\n"
+        "⚠️ Не удалось получить полную конфигурацию (сервер недоступен).\n"
+        "Попробуйте позже."
+    )
+    append_buttons = getattr(markup, 'inline_keyboard', None) if markup else None
+
     if hasattr(messageable, 'text') or hasattr(messageable, 'photo'):
-        await safe_edit_or_send(messageable, text, reply_markup=markup)
+        await render_key_status_page(
+            messageable,
+            title_html='📋 <b>Ваш VPN-ключ</b>',
+            body_html=body_html,
+            append_buttons=append_buttons,
+        )
     elif hasattr(messageable, 'message'):
-        await safe_edit_or_send(messageable.message, text, reply_markup=markup)
+        await render_key_status_page(
+            messageable.message,
+            title_html='📋 <b>Ваш VPN-ключ</b>',
+            body_html=body_html,
+            append_buttons=append_buttons,
+        )
     else:
         func = messageable.answer if hasattr(messageable, 'answer') else messageable.message.answer
-        await func(text, reply_markup=markup, parse_mode="HTML")
+        await func(
+            f"📋 <b>Ваш VPN-ключ</b>\n\n{body_html}",
+            reply_markup=markup,
+            parse_mode="HTML",
+        )

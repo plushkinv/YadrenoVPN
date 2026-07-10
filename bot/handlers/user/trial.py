@@ -70,6 +70,24 @@ async def activate_trial_subscription(callback: CallbackQuery, state: FSMContext
     key_id = create_initial_vpn_key(internal_user_id, tariff_id, duration_days, traffic_limit=traffic_limit_bytes)
     (_, order_id) = create_pending_order(user_id=internal_user_id, tariff_id=tariff_id, payment_type='trial', vpn_key_id=key_id)
     complete_order(order_id)
+    try:
+        from bot.services.key_lifecycle import emit_key_lifecycle_event_safe
+
+        await emit_key_lifecycle_event_safe(
+            'key_created',
+            {
+                'key_id': key_id,
+                'user_id': internal_user_id,
+                'tariff_id': tariff_id,
+                'days': duration_days,
+                'traffic_limit': traffic_limit_bytes,
+                'order_id': order_id,
+                'payment_type': 'trial',
+                'source': 'trial',
+            },
+        )
+    except Exception as hook_err:
+        logger.warning(f"Не удалось вызвать lifecycle hooks trial-ключа {key_id}: {hook_err}")
 
     # Уведомление администраторов об активации пробной подписки
     try:

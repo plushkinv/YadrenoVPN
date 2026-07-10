@@ -16,8 +16,10 @@ from bot.handlers.admin.users_keys_deleted import router as users_keys_deleted_r
 from bot.handlers.admin.system import router as system_router
 from bot.handlers.admin.trial import router as trial_router
 from bot.handlers.admin.referral import router as referral_router
+from bot.handlers.admin.promotions import router as promotions_router
 from bot.handlers.admin.groups import router as groups_router
 from bot.handlers.admin.yadreno_admin import router as yadreno_admin_router
+from bot.handlers.admin.support import router as support_router
 
 admin_router = Router()
 
@@ -30,10 +32,12 @@ admin_router.include_router(groups_router)
 admin_router.include_router(broadcast_router)
 admin_router.include_router(users_list_router)
 admin_router.include_router(users_manage_router)
+admin_router.include_router(support_router)
 admin_router.include_router(users_keys_router)
 admin_router.include_router(users_keys_deleted_router)
 admin_router.include_router(system_router)
 admin_router.include_router(trial_router)
 admin_router.include_router(referral_router)
+admin_router.include_router(promotions_router)
 admin_router.include_router(yadreno_admin_router)
 

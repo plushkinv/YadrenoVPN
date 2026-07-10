@@ -92,7 +92,7 @@ async def show_tariffs_list(callback: CallbackQuery, state: FSMContext):
         lines = ["📋 <b>Тарифы</b>\n"]
         
         for tariff in tariffs:
-            status = "🟢" if tariff['is_active'] else "🔴"
+            status = "🟢" if tariff['is_active'] else "⚪"
             price_usd = tariff['price_cents'] / 100
             price_str = f"{price_usd:g}".replace('.', ',')
             
@@ -126,7 +126,7 @@ async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext
     await state.set_state(AdminStates.tariff_view)
     await state.update_data(tariff_id=tariff_id)
     
-    status_emoji = "🟢 Активен" if tariff['is_active'] else "🔴 Скрыт"
+    status_emoji = "🟢 Активен" if tariff['is_active'] else "⚪ Скрыт"
     price_usd = tariff['price_cents'] / 100
     price_str = f"{price_usd:g}".replace('.', ',')
     

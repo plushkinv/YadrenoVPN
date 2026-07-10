@@ -10,6 +10,7 @@
 import json
 import logging
 from typing import Optional, List, Dict, Any
+from .db_page_flow import normalize_registry_names
 from .connection import get_db
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     'get_page',
     'update_page_custom',
+    'update_page_flow',
     'upsert_page_defaults',
 ]
 
@@ -87,6 +89,40 @@ def update_page_custom(
             params
         )
     logger.info(f"Кастомные данные страницы обновлены: {page_key}")
+
+
+def update_page_flow(
+    page_key: str,
+    guard_names: list[str] | tuple[str, ...] | str | None = None,
+    hook_names: list[str] | tuple[str, ...] | str | None = None,
+) -> None:
+    """
+    Обновляет page-level guards/hooks для прямых переходов page:<custom_*>
+    и route-переходов на эту страницу.
+
+    None означает "не менять поле"; для очистки передавайте [] или '[]'.
+    """
+    updates = []
+    params = []
+    if guard_names is not None:
+        updates.append("guard_names = ?")
+        params.append(normalize_registry_names(guard_names))
+    if hook_names is not None:
+        updates.append("hook_names = ?")
+        params.append(normalize_registry_names(hook_names))
+
+    if not updates:
+        return
+
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(page_key)
+
+    with get_db() as conn:
+        conn.execute(
+            f"UPDATE pages SET {', '.join(updates)} WHERE page_key = ?",
+            params,
+        )
+    logger.info("Flow-настройки страницы обновлены: %s", page_key)
 
 
 def upsert_page_defaults(

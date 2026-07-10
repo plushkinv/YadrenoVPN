@@ -39,6 +39,7 @@ from bot.keyboards.admin import (
     edit_crypto_kb,
     crypto_management_kb,
     cards_management_kb,
+    qr_management_kb,
     wata_management_kb,
     platega_management_kb,
     cardlink_management_kb,
@@ -537,22 +538,41 @@ async def show_crypto_management_menu(callback: CallbackQuery, state: FSMContext
 
 
 
-@router.callback_query(F.data == "admin_crypto_mgmt_toggle")
-async def crypto_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Включает/выключает крипто-платежи (без потери данных)."""
+async def _set_crypto_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
+    """Устанавливает состояние крипто-платежей без потери данных."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
-    
+
     current = is_crypto_enabled()
-    new_value = '0' if current else '1'
+    if current == target_enabled:
+        status = "уже включены" if target_enabled else "уже выключены"
+        await callback.answer(f"Крипто-платежи {status}")
+        return
+
+    if target_enabled and not has_crypto_data():
+        await callback.answer("❌ Сначала укажите ссылку на товар и секретный ключ!", show_alert=True)
+        return
+
+    new_value = '1' if target_enabled else '0'
     set_setting('crypto_enabled', new_value)
-    
+
     status = "включены ✅" if new_value == '1' else "выключены"
     await callback.answer(f"Крипто-платежи {status}")
-    
-    # Обновляем меню
     await show_crypto_management_menu(callback, state)
+
+
+@router.callback_query(F.data.startswith("admin_crypto_mgmt_set:"))
+async def crypto_mgmt_set(callback: CallbackQuery, state: FSMContext):
+    """Включает или выключает крипто-платежи выбранным состоянием."""
+    target_enabled = callback.data.rsplit(":", 1)[1] == "1"
+    await _set_crypto_enabled(callback, state, target_enabled)
+
+
+@router.callback_query(F.data == "admin_crypto_mgmt_toggle")
+async def crypto_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
+    """Совместимый toggle для старых сообщений."""
+    await _set_crypto_enabled(callback, state, not is_crypto_enabled())
 
 
 @router.callback_query(F.data == "admin_crypto_mgmt_edit_url")
@@ -825,27 +845,42 @@ async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext)
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_cards_mgmt_toggle")
-async def cards_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Включает/выключает оплату картами."""
+async def _set_cards_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
+    """Устанавливает состояние TG payments."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
-    
+
+    current = is_cards_enabled()
+    if current == target_enabled:
+        status = "уже включены" if target_enabled else "уже выключены"
+        await callback.answer(f"TG payments {status}")
+        return
+
     # Нельзя включить, если нет токена
-    if not is_cards_enabled() and not get_setting('cards_provider_token', ''):
+    if target_enabled and not get_setting('cards_provider_token', ''):
         await callback.answer("❌ Сначала укажите Provider Token!", show_alert=True)
         return
 
-    current = is_cards_enabled()
-    new_value = '0' if current else '1'
+    new_value = '1' if target_enabled else '0'
     set_setting('cards_enabled', new_value)
-    
+
     status = "включена ✅" if new_value == '1' else "выключена"
     await callback.answer(f"TG payments {status}")
-    
-    # Обновляем меню
     await show_cards_management_menu(callback, state)
+
+
+@router.callback_query(F.data.startswith("admin_cards_mgmt_set:"))
+async def cards_mgmt_set(callback: CallbackQuery, state: FSMContext):
+    """Включает или выключает TG payments выбранным состоянием."""
+    target_enabled = callback.data.rsplit(":", 1)[1] == "1"
+    await _set_cards_enabled(callback, state, target_enabled)
+
+
+@router.callback_query(F.data == "admin_cards_mgmt_toggle")
+async def cards_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
+    """Совместимый toggle для старых сообщений."""
+    await _set_cards_enabled(callback, state, not is_cards_enabled())
 
 
 @router.callback_query(F.data == "admin_cards_mgmt_edit_token")
@@ -937,23 +972,6 @@ async def cards_setup_token_value(message: Message, state: FSMContext):
 # НАСТРОЙКА ЮКАССЫ (прямой API)
 # ============================================================================
 
-def qr_management_kb(is_enabled: bool) -> "InlineKeyboardMarkup":
-    """Клавиатура управления QR-оплатой ЮКасса."""
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    from aiogram.types import InlineKeyboardButton
-    from bot.keyboards.admin import back_button, home_button
-
-    builder = InlineKeyboardBuilder()
-
-    toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
-    builder.row(InlineKeyboardButton(text=toggle_text, callback_data="admin_qr_mgmt_toggle"))
-    builder.row(InlineKeyboardButton(text="🏪 Изменить Shop ID", callback_data="admin_qr_edit_shop_id"))
-    builder.row(InlineKeyboardButton(text="🔐 Изменить Secret Key", callback_data="admin_qr_edit_secret"))
-    builder.row(back_button("admin_payments"), home_button())
-
-    return builder.as_markup()
-
-
 @router.callback_query(F.data == "admin_payments_qr")
 async def show_qr_management_menu(callback: CallbackQuery, state: FSMContext):
     """Показывает меню управления QR-оплатой ЮКасса."""
@@ -995,30 +1013,48 @@ async def show_qr_management_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_qr_mgmt_toggle")
-async def qr_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Включает/выключает QR-оплату ЮКасса."""
+async def _set_qr_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
+    """Устанавливает состояние QR-оплаты ЮКасса."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
     from database.requests import is_yookassa_qr_enabled
 
+    current = is_yookassa_qr_enabled()
+    if current == target_enabled:
+        status = "уже включена" if target_enabled else "уже выключена"
+        await callback.answer(f"ЮКасса {status}")
+        return
+
     # Нельзя включить без реквизитов
-    if not is_yookassa_qr_enabled():
+    if target_enabled:
         shop_id = get_setting('yookassa_shop_id', '')
         secret_key = get_setting('yookassa_secret_key', '')
         if not shop_id or not secret_key:
             await callback.answer("❌ Сначала укажите Shop ID и Secret Key!", show_alert=True)
             return
 
-    current = is_yookassa_qr_enabled()
-    new_value = '0' if current else '1'
+    new_value = '1' if target_enabled else '0'
     set_setting('yookassa_qr_enabled', new_value)
 
     status = "включена ✅" if new_value == '1' else "выключена"
     await callback.answer(f"ЮКасса {status}")
     await show_qr_management_menu(callback, state)
+
+
+@router.callback_query(F.data.startswith("admin_qr_mgmt_set:"))
+async def qr_mgmt_set(callback: CallbackQuery, state: FSMContext):
+    """Включает или выключает QR-оплату ЮКасса выбранным состоянием."""
+    target_enabled = callback.data.rsplit(":", 1)[1] == "1"
+    await _set_qr_enabled(callback, state, target_enabled)
+
+
+@router.callback_query(F.data == "admin_qr_mgmt_toggle")
+async def qr_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
+    """Совместимый toggle для старых сообщений."""
+    from database.requests import is_yookassa_qr_enabled
+    await _set_qr_enabled(callback, state, not is_yookassa_qr_enabled())
 
 
 @router.callback_query(F.data == "admin_qr_edit_shop_id")
@@ -1211,26 +1247,43 @@ async def show_wata_management_menu(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_wata_mgmt_toggle")
-async def wata_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Включает/выключает оплату через WATA."""
+async def _set_wata_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
+    """Устанавливает состояние оплаты через WATA."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
     current = is_wata_enabled()
-    if not current:
+    if current == target_enabled:
+        status = "уже включена" if target_enabled else "уже выключена"
+        await callback.answer(f"WATA-оплата {status}")
+        return
+
+    if target_enabled:
         token = get_setting('wata_jwt_token', '')
         if not token or not token.strip():
             await callback.answer("❌ Сначала укажите JWT-токен!", show_alert=True)
             return
 
-    new_value = '0' if current else '1'
+    new_value = '1' if target_enabled else '0'
     set_setting('wata_enabled', new_value)
 
     status = "включена ✅" if new_value == '1' else "выключена"
     await callback.answer(f"WATA-оплата {status}")
     await show_wata_management_menu(callback, state)
+
+
+@router.callback_query(F.data.startswith("admin_wata_mgmt_set:"))
+async def wata_mgmt_set(callback: CallbackQuery, state: FSMContext):
+    """Включает или выключает WATA выбранным состоянием."""
+    target_enabled = callback.data.rsplit(":", 1)[1] == "1"
+    await _set_wata_enabled(callback, state, target_enabled)
+
+
+@router.callback_query(F.data == "admin_wata_mgmt_toggle")
+async def wata_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
+    """Совместимый toggle для старых сообщений."""
+    await _set_wata_enabled(callback, state, not is_wata_enabled())
 
 
 @router.callback_query(F.data == "admin_wata_mgmt_edit_token")
@@ -1358,27 +1411,44 @@ async def show_platega_management_menu(callback: CallbackQuery, state: FSMContex
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_platega_mgmt_toggle")
-async def platega_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Включает/выключает оплату через Platega."""
+async def _set_platega_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
+    """Устанавливает состояние оплаты через Platega."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
     current = is_platega_enabled()
-    if not current:
+    if current == target_enabled:
+        status = "уже включена" if target_enabled else "уже выключена"
+        await callback.answer(f"Platega-оплата {status}")
+        return
+
+    if target_enabled:
         merchant_id = get_setting('platega_merchant_id', '')
         secret = get_setting('platega_secret', '')
         if not merchant_id or not merchant_id.strip() or not secret or not secret.strip():
             await callback.answer("❌ Сначала укажите Merchant ID и Secret!", show_alert=True)
             return
 
-    new_value = '0' if current else '1'
+    new_value = '1' if target_enabled else '0'
     set_setting('platega_enabled', new_value)
 
     status = "включена ✅" if new_value == '1' else "выключена"
     await callback.answer(f"Platega-оплата {status}")
     await show_platega_management_menu(callback, state)
+
+
+@router.callback_query(F.data.startswith("admin_platega_mgmt_set:"))
+async def platega_mgmt_set(callback: CallbackQuery, state: FSMContext):
+    """Включает или выключает Platega выбранным состоянием."""
+    target_enabled = callback.data.rsplit(":", 1)[1] == "1"
+    await _set_platega_enabled(callback, state, target_enabled)
+
+
+@router.callback_query(F.data == "admin_platega_mgmt_toggle")
+async def platega_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
+    """Совместимый toggle для старых сообщений."""
+    await _set_platega_enabled(callback, state, not is_platega_enabled())
 
 
 @router.callback_query(F.data == "admin_platega_mgmt_edit_merchant")
@@ -1586,27 +1656,44 @@ async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMConte
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_cardlink_mgmt_toggle")
-async def cardlink_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Включает/выключает оплату через Cardlink."""
+async def _set_cardlink_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
+    """Устанавливает состояние оплаты через Cardlink."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
     current = is_cardlink_enabled()
-    if not current:
+    if current == target_enabled:
+        status = "уже включена" if target_enabled else "уже выключена"
+        await callback.answer(f"Cardlink-оплата {status}")
+        return
+
+    if target_enabled:
         shop_id = get_setting('cardlink_shop_id', '')
         api_token = get_setting('cardlink_api_token', '')
         if not shop_id or not shop_id.strip() or not api_token or not api_token.strip():
             await callback.answer("❌ Сначала укажите Shop ID и API-токен!", show_alert=True)
             return
 
-    new_value = '0' if current else '1'
+    new_value = '1' if target_enabled else '0'
     set_setting('cardlink_enabled', new_value)
 
     status = "включена ✅" if new_value == '1' else "выключена"
     await callback.answer(f"Cardlink-оплата {status}")
     await show_cardlink_management_menu(callback, state)
+
+
+@router.callback_query(F.data.startswith("admin_cardlink_mgmt_set:"))
+async def cardlink_mgmt_set(callback: CallbackQuery, state: FSMContext):
+    """Включает или выключает Cardlink выбранным состоянием."""
+    target_enabled = callback.data.rsplit(":", 1)[1] == "1"
+    await _set_cardlink_enabled(callback, state, target_enabled)
+
+
+@router.callback_query(F.data == "admin_cardlink_mgmt_toggle")
+async def cardlink_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
+    """Совместимый toggle для старых сообщений."""
+    await _set_cardlink_enabled(callback, state, not is_cardlink_enabled())
 
 
 @router.callback_query(F.data == "admin_cardlink_mgmt_edit_shop_id")

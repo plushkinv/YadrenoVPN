@@ -70,7 +70,81 @@ async def renew_key_access(
         logger.warning(f"renew_key_access: панель не синхронизирована для ключа {key_id}: {e}")
         result['sync_stats'] = {'errors': 1, 'ok': 0}
 
+    await emit_key_lifecycle_event_safe(
+        'key_renewed',
+        {
+            'key_id': key_id,
+            'days': days,
+            'reset_traffic': reset_traffic,
+            'tariff_id': tariff_id,
+            'paid_traffic_limit': paid_traffic_limit,
+            'result': dict(result),
+        },
+    )
     return result
+
+
+async def emit_key_lifecycle_event_safe(event: str, context: Dict[str, Any]) -> list[dict]:
+    """Вызывает lifecycle hooks и защищает основной flow от ошибок registry."""
+    try:
+        from bot.utils.lifecycle_registry import emit_key_lifecycle_event
+
+        return await emit_key_lifecycle_event(event, context)
+    except Exception as e:
+        logger.warning(f"Lifecycle hooks для события {event} не выполнены: {e}")
+        return []
+
+
+async def process_expired_key_lifecycle_events(limit: Optional[int] = None) -> list[Dict[str, Any]]:
+    """Эмитит key_expired один раз для каждого key_id+expires_at."""
+    from database.requests import (
+        get_pending_expired_key_events,
+        record_key_lifecycle_event_once,
+    )
+
+    processed: list[Dict[str, Any]] = []
+    for key in get_pending_expired_key_events(limit=limit):
+        key_id = int(key['id'])
+        event_token = str(key.get('expires_at') or '')
+        context = {
+            'key_id': key_id,
+            'user_id': key.get('user_id'),
+            'telegram_id': key.get('telegram_id'),
+            'tariff_id': key.get('tariff_id'),
+            'tariff_name': key.get('tariff_name'),
+            'server_id': key.get('server_id'),
+            'server_name': key.get('server_name'),
+            'panel_email': key.get('panel_email'),
+            'expires_at': key.get('expires_at'),
+            'custom_name': key.get('custom_name'),
+            'traffic_limit': key.get('traffic_limit'),
+            'traffic_used': key.get('traffic_used'),
+            'is_banned': key.get('is_banned'),
+        }
+        claimed = record_key_lifecycle_event_once(
+            key_id=key_id,
+            event_name='key_expired',
+            event_token=event_token,
+            metadata={
+                'expires_at': key.get('expires_at'),
+                'telegram_id': key.get('telegram_id'),
+                'tariff_id': key.get('tariff_id'),
+                'server_id': key.get('server_id'),
+            },
+        )
+        if not claimed:
+            continue
+
+        hook_results = await emit_key_lifecycle_event_safe('key_expired', context)
+        processed.append({
+            'key_id': key_id,
+            'event_token': event_token,
+            'hook_results': hook_results,
+        })
+
+    if processed:
+        logger.info("Обработано key_expired lifecycle events: %s", len(processed))
+    return processed
 
 
 async def sync_user_keys_panel_access(telegram_id: int) -> Dict[str, Any]:

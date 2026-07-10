@@ -6,6 +6,11 @@ from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from bot.utils.text import escape_html, safe_edit_or_send
 from config import ADMIN_IDS
+from bot.handlers.user.payments.tariff_select_page import (
+    build_payment_tariff_select_page_context,
+    show_payment_no_tariffs_page,
+    show_payment_tariff_select_page,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +32,28 @@ async def renew_stars_select_tariff(callback: CallbackQuery):
     from bot.utils.groups import get_tariffs_for_renewal
     tariffs = get_tariffs_for_renewal(key.get('tariff_id', 0))
     if not tariffs:
-        await callback.answer('Нет доступных тарифов', show_alert=True)
+        await show_payment_no_tariffs_page(
+            callback,
+            provider_title_html='⭐ <b>Оплата звёздами</b>',
+            instruction_html='😔 Нет доступных тарифов для продления.\n\nПопробуйте позже или обратитесь в поддержку.',
+            key_name=key['display_name'],
+            back_callback=f'key_renew:{key_id}',
+        )
+        await callback.answer()
         return
-    await safe_edit_or_send(callback.message, f"⭐ <b>Оплата звёздами</b>\n\n🔑 Ключ: <b>{escape_html(key['display_name'])}</b>\n\nВыберите тариф для продления:", reply_markup=renew_tariff_select_kb(tariffs, key_id, order_id=order_id))
+    await show_payment_tariff_select_page(
+        callback,
+        context=build_payment_tariff_select_page_context(
+            provider_title_html='⭐ <b>Оплата звёздами</b>',
+            instruction_html='Выберите тариф для продления:',
+            key_name=key['display_name'],
+        ),
+        runtime_markup=renew_tariff_select_kb(tariffs, key_id, order_id=order_id),
+    )
     await callback.answer()
 
 @router.callback_query(F.data.startswith('renew_pay_stars:'))
-async def renew_stars_invoice(callback: CallbackQuery):
+async def renew_stars_invoice(callback: CallbackQuery, state: FSMContext):
     """Инвойс для продления (Stars)."""
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, get_user_internal_id, create_pending_order, get_key_details_for_user, update_order_tariff, update_payment_type
@@ -54,9 +74,50 @@ async def renew_stars_invoice(callback: CallbackQuery):
         update_payment_type(order_id, 'stars')
     else:
         (_, order_id) = create_pending_order(user_id=user_id, tariff_id=tariff_id, payment_type='stars', vpn_key_id=key_id)
+    from bot.services.promotions import prepare_order_pricing
+    from bot.handlers.user.payments.base import complete_promo_free_payment, send_telegram_invoice_or_status
+    quote = prepare_order_pricing(
+        order_id=order_id,
+        user_id=user_id,
+        tariff=tariff,
+        payment_type='stars',
+        action='renewal',
+    )
+    if not quote['ok']:
+        from bot.handlers.user.payments.status_page import show_payment_unavailable_status
+
+        await show_payment_unavailable_status(
+            callback.message,
+            quote['unavailable_reason'],
+            payment_provider_title='Telegram Stars',
+        )
+        await callback.answer()
+        return
+    if quote['is_free']:
+        await complete_promo_free_payment(callback, state, order_id, callback.from_user.id)
+        await callback.answer()
+        return
     bot_info = await callback.bot.get_me()
     bot_name = bot_info.first_name
-    await callback.message.answer_invoice(title=bot_name, description=f"Продление ключа «{key['display_name']}»: {tariff['name']}.", payload=f'renew:{order_id}', currency='XTR', prices=[LabeledPrice(label=f"Тариф {tariff['name']}", amount=tariff['price_stars'])], reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text=f"⭐️ Оплатить {tariff['price_stars']} XTR", pay=True)).row(InlineKeyboardButton(text='⬅️ Назад', callback_data=f'renew_invoice_cancel:{key_id}:{tariff_id}')).as_markup())
+    promo_note = f" Промокод {quote['promo']['code']} -{quote['discount_percent']}%." if quote.get('promo') else ""
+    invoice_sent = await send_telegram_invoice_or_status(
+        callback,
+        provider_title='Telegram Stars',
+        log_context=f"stars:renew order={order_id} tariff={tariff.get('id')} key={key_id}",
+        title=bot_name,
+        description=f"Продление ключа «{key['display_name']}»: {tariff['name']}.{promo_note}",
+        payload=f'renew:{order_id}',
+        currency='XTR',
+        prices=[LabeledPrice(label=f"Тариф {tariff['name']}", amount=quote['final_amount'])],
+        reply_markup=(
+            InlineKeyboardBuilder()
+            .row(InlineKeyboardButton(text=f"⭐️ Оплатить {quote['final_amount']} XTR", pay=True))
+            .row(InlineKeyboardButton(text='⬅️ Назад', callback_data=f'renew_invoice_cancel:{key_id}:{tariff_id}'))
+            .as_markup()
+        ),
+    )
+    if not invoice_sent:
+        return
     await callback.message.delete()
     await callback.answer()
 
@@ -71,14 +132,27 @@ async def pay_stars_select_tariff(callback: CallbackQuery):
         order_id = callback.data.split(':')[1]
     tariffs = get_all_tariffs(include_hidden=False)
     if not tariffs:
-        await safe_edit_or_send(callback.message, '⭐ <b>Оплата звёздами</b>\n\n😔 Нет доступных тарифов.\n\nПопробуйте позже или обратитесь в поддержку.', reply_markup=home_only_kb())
+        await show_payment_tariff_select_page(
+            callback,
+            context=build_payment_tariff_select_page_context(
+                provider_title_html='⭐ <b>Оплата звёздами</b>',
+                instruction_html='😔 Нет доступных тарифов.\n\nПопробуйте позже или обратитесь в поддержку.',
+            ),
+            runtime_markup=home_only_kb(),
+        )
         await callback.answer()
         return
-    await safe_edit_or_send(callback.message, '⭐ <b>Оплата звёздами</b>\n\nВыберите тариф:', reply_markup=tariff_select_kb(tariffs, order_id=order_id))
+    await show_payment_tariff_select_page(
+        callback,
+        context=build_payment_tariff_select_page_context(
+            provider_title_html='⭐ <b>Оплата звёздами</b>',
+        ),
+        runtime_markup=tariff_select_kb(tariffs, order_id=order_id),
+    )
     await callback.answer()
 
 @router.callback_query(F.data.startswith('stars_pay:'))
-async def pay_stars_invoice(callback: CallbackQuery):
+async def pay_stars_invoice(callback: CallbackQuery, state: FSMContext):
     """Создание инвойса для оплаты Stars."""
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, update_order_tariff, update_payment_type
@@ -91,23 +165,61 @@ async def pay_stars_invoice(callback: CallbackQuery):
         return
     days = tariff['duration_days']
     from database.requests import get_user_internal_id, create_pending_order
+    user_id = get_user_internal_id(callback.from_user.id)
+    if not user_id:
+        await callback.answer('❌ Ошибка пользователя', show_alert=True)
+        return
     if order_id:
         update_order_tariff(order_id, tariff_id, payment_type='stars')
     else:
-        user_id = get_user_internal_id(callback.from_user.id)
         if not user_id:
             await callback.answer('❌ Ошибка пользователя', show_alert=True)
             return
         (_, order_id) = create_pending_order(user_id=user_id, tariff_id=tariff_id, payment_type='stars', vpn_key_id=None)
-    try:
-        bot_info = await callback.bot.get_me()
-        bot_name = bot_info.first_name
-        price_stars = tariff['price_stars']
-        await callback.message.answer_invoice(title=bot_name, description=f"Оплата тарифа «{tariff['name']}» ({days} дн.).", payload=order_id, currency='XTR', prices=[LabeledPrice(label=f"Тариф {tariff['name']}", amount=price_stars)], reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text=f'⭐️ Оплатить {price_stars} XTR', pay=True)).row(InlineKeyboardButton(text='❌ Отмена', callback_data='buy_key')).as_markup())
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f'Ошибка при выставлении счета Stars: {e}')
-        await callback.answer('❌ Произошла ошибка при создании счета', show_alert=True)
+    from bot.services.promotions import prepare_order_pricing
+    from bot.handlers.user.payments.base import complete_promo_free_payment, send_telegram_invoice_or_status
+    quote = prepare_order_pricing(
+        order_id=order_id,
+        user_id=user_id,
+        tariff=tariff,
+        payment_type='stars',
+        action='new_key',
+    )
+    if not quote['ok']:
+        from bot.handlers.user.payments.status_page import show_payment_unavailable_status
+
+        await show_payment_unavailable_status(
+            callback.message,
+            quote['unavailable_reason'],
+            payment_provider_title='Telegram Stars',
+        )
+        await callback.answer()
+        return
+    if quote['is_free']:
+        await complete_promo_free_payment(callback, state, order_id, callback.from_user.id)
+        await callback.answer()
+        return
+    bot_info = await callback.bot.get_me()
+    bot_name = bot_info.first_name
+    price_stars = quote['final_amount']
+    promo_note = f" Промокод {quote['promo']['code']} -{quote['discount_percent']}%." if quote.get('promo') else ""
+    invoice_sent = await send_telegram_invoice_or_status(
+        callback,
+        provider_title='Telegram Stars',
+        log_context=f"stars:new_key order={order_id} tariff={tariff.get('id')}",
+        title=bot_name,
+        description=f"Оплата тарифа «{tariff['name']}» ({days} дн.).{promo_note}",
+        payload=order_id,
+        currency='XTR',
+        prices=[LabeledPrice(label=f"Тариф {tariff['name']}", amount=price_stars)],
+        reply_markup=(
+            InlineKeyboardBuilder()
+            .row(InlineKeyboardButton(text=f'⭐️ Оплатить {price_stars} XTR', pay=True))
+            .row(InlineKeyboardButton(text='❌ Отмена', callback_data='buy_key'))
+            .as_markup()
+        ),
+    )
+    if not invoice_sent:
         return
     await callback.message.delete()
     await callback.answer()

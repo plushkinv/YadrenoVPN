@@ -33,6 +33,7 @@ from bot.utils.git_utils import (
 from bot.keyboards.admin import (
     bot_settings_kb,
     bot_mode_toggle_confirm_kb,
+    extensions_diagnostics_kb,
     update_confirm_kb,
     force_overwrite_confirm_kb,
     stop_bot_confirm_kb,
@@ -56,6 +57,32 @@ from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock, set_update_blocked
 
 router = Router()
+
+
+_EXTENSION_STATUS_LABELS = {
+    'ok': 'найдена',
+    'directory_missing': 'папка не создана',
+    'not_directory': 'путь не является папкой',
+}
+
+_EXTENSION_LOAD_REASON_LABELS = {
+    'not_loaded': 'загрузка ещё не выполнялась',
+    'disabled': 'загрузка выключена',
+    'directory_missing': 'папка не создана',
+    'not_directory': 'путь не является папкой',
+}
+
+_EXTENSION_REGISTRATION_LABELS = {
+    'actions': 'actions',
+    'guards': 'guards',
+    'page_hooks': 'hooks',
+    'pricing_policies': 'pricing',
+    'promo_reward_policies': 'promo rewards',
+    'referral_reward_policies': 'referral rewards',
+    'key_lifecycle_hooks': 'key lifecycle',
+    'payment_providers': 'payment providers',
+    'schemas': 'schemas',
+}
 
 
 # ============================================================================
@@ -98,17 +125,8 @@ async def show_bot_settings(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_toggle_bot_mode")
-async def admin_toggle_bot_mode(callback: CallbackQuery, state: FSMContext):
-    """Показывает экран подтверждения переключения режима работы бота."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
-        return
-
-    from bot.services.vpn_api import get_bot_mode
-    current = get_bot_mode()
-    target = 'key' if current == 'subscription' else 'subscription'
-
+async def _show_bot_mode_confirm(callback: CallbackQuery, target: str):
+    """Показывает подтверждение переключения режима работы бота."""
     if target == 'subscription':
         warning = (
             "⚠️ <b>Переключение в режим Подписка</b>\n\n"
@@ -135,6 +153,136 @@ async def admin_toggle_bot_mode(callback: CallbackQuery, state: FSMContext):
     await safe_edit_or_send(callback.message, warning,
                             reply_markup=bot_mode_toggle_confirm_kb(target))
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_extensions_diagnostics")
+async def show_extensions_diagnostics(callback: CallbackQuery, state: FSMContext):
+    """Показывает read-only диагностику пользовательских расширений."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    from bot.utils.custom_extensions import get_custom_extensions_diagnostics
+
+    diagnostics = get_custom_extensions_diagnostics()
+    await safe_edit_or_send(
+        callback.message,
+        _format_extensions_diagnostics(diagnostics),
+        reply_markup=extensions_diagnostics_kb(),
+    )
+    await callback.answer()
+
+
+def _format_extensions_diagnostics(diagnostics: dict) -> str:
+    enabled = bool(diagnostics.get('enabled'))
+    status_icon = '🟢' if enabled else '⚪'
+    directory = Path(str(diagnostics.get('directory') or 'custom_extensions'))
+    directory_label = _EXTENSION_STATUS_LABELS.get(
+        str(diagnostics.get('directory_status') or ''),
+        'неизвестно',
+    )
+
+    last_load = diagnostics.get('last_load') or {}
+    loaded = list(last_load.get('loaded') or [])
+    failed = dict(last_load.get('failed') or {})
+    skipped = bool(last_load.get('skipped'))
+    reason = str(last_load.get('reason') or '')
+    reason_label = _EXTENSION_LOAD_REASON_LABELS.get(reason, reason or 'выполнена')
+
+    files = list(diagnostics.get('files') or [])
+    candidates = sum(1 for item in files if item.get('status') == 'candidate')
+    invalid = sum(1 for item in files if item.get('status') == 'invalid_filename')
+    ignored = sum(1 for item in files if item.get('status') == 'ignored_private')
+
+    lines = [
+        "🧩 <b>Диагностика расширений</b>",
+        "",
+        f"<b>Загрузка:</b> {status_icon} {'включена' if enabled else 'выключена'}",
+        f"<b>Папка:</b> <code>{escape_html(directory.name)}</code> — {escape_html(directory_label)}",
+        f"<b>Последняя загрузка:</b> {escape_html(reason_label) if skipped else 'выполнена'}",
+        f"<b>Файлы:</b> {len(files)} всего, {candidates} к загрузке, {invalid} с ошибкой имени, {ignored} приватных",
+        f"<b>Итог:</b> {len(loaded)} загружено, {len(failed)} с ошибками",
+    ]
+
+    if loaded:
+        lines.extend(["", "<b>Загружены:</b>"])
+        lines.extend(f"• <code>{escape_html(name)}</code>" for name in loaded[:8])
+        if len(loaded) > 8:
+            lines.append(f"• ещё {len(loaded) - 8}")
+
+    if failed:
+        lines.extend(["", "<b>Ошибки:</b>"])
+        for filename, error in list(sorted(failed.items()))[:6]:
+            short_error = str(error)[:180]
+            lines.append(f"• <code>{escape_html(filename)}</code>: {escape_html(short_error)}")
+        if len(failed) > 6:
+            lines.append(f"• ещё {len(failed) - 6}")
+
+    registrations = dict(diagnostics.get('registrations') or {})
+    if registrations:
+        lines.extend(["", "<b>Регистрации расширений:</b>"])
+        for extension_name, items in list(sorted(registrations.items()))[:8]:
+            summary = _format_extension_registration_summary(items)
+            lines.append(f"• <code>{escape_html(extension_name)}</code>: {escape_html(summary)}")
+        if len(registrations) > 8:
+            lines.append(f"• ещё {len(registrations) - 8}")
+
+    totals = dict(diagnostics.get('registry_totals') or {})
+    if totals:
+        lines.extend(["", "<b>Текущий registry:</b>"])
+        lines.append(
+            "• "
+            + ", ".join(
+                f"{_EXTENSION_REGISTRATION_LABELS.get(key, key)}: {value}"
+                for key, value in totals.items()
+            )
+        )
+
+    return "\n".join(lines)
+
+
+def _format_extension_registration_summary(items: dict) -> str:
+    parts: list[str] = []
+    for key, label in _EXTENSION_REGISTRATION_LABELS.items():
+        count = len(items.get(key) or [])
+        if count:
+            parts.append(f"{label} {count}")
+    return ", ".join(parts) if parts else "нет зарегистрированных объектов"
+
+
+@router.callback_query(F.data.startswith("admin_select_bot_mode:"))
+async def admin_select_bot_mode(callback: CallbackQuery, state: FSMContext):
+    """Открывает подтверждение только при выборе другого режима."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    target = callback.data.split(":", 1)[1]
+    if target not in ('subscription', 'key'):
+        await callback.answer("⛔ Недопустимое значение", show_alert=True)
+        return
+
+    from bot.services.vpn_api import get_bot_mode
+    current = get_bot_mode()
+    if target == current:
+        label = "📡 Подписка" if target == 'subscription' else "🔑 Ключи"
+        await callback.answer(f"Режим уже выбран: {label}")
+        return
+
+    await _show_bot_mode_confirm(callback, target)
+
+
+@router.callback_query(F.data == "admin_toggle_bot_mode")
+async def admin_toggle_bot_mode(callback: CallbackQuery, state: FSMContext):
+    """Совместимый toggle для старых сообщений."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    from bot.services.vpn_api import get_bot_mode
+    current = get_bot_mode()
+    target = 'key' if current == 'subscription' else 'subscription'
+    await _show_bot_mode_confirm(callback, target)
 
 
 @router.callback_query(F.data.startswith("admin_set_bot_mode:"))
@@ -619,8 +767,9 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
             "📝 <b>Справка: Текст выдачи ключа</b>\n\n"
             "Формат: <b>только текст</b> (без фото).\n\n"
             "Переменные:\n"
-            "• <code>%ключ%</code> — ссылка или ключ в моноширинном виде для копирования\n"
-            "• <code>%ссылка%</code> — чистая ссылка без code/pre, кликабельная для HTTP/HTTPS подписки\n\n"
+            "• <code>%ключ_для_копирования%</code> — ссылка или ключ в моноширинном виде для копирования\n"
+            "• <code>%ключ_ссылка%</code> — чистая ссылка без code/pre, кликабельная для HTTP/HTTPS подписки\n"
+            "• <code>%ключ_ссылка_url%</code> — URL-кодированная ссылка для URL-кнопок\n\n"
             "Можно использовать один тег или оба сразу."
         ),
     }
@@ -1094,16 +1243,17 @@ async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.answer()
-    await state.set_state(AdminStates.yadreno_chat)
+    from bot.handlers.admin.yadreno_admin import (
+        _YadrenoProgressRenderer,
+        _activate_yadreno_chat_lane,
+        _format_final_response,
+    )
+
+    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CHAT_TOPIC_ID)
     status_message = await safe_edit_or_send(
         callback.message,
         "🤖 <b>Yadreno Admin</b>\n\n⏳ Отправляю bot.log и запускаю анализ...",
         reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
-    )
-
-    from bot.handlers.admin.yadreno_admin import (
-        _YadrenoProgressRenderer,
-        _format_final_response,
     )
 
     progress = _YadrenoProgressRenderer(

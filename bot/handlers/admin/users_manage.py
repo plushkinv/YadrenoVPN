@@ -6,7 +6,7 @@ from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardB
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from config import ADMIN_IDS
-from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, extend_vpn_key, create_vpn_key_admin, get_active_servers, get_all_tariffs, get_user_balance, get_user_referral_coefficient, add_to_balance, deduct_from_balance, set_user_referral_coefficient
+from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, extend_vpn_key, create_vpn_key_admin, get_active_servers, get_all_tariffs, get_user_balance, get_user_referral_coefficient, set_user_referral_coefficient
 from bot.utils.admin import is_admin
 from bot.utils.datetime_format import format_datetime_for_display
 from bot.utils.text import escape_html, safe_edit_or_send
@@ -286,7 +286,6 @@ async def process_balance_amount(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage
-    from bot.services.user_locks import user_locks
     text = get_message_text_for_storage(message, 'plain').replace(',', '.')
     try:
         amount_rub = float(text)
@@ -313,16 +312,38 @@ async def process_balance_amount(message: Message, state: FSMContext):
             balance_rub = current_balance / 100
             await safe_edit_or_send(message, f'❌ Недостаточно средств на балансе.\nТекущий баланс: {balance_rub:.2f} ₽\nПопытка списать: {amount_rub:.2f} ₽')
             return
-        async with user_locks[user_id]:
-            deduct_from_balance(user_id, amount_cents)
-        new_balance = get_user_balance(user_id)
+        from bot.services.balance import debit_user_balance
+
+        result = await debit_user_balance(
+            user_id,
+            amount_cents,
+            source='admin_manual',
+            reason='Ручное списание администратором',
+            performed_by=message.from_user.id,
+            metadata={'admin_telegram_id': message.from_user.id},
+        )
+        if not result.get('ok'):
+            await safe_edit_or_send(message, '❌ Не удалось списать баланс. Проверьте текущий баланс пользователя.')
+            return
+        new_balance = int(result.get('balance_after') or get_user_balance(user_id))
         new_balance_rub = new_balance / 100
         await safe_edit_or_send(message, f'✅ Баланс списан\n\nСписано: {amount_rub:.2f} ₽\nНовый баланс: {new_balance_rub:.2f} ₽')
         logger.info(f'Админ {message.from_user.id} списал {amount_cents} коп с баланса user {user_id}')
     else:
-        async with user_locks[user_id]:
-            add_to_balance(user_id, amount_cents)
-        new_balance = get_user_balance(user_id)
+        from bot.services.balance import credit_user_balance
+
+        result = await credit_user_balance(
+            user_id,
+            amount_cents,
+            source='admin_manual',
+            reason='Ручное пополнение администратором',
+            performed_by=message.from_user.id,
+            metadata={'admin_telegram_id': message.from_user.id},
+        )
+        if not result.get('ok'):
+            await safe_edit_or_send(message, '❌ Не удалось пополнить баланс. Попробуйте ещё раз.')
+            return
+        new_balance = int(result.get('balance_after') or get_user_balance(user_id))
         new_balance_rub = new_balance / 100
         await safe_edit_or_send(message, f'✅ Баланс пополнен\n\nПополнено: {amount_rub:.2f} ₽\nНовый баланс: {new_balance_rub:.2f} ₽')
         logger.info(f'Админ {message.from_user.id} пополнил баланс user {user_id} на {amount_cents} коп')

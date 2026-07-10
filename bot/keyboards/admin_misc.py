@@ -2,6 +2,24 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
 
+def state_pair_buttons(
+    is_left_active: bool,
+    left_text: str,
+    left_callback: str,
+    right_text: str,
+    right_callback: str,
+    *,
+    left_active_emoji: str = '🟢',
+    right_active_emoji: str = '🔴',
+):
+    """Возвращает две кнопки состояния с активным и неактивным индикатором."""
+    left_emoji = left_active_emoji if is_left_active else '⚪'
+    right_emoji = '⚪' if is_left_active else right_active_emoji
+    return (
+        InlineKeyboardButton(text=f'{left_emoji} {left_text}', callback_data=left_callback),
+        InlineKeyboardButton(text=f'{right_emoji} {right_text}', callback_data=right_callback),
+    )
+
 def back_button(callback: str='back') -> InlineKeyboardButton:
     """Кнопка 'Назад'."""
     return InlineKeyboardButton(text='⬅️ Назад', callback_data=callback)
@@ -41,11 +59,11 @@ def admin_main_menu_kb() -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text='👥 Пользователи', callback_data='admin_users'),
-        InlineKeyboardButton(text='📢 Рассылка', callback_data='admin_broadcast')
+        InlineKeyboardButton(text='📣 Маркетинг', callback_data='admin_marketing')
     )
     builder.row(
         InlineKeyboardButton(text='⚙️ Настройки бота', callback_data='admin_bot_settings'),
-        InlineKeyboardButton(text='📥 Скачать логи', callback_data='admin_logs_menu')
+        InlineKeyboardButton(text='-', callback_data='admin_placeholder')
     )
     builder.row(
         InlineKeyboardButton(
@@ -58,13 +76,23 @@ def admin_main_menu_kb() -> InlineKeyboardMarkup:
     builder.row(home_button())
     return builder.as_markup()
 
+def marketing_menu_kb() -> InlineKeyboardMarkup:
+    """Меню маркетинговых инструментов."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text='📢 Рассылка', callback_data='admin_broadcast'))
+    builder.row(InlineKeyboardButton(text='🔗 Реферальная система', callback_data='admin_referral'))
+    builder.row(InlineKeyboardButton(text='🎟 Промокоды', callback_data='admin_promocodes'))
+    builder.row(InlineKeyboardButton(text='🎫 Купоны', callback_data='admin_coupons'))
+    builder.row(back_button('admin_panel'), home_button())
+    return builder.as_markup()
+
 def admin_logs_menu_kb() -> InlineKeyboardMarkup:
     """Меню скачивания логов."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='📄 Полный лог', callback_data='admin_download_log_full'), InlineKeyboardButton(text='⚠️ Ошибки', callback_data='admin_download_log_errors'))
     builder.row(InlineKeyboardButton(text='📤 Отправить в Ядрёно Админ', callback_data='admin_send_log_to_yadreno'))
     builder.row(InlineKeyboardButton(text='🧹 Очистить логи', callback_data='admin_clear_logs_confirm'))
-    builder.row(back_button('admin_panel'), home_button())
+    builder.row(back_button('admin_bot_settings'), home_button())
     return builder.as_markup()
 
 def stop_bot_confirm_kb() -> InlineKeyboardMarkup:

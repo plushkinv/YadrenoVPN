@@ -9,8 +9,8 @@ from bot.utils.text import escape_html
 
 MY_KEYS_ITEM_TEMPLATE_SETTING = 'my_keys_item_template'
 DEFAULT_MY_KEYS_ITEM_TEMPLATE = (
-    "%статус%<b>%имяключа%</b> - %трафик% - до %датаокончания%\n"
-    "     📍%сервер% - %инбаунд% (%протокол%)"
+    "%ключ_статус%<b>%ключ_имя%</b> - %ключ_трафик% - до %ключ_дата_окончания%\n"
+    "     📍%ключ_сервер% - %ключ_инбаунд% (%ключ_протокол%)"
 )
 
 
@@ -29,14 +29,14 @@ def build_my_keys_item_text(
     display_name = key.get('display_name') or f"Ключ #{key.get('id', '')}"
 
     replacements = {
-        '%статус%': status,
-        '%имяключа%': escape_html(str(display_name)),
-        '%трафик%': escape_html(str(traffic_text)),
-        '%датаокончания%': escape_html(str(expires)),
-        '%сервер%': escape_html(str(server)),
-        '%инбаунд%': escape_html(str(inbound_name)),
-        '%протокол%': escape_html(str(protocol)),
-        '%id%': escape_html(str(key.get('id', ''))),
+        '%ключ_статус%': status,
+        '%ключ_имя%': escape_html(str(display_name)),
+        '%ключ_трафик%': escape_html(str(traffic_text)),
+        '%ключ_дата_окончания%': escape_html(str(expires)),
+        '%ключ_сервер%': escape_html(str(server)),
+        '%ключ_инбаунд%': escape_html(str(inbound_name)),
+        '%ключ_протокол%': escape_html(str(protocol)),
+        '%ключ_id%': escape_html(str(key.get('id', ''))),
     }
 
     return apply_placeholder_replacements(template, replacements)

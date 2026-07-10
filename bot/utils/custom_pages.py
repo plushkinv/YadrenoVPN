@@ -4,10 +4,11 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from bot.utils.action_registry import normalize_callback_data
+
 
 CUSTOM_PAGE_PREFIX = "custom_"
 CUSTOM_PAGE_CALLBACK_PREFIX = "page:"
-MAX_CALLBACK_DATA_BYTES = 64
 
 _CUSTOM_PAGE_KEY_RE = re.compile(r"^custom_[a-z0-9_]+$")
 
@@ -17,16 +18,16 @@ def is_custom_page_key(page_key: object) -> bool:
     return isinstance(page_key, str) and bool(_CUSTOM_PAGE_KEY_RE.fullmatch(page_key))
 
 
-def build_custom_page_callback(page_key: str) -> Optional[str]:
+def build_custom_page_callback(page_key: object) -> Optional[str]:
     """Возвращает callback для custom-страницы, если он помещается в лимит Telegram."""
     if not is_custom_page_key(page_key):
         return None
 
     callback_data = f"{CUSTOM_PAGE_CALLBACK_PREFIX}{page_key}"
-    if len(callback_data.encode("utf-8")) > MAX_CALLBACK_DATA_BYTES:
+    try:
+        return normalize_callback_data(callback_data)
+    except ValueError:
         return None
-
-    return callback_data
 
 
 def extract_custom_page_key(callback_data: object) -> Optional[str]:

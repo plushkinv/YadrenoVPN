@@ -29,11 +29,14 @@ PAGE_KEYS = (
     'main',
     'help',
     'trial',
+    'access_blocked',
     'prepayment',
+    'prepayment_unavailable',
     'renew_payment',
     'my_keys',
     'my_keys_empty',
     'key_details',
+    'key_status',
     'key_show_unconfigured',
     'renew_payment_unavailable',
     'key_replace_server_select',
@@ -45,6 +48,17 @@ PAGE_KEYS = (
     'new_key_no_servers',
     'referral',
     'key_delivery',
+    'qr_payment',
+    'crypto_payment',
+    'balance_payment',
+    'demo_payment',
+    'payment_tariff_select',
+    'payment_status',
+    'support_start',
+    'support_status',
+    'promo_enter',
+    'promo_status',
+    'show_id',
 )
 
 
@@ -357,7 +371,7 @@ async def send_editor_message(
         default_text: Текст по умолчанию если ключ не найден
         reply_markup: Клавиатура
         text_override: Подготовленный текст (заменяет data['text']).
-            Используется когда нужно подставить плейсхолдеры (%тарифы%, %ключ% и т.д.)
+            Используется когда нужно подставить плейсхолдеры (%тарифы%, %ключ_имя% и т.д.)
             Важно: все динамические значения должны быть экранированы через escape_html()
             
     Returns:

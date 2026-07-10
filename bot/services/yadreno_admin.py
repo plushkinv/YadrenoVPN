@@ -306,11 +306,41 @@ def _pid_is_running(pid: Any) -> bool:
         return False
     if value <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_is_running(value)
     try:
         os.kill(value, 0)
         return True
     except OSError:
         return False
+    except Exception:
+        return False
+
+
+def _windows_pid_is_running(pid: int) -> bool:
+    """Dev-only предохранитель: на Windows os.kill(pid, 0) шлёт CTRL+C."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(
+            process_query_limited_information,
+            False,
+            int(pid),
+        )
+        if not handle:
+            return False
+
+        exit_code = wintypes.DWORD()
+        try:
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return int(exit_code.value) == still_active
+        finally:
+            kernel32.CloseHandle(handle)
     except Exception:
         return False
 

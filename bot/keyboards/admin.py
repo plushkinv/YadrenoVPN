@@ -10,6 +10,7 @@ from .admin_broadcast import *
 from .admin_users import *
 from .admin_settings import *
 from .admin_yadreno import *
+from .admin_promotions import *
 
 __all__ = [
     'BROADCAST_FILTERS',
@@ -17,15 +18,18 @@ __all__ = [
     'back_button',
     'home_button',
     'cancel_button',
+    'state_pair_buttons',
     'cancel_kb',
     'back_and_home_kb',
     'home_only_kb',
     'admin_main_menu_kb',
+    'marketing_menu_kb',
     'author_support_kb',
     'admin_logs_menu_kb',
     'stop_bot_confirm_kb',
     'bot_settings_kb',
     'bot_mode_toggle_confirm_kb',
+    'extensions_diagnostics_kb',
     'force_overwrite_confirm_kb',
     'update_confirm_kb',
     'servers_list_kb',
@@ -40,6 +44,7 @@ __all__ = [
     'crypto_setup_kb',
     'crypto_setup_confirm_kb',
     'cards_management_kb',
+    'qr_management_kb',
     'wata_management_kb',
     'platega_management_kb',
     'cardlink_management_kb',
@@ -85,4 +90,8 @@ __all__ = [
     'yadreno_admin_chat_kb',
     'yadreno_admin_agent_kb',
     'yadreno_admin_cancel_key_kb',
+    'promocodes_list_kb',
+    'promocode_detail_kb',
+    'coupons_menu_kb',
+    'promotion_cancel_kb',
 ]

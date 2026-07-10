@@ -7,11 +7,11 @@ from bot.utils.datetime_format import format_date_for_display
 from bot.utils.text import escape_html
 
 
-KEY_INFO_PLACEHOLDER = '%информацияключа%'
-KEY_HISTORY_PLACEHOLDER = '%историяопераций%'
-SCREEN_DATA_PLACEHOLDER = '%данныеэкрана%'
-REPLACE_DATA_PLACEHOLDER = '%данныезамены%'
-KEY_DATA_PLACEHOLDER = '%данныеключа%'
+KEY_INFO_PLACEHOLDER = '%ключ_информация%'
+KEY_HISTORY_PLACEHOLDER = '%ключ_история_операций%'
+SCREEN_DATA_PLACEHOLDER = '%экран_данные%'
+REPLACE_DATA_PLACEHOLDER = '%замена_ключа_данные%'
+KEY_DATA_PLACEHOLDER = '%ключ_переименование_данные%'
 
 
 def _safe(value: Any, fallback: str = '—') -> str:
@@ -70,21 +70,32 @@ def build_key_history_block(payments: Iterable[Mapping[str, Any]]) -> str:
     lines = ['', '📜 <b>История операций:</b>']
     for payment in payment_rows:
         date = format_date_for_display(payment.get('paid_at'))
+        if payment.get('history_type') == 'key_operation':
+            delta_days = int(payment.get('delta_days') or 0)
+            reason = payment.get('reason') or 'Начисление дней'
+            if delta_days > 0:
+                lines.append(f"   • {_safe(date)}: {_safe(reason)} (+{_safe(delta_days)} дн.)")
+            else:
+                lines.append(f"   • {_safe(date)}: {_safe(reason)}")
+            continue
         tariff = payment.get('tariff_name') or 'Тариф'
         ptype = payment.get('payment_type')
         if ptype == 'stars':
-            amount = f"{_safe(payment.get('amount_stars') or 0)} ⭐"
+            stars = payment.get('final_amount_stars') if payment.get('final_amount_stars') is not None else payment.get('amount_stars') or 0
+            amount = f"{_safe(stars)} ⭐"
         elif ptype == 'crypto':
-            amount_val = (payment.get('amount_cents') or 0) / 100
+            cents = payment.get('final_amount_cents') if payment.get('final_amount_cents') is not None else payment.get('amount_cents') or 0
+            amount_val = cents / 100
             amount_str = f'{amount_val:g}'.replace('.', ',')
             amount = f'${_safe(amount_str)}'
-        elif ptype in ('cards', 'yookassa_qr', 'wata', 'platega', 'cardlink', 'balance'):
-            rub = payment.get('price_rub') or 0
+        elif ptype in ('cards', 'yookassa_qr', 'wata', 'platega', 'cardlink', 'balance', 'promo_free'):
+            rub = ((payment.get('final_amount_cents') or 0) / 100) if payment.get('final_amount_cents') is not None else payment.get('price_rub') or 0
             rub_str = f'{rub:g}'.replace('.', ',')
             amount = f'{_safe(rub_str)} ₽'
         else:
             amount = '?'
-        lines.append(f"   • {_safe(date)}: {_safe(tariff)} ({amount})")
+        promo = f", 🎟 {_safe(payment.get('promo_code'))}" if payment.get('promo_code') else ""
+        lines.append(f"   • {_safe(date)}: {_safe(tariff)} ({amount}{promo})")
     return '\n'.join(lines)
 
 

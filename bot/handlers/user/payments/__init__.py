@@ -9,6 +9,7 @@ from .stars import router as stars_router
 from .crypto import router as crypto_router
 from .keys_config import router as keys_config_router
 from .demo import router as demo_router
+from .custom import router as custom_router
 
 router = Router()
 router.include_router(base_router)
@@ -21,3 +22,4 @@ router.include_router(stars_router)
 router.include_router(crypto_router)
 router.include_router(keys_config_router)
 router.include_router(demo_router)
+router.include_router(custom_router)

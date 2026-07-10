@@ -10,9 +10,11 @@
 - button_id — контракт, НЕЛЬЗЯ менять после релиза
 """
 import logging
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, Mapping
 
 logger = logging.getLogger(__name__)
+
+MAX_CALLBACK_DATA_BYTES = 64
 
 
 # =============================================================================
@@ -28,7 +30,46 @@ ACTION_REGISTRY: Dict[str, str] = {
     "cmd_trial":          "trial_subscription",
     "cmd_referral":       "referral_system",
     "cmd_activate_trial": "trial_activate",
+    "cmd_support":        "support_start",
+    "cmd_show_profile":   "route:profile",
+    "cmd_show_id":        "show_id",
 }
+
+
+def register_action_handler(action_value: str, callback_data: str, *, replace: bool = False) -> None:
+    """Регистрирует callback для internal-кнопки расширения."""
+    action_key = _require_text(action_value, 'action_value').strip()
+    callback = normalize_callback_data(callback_data)
+    _require_bool(replace, 'replace')
+
+    if not action_key:
+        raise ValueError("action_value не может быть пустым")
+    if action_key in ACTION_REGISTRY and not replace:
+        raise ValueError(f"action_value '{action_key}' уже зарегистрирован")
+
+    ACTION_REGISTRY[action_key] = callback
+
+
+def _require_text(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} должен быть строкой")
+    return value
+
+
+def _require_bool(value: Any, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field} должен быть bool")
+    return value
+
+
+def normalize_callback_data(value: Any, field: str = 'callback_data') -> str:
+    """Проверяет callback_data по контракту Telegram InlineKeyboardButton."""
+    callback = _require_text(value, field).strip()
+    if not callback:
+        raise ValueError(f"{field} не может быть пустым")
+    if len(callback.encode('utf-8')) > MAX_CALLBACK_DATA_BYTES:
+        raise ValueError(f"{field} не может быть длиннее {MAX_CALLBACK_DATA_BYTES} байт")
+    return callback
 
 
 # =============================================================================
@@ -156,10 +197,18 @@ def _resolve_pay_balance(ctx: dict) -> Optional[dict]:
     return {"callback_data": "pay_use_balance"}
 
 
+def _resolve_enter_promo(ctx: dict) -> Optional[dict]:
+    """Кнопка ввода промокода на странице покупки."""
+    return {"callback_data": "promo_enter"}
+
+
 def _get_renew_key_id(ctx: dict) -> Optional[str]:
     """Возвращает key_id для кнопок продления или скрывает кнопку без контекста."""
     key_id = ctx.get('key_id')
     if key_id is None or key_id == '':
+        return None
+    if isinstance(key_id, bool) or not isinstance(key_id, (int, str)):
+        logger.warning("Некорректный key_id для system-кнопки: %r", key_id)
         return None
     return str(key_id)
 
@@ -281,6 +330,45 @@ def _resolve_renew_pay_balance(ctx: dict) -> Optional[dict]:
     return {"callback_data": f"pay_use_balance:{key_id}"}
 
 
+def _resolve_pay_ext(btn_id: str, ctx: dict) -> Optional[dict]:
+    provider_id = btn_id.removeprefix('btn_pay_ext_')
+    if not provider_id:
+        return None
+    from bot.utils.payment_provider_registry import get_payment_provider, is_payment_provider_enabled
+
+    provider = get_payment_provider(provider_id)
+    if provider is None or not is_payment_provider_enabled(provider.provider_id, ctx):
+        return None
+    return {
+        "callback_data": f"pe:{provider.provider_id}",
+        "label": provider.label,
+    }
+
+
+def _resolve_renew_pay_ext(btn_id: str, ctx: dict) -> Optional[dict]:
+    provider_id = btn_id.removeprefix('btn_renew_pay_ext_')
+    key_id = _get_renew_key_id(ctx)
+    if not provider_id or not key_id:
+        return None
+    from bot.utils.payment_provider_registry import get_payment_provider, is_payment_provider_enabled
+
+    provider = get_payment_provider(provider_id)
+    if provider is None or not is_payment_provider_enabled(provider.provider_id, ctx):
+        return None
+    return {
+        "callback_data": f"re:{provider.provider_id}:{key_id}",
+        "label": provider.label,
+    }
+
+
+def _resolve_renew_enter_promo(ctx: dict) -> Optional[dict]:
+    """Кнопка ввода промокода на странице продления."""
+    key_id = _get_renew_key_id(ctx)
+    if not key_id:
+        return None
+    return {"callback_data": f"promo_enter:{key_id}"}
+
+
 def _resolve_renew_back(ctx: dict) -> Optional[dict]:
     """Кнопка возврата со страницы выбора оплаты продления к ключу."""
     key_id = _get_renew_key_id(ctx)
@@ -296,15 +384,19 @@ def _get_key_details_id(ctx: dict) -> Optional[str]:
 
 
 def _key_details_is_active(ctx: dict) -> bool:
-    return bool(ctx.get('key_active'))
+    return ctx.get('key_active') is True
 
 
 def _key_details_is_unconfigured(ctx: dict) -> bool:
-    return bool(ctx.get('is_unconfigured'))
+    return ctx.get('is_unconfigured') is True
 
 
 def _key_details_traffic_exhausted(ctx: dict) -> bool:
-    return bool(ctx.get('traffic_exhausted'))
+    return ctx.get('traffic_exhausted') is True
+
+
+def _key_details_has_sub_id(ctx: dict) -> bool:
+    return ctx.get('has_sub_id') is True
 
 
 def _resolve_key_show_key(ctx: dict) -> Optional[dict]:
@@ -316,7 +408,7 @@ def _resolve_key_show_key(ctx: dict) -> Optional[dict]:
         return None
     if _key_details_is_unconfigured(ctx) or _key_details_traffic_exhausted(ctx):
         return None
-    if ctx.get('has_sub_id'):
+    if _key_details_has_sub_id(ctx):
         return None
 
     return {"callback_data": f"key_show:{key_id}"}
@@ -331,7 +423,7 @@ def _resolve_key_show_subscription(ctx: dict) -> Optional[dict]:
         return None
     if _key_details_is_unconfigured(ctx) or _key_details_traffic_exhausted(ctx):
         return None
-    if not ctx.get('has_sub_id'):
+    if not _key_details_has_sub_id(ctx):
         return None
 
     return {"callback_data": f"key_show:{key_id}"}
@@ -402,6 +494,7 @@ SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_pay_cardlink": _resolve_pay_cardlink,
     "btn_pay_demo":    _resolve_pay_demo,
     "btn_pay_balance": _resolve_pay_balance,
+    "btn_enter_promo": _resolve_enter_promo,
     "btn_renew_pay_crypto": _resolve_renew_pay_crypto,
     "btn_renew_pay_stars": _resolve_renew_pay_stars,
     "btn_renew_pay_cards": _resolve_renew_pay_cards,
@@ -411,6 +504,7 @@ SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_renew_pay_cardlink": _resolve_renew_pay_cardlink,
     "btn_renew_pay_demo": _resolve_renew_pay_demo,
     "btn_renew_pay_balance": _resolve_renew_pay_balance,
+    "btn_renew_enter_promo": _resolve_renew_enter_promo,
     "btn_renew_back": _resolve_renew_back,
     "btn_key_show_key": _resolve_key_show_key,
     "btn_key_show_subscription": _resolve_key_show_subscription,
@@ -420,3 +514,54 @@ SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_key_delete": _resolve_key_delete,
     "btn_key_rename": _resolve_key_rename,
 }
+
+
+def resolve_system_button(button_id: str, context: Mapping[str, Any]) -> Optional[dict]:
+    button_id = _require_text(button_id, 'button_id')
+    if not isinstance(context, Mapping):
+        raise ValueError("context должен быть mapping")
+    context = dict(context)
+
+    handler = SYSTEM_BUTTONS.get(button_id)
+    if handler is not None:
+        return _normalize_system_button_result(button_id, handler(context))
+    if button_id.startswith('btn_pay_ext_'):
+        return _normalize_system_button_result(button_id, _resolve_pay_ext(button_id, context))
+    if button_id.startswith('btn_renew_pay_ext_'):
+        return _normalize_system_button_result(button_id, _resolve_renew_pay_ext(button_id, context))
+    return None
+
+
+def _normalize_system_button_result(button_id: str, result: Any) -> Optional[dict]:
+    """Проверяет контракт system handler-а перед передачей в renderer."""
+    if result is None:
+        return None
+    if not isinstance(result, Mapping):
+        raise ValueError(f"system handler '{button_id}' должен вернуть dict или None")
+
+    normalized = dict(result)
+    allowed = {'callback_data', 'url', 'label', 'hidden'}
+    unknown = set(normalized.keys()) - allowed
+    if unknown:
+        raise ValueError(f"system handler '{button_id}' вернул неподдерживаемые поля: {', '.join(sorted(unknown))}")
+
+    for field in ('callback_data', 'url', 'label'):
+        if field in normalized and normalized[field] is not None:
+            value = normalized[field]
+            if not isinstance(value, str):
+                raise ValueError(f"system handler '{button_id}' field {field} должен быть строкой")
+            normalized[field] = value.strip()
+
+    if normalized.get('callback_data') and normalized.get('url'):
+        raise ValueError(f"system handler '{button_id}' не может вернуть одновременно callback_data и url")
+
+    if normalized.get('callback_data'):
+        normalized['callback_data'] = normalize_callback_data(
+            normalized['callback_data'],
+            f"system handler '{button_id}' field callback_data",
+        )
+
+    if 'hidden' in normalized and not isinstance(normalized['hidden'], bool):
+        raise ValueError(f"system handler '{button_id}' field hidden должен быть bool")
+
+    return normalized

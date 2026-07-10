@@ -2,7 +2,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
 
-from .admin_misc import back_button, home_button, cancel_button
+from .admin_misc import back_button, home_button, cancel_button, state_pair_buttons
 
 def bot_settings_kb(current_mode: str = 'subscription') -> InlineKeyboardMarkup:
     """
@@ -13,14 +13,18 @@ def bot_settings_kb(current_mode: str = 'subscription') -> InlineKeyboardMarkup:
                       Влияет только на лейбл кнопки переключения режима.
     """
     builder = InlineKeyboardBuilder()
-    mode_label = (
-        '🔁 Режим: 📡 Подписка' if current_mode == 'subscription'
-        else '🔁 Режим: 🔑 Ключи'
-    )
-    builder.row(InlineKeyboardButton(text=mode_label, callback_data='admin_toggle_bot_mode'))
+    builder.row(*state_pair_buttons(
+        current_mode == 'subscription',
+        'Подписка',
+        'admin_select_bot_mode:subscription',
+        'Ключи',
+        'admin_select_bot_mode:key',
+        right_active_emoji='🟢',
+    ))
     builder.row(InlineKeyboardButton(text='🔄 Обновления', callback_data='admin_update_bot'))
     builder.row(InlineKeyboardButton(text='✏️ Изменить тексты', callback_data='admin_edit_texts'))
-    builder.row(InlineKeyboardButton(text='🔗 Реферальная система', callback_data='admin_referral'))
+    builder.row(InlineKeyboardButton(text='📥 Скачать логи', callback_data='admin_logs_menu'))
+    builder.row(InlineKeyboardButton(text='🧩 Расширения', callback_data='admin_extensions_diagnostics'))
     builder.row(InlineKeyboardButton(text='🛑 Остановить бота', callback_data='admin_stop_bot'))
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
@@ -41,6 +45,14 @@ def bot_mode_toggle_confirm_kb(target_mode: str) -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
+
+def extensions_diagnostics_kb() -> InlineKeyboardMarkup:
+    """Клавиатура экрана диагностики пользовательских расширений."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text='🔄 Обновить', callback_data='admin_extensions_diagnostics'))
+    builder.row(back_button('admin_bot_settings'), home_button())
+    return builder.as_markup()
+
 def trial_settings_kb(enabled: bool, tariff_name: Optional[str]=None) -> InlineKeyboardMarkup:
     """
     Клавиатура управления пробной подпиской.
@@ -50,11 +62,13 @@ def trial_settings_kb(enabled: bool, tariff_name: Optional[str]=None) -> InlineK
         tariff_name: Название выбранного тарифа или None
     """
     builder = InlineKeyboardBuilder()
-    if enabled:
-        toggle_text = '🟢 Выключить'
-    else:
-        toggle_text = '⚪ Включить'
-    builder.row(InlineKeyboardButton(text=toggle_text, callback_data='admin_trial_toggle'))
+    builder.row(*state_pair_buttons(
+        enabled,
+        'Включено',
+        'admin_trial_set:1',
+        'Выключено',
+        'admin_trial_set:0',
+    ))
     builder.row(InlineKeyboardButton(text='✏️ Изменить текст', callback_data='admin_trial_edit_text'))
     tariff_label = tariff_name if tariff_name else 'не задан'
     builder.row(InlineKeyboardButton(text=f'📋 Тариф: {tariff_label}', callback_data='admin_trial_select_tariff'))
@@ -75,10 +89,10 @@ def trial_tariff_select_kb(tariffs: List[Dict[str, Any]], selected_id: Optional[
     for tariff in tariffs:
         if tariff.get('name') == 'Admin Tariff':
             continue
-        status = '🟢' if tariff.get('is_active') else '🔴'
+        status = '🟢' if tariff.get('is_active') else '⚪'
         is_selected = tariff['id'] == selected_id
-        selected_mark = '🔘 ' if is_selected else '⚪ '
-        builder.row(InlineKeyboardButton(text=f"{selected_mark}{status} {tariff['name']} ({tariff['duration_days']} дн.)", callback_data=f"admin_trial_set_tariff:{tariff['id']}"))
+        selected_suffix = ' — выбрано' if is_selected else ''
+        builder.row(InlineKeyboardButton(text=f"{status} {tariff['name']} ({tariff['duration_days']} дн.){selected_suffix}", callback_data=f"admin_trial_set_tariff:{tariff['id']}"))
     builder.row(back_button('admin_trial'), home_button())
     return builder.as_markup()
 
@@ -112,7 +126,7 @@ def referral_main_kb(enabled: bool, reward_type: str, levels: List[Dict[str, Any
         status = '🟢' if is_enabled else '⚪'
         builder.row(InlineKeyboardButton(text=f'{status} Уровень {level_num}: {percent}%', callback_data=f'admin_referral_level:{level_num}'))
     builder.row(InlineKeyboardButton(text='📝 Реферальная страница', callback_data='admin_referral_conditions'))
-    builder.row(back_button('admin_panel'), home_button())
+    builder.row(back_button('admin_marketing'), home_button())
     return builder.as_markup()
 
 def referral_level_kb(level_num: int, percent: int, enabled: bool) -> InlineKeyboardMarkup:
