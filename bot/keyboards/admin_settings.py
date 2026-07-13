@@ -57,6 +57,30 @@ def extensions_diagnostics_kb(setting_buttons: Optional[List[Dict[str, str]]] = 
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
 
+
+def custom_reset_preview_kb() -> InlineKeyboardMarkup:
+    """Hidden customization reset preview keyboard."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text='🧹 Сбросить кастомизацию', callback_data='admin_custom_reset_confirm'))
+    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_custom_reset_cancel'))
+    return builder.as_markup()
+
+
+def custom_reset_cancel_kb() -> InlineKeyboardMarkup:
+    """Hidden customization reset phrase input keyboard."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_custom_reset_cancel'))
+    return builder.as_markup()
+
+
+def custom_reset_done_kb() -> InlineKeyboardMarkup:
+    """Hidden customization reset completion keyboard."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text='⚙️ Настройки бота', callback_data='admin_bot_settings'))
+    builder.row(home_button())
+    return builder.as_markup()
+
+
 def trial_settings_kb(enabled: bool, tariff_name: Optional[str]=None) -> InlineKeyboardMarkup:
     """
     Trial subscription control keyboard.

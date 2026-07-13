@@ -21,6 +21,12 @@ from typing import Any, Awaitable, Callable, Optional
 
 import aiohttp
 
+from bot.services.yadreno_admin_core_guard import (
+    finalize_core_guard,
+    finalize_core_guards_for_request,
+    interrupted_tool_result,
+    run_with_core_guard,
+)
 from config import RETRY_CONFIG
 from database.requests import (
     clear_yadreno_admin_active_request_id,
@@ -86,16 +92,33 @@ _dangerous_shell_patterns: tuple[tuple[str, str], ...] = (
         "pipe curl/wget в shell",
     ),
 )
-_core_mutation_shell_patterns: tuple[tuple[str, str], ...] = (
-    (r"(^|[;&|]\s*)(sudo\s+)?(rm|mv|cp|install|touch|mkdir|rmdir)\b", "filesystem mutation"),
-    (r"(^|[;&|]\s*)(sudo\s+)?(chmod|chown|chgrp)\b", "permission mutation"),
-    (r"(^|[;&|]\s*)(sudo\s+)?(sed\s+-i|perl\s+-pi)\b", "in-place file edit"),
-    (r"(^|[;&|]\s*)(sudo\s+)?(apt|apt-get|pip|npm|yarn|pnpm)\b", "package mutation"),
-    (r"(^|[;&|]\s*)(sudo\s+)?systemctl\s+(start|stop|restart|reload|enable|disable)\b", "service mutation"),
-    (r"(^|[;&|]\s*)git\s+(checkout|reset|clean|pull|merge|apply|am)\b", "git worktree mutation"),
-    (r"(?:^|\s)(>|>>)\s*[^&]", "shell redirection write"),
-    (r"(^|[;&|]\s*)tee\s+", "tee write"),
-    (r"\.write_text\s*\(|\.write_bytes\s*\(|\bopen\s*\([^)]*,\s*['\"][wax]", "python file write"),
+_guard_integrity_shell_patterns: tuple[tuple[str, str], ...] = (
+    (
+        r"(^|[;&|]\s*)(?:sudo\s+)?git\s+"
+        r"(?:add|commit|checkout|switch|restore|reset|clean|pull|fetch|merge|rebase|"
+        r"cherry-pick|revert|apply|am|stash|worktree|update-index|read-tree|write-tree|"
+        r"commit-tree|update-ref|symbolic-ref|gc|prune)\b",
+        "mutating Git command",
+    ),
+    (
+        r"(^|[;&|]\s*)(?:sudo\s+)?git\s+(?:branch|tag|remote|config)\b[^\n;&|]*"
+        r"(?:\s-[dDmMcf]\b|\b(?:add|delete|remove|rename|set-url|unset|replace-all)\b)",
+        "mutating Git metadata command",
+    ),
+    (r"\b(?:GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)\s*=", "Git control environment override"),
+    (
+        r"(?:\brm\b|\bmv\b|\bcp\b|\btouch\b|\bmkdir\b|\bchmod\b|\bchown\b|"
+        r"\btee\b|>|>>)\s*[^\n;&|]*\.git(?:[/\\]|\b)",
+        "direct .git mutation",
+    ),
+)
+
+_SELF_RESTART_RE = re.compile(
+    r"^\s*(?:sudo\s+)?(?:"
+    r"systemctl\s+(?:restart|try-restart)\s+yadreno-vpn(?:\.service)?"
+    r"|service\s+yadreno-vpn\s+restart"
+    r")\s*$",
+    flags=re.IGNORECASE,
 )
 
 
@@ -517,66 +540,23 @@ def _core_guard_enabled(topic_id: int) -> bool:
     )
 
 
-def _is_allowed_customization_write_path(path: Path) -> bool:
-    return _is_inside(path, PROJECT_ROOT / "custom_extensions")
-
-
-def _core_guard_reject_shell(command: str) -> Optional[str]:
-    for pattern, reason in _core_mutation_shell_patterns:
+def _core_guard_integrity_error(command: str) -> Optional[str]:
+    """Protect only the Git checkpoint machinery, not customization capabilities."""
+    for pattern, reason in _guard_integrity_shell_patterns:
         if re.search(pattern, command, flags=re.IGNORECASE | re.MULTILINE):
-            return f"core changes are disabled; rejected shell mutation: {reason}"
+            return f"core protection integrity check rejected: {reason}"
     return None
 
 
-def _normalized_sql(query: str) -> str:
-    return " ".join(query.strip().rstrip(";").split())
-
-
-def _is_readonly_sql(query: str) -> bool:
-    normalized = _normalized_sql(query).lower()
-    return normalized.startswith(("select ", "pragma ", "with ", "explain "))
-
-
-def _is_allowed_page_custom_sql(query: str) -> bool:
-    normalized = _normalized_sql(query)
-    lowered = normalized.lower()
-    if not lowered.startswith("update pages set "):
+def _is_deferred_self_restart(tool: str, args: dict[str, Any]) -> bool:
+    """Recognize only a standalone restart of the current satellite service."""
+    if tool == "satellite_execute":
+        command = str(args.get("command", ""))
+    elif tool == "satellite_run_script":
+        command = str(args.get("script_body", ""))
+    else:
         return False
-    if " where " not in lowered:
-        return False
-    set_part = normalized[normalized.lower().find(" set ") + 5:normalized.lower().find(" where ")]
-    columns: list[str] = []
-    for part in set_part.split(","):
-        column = part.split("=", 1)[0].strip().strip('"`[]').lower()
-        if column:
-            columns.append(column)
-    allowed = {
-        "text_custom",
-        "image_custom",
-        "media_type_custom",
-        "buttons_custom",
-        "updated_at",
-    }
-    return bool(columns) and all(column in allowed for column in columns)
-
-
-def _is_allowed_settings_sql(query: str) -> bool:
-    normalized = _normalized_sql(query).lower()
-    if normalized.startswith("update settings set ") and " where " in normalized:
-        return True
-    if normalized.startswith("insert or replace into settings"):
-        return True
-    return False
-
-
-def _core_guard_reject_sql(query: str) -> Optional[str]:
-    if ";" in query.strip().rstrip(";"):
-        return "core changes are disabled; multiple SQL statements are rejected"
-    if _is_readonly_sql(query):
-        return None
-    if _is_allowed_page_custom_sql(query) or _is_allowed_settings_sql(query):
-        return None
-    return "core changes are disabled; rejected direct core SQL mutation"
+    return bool(_SELF_RESTART_RE.fullmatch(command))
 
 
 def _get_timeout(args: dict[str, Any], default: int = 60) -> int:
@@ -1031,7 +1011,7 @@ def _log_tool_audit(event: dict[str, Any], tool_result: dict[str, Optional[str]]
     )
 
 
-def _core_guard_reject_tool(
+def _core_guard_integrity_error_for_tool(
     tool: str,
     args: dict[str, Any],
     *,
@@ -1042,27 +1022,18 @@ def _core_guard_reject_tool(
     if tool == "satellite_write_file":
         raw_path = str(args.get("path", "")).strip()
         if not raw_path:
-            return "core changes are disabled; empty write path rejected"
+            return None
         try:
             path = _resolve_tool_path(raw_path)
-        except Exception as e:
-            return f"core changes are disabled; invalid write path: {e}"
-        if not _is_allowed_customization_write_path(path):
-            return (
-                "core changes are disabled; file writes are allowed only under "
-                "custom_extensions/"
-            )
+        except (OSError, RuntimeError, ValueError) as e:
+            return f"core protection integrity check rejected invalid path: {e}"
+        if _is_inside(path, PROJECT_ROOT / ".git"):
+            return "core protection integrity check rejected: direct .git mutation"
         return None
     if tool == "satellite_execute":
-        return _core_guard_reject_shell(str(args.get("command", "")).strip())
+        return _core_guard_integrity_error(str(args.get("command", "")).strip())
     if tool == "satellite_run_script":
-        script = str(args.get("script_body", "")).strip()
-        return (
-            _core_guard_reject_shell(script)
-            or "core changes are disabled; run_script is blocked in customization mode"
-        )
-    if tool == "satellite_sql":
-        return _core_guard_reject_sql(str(args.get("query", "")).strip())
+        return _core_guard_integrity_error(str(args.get("script_body", "")).strip())
     return None
 
 
@@ -1070,25 +1041,55 @@ async def _run_tool_call(
     event: dict[str, Any],
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
-) -> dict[str, Optional[str]]:
+) -> dict[str, Any]:
     """Executes one tool_call of the hub."""
-    tool = event.get("tool")
+    tool = str(event.get("tool") or "")
     args = event.get("args") or {}
     runtime = _runtime_context_from_event(event, topic_id=topic_id)
     _remember_tool_runtime(runtime)
-    guard_error = _core_guard_reject_tool(str(tool or ""), args, topic_id=topic_id)
+
+    async def execute_tool() -> dict[str, Any]:
+        if _is_deferred_self_restart(tool, args):
+            return {
+                "result": (
+                    "YadrenoVPN service restart queued. It will run only after the "
+                    "tool result is delivered to the agent."
+                ),
+                "error": None,
+                "_deferred_restart": True,
+            }
+        if tool == "satellite_execute":
+            return await _execute_shell(args, runtime=runtime)
+        if tool == "satellite_write_file":
+            return await _write_file(args)
+        if tool == "satellite_run_script":
+            return await _run_script(args, runtime=runtime)
+        if tool == "satellite_sql":
+            return await _execute_sql(args, runtime=runtime)
+        return {"result": "", "error": f"unknown tool {tool}"}
+
+    guard_error = _core_guard_integrity_error_for_tool(tool, args, topic_id=topic_id)
     if guard_error:
-        result = {"result": "", "error": guard_error}
-    elif tool == "satellite_execute":
-        result = await _execute_shell(args, runtime=runtime)
-    elif tool == "satellite_write_file":
-        result = await _write_file(args)
-    elif tool == "satellite_run_script":
-        result = await _run_script(args, runtime=runtime)
-    elif tool == "satellite_sql":
-        result = await _execute_sql(args, runtime=runtime)
+        result: dict[str, Any] = {"result": "", "error": guard_error}
+    elif _core_guard_enabled(topic_id):
+        if runtime is None:
+            result = {
+                "result": "",
+                "error": (
+                    "Core Git protection could not start because request_id or "
+                    "tool_call_id is missing; the tool was NOT executed."
+                ),
+            }
+        else:
+            result = await run_with_core_guard(
+                repository=PROJECT_ROOT,
+                request_id=runtime.request_id,
+                tool_call_id=runtime.tool_call_id,
+                topic_id=runtime.topic_id,
+                executor=execute_tool,
+            )
     else:
-        result = {"result": "", "error": f"unknown tool {tool}"}
+        result = await execute_tool()
 
     _log_tool_audit(event, result)
     return result
@@ -1116,6 +1117,26 @@ async def _notify_progress(
             progress_event.slot,
             e,
         )
+
+
+async def _schedule_deferred_self_restart() -> None:
+    """Launch a detached self-restart after the hub accepted the tool result."""
+    if os.name == "nt":
+        logger.warning("Deferred YadrenoVPN self-restart is unavailable on Windows")
+        return
+    try:
+        await asyncio.create_subprocess_exec(
+            "/bin/bash",
+            "-c",
+            "sleep 1; systemctl restart yadreno-vpn.service",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logger.info("YadrenoVPN self-restart scheduled after tool_result delivery")
+    except OSError as exc:
+        logger.error("Failed to schedule deferred YadrenoVPN self-restart: %s", exc)
 
 
 async def _poll_until_final(
@@ -1171,7 +1192,7 @@ async def _poll_until_final(
                         "error": "tool_call without tool_call_id",
                     }
                 elif not mark_yadreno_admin_tool_call_started(request_id, tool_call_id):
-                    tool_result = {
+                    tool_result = interrupted_tool_result(request_id, tool_call_id) or {
                         "result": "",
                         "error": (
                             "Локальный сателлит был перезапущен во время выполнения "
@@ -1185,6 +1206,7 @@ async def _poll_until_final(
                 try:
                     if tool_started_here:
                         tool_result = await _run_tool_call(event, topic_id=topic_id)
+                    deferred_restart = bool(tool_result.pop("_deferred_restart", False))
                     await _request_json(
                         session,
                         api_key,
@@ -1196,8 +1218,11 @@ async def _poll_until_final(
                             **tool_result,
                         },
                     )
-                    if tool_started_here:
+                    guard_finalized = await finalize_core_guard(request_id, tool_call_id)
+                    if tool_call_id:
                         clear_yadreno_admin_tool_call_started(request_id, tool_call_id)
+                    if deferred_restart and guard_finalized:
+                        await _schedule_deferred_self_restart()
                 finally:
                     if tool_started_here:
                         _clear_tool_runtime(request_id, tool_call_id)
@@ -1209,6 +1234,7 @@ async def _poll_until_final(
                 continue
 
             if event_type == "final":
+                await finalize_core_guards_for_request(request_id)
                 final_received = True
                 return YadrenoAdminFinal(
                     content=event.get("content") or "",

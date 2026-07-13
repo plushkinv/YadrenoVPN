@@ -12,6 +12,20 @@ from typing import Tuple, Optional, List, Dict
 logger = logging.getLogger(__name__)
 
 
+def _repository_update_blocked_message() -> Optional[str]:
+    """Prevent updater worktree mutations while a protected tool is running."""
+    try:
+        from bot.services.yadreno_admin_core_guard import is_repository_guard_active
+    except ImportError:
+        return None
+    if not is_repository_guard_active():
+        return None
+    return (
+        "❌ Обновление временно недоступно: Yadreno Admin проверяет изменения "
+        "защищённого tool call. Повторите обновление после его завершения."
+    )
+
+
 def get_project_root() -> str:
     """
     Gets the root directory of the project.
@@ -204,6 +218,10 @@ def pull_to_commit(commit_hash: str) -> Tuple[bool, str]:
     Returns:
         (success, message) - the result of the operation
     """
+    blocked_message = _repository_update_blocked_message()
+    if blocked_message:
+        return False, blocked_message
+
     try:
         success, output = run_git_command(['reset', '--hard', commit_hash], timeout=120)
         if not success:
@@ -273,6 +291,10 @@ def pull_updates() -> Tuple[bool, str]:
     Returns:
         (success, message) - the message contains information about the commit
     """
+    blocked_message = _repository_update_blocked_message()
+    if blocked_message:
+        return False, blocked_message
+
     success, status = run_git_command(['status', '--porcelain'])
     if success and status.strip():
         return False, "❌ Есть локальные изменения. Сделайте commit или stash перед обновлением."
@@ -299,6 +321,10 @@ def force_pull_updates() -> Tuple[bool, str]:
     Returns:
         (success, message)
     """
+    blocked_message = _repository_update_blocked_message()
+    if blocked_message:
+        return False, blocked_message
+
     # Download all changes
     success, output = run_git_command(['fetch', 'origin'], timeout=120)
     if not success:

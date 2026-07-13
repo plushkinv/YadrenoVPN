@@ -21,5 +21,6 @@ from database.db_business_operations import *
 from database.db_key_lifecycle import *
 from database.db_payment_providers import *
 from database.db_backup import *
+from database.db_customization_reset import *
 from database.db_support import *
 from database.db_promotions import *

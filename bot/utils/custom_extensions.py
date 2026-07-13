@@ -1571,6 +1571,22 @@ def _registry_totals() -> dict[str, int]:
     }
 
 
+def reset_custom_extensions_runtime() -> dict[str, dict[str, int]]:
+    """Removes all currently registered custom extension runtime objects."""
+    global _LAST_LOAD_RESULT
+
+    before = _registry_totals()
+    for extension_id in list(_EXTENSION_REGISTRATIONS):
+        _remove_extension_runtime_registrations(extension_id)
+        _EXTENSION_REGISTRATIONS.pop(extension_id, None)
+    for module_name in list(sys.modules):
+        if module_name.startswith('_custom_extensions_'):
+            sys.modules.pop(module_name, None)
+    _LAST_LOAD_RESULT = CustomExtensionsLoadResult(skipped=True, reason='reset')
+    after = _registry_totals()
+    return {'before': before, 'after': after}
+
+
 def _as_bool(value: object) -> bool:
     return str(value or '').strip().casefold() in _TRUE_VALUES
 
@@ -1600,6 +1616,7 @@ __all__ = [
     'register_promo_reward_policy',
     'register_referral_reward_policy',
     'register_user_access_guard',
+    'reset_custom_extensions_runtime',
     'validate_custom_extension_file',
     'validate_custom_extensions_dir',
 ]

@@ -58,6 +58,10 @@ async def on_startup(bot: Bot):
     # Applying database migrations
     run_migrations()
 
+    from bot.services.yadreno_admin_core_guard import recover_core_guards_on_startup
+
+    await recover_core_guards_on_startup()
+
     from bot.utils.custom_extensions import load_custom_extensions
     extensions_result = load_custom_extensions()
     if extensions_result.skipped:
@@ -79,12 +83,6 @@ async def on_startup(bot: Bot):
     # Bot information
     bot_info = await bot.get_me()
     bot.my_username = bot_info.username
-    try:
-        from bot.services.bot_commands import sync_bot_commands
-
-        await sync_bot_commands(bot)
-    except Exception as e:
-        logger.warning(f"Failed to sync Telegram bot command menu: {e}")
     logger.info(f"✅ Бот запущен: @{bot_info.username}")
     
     # If updates are blocked, we immediately notify the admins

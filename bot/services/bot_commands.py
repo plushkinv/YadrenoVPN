@@ -11,12 +11,9 @@ logger = logging.getLogger(__name__)
 MAX_BOT_COMMANDS = 100
 
 CORE_BOT_COMMANDS = (
-    BotCommand(command='start', description='Главное меню'),
-    BotCommand(command='id', description='Ваш Telegram ID'),
-    BotCommand(command='help', description='Инструкция'),
-    BotCommand(command='support', description='Поддержка'),
-    BotCommand(command='buy', description='Купить ключ'),
+    BotCommand(command='start', description='Старт'),
     BotCommand(command='mykeys', description='Мои ключи'),
+    BotCommand(command='help', description='Справка'),
 )
 
 

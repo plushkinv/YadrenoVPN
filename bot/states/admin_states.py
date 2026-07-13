@@ -13,6 +13,7 @@ class AdminStates(StatesGroup):
     admin_menu = State()  # Admin main screen
     yadreno_waiting_api_key = State()  # Entering personal api_key Yadreno Admin
     yadreno_chat = State()  # Dialogue with agent Yadreno Admin
+    custom_reset_confirm_phrase = State()  # Hidden customization reset confirmation phrase
     
     # ========== Server management ==========
     servers_list = State()           # Server list
