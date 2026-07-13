@@ -1,4 +1,4 @@
-"""Доменные начисления наград, применяемые ядром."""
+"""Domain rewards applied by the kernel."""
 from __future__ import annotations
 
 import logging
@@ -18,10 +18,10 @@ async def grant_days_to_first_active_key(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Начисляет дни на первый активный ключ пользователя через штатный lifecycle.
+    Accrues days to the user's first active key through the regular lifecycle.
 
-    Критичное состояние ключа меняет `renew_key_access()`, а этот сервис
-    добавляет блокировку пользователя и видимую бизнес-историю.
+    The critical state of the key is changed by `renew_key_access()`, and this service
+    adds user blocking and visible business history.
     """
     _positive_int(user_id, 'user_id')
     _positive_int(days, 'days')

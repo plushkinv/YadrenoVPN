@@ -1,11 +1,11 @@
-"""Общие DB-хелперы для имён page hooks/guards."""
+"""Common DB helpers for page hooks/guards names."""
 from __future__ import annotations
 
 import json
 
 
 def normalize_registry_names(value: list[str] | tuple[str, ...] | str | None) -> str:
-    """Сохраняет список имён hooks/guards как JSON-массив строк."""
+    """Saves a list of hooks/guards names as a JSON array of strings."""
     if value is None:
         return '[]'
     if isinstance(value, str):

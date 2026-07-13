@@ -1,4 +1,4 @@
-"""Маршруты конструктора пользовательских страниц."""
+"""Custom page builder routes."""
 from __future__ import annotations
 
 import logging
@@ -25,7 +25,7 @@ def _is_route_key(route_key: object) -> bool:
 
 
 def get_page_route(route_key: str) -> Optional[dict[str, Any]]:
-    """Возвращает route-конфигурацию из БД."""
+    """Returns route configuration from the database."""
     if not _is_route_key(route_key):
         return None
     with get_db() as conn:
@@ -37,7 +37,7 @@ def get_page_route(route_key: str) -> Optional[dict[str, Any]]:
 
 
 def page_route_exists(route_key: str) -> bool:
-    """Проверяет наличие включённого route."""
+    """Checks if route is enabled."""
     route = get_page_route(route_key)
     return bool(route and route.get('is_enabled'))
 
@@ -50,7 +50,7 @@ def upsert_page_route(
     hook_names: list[str] | tuple[str, ...] | str | None = None,
     is_enabled: bool = True,
 ) -> None:
-    """Создаёт или обновляет маршрут конструктора страниц."""
+    """Creates or updates a page builder route."""
     if not _is_route_key(route_key):
         raise ValueError(f"Некорректный route_key: {route_key!r}")
 

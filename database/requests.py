@@ -1,8 +1,8 @@
 """
-Модуль запросов к базе данных.
+Database query module.
 
-Единственная точка доступа к БД для всех хендлеров.
-Прямой SQL в хендлерах запрещён — используйте функции из этого модуля.
+The only access point to the database for all handlers.
+Direct SQL is prohibited in handlers - use functions from this module.
 """
 
 from database.db_users import *

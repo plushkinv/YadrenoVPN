@@ -1,5 +1,5 @@
 """
-Общие правила работы с inbound'ами панели.
+General rules for working with inbound panels.
 """
 from typing import Any, Dict, List, Tuple
 
@@ -8,7 +8,7 @@ IGNORED_INBOUND_PREFIX = "--!"
 
 
 def is_ignored_inbound(inbound: Dict[str, Any]) -> bool:
-    """True, если inbound скрыт от бота через префикс в начале remark."""
+    """True if inbound is hidden from the bot through the prefix at the beginning of remark."""
     if not isinstance(inbound, dict):
         return False
     remark = inbound.get("remark") or ""
@@ -18,7 +18,7 @@ def is_ignored_inbound(inbound: Dict[str, Any]) -> bool:
 def split_ignored_inbounds(
     inbounds: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Разделяет inbound'ы на видимые для бота и скрытые."""
+    """Divides inbounds into those visible to the bot and hidden."""
     visible: List[Dict[str, Any]] = []
     ignored: List[Dict[str, Any]] = []
     for inbound in inbounds:
@@ -30,6 +30,6 @@ def split_ignored_inbounds(
 
 
 def filter_visible_inbounds(inbounds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Возвращает только inbound'ы без служебного префикса скрытия."""
+    """Returns only inbounds without the hidden service prefix."""
     visible, _ = split_ignored_inbounds(inbounds)
     return visible

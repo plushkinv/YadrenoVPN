@@ -1,4 +1,4 @@
-"""Lifecycle hooks для custom extensions."""
+"""Lifecycle hooks for custom extensions."""
 from __future__ import annotations
 
 import inspect
@@ -31,7 +31,7 @@ def register_key_lifecycle_hook(
     events: list[str] | tuple[str, ...] | set[str] | None = None,
     replace: bool = False,
 ) -> None:
-    """Регистрирует hook жизненного цикла ключа."""
+    """Registers a key lifecycle hook."""
     hook_name = _normalize_hook_name(name)
     _require_bool_option(replace, 'replace')
     if not callable(func):
@@ -47,7 +47,7 @@ def register_key_lifecycle_hook(
 
 
 async def emit_key_lifecycle_event(event: str, context: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Вызывает registered hooks для события ключа, не блокируя core-flow ошибками."""
+    """Calls registered hooks on the key event without blocking core-flow with errors."""
     event_name = _normalize_event(event)
     base_context = _normalize_context(context)
     results: list[dict[str, Any]] = []

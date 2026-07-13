@@ -37,7 +37,7 @@ def create_support_thread(
     initiator_admin_id: Optional[int] = None,
     assigned_admin_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Создаёт цепочку поддержки для существующего пользователя."""
+    """Creates a support chain for an existing user."""
     if initiator_type not in {"user", "admin"}:
         raise ValueError("initiator_type должен быть user или admin")
 
@@ -72,7 +72,7 @@ def create_support_thread(
 
 
 def get_support_thread(thread_id: int) -> Optional[Dict[str, Any]]:
-    """Возвращает цепочку поддержки по ID."""
+    """Returns the support chain by ID."""
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM support_threads WHERE id = ?",
@@ -83,10 +83,10 @@ def get_support_thread(thread_id: int) -> Optional[Dict[str, Any]]:
 
 def claim_support_thread(thread_id: int, admin_telegram_id: int) -> str:
     """
-    Атомарно закрепляет незакреплённую цепочку за админом.
+    Atomically assigns an unassigned chain to the admin.
 
     Returns:
-        claimed, already_mine, assigned_other или not_found.
+        claimed, already_mine, assigned_other or not_found.
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -112,7 +112,7 @@ def claim_support_thread(thread_id: int, admin_telegram_id: int) -> str:
 
 
 def release_support_thread_assignment(thread_id: int, admin_telegram_id: int) -> bool:
-    """Снимает закрепление, если оно всё ещё принадлежит указанному админу."""
+    """Removes a pin if it is still owned by the specified admin."""
     with get_db() as conn:
         cursor = conn.execute(
             """
@@ -137,7 +137,7 @@ def record_support_message(
     source_chat_id: int,
     source_message_id: int,
 ) -> int:
-    """Записывает сообщение в журнал поддержки."""
+    """Writes a message to the support log."""
     if sender_type not in {"user", "admin"}:
         raise ValueError("sender_type должен быть user или admin")
 
@@ -181,7 +181,7 @@ def record_support_admin_notification(
     card_message_id: Optional[int],
     copy_message_id: Optional[int],
 ) -> int:
-    """Сохраняет сообщения, отправленные админу по незакреплённой цепочке."""
+    """Saves messages sent to the admin via an unpinned thread."""
     with get_db() as conn:
         cursor = conn.execute(
             """
@@ -202,7 +202,7 @@ def get_support_admin_notifications(
     exclude_admin_id: Optional[int] = None,
     active_only: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Возвращает уведомления админов для цепочки."""
+    """Returns admin notifications for the thread."""
     query = "SELECT * FROM support_admin_notifications WHERE thread_id = ?"
     params: List[Any] = [thread_id]
     if active_only:
@@ -217,7 +217,7 @@ def get_support_admin_notifications(
 
 
 def mark_support_admin_notifications_inactive(thread_id: int, admin_telegram_ids: List[int]) -> int:
-    """Помечает уведомления указанных админов как неактивные."""
+    """Marks notifications from the specified admins as inactive."""
     if not admin_telegram_ids:
         return 0
 
@@ -236,7 +236,7 @@ def mark_support_admin_notifications_inactive(thread_id: int, admin_telegram_ids
 
 
 def get_support_claim_cleanup_mode() -> str:
-    """Возвращает режим очистки уведомлений у админов после взятия цепочки."""
+    """Returns the mode for clearing notifications for admins after taking the chain."""
     from database.db_settings import get_setting
 
     value = get_setting(SUPPORT_CLEANUP_SETTING, SUPPORT_CLEANUP_REMOVE_BUTTON)

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-# Конфигурация провайдера Platega
+# Platega provider configuration
 _PLATEGA_TITLE = '💸 <b>Platega</b>'
 _PLATEGA_TYPE = 'platega'
 _PLATEGA_ERROR = 'Platega'
@@ -31,7 +31,7 @@ _PLATEGA_INSTRUCTION = (
 
 @router.callback_query(F.data == 'pay_platega')
 async def pay_platega_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты через Platega (новый ключ)."""
+    """Selecting a tariff for payment via Platega (new key)."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -62,7 +62,7 @@ async def pay_platega_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('platega_pay:'))
 async def platega_pay_create(callback: CallbackQuery, state: FSMContext):
-    """Создаёт платёжную ссылку Platega для нового ключа и отправляет QR-фото."""
+    """Creates a Platega payment link for the new key and sends a QR photo."""
     from database.requests import get_tariff_by_id, save_platega_transaction_id
     from bot.services.billing import create_platega_payment
 
@@ -100,7 +100,7 @@ async def platega_pay_create(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('renew_platega_tariff:'))
 async def renew_platega_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты Platega при продлении ключа."""
+    """Selecting a payment plan for Platega when renewing a key."""
     from database.requests import get_key_details_for_user
     from bot.keyboards.user import renew_tariff_select_kb
     from bot.utils.groups import get_tariffs_for_renewal
@@ -136,7 +136,7 @@ async def renew_platega_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('renew_pay_platega:'))
 async def renew_platega_create(callback: CallbackQuery, state: FSMContext):
-    """Создаёт платёжную ссылку Platega для продления ключа."""
+    """Creates a Platega payment link to renew the key."""
     from database.requests import get_tariff_by_id, get_key_details_for_user, save_platega_transaction_id
     from bot.services.billing import create_platega_payment
 
@@ -178,7 +178,7 @@ async def renew_platega_create(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('check_platega:'))
 async def check_platega_payment(callback: CallbackQuery, state: FSMContext):
-    """Проверяет статус Platega-платежа по нажатию «✅ Я оплатил»."""
+    """Checks the status of a Platega payment by clicking “✅ I paid.”"""
     await _run_platega_check(
         callback.message, state,
         order_id=callback.data.split(':', 1)[1],
@@ -190,7 +190,7 @@ async def check_platega_payment(callback: CallbackQuery, state: FSMContext):
 async def _run_platega_check(message, state, order_id: str,
                              telegram_id: int, callback=None) -> None:
     """
-    Общая проверка Platega-платежа для кнопки «Я оплатил» и deep-link возврата.
+    General verification of Platega payment for the “I paid” button and deep-link return.
     """
     from bot.services.billing import check_platega_payment_status
 

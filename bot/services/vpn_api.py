@@ -1,5 +1,5 @@
 """
-Фасад для работы с API VPN-панелей.
+Facade for working with VPN panel APIs.
 """
 import json
 import logging
@@ -16,16 +16,16 @@ logger = logging.getLogger(__name__)
 
 _clients: Dict[int, BaseVPNClient] = {}
 
-# Per-key locks для ensure_subscription_keys_on_server (защита от гонок)
+# Per-key locks for ensure_subscription_keys_on_server (race protection)
 _ensure_locks: Dict[int, asyncio.Lock] = {}
 
 
 def get_bot_mode() -> str:
     """
-    Возвращает текущий глобальный режим работы бота.
+    Returns the bot's current global operating mode.
 
     Returns:
-        'subscription' (по умолчанию) или 'key'
+        'subscription' (default) or 'key'
     """
     try:
         from database.db_settings import get_setting
@@ -37,12 +37,12 @@ def get_bot_mode() -> str:
 
 
 def is_subscription_mode() -> bool:
-    """True, если бот работает в режиме Subscription."""
+    """True if the bot is running in Subscription mode."""
     return get_bot_mode() == 'subscription'
 
 def get_client_from_server_data(server: Dict[str, Any]) -> BaseVPNClient:
     """
-    Создает или возвращает экземпляр клиента для API панели.
+    Creates or returns a client instance for the panel API.
     """
     server_id = server['id']
     if server_id in _clients:
@@ -54,7 +54,7 @@ def get_client_from_server_data(server: Dict[str, Any]) -> BaseVPNClient:
     return client
 
 async def invalidate_client_cache(server_id: int):
-    """Инвалидирует сессию клиента."""
+    """Invalidates the client session."""
     client = _clients.pop(server_id, None)
     if not client:
         return
@@ -65,7 +65,7 @@ async def invalidate_client_cache(server_id: int):
     logger.debug(f'Кэш клиента {server_id} очищен')
 
 def format_traffic(bytes_count: int) -> str:
-    """Форматирует байты в читабельный вид."""
+    """Formats bytes into a readable form."""
     if bytes_count < 1024:
         return f'{bytes_count} B'
     elif bytes_count < 1024 ** 2:
@@ -79,7 +79,7 @@ def format_traffic(bytes_count: int) -> str:
 
 
 def _traffic_remaining_bytes(key: Dict[str, Any]) -> int:
-    """Возвращает остаток трафика по накопительному учёту БД."""
+    """Returns the remaining traffic for the cumulative database accounting."""
     traffic_limit = key.get('traffic_limit', 0) or 0
     if traffic_limit <= 0:
         return 0
@@ -89,11 +89,11 @@ def _traffic_remaining_bytes(key: Dict[str, Any]) -> int:
 
 def calculate_panel_total_for_key(key: Dict[str, Any], panel_used_bytes: int = 0) -> int:
     """
-    Считает рабочий totalGB панели для текущего состояния ключа.
+    Counts the working totalGB of the panel for the current state of the key.
 
-    В БД traffic_limit хранит общий купленный лимит, а traffic_used — общий
-    расход. Панель умеет хранить только счётчик текущего клиента, поэтому её
-    лимит равен текущему расходу панели плюс остаток по БД.
+    In the database, traffic_limit stores the total purchased limit, and traffic_used stores the total
+    consumption The panel can only store the counter of the current client, so it
+    the limit is equal to the current consumption of the panel plus the balance in the database.
     """
     traffic_limit = key.get('traffic_limit', 0) or 0
     if traffic_limit <= 0:
@@ -102,7 +102,7 @@ def calculate_panel_total_for_key(key: Dict[str, Any], panel_used_bytes: int = 0
 
 
 def _panel_total_gb_for_key(key: Dict[str, Any], panel_used_bytes: int = 0) -> int:
-    """Конвертирует рабочий лимит панели в целые ГБ для add_client()."""
+    """Converts the working limit of the panel to whole GB for add_client()."""
     total_bytes = calculate_panel_total_for_key(key, panel_used_bytes)
     if total_bytes <= 0:
         return 0
@@ -110,7 +110,7 @@ def _panel_total_gb_for_key(key: Dict[str, Any], panel_used_bytes: int = 0) -> i
     return int((total_bytes + gb - 1) // gb)
 
 async def close_all_clients():
-    """Закрывает все открытые сессии клиентов."""
+    """Closes all open client sessions."""
     clients = list(_clients.items())
     _clients.clear()
     for server_id, client in clients:
@@ -121,16 +121,16 @@ async def close_all_clients():
 
 async def get_client(server_id: int) -> XUIClient:
     """
-    Получает клиент для сервера по ID (из БД).
+    Retrieves the client for the server by ID (from the database).
     
     Args:
-        server_id: ID сервера в БД
+        server_id: Server ID in the database
         
     Returns:
-        Экземпляр XUIClient
+        XUIClient instance
         
     Raises:
-        ValueError: Если сервер не найден
+        ValueError: If the server is not found
     """
     from database.requests import get_server_by_id
     if server_id in _clients:
@@ -142,16 +142,16 @@ async def get_client(server_id: int) -> XUIClient:
 
 async def test_server_connection(server_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Проверяет подключение к серверу.
+    Checks the connection to the server.
     
     Args:
-        server_data: Словарь с данными сервера
+        server_data: Dictionary with server data
         
     Returns:
-        Словарь с результатом:
-        - success: True если подключение успешно
-        - message: Сообщение о результате
-        - stats: Статистика (если успешно)
+        Dictionary with result:
+        - success: True if the connection is successful
+        - message: Message about the result
+        - stats: Statistics (if successful)
     """
     client = XUIClient(server_data)
     try:
@@ -165,14 +165,14 @@ async def test_server_connection(server_data: Dict[str, Any]) -> Dict[str, Any]:
 
 async def reset_key_traffic_if_active(key_id: int) -> bool:
     """
-    Сбрасывает израсходованный трафик ключа в панели 3X-UI,
-    если сервер активен.
+    Resets spent dongle traffic in the 3X-UI panel,
+    if the server is active.
     
     Args:
-        key_id: ID ключа (VPNKey.id)
+        key_id: Key ID (VPNKey.id)
         
     Returns:
-        True при успешном сбросе, иначе False.
+        True if the reset was successful, otherwise False.
     """
     from database.requests import get_vpn_key_by_id
     key = get_vpn_key_by_id(key_id)
@@ -198,14 +198,14 @@ async def reset_key_traffic_if_active(key_id: int) -> bool:
 
 async def extend_key_on_server(key_id: int, days: int) -> bool:
     """
-    Продлевает срок действия ключа в панели 3X-UI, если сервер активен.
+    Extends the validity period of the key in the 3X-UI panel if the server is active.
     
     Args:
-        key_id: ID ключа (VPNKey.id)
-        days: Количество дней для продления
+        key_id: Key ID (VPNKey.id)
+        days: Number of days to extend
         
     Returns:
-        True при успешном продлении, иначе False.
+        True if renewal is successful, otherwise False.
     """
     from database.requests import get_vpn_key_by_id
     key = get_vpn_key_by_id(key_id)
@@ -230,19 +230,19 @@ async def extend_key_on_server(key_id: int, days: int) -> bool:
 
 async def restore_key_traffic_limit(key_id: int) -> bool:
     """
-    Восстанавливает полный лимит трафика тарифа на панели и обнуляет traffic_used в БД.
-    Вызывается при продлении ключа (после reset_key_traffic_if_active).
+    Restores the full tariff traffic limit on the panel and resets traffic_used in the database.
+    Called when a key is renewed (after reset_key_traffic_if_active).
     
-    Делает 3 вещи:
-    1. Получает лимит из тарифа ключа
-    2. Обновляет totalGB на панели до полного лимита тарифа
-    3. Обнуляет traffic_used и сбрасывает пороги уведомлений в БД
+    Does 3 things:
+    1. Gets the limit from the key tariff
+    2. Updates totalGB on the panel to the full tariff limit
+    3. Resets traffic_used and resets notification thresholds in the database
     
     Args:
-        key_id: ID ключа
+        key_id: Key ID
         
     Returns:
-        True при успехе, False при ошибке
+        True on success, False on error
     """
     from database.requests import (
         get_vpn_key_by_id, get_tariff_by_id,
@@ -253,7 +253,7 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
     if not key:
         return False
     
-    # Получаем лимит из тарифа
+    # We get the limit from the tariff
     tariff_id = key.get('tariff_id')
     traffic_limit = key.get('traffic_limit', 0) or 0
     
@@ -262,13 +262,13 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
         if tariff:
             traffic_limit = (tariff.get('traffic_limit_gb', 0) or 0) * (1024**3)
     
-    # Обнуляем traffic_used и сбрасываем пороги в БД
+    # Reset traffic_used and reset thresholds in the database
     reset_key_traffic_notification(key_id)
     
-    # Обновляем traffic_limit в БД (на случай если тариф менялся)
+    # Update traffic_limit in the database (in case the tariff has changed)
     update_key_traffic_limit(key_id, traffic_limit)
     
-    # Обновляем totalGB на панели
+    # Update totalGB on the panel
     if key.get('server_active') and key.get('panel_email'):
         try:
             server_data = _build_server_data_from_key(key)
@@ -288,12 +288,12 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
 
 
 def _client_identifier(client: Dict[str, Any]) -> str:
-    """Возвращает идентификатор клиента 3X-UI для update/delete."""
+    """Returns the 3X-UI client ID for update/delete."""
     return client.get('id') or client.get('password') or ''
 
 
 def _key_expiry_time_ms(key: Dict[str, Any]) -> int:
-    """Конвертирует expires_at из БД в expiryTime 3X-UI."""
+    """Converts expires_at from DB to expiryTime 3X-UI."""
     from datetime import datetime, timedelta, timezone
 
     expires_at = key.get('expires_at')
@@ -315,10 +315,10 @@ def _key_expiry_time_ms(key: Dict[str, Any]) -> int:
 
 def _key_days_left_for_add(key: Dict[str, Any]) -> int:
     """
-    Возвращает положительный срок для add_client.
+    Returns a positive term for add_client.
 
-    3X-UI не принимает создание клиента с 0 или отрицательным сроком, поэтому
-    точное значение потом всё равно выравнивается через update_client_full().
+    3X-UI does not accept creating a client with a 0 or negative term, so
+    the exact value is then adjusted anyway via update_client_full().
     """
     from datetime import datetime, timezone
     import math
@@ -338,7 +338,7 @@ def _key_days_left_for_add(key: Dict[str, Any]) -> int:
 
 
 def _build_server_data_from_key(key: Dict[str, Any]) -> Dict[str, Any]:
-    """Собирает данные сервера из JOIN-строки ключа."""
+    """Collects server data from a JOIN key string."""
     return {
         'id': key.get('server_id'),
         'name': key.get('server_name'),
@@ -356,7 +356,7 @@ def _build_server_data_from_key(key: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _parse_clients_by_email(inbounds: List[Dict[str, Any]], email: str) -> Dict[int, Dict[str, Any]]:
-    """Собирает map inbound_id -> client для указанного email."""
+    """Collects map inbound_id -> client for the specified email."""
     presence: Dict[int, Dict[str, Any]] = {}
     for inbound in inbounds:
         try:
@@ -371,7 +371,7 @@ def _parse_clients_by_email(inbounds: List[Dict[str, Any]], email: str) -> Dict[
 
 
 def _panel_int(value: Any, default: Optional[int] = None) -> Optional[int]:
-    """Нормализует числовые поля клиента панели для сравнения."""
+    """Normalizes the panel client's numeric fields for comparison."""
     if value is None or value == '':
         return default
     try:
@@ -381,7 +381,7 @@ def _panel_int(value: Any, default: Optional[int] = None) -> Optional[int]:
 
 
 def _panel_bool(value: Any, default: bool = True) -> bool:
-    """Нормализует boolean-поля клиента панели для сравнения."""
+    """Normalizes the boolean fields of the panel client for comparison."""
     if value is None or value == '':
         return default
     if isinstance(value, bool):
@@ -402,7 +402,7 @@ def _client_needs_panel_update(
     flow: Optional[str] = None,
     compare_sub_id: bool = True,
 ) -> bool:
-    """True, если клиент панели отличается от целевого состояния из БД."""
+    """True if the panel client is different from the target state from the database."""
     checks = (
         (_panel_int(client.get('expiryTime')), int(expiry_time_ms)),
         (_panel_int(client.get('totalGB')), int(total_gb_bytes)),
@@ -421,12 +421,12 @@ def _client_needs_panel_update(
 
 
 def _client_uses_clients_api(client: BaseVPNClient) -> bool:
-    """True для first-class Clients API 3x-ui v3.1.0+."""
+    """True for first-class Clients API 3x-ui v3.1.0+."""
     return getattr(client, 'api_profile', None) == 'clients_api'
 
 
 def _traffic_int(value: Any) -> Optional[int]:
-    """Нормализует числовые поля трафика из API панели."""
+    """Normalizes numeric traffic fields from the panel API."""
     if value is None or value == '':
         return None
     try:
@@ -471,7 +471,7 @@ def _cumulative_traffic_used_from_panel(
     used_on_server: int,
     total_on_server: int,
 ) -> int:
-    """Переводит счётчики панели в накопительный расход ключа из БД."""
+    """Converts panel counters to cumulative key consumption from the database."""
     traffic_limit = key.get('traffic_limit', 0) or 0
     if traffic_limit > 0 and total_on_server > 0:
         remaining_on_server = max(0, int(total_on_server) - int(used_on_server))
@@ -528,7 +528,7 @@ def _ensure_traffic_entry(
 
 
 def build_inbound_traffic_map(inbounds: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Собирает email -> traffic/meta из legacy inbound/clientStats."""
+    """Collects email -> traffic/meta from legacy inbound/clientStats."""
     stats_map: Dict[str, Dict[str, Any]] = {}
 
     for inbound in inbounds:
@@ -574,7 +574,7 @@ def build_inbound_traffic_map(inbounds: List[Dict[str, Any]]) -> Dict[str, Dict[
 
 
 def _build_inbound_usage_by_id(inbounds: List[Dict[str, Any]], email: str) -> Dict[int, int]:
-    """Собирает inbound_id -> up+down для указанного email."""
+    """Collects inbound_id -> up+down for the specified email."""
     usage: Dict[int, int] = {}
     for inbound in inbounds:
         inbound_id = inbound.get('id')
@@ -596,7 +596,7 @@ async def _get_global_panel_used_safe(
     email: str,
     fallback_used: int,
 ) -> int:
-    """Читает общий расход clients API, если он доступен."""
+    """Reads the clients API total flow, if available."""
     try:
         try:
             stats_result = client.get_client_stats(email, resolve_inbound=False)
@@ -639,11 +639,11 @@ async def get_key_traffic_snapshot(
     inbounds: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Возвращает нормализованный снимок трафика ключа.
+    Returns a normalized snapshot of the key's traffic.
 
-    Для subscription-клиентов на новых 3X-UI сначала используется общий
-    счётчик first-class client по email. Если он недоступен, применяется
-    legacy-агрегация по inbound/clientStats.
+    For subscription clients on the new 3X-UI, the common one is first used
+    first-class client counter by email. If it is not available, it applies
+    legacy aggregation by inbound/clientStats.
     """
     email = key.get('panel_email')
     if not email:
@@ -688,7 +688,7 @@ async def get_key_traffic_snapshot(
 
 
 def _get_inbound_flow_from_data(inbound: Dict[str, Any]) -> Optional[str]:
-    """Определяет flow по уже загруженному inbound; None = данных не хватило."""
+    """Determines flow based on already loaded inbound; None = There was not enough data."""
     protocol = inbound.get('protocol', '')
     if protocol != 'vless':
         return ""
@@ -716,7 +716,7 @@ async def _get_inbound_flow_safe(
     server_id: Any,
     inbound: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Возвращает flow inbound, не срывая всю синхронизацию при ошибке панели."""
+    """Returns flow inbound without disrupting all synchronization when a panel error occurs."""
     if inbound is not None:
         flow = _get_inbound_flow_from_data(inbound)
         if flow is not None:
@@ -740,7 +740,7 @@ async def _get_first_required_flow(
     inbounds: List[Dict[str, Any]],
     server_id: Any,
 ) -> str:
-    """Для clients_api выбирает общий flow, если он нужен любому видимому inbound."""
+    """For clients_api, selects a common flow if any visible inbound needs it."""
     for inbound in inbounds:
         try:
             inbound_id = inbound['id']
@@ -754,10 +754,10 @@ async def _get_first_required_flow(
 
 async def push_key_to_panel(key_id: int, reset_traffic: bool = False) -> bool:
     """
-    Совместимый алиас старой точки записи.
+    Compatible alias for the old record point.
 
-    Новая логика находится в sync_key_to_panel_state(): она умеет обновлять
-    как одиночный ключ, так и все inbound subscription-ключа.
+    The new logic is in sync_key_to_panel_state(): it can update
+    both a single key and all inbound subscription keys.
     """
     stats = await sync_key_to_panel_state(key_id, reset_traffic=reset_traffic)
     success = bool(stats.get('ok')) and stats.get('errors', 0) == 0
@@ -770,19 +770,19 @@ async def push_key_to_panel(key_id: int, reset_traffic: bool = False) -> bool:
 
 def restore_traffic_limit_in_db(key_id: int) -> bool:
     """
-    Восстанавливает полный лимит трафика тарифа в нашей БД.
-    НЕ обращается к панели! Панель обновляется через push_key_to_panel.
+    Restores the full tariff traffic limit in our database.
+    DOES NOT access the panel! The panel is updated via push_key_to_panel.
     
-    Делает:
-    1. Получает лимит из тарифа ключа
-    2. Обновляет traffic_limit в БД
-    3. Обнуляет traffic_used и сбрасывает пороги уведомлений
+    Does:
+    1. Gets the limit from the key tariff
+    2. Updates traffic_limit in the database
+    3. Resets traffic_used and resets notification thresholds
     
     Args:
-        key_id: ID ключа
+        key_id: Key ID
         
     Returns:
-        True при успехе
+        True on success
     """
     from database.requests import (
         get_vpn_key_by_id, get_tariff_by_id,
@@ -793,7 +793,7 @@ def restore_traffic_limit_in_db(key_id: int) -> bool:
     if not key:
         return False
     
-    # Получаем лимит из тарифа
+    # We get the limit from the tariff
     tariff_id = key.get('tariff_id')
     traffic_limit = key.get('traffic_limit', 0) or 0
     
@@ -802,10 +802,10 @@ def restore_traffic_limit_in_db(key_id: int) -> bool:
         if tariff:
             traffic_limit = (tariff.get('traffic_limit_gb', 0) or 0) * (1024**3)
     
-    # Обнуляем traffic_used и пороги уведомлений
+    # Resetting traffic_used and notification thresholds
     reset_key_traffic_notification(key_id)
     
-    # Обновляем traffic_limit (включая 0, если тариф стал безлимитным)
+    # Update traffic_limit (including 0 if the tariff has become unlimited)
     update_key_traffic_limit(key_id, traffic_limit)
     
     logger.info(f'Лимит трафика ключа {key_id} восстановлен в БД: {traffic_limit / 1024**3:.1f} ГБ')
@@ -814,29 +814,29 @@ def restore_traffic_limit_in_db(key_id: int) -> bool:
 
 async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = False) -> Dict[str, int]:
     """
-    Приводит набор клиентов с key.panel_email на key.server_id в соответствие
-    с текущим bot_mode и состоянием ключа в БД.
+    Matches the set of clients with key.panel_email to key.server_id
+    with the current bot_mode and the key state in the database.
 
-    Режим 'subscription':
-      - В каждом inbound сервера, где нет клиента с key.panel_email, создаёт
-        клиента с key.sub_id, key.expires_at, key.traffic_limit.
-        Если у ключа sub_id IS NULL — генерирует (или подхватывает существующий
-        subId из найденного клиента на панели) и сохраняет в БД.
-      - Обновляет vpn_keys.panel_inbound_id и client_uuid на минимальный inbound.
-      - Обновляет expiryTime, totalGB, enable и subId у всех клиентов с этим email.
-      - Если traffic_exhausted ИЛИ expired — выставляет enable=False.
-      - Если ключ активен — выставляет enable=True.
+    'subscription' mode:
+      - In every inbound server where there is no client with key.panel_email, creates
+        client with key.sub_id, key.expires_at, key.traffic_limit.
+        If the key has sub_id IS NULL, it generates (or picks up an existing
+        subId from the client found on the panel) and saves it in the database.
+      - Updates vpn_keys.panel_inbound_id and client_uuid to the minimum inbound.
+      - Updates expiryTime, totalGB, enable and subId for all clients with this email.
+      - If traffic_exhausted OR expired - sets enable=False.
+      - If the key is active, set enable=True.
 
-    Режим 'key':
-      - Оставляет клиента в МИНИМАЛЬНОМ inbound, остальных с тем же email удаляет.
-      - Обновляет panel_inbound_id и client_uuid в БД на минимальный.
+    'key' mode:
+      - Leaves the client in MINIMUM inbound, deletes others with the same email.
+      - Updates panel_inbound_id and client_uuid in the database to the minimum.
 
     Args:
-        key_id: ID ключа в БД
-        reset_traffic: True = сбросить up/down на панели перед записью состояния
+        key_id: ID of the key in the database
+        reset_traffic: True = reset up/down on panel before recording state
 
     Returns:
-        Словарь со статистикой: {'created', 'deleted', 'enabled', 'disabled',
+        Dictionary with statistics: {'created', 'deleted', 'enabled', 'disabled',
         'updated', 'skipped', 'reset', 'errors', 'ok'}
     """
     stats = {
@@ -925,10 +925,10 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
         inbound_usage_by_id = _build_inbound_usage_by_id(inbounds, email)
 
         if mode == 'subscription':
-            # Гарантируем sub_id у ключа
+            # We guarantee the sub_id of the key
             sub_id = key.get('sub_id')
             if not sub_id:
-                # Подхватим subId из существующего клиента на панели, если есть
+                # Let's pick up the subId from the existing client on the panel, if any
                 for cl in all_presence.values():
                     existing = cl.get('subId')
                     if existing:
@@ -949,12 +949,12 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                 )
             target_total_bytes = calculate_panel_total_for_key(key, subscription_panel_used)
 
-            # Параметры для add_client в отсутствующих inbound
+            # Parameters for add_client in missing inbound
             total_gb = _panel_total_gb_for_key(key, subscription_panel_used)
             days_left = _key_days_left_for_add(key)
             visible_inbounds_by_id = {inb.get('id'): inb for inb in inbounds}
 
-            # Создаём в отсутствующих inbound
+            # Create in missing inbound
             missing = [inb for inb in inbounds if inb['id'] not in presence]
             for inb in missing:
                 try:
@@ -987,7 +987,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                     )
                     stats['errors'] += 1
 
-            # Обновляем panel_inbound_id/client_uuid на МИНИМАЛЬНЫЙ присутствующий inbound
+            # Update panel_inbound_id/client_uuid to the MINIMUM present inbound
             if presence:
                 min_inb_id = min(presence.keys())
                 min_client = presence[min_inb_id]
@@ -1003,7 +1003,7 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
                         sub_id=sub_id,
                     )
 
-            # Сбрасываем трафик и выравниваем ВСЕ существующие клиенты подписки.
+            # We reset traffic and align ALL existing subscription clients.
             target_enable = active
             clients_api_flow = (
                 await _get_first_required_flow(client, inbounds, server_id)
@@ -1276,24 +1276,24 @@ async def ensure_subscription_keys_on_server(key_id: int, reset_traffic: bool = 
 
 async def sync_key_to_panel_state(key_id: int, reset_traffic: bool = False) -> Dict[str, int]:
     """
-    Единая точка синхронизации состояния ключа из БД на панель.
+    A single point of synchronization of the key state from the database to the panel.
 
-    Для subscription-режима обновляет всех клиентов с одним email/subId во всех
-    inbound. Для key-режима обновляет основной клиент и чистит лишние через ту
-    же материализацию состояния.
+    For subscription mode, updates all clients with the same email/subId in all
+    inbound. For key mode, it updates the main client and cleans up unnecessary ones through that
+    the same materialization of the state.
     """
     return await ensure_subscription_keys_on_server(key_id, reset_traffic=reset_traffic)
 
 
 async def get_subscription_url_for_key(key: Dict[str, Any]) -> Optional[str]:
     """
-    Возвращает HTTP-URL подписки для ключа.
+    Returns the HTTP subscription URL for the key.
 
     Args:
-        key: dict с полями sub_id, server_id (+ обычные поля сервера если есть)
+        key: dict with fields sub_id, server_id (+ regular server fields if any)
 
     Returns:
-        Subscription URL или None (если у ключа нет sub_id или сервер недоступен)
+        Subscription URL or None (if the key does not have a sub_id or the server is unavailable)
     """
     sub_id = key.get('sub_id')
     server_id = key.get('server_id')

@@ -18,7 +18,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith('renew_stars_tariff:'))
 async def renew_stars_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для продления (Stars)."""
+    """Selecting a tariff for renewal (Stars)."""
     from database.requests import get_key_details_for_user, get_all_tariffs
     from bot.keyboards.user import renew_tariff_select_kb
     parts = callback.data.split(':')
@@ -54,7 +54,7 @@ async def renew_stars_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('renew_pay_stars:'))
 async def renew_stars_invoice(callback: CallbackQuery, state: FSMContext):
-    """Инвойс для продления (Stars)."""
+    """Invoice for renewal (Stars)."""
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, get_user_internal_id, create_pending_order, get_key_details_for_user, update_order_tariff, update_payment_type
     parts = callback.data.split(':')
@@ -123,7 +123,7 @@ async def renew_stars_invoice(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('pay_stars'))
 async def pay_stars_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты Stars."""
+    """Selecting a Stars payment plan."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -153,7 +153,7 @@ async def pay_stars_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('stars_pay:'))
 async def pay_stars_invoice(callback: CallbackQuery, state: FSMContext):
-    """Создание инвойса для оплаты Stars."""
+    """Creating an invoice for Stars payment."""
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, update_order_tariff, update_payment_type
     parts = callback.data.split(':')

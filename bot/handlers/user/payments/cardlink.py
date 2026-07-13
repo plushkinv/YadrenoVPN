@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-# Конфигурация провайдера Cardlink
+# Cardlink Provider Configuration
 _CL_TITLE = '🔗 <b>Cardlink</b>'
 _CL_TYPE = 'cardlink'
 _CL_ERROR = 'Cardlink'
@@ -25,7 +25,7 @@ _CL_QR_FILE = 'cardlink.png'
 _CL_CHECK_PREFIX = 'check_cardlink'
 _CL_RESULT_KEY = 'cardlink_bill_id'
 _CL_MIN_PRICE = 10
-# Подсказка Cardlink: после оплаты можно вернуться в бот по ссылке
+# Cardlink hint: after payment you can return to the bot using the link
 _CL_HINT = (
     'После оплаты нажмите «✅ Я оплатил» — или просто вернитесь '
     'в бот по ссылке после оплаты, проверка запустится автоматически.'
@@ -34,7 +34,7 @@ _CL_HINT = (
 
 @router.callback_query(F.data == 'pay_cardlink')
 async def pay_cardlink_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты через Cardlink (новый ключ)."""
+    """Selecting a tariff for payment via Cardlink (new key)."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -65,7 +65,7 @@ async def pay_cardlink_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('cardlink_pay:'))
 async def cardlink_pay_create(callback: CallbackQuery, state: FSMContext):
-    """Создаёт счёт Cardlink для нового ключа и отправляет QR-фото."""
+    """Creates a Cardlink account for the new key and sends a QR photo."""
     from database.requests import get_tariff_by_id, save_cardlink_bill_id
     from bot.services.billing import create_cardlink_payment
 
@@ -103,7 +103,7 @@ async def cardlink_pay_create(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('renew_cardlink_tariff:'))
 async def renew_cardlink_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты Cardlink при продлении ключа."""
+    """Selecting a tariff for Cardlink payment when renewing a key."""
     from database.requests import get_key_details_for_user
     from bot.keyboards.user import renew_tariff_select_kb
     from bot.utils.groups import get_tariffs_for_renewal
@@ -139,7 +139,7 @@ async def renew_cardlink_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('renew_pay_cardlink:'))
 async def renew_cardlink_create(callback: CallbackQuery, state: FSMContext):
-    """Создаёт счёт Cardlink для продления ключа."""
+    """Creates a Cardlink account for key renewal."""
     from database.requests import get_tariff_by_id, get_key_details_for_user, save_cardlink_bill_id
     from bot.services.billing import create_cardlink_payment
 
@@ -181,7 +181,7 @@ async def renew_cardlink_create(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('check_cardlink:'))
 async def check_cardlink_payment(callback: CallbackQuery, state: FSMContext):
-    """Проверяет статус Cardlink-платежа по нажатию «✅ Я оплатил»."""
+    """Checks the status of a Cardlink payment by clicking “✅ I paid.”"""
     await _run_cardlink_check(
         callback.message, state,
         order_id=callback.data.split(':', 1)[1],
@@ -193,11 +193,11 @@ async def check_cardlink_payment(callback: CallbackQuery, state: FSMContext):
 async def _run_cardlink_check(message, state, order_id: str,
                               telegram_id: int, callback=None) -> None:
     """
-    Общая логика проверки Cardlink-платежа.
+    General logic for checking Cardlink payment.
 
-    Используется как хендлером «✅ Я оплатил» (с callback), так и deep-link
-    возвратом pay_cardlink_{order_id}. Старые cl_Success / cl_Fail / cl_Result
-    обрабатываются как fallback через последний pending-ордер пользователя.
+    Used by both the “✅ I paid” handler (with callback) and deep-link
+    return pay_cardlink_{order_id}. Old cl_Success / cl_Fail / cl_Result
+    are processed as fallback through the user's last pending order.
     """
     from bot.services.billing import check_cardlink_payment_status
 

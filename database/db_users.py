@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 def _generate_referral_code() -> str:
-    """Генерация уникального 8-символьного кода (A-Z, a-z, 0-9)."""
+    """Generate a unique 8-character code (A-Z, a-z, 0-9)."""
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(8))
 
@@ -51,16 +51,16 @@ def get_or_create_user(
     last_name: Optional[str] = None,
 ) -> tuple[Dict[str, Any], bool]:
     """
-    Получает или создаёт пользователя.
+    Gets or creates a user.
     
     Args:
-        telegram_id: Telegram ID пользователя
-        username: @username (опционально)
+        telegram_id: Telegram user ID
+        username: @username (optional)
         
     Returns:
-        Кортеж (user_dict, is_new):
-        - user_dict: словарь с данными пользователя
-        - is_new: True если пользователь был создан, False если уже существовал
+        Tuple (user_dict, is_new):
+        - user_dict: dictionary with user data
+        - is_new: True if the user was created, False if already existed
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -135,13 +135,13 @@ def get_or_create_user(
 
 def is_user_banned(telegram_id: int) -> bool:
     """
-    Проверяет, забанен ли пользователь.
+    Checks if the user is banned.
     
     Args:
-        telegram_id: Telegram ID пользователя
+        telegram_id: Telegram user ID
         
     Returns:
-        True если пользователь забанен
+        True if the user is banned
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -152,7 +152,7 @@ def is_user_banned(telegram_id: int) -> bool:
         return bool(row['is_banned']) if row else False
 
 def mark_user_bot_blocked(telegram_id: int) -> bool:
-    """Помечает пользователя как недоступного для сообщений бота."""
+    """Marks the user as unavailable for bot messages."""
     with get_db() as conn:
         cursor = conn.execute(
             "UPDATE users SET is_bot_blocked = 1 WHERE telegram_id = ?",
@@ -164,7 +164,7 @@ def mark_user_bot_blocked(telegram_id: int) -> bool:
         return success
 
 def mark_user_bot_unblocked(telegram_id: int) -> bool:
-    """Снимает флаг недоступности, когда пользователь снова обратился в бот."""
+    """Removes the unavailable flag when the user contacts the bot again."""
     with get_db() as conn:
         cursor = conn.execute(
             "UPDATE users SET is_bot_blocked = 0 WHERE telegram_id = ? AND is_bot_blocked = 1",
@@ -177,13 +177,13 @@ def mark_user_bot_unblocked(telegram_id: int) -> bool:
 
 def has_used_trial(telegram_id: int) -> bool:
     """
-    Проверяет, использовал ли пользователь пробную подписку.
+    Checks whether the user has used a trial subscription.
     
     Args:
-        telegram_id: Telegram ID пользователя
+        telegram_id: Telegram user ID
         
     Returns:
-        True если пользователь уже использовал пробный период
+        True if the user has already used the trial period
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -195,10 +195,10 @@ def has_used_trial(telegram_id: int) -> bool:
 
 def mark_trial_used(user_id: int) -> None:
     """
-    Помечает, что пользователь использовал пробную подписку.
+    Indicates that the user has used a trial subscription.
     
     Args:
-        user_id: Внутренний ID пользователя (не Telegram ID)
+        user_id: Internal user ID (not Telegram ID)
     """
     with get_db() as conn:
         conn.execute(
@@ -209,10 +209,10 @@ def mark_trial_used(user_id: int) -> None:
 
 def get_all_users_count() -> int:
     """
-    Возвращает общее количество пользователей (не забаненных).
+    Returns the total number of users (not banned).
     
     Returns:
-        Количество пользователей
+        Number of users
     """
     with get_db() as conn:
         cursor = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE is_banned = 0")
@@ -221,15 +221,15 @@ def get_all_users_count() -> int:
 
 def get_users_stats() -> Dict[str, int]:
     """
-    Возвращает статистику пользователей по фильтрам (как в рассылке).
+    Returns user statistics by filters (as in the newsletter).
     
     Returns:
-        Словарь с количеством пользователей по категориям:
-        - total: все не забаненные
-        - active: с активными ключами
-        - inactive: без активных ключей
-        - never_paid: никогда не покупали
-        - expired: был ключ, но истёк
+        Dictionary with the number of users by category:
+        - total: all not banned
+        - active: with active keys
+        - inactive: no active keys
+        - never_paid: never purchased
+        - expired: there was a key, but it expired
     """
     with get_db() as conn:
         def count(query: str) -> int:
@@ -276,18 +276,18 @@ def get_users_stats() -> Dict[str, int]:
 def get_all_users_paginated(offset: int = 0, limit: int = 20, 
                              filter_type: str = 'all') -> tuple[List[Dict[str, Any]], int]:
     """
-    Получает список пользователей с пагинацией и фильтрацией.
+    Gets a list of users with pagination and filtering.
     
     Args:
-        offset: Смещение для пагинации
-        limit: Количество на странице (по умолчанию 20)
-        filter_type: Тип фильтра (all, active, inactive, never_paid, expired)
+        offset: Offset for pagination
+        limit: Number per page (default 20)
+        filter_type: Filter type (all, active, inactive, never_paid, expired)
     
     Returns:
-        Кортеж (список пользователей, общее количество)
+        Tuple (list of users, total number)
     """
     with get_db() as conn:
-        # Базовый запрос с данными о ключах
+        # Basic query with key data
         if filter_type == 'all':
             base_query = "SELECT * FROM users WHERE is_banned = 0"
             count_query = "SELECT COUNT(*) as cnt FROM users WHERE is_banned = 0"
@@ -363,18 +363,18 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
         else:
             return [], 0
         
-        # Получаем общее количество
+        # We get the total quantity
         cursor = conn.execute(count_query)
         total = cursor.fetchone()['cnt']
         
-        # Получаем страницу
+        # We get the page
         cursor = conn.execute(f"{base_query} ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         users = [dict(row) for row in cursor.fetchall()]
         
         return users, total
 
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
-    """Получает пользователя по внутреннему ID."""
+    """Gets the user by internal ID."""
     with get_db() as conn:
         cursor = conn.execute(
             "SELECT * FROM users WHERE id = ?",
@@ -385,13 +385,13 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
 
 def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
     """
-    Получает пользователя по Telegram ID.
+    Gets the user by Telegram ID.
     
     Args:
-        telegram_id: Telegram ID пользователя
+        telegram_id: Telegram user ID
     
     Returns:
-        Словарь с данными пользователя или None
+        Dictionary with user data or None
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -403,15 +403,15 @@ def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     """
-    Получает пользователя по @username.
+    Gets the user by @username.
     
     Args:
-        username: Username без @
+        username: Username without @
     
     Returns:
-        Словарь с данными пользователя или None
+        Dictionary with user data or None
     """
-    # Убираем @ если передали с ним
+    # Remove @ if it was passed along with it
     username = username.lstrip('@')
     
     with get_db() as conn:
@@ -424,13 +424,13 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 
 def toggle_user_ban(telegram_id: int) -> Optional[bool]:
     """
-    Переключает бан пользователя.
+    Toggles user ban.
     
     Args:
-        telegram_id: Telegram ID пользователя
+        telegram_id: Telegram user ID
     
     Returns:
-        Новый статус (True = забанен) или None если не найден
+        New status (True = banned) or None if not found
     """
     user = get_user_by_telegram_id(telegram_id)
     if not user:
@@ -449,10 +449,10 @@ def toggle_user_ban(telegram_id: int) -> Optional[bool]:
 
 def get_new_users_count_today() -> int:
     """
-    Получает количество новых пользователей за последние 24 часа.
+    Gets the number of new users in the last 24 hours.
     
     Returns:
-        Количество новых пользователей
+        Number of new users
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -464,13 +464,13 @@ def get_new_users_count_today() -> int:
 
 def get_user_internal_id(telegram_id: int) -> Optional[int]:
     """
-    Получает внутренний ID пользователя по Telegram ID.
+    Gets the internal user ID from the Telegram ID.
     
     Args:
         telegram_id: Telegram ID
     
     Returns:
-        Внутренний ID (users.id) или None
+        Internal ID (users.id) or None
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -482,13 +482,13 @@ def get_user_internal_id(telegram_id: int) -> Optional[int]:
 
 def get_user_by_referral_code(code: str) -> Optional[Dict[str, Any]]:
     """
-    Найти пользователя по реферальному коду.
+    Find a user by referral code.
     
     Args:
-        code: Реферальный код (8 символов)
+        code: Referral code (8 characters)
     
     Returns:
-        Словарь с данными пользователя или None
+        Dictionary with user data or None
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -500,14 +500,14 @@ def get_user_by_referral_code(code: str) -> Optional[Dict[str, Any]]:
 
 def set_user_referrer(user_id: int, referrer_id: int) -> bool:
     """
-    Привязать реферера к пользователю.
+    Link the referrer to the user.
     
     Args:
-        user_id: ID пользователя (того, кого пригласили)
-        referrer_id: ID пригласившего (реферера)
+        user_id: User ID (the one who was invited)
+        referrer_id: ID of the inviter (referrer)
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -521,13 +521,13 @@ def set_user_referrer(user_id: int, referrer_id: int) -> bool:
 
 def get_user_referrer(user_id: int) -> Optional[int]:
     """
-    Получить ID пригласившего пользователя (referred_by).
+    Get the ID of the inviting user (referred_by).
     
     Args:
-        user_id: Внутренний ID пользователя
+        user_id: Internal user ID
     
     Returns:
-        ID реферера или None
+        Referrer ID or None
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -539,14 +539,14 @@ def get_user_referrer(user_id: int) -> Optional[int]:
 
 def ensure_user_referral_code(user_id: int) -> str:
     """
-    Убедиться что у пользователя есть реферальный код, вернуть его.
-    FALLBACK: используется только если код не был создан при регистрации.
+    Make sure that the user has a referral code and return it.
+    FALLBACK: only used if the code was not created during registration.
     
     Args:
-        user_id: Внутренний ID пользователя
+        user_id: Internal user ID
     
     Returns:
-        Реферальный код пользователя
+        User referral code
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -576,13 +576,13 @@ def ensure_user_referral_code(user_id: int) -> str:
 
 def get_user_balance(user_id: int) -> int:
     """
-    Получить баланс пользователя в копейках.
+    Get the user's balance in kopecks.
     
     Args:
-        user_id: Внутренний ID пользователя
+        user_id: Internal user ID
     
     Returns:
-        Баланс в копейках (0 если пользователь не найден)
+        Balance in kopecks (0 if the user is not found)
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -594,14 +594,14 @@ def get_user_balance(user_id: int) -> int:
 
 def add_to_balance(user_id: int, cents: int) -> bool:
     """
-    Добавить к балансу. СИНХРОННАЯ функция, вызывается внутри async with user_locks[user_id].
+    Add to balance. SYNCHRONOUS function, called inside async with user_locks[user_id].
     
     Args:
-        user_id: Внутренний ID пользователя
-        cents: Сумма в копейках
+        user_id: Internal user ID
+        cents: Amount in kopecks
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -615,14 +615,14 @@ def add_to_balance(user_id: int, cents: int) -> bool:
 
 def deduct_from_balance(user_id: int, cents: int) -> bool:
     """
-    Списать с баланса. СИНХРОННАЯ функция, вызывается внутри async with user_locks[user_id].
+    Write off from balance sheet. SYNCHRONOUS function, called inside async with user_locks[user_id].
     
     Args:
-        user_id: Внутренний ID пользователя
-        cents: Сумма в копейках
+        user_id: Internal user ID
+        cents: Amount in kopecks
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -636,13 +636,13 @@ def deduct_from_balance(user_id: int, cents: int) -> bool:
 
 def get_user_referral_coefficient(user_id: int) -> float:
     """
-    Получить индивидуальный коэффициент реферальных отчислений.
+    Get an individual referral rate.
     
     Args:
-        user_id: Внутренний ID пользователя
+        user_id: Internal user ID
     
     Returns:
-        Коэффициент (по умолчанию 1.0)
+        Coefficient (default 1.0)
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -654,14 +654,14 @@ def get_user_referral_coefficient(user_id: int) -> float:
 
 def set_user_referral_coefficient(user_id: int, coefficient: float) -> bool:
     """
-    Установить индивидуальный коэффициент реферальных отчислений.
+    Set an individual referral rate.
     
     Args:
-        user_id: Внутренний ID пользователя
-        coefficient: Коэффициент (0.0 - 10.0)
+        user_id: Internal user ID
+        coefficient: Coefficient (0.0 - 10.0)
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(

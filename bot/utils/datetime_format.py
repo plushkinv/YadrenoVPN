@@ -1,4 +1,4 @@
-"""Форматирование UTC-дат из SQLite для отображения в часовом поясе бота."""
+"""Formatting UTC dates from SQLite to display in the bot's time zone."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, tzinfo
@@ -12,7 +12,7 @@ _UTC_OFFSET_RE = re.compile(r'^UTC([+-])(\d{2}):(\d{2})$')
 
 
 def _timezone_from_setting(value: str) -> tzinfo:
-    """Возвращает tzinfo для нормализованного значения настройки."""
+    """Returns tzinfo for the normalized setting value."""
     match = _UTC_OFFSET_RE.match(value)
     if match:
         sign, hours_raw, minutes_raw = match.groups()
@@ -30,7 +30,7 @@ def _timezone_from_setting(value: str) -> tzinfo:
 
 
 def get_display_tzinfo() -> tzinfo:
-    """Возвращает tzinfo текущей настройки, безопасно откатываясь на Москву."""
+    """Returns tzinfo to the current setting, safely falling back to Moscow."""
     try:
         timezone_name = get_display_timezone()
     except Exception:
@@ -59,7 +59,7 @@ def _parse_utc_datetime(value: Any) -> Optional[datetime]:
 
 
 def format_datetime_for_display(value: Any, fallback: str = '—') -> str:
-    """Форматирует дату и время из UTC в часовой пояс отображения."""
+    """Formats the date and time from UTC to the display time zone."""
     dt = _parse_utc_datetime(value)
     if dt is None:
         return fallback if value is None or value == '' else str(value)
@@ -67,7 +67,7 @@ def format_datetime_for_display(value: Any, fallback: str = '—') -> str:
 
 
 def format_date_for_display(value: Any, fallback: str = '—') -> str:
-    """Форматирует только дату после конвертации UTC в часовой пояс отображения."""
+    """Formats only the date after converting UTC to the display time zone."""
     dt = _parse_utc_datetime(value)
     if dt is None:
         return fallback if value is None or value == '' else str(value)

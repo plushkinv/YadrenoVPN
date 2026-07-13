@@ -1,10 +1,10 @@
 """
-Универсальный редактор сообщений для админ-панели.
+Universal message editor for the admin panel.
 
-Утилиты для хранения, отображения и редактирования сообщений.
-Сообщение = текст + опциональное медиа (фото, видео, гифка).
-В БД хранится JSON: {text, photo_file_id, video_file_id, animation_file_id}.
-Обратная совместимость: если в БД старая строка (не JSON) — возвращаем {'text': строка}.
+Utilities for storing, displaying and editing messages.
+Message = text + optional media (photo, video, gif).
+The database stores JSON: {text, photo_file_id, video_file_id, animation_file_id}.
+Backward compatibility: if the database contains an old string (not JSON), we return {'text': string}.
 """
 import json
 import logging
@@ -20,11 +20,11 @@ from database.requests import get_setting, set_setting
 
 logger = logging.getLogger(__name__)
 
-# Допустимые типы медиа
+# Acceptable media types
 ALL_MEDIA_TYPES = ['text', 'photo', 'video', 'animation']
 
 
-# Ключи, которые хранятся в новой таблице pages
+# Keys that are stored in the new pages table
 PAGE_KEYS = (
     'main',
     'help',
@@ -73,12 +73,12 @@ def _is_page_key(key: str) -> bool:
 
 def _page_image_value(row: dict) -> Optional[str]:
     """
-    Возвращает итоговый file_id медиа страницы.
+    Returns the final file_id of the media page.
 
-    Для pages.image_custom используется три состояния:
-    - NULL: использовать image_default;
-    - пустая строка: админ явно отключил медиа;
-    - file_id: использовать кастомное медиа.
+    Pages.image_custom uses three states:
+    - NULL: use image_default;
+    - empty line: the admin has explicitly disabled the media;
+    - file_id: use custom media.
     """
     custom_image = row.get('image_custom')
     if custom_image is not None:
@@ -123,28 +123,28 @@ def _with_media_fields(text: str, media_file_id: Optional[str], media_type: Opti
 
 
 def _normalize_message_data(data: dict, default_text: str = '') -> dict:
-    """Дополняет данные сообщения ожидаемыми ключами для обратной совместимости."""
+    """Supplements these messages with the expected keys for backward compatibility."""
     media_file_id, media_type = _media_from_parts(data)
     return _with_media_fields(data.get('text', default_text), media_file_id, media_type)
 
 
 def get_message_data(key: str, default_text: str = '') -> dict:
     """
-    Загружает данные сообщения.
+    Loads message data.
     
-    Для ключей из PAGE_KEY_MAP — читает из таблицы pages.
-    Для остальных — из settings (обратная совместимость).
+    For keys from PAGE_KEY_MAP - reads from the pages table.
+    For others - from settings (backward compatibility).
     
     Args:
-        key: Ключ настройки
-        default_text: Текст по умолчанию если ключ не найден
+        key: Setting key
+        default_text: Default text if key not found
         
     Returns:
-        Словарь с ключами: text, photo_file_id, video_file_id, animation_file_id,
+        Dictionary with keys: text, photo_file_id, video_file_id, animation_file_id,
         media_file_id, media_type
     """
     if _is_page_key(key):
-        # Читаем из таблицы pages
+        # Reading from the pages table
         from database.requests import get_page
         row = get_page(key)
         if row:
@@ -154,13 +154,13 @@ def get_message_data(key: str, default_text: str = '') -> dict:
             return _with_media_fields(text, image, media_type)
         return _normalize_message_data({'text': default_text})
 
-    # Старая логика: settings
+    # Old logic: settings
     raw = get_setting(key)
     
     if raw is None:
         return _normalize_message_data({'text': default_text})
     
-    # Пробуем распарсить как JSON
+    # Trying to parse it as JSON
     try:
         data = json.loads(raw)
         if isinstance(data, dict) and 'text' in data:
@@ -168,28 +168,28 @@ def get_message_data(key: str, default_text: str = '') -> dict:
     except (json.JSONDecodeError, TypeError):
         pass
     
-    # Старый формат — просто строка
+    # The old format is just a string
     return _normalize_message_data({'text': raw})
 
 
 def save_message_data(key: str, message: Message, allowed_types: Optional[List[str]] = None) -> dict:
     """
-    Извлекает данные из входящего Telegram-сообщения и сохраняет.
+    Extracts data from an incoming Telegram message and saves it.
     
-    Для ключей из PAGE_KEY_MAP — сохраняет в таблицу pages
+    For keys from PAGE_KEY_MAP - saves to the pages table
     (text_custom, image_custom, media_type_custom).
-    Для остальных — в settings как JSON (обратная совместимость).
+    For others - in settings as JSON (backward compatibility).
     
-    Использует get_message_text_for_storage() для текста (правило ТЗ).
-    Медиа не скачиваем — сохраняем только file_id.
+    Uses get_message_text_for_storage() for text (TK rule).
+    We don’t download media - we save only file_id.
     
     Args:
-        key: Ключ настройки
-        message: Входящее сообщение от Telegram
-        allowed_types: Допустимые типы ['text', 'photo', 'video', 'animation']
+        key: Setting key
+        message: Incoming message from Telegram
+        allowed_types: Allowed types ['text', 'photo', 'video', 'animation']
         
     Returns:
-        Сохранённый словарь данных
+        Saved data dictionary
     """
     from bot.utils.text import get_message_text_for_storage
 
@@ -201,10 +201,10 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
         current_media_type,
     )
     
-    # Определяем тип сообщения и извлекаем медиа
+    # Determine the message type and extract media
     if message.animation:
         data.update(_with_media_fields(data.get('text', ''), message.animation.file_id, 'animation'))
-        # Для медиа используем caption
+        # For media we use caption
         data['text'] = get_message_text_for_storage(message, 'html') if message.caption else ''
     elif message.video:
         data.update(_with_media_fields(data.get('text', ''), message.video.file_id, 'video'))
@@ -215,9 +215,9 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
     elif message.text:
         data['text'] = get_message_text_for_storage(message, 'html')
     
-    # Проверяем, относится ли ключ к таблице pages
+    # Checking whether the key belongs to the pages table
     if _is_page_key(key):
-        # Сохраняем в таблицу pages
+        # Save to the pages table
         from database.requests import update_page_custom
         if message.photo or message.video or message.animation:
             update_page_custom(
@@ -230,7 +230,7 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
             update_page_custom(key, text=data['text'] or None)
         logger.info(f"Сообщение сохранено в pages: {key}")
     else:
-        # Старая логика: settings
+        # Old logic: settings
         set_setting(key, json.dumps(data, ensure_ascii=False))
         logger.info(f"Сообщение сохранено в settings: {key}")
     
@@ -239,10 +239,10 @@ def save_message_data(key: str, message: Message, allowed_types: Optional[List[s
 
 def delete_message_media(key: str) -> dict:
     """
-    Явно удаляет медиа редактируемого сообщения, не меняя текст.
+    Explicitly removes the media of the edited message without changing the text.
 
-    Для settings очищает media-поля в JSON. Для pages записывает пустую строку
-    в image_custom, чтобы не подтягивалось дефолтное медиа.
+    For settings, clears media fields in JSON. For pages writes an empty string
+    in image_custom so that the default media is not pulled up.
     """
     data = get_message_data(key)
     data.update(_with_media_fields(data.get('text', ''), None, None))
@@ -259,16 +259,16 @@ def delete_message_media(key: str) -> dict:
 
 
 def delete_message_photo(key: str) -> dict:
-    """Обратная совместимость для старых импортов."""
+    """Backward compatibility for old imports."""
     return delete_message_media(key)
 
 
 def detect_message_type(message: Message) -> str:
     """
-    Определяет тип входящего сообщения.
+    Determines the type of incoming message.
     
     Returns:
-        'animation', 'video', 'photo' или 'text'
+        'animation', 'video', 'photo' or 'text'
     """
     if message.animation:
         return 'animation'
@@ -286,25 +286,25 @@ def editor_kb(
     can_delete_media: bool = False,
 ) -> InlineKeyboardMarkup:
     """
-    Клавиатура редактора сообщений.
+    Message editor keyboard.
     
-    Раскладка:
-    [⬅️ Назад]  [🈴 На главную]
-    [🗑 Удалить медиа]  # если медиа есть
-    [📝 Отправьте новое сообщение ⬇️]
+    Layout:
+    [⬅️ Back] [🈴 Home]
+    [🗑 Remove media] # if there is media
+    [📝 Send a new message ⬇️]
     
     Args:
-        back_callback: callback_data для кнопки «Назад»
-        has_help: Есть ли текст справки (меняет поведение кнопки)
-        can_delete_photo: Совместимость со старым названием флага удаления медиа
-        can_delete_media: Показывать ли кнопку удаления текущего медиа
+        back_callback: callback_data for the back button
+        has_help: Whether there is help text (changes the behavior of the button)
+        can_delete_photo: Compatible with old media delete flag name
+        can_delete_media: Whether to show a button to delete the current media
     """
     if can_delete_photo:
         can_delete_media = True
 
     builder = InlineKeyboardBuilder()
     
-    # Верхний ряд: Назад + На главную
+    # Top row: Back + Home
     builder.row(
         InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
         InlineKeyboardButton(text="🈴 На главную", callback_data="start"),
@@ -318,9 +318,9 @@ def editor_kb(
             )
         )
     
-    # Нижний ряд: кнопка ввода
+    # Bottom row: enter button
     if has_help:
-        # Кнопка показывает справку перед вводом
+        # The button shows help before entering
         builder.row(
             InlineKeyboardButton(
                 text="📝 Отправьте новое сообщение ⬇️",
@@ -328,7 +328,7 @@ def editor_kb(
             )
         )
     else:
-        # Кнопка-заглушка (просто визуальный индикатор, редактор уже ждёт ввод)
+        # Placeholder button (just a visual indicator, the editor is already waiting for input)
         builder.row(
             InlineKeyboardButton(
                 text="📝 Отправьте новое сообщение ⬇️",
@@ -340,7 +340,7 @@ def editor_kb(
 
 
 def editor_help_kb() -> InlineKeyboardMarkup:
-    """Клавиатура для экрана справки редактора."""
+    """Keyboard for editor help screen."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="⬅️ Назад", callback_data="msg_editor_back_to_preview")
@@ -356,36 +356,36 @@ async def send_editor_message(
     reply_markup=None,
     text_override: str = None,
 ) -> Message:
-    """Универсальная отправка/редактирование сообщения из редактора.
+    """Universal sending/editing of a message from the editor.
     
-    Единый контракт: все тексты из редактора хранятся в БД в формате
-    HTML и отправляются ТОЛЬКО через эту функцию с parse_mode='HTML'.
+    Single contract: all texts from the editor are stored in the database in the format
+    HTML and are sent ONLY through this function with parse_mode='HTML'.
     
-    Внутри делегирует вызов в safe_edit_or_send() для обработки
-    переходов текст↔медиа и ошибок Telegram API.
+    Internally delegates a call to safe_edit_or_send() to handle
+    text↔media transitions and Telegram API errors.
     
     Args:
-        message: Сообщение для редактирования или ответа
-        key: Ключ настройки в таблице settings (загружает через get_message_data)
-        data: Уже загруженный словарь данных (приоритет над key)
-        default_text: Текст по умолчанию если ключ не найден
-        reply_markup: Клавиатура
-        text_override: Подготовленный текст (заменяет data['text']).
-            Используется когда нужно подставить плейсхолдеры (%тарифы%, %ключ_имя% и т.д.)
-            Важно: все динамические значения должны быть экранированы через escape_html()
+        message: Message to edit or reply
+        key: Settings key in the settings table (loads via get_message_data)
+        data: Already loaded data dictionary (priority over key)
+        default_text: Default text if key not found
+        reply_markup: Keyboard
+        text_override: Prepared text (replaces data['text']).
+            Used when editor placeholders must be substituted before rendering.
+            Important: all dynamic values must be escaped via escape_html()
             
     Returns:
-        Объект Message после отправки/редактирования
+        Message object after sending/editing
     """
     from bot.utils.text import safe_edit_or_send
     
-    # Загружаем данные из БД если не переданы явно
+    # Load data from the database if not passed explicitly
     if data is None:
         if key is None:
             raise ValueError("Нужно передать key или data")
         data = get_message_data(key, default_text)
     
-    # Определяем текст
+    # Defining the text
     text = text_override if text_override is not None else (data.get('text', '') or default_text)
     if not text:
         text = '(пусто)'

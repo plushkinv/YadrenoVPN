@@ -1,4 +1,4 @@
-"""Создание согласованных резервных копий основной SQLite-базы."""
+"""Creating consistent backups of the main SQLite database."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ BACKUP_DIR = PROJECT_ROOT / "backup"
 
 
 def backup_bot_database_to(destination_path: str | Path) -> Path:
-    """Создаёт согласованную копию основной БД в указанный файл."""
+    """Creates a consistent copy of the main database to the specified file."""
     source_path = Path(db_connection.DB_PATH).resolve()
     if not source_path.is_file():
         raise FileNotFoundError(f"База данных не найдена: {source_path}")
@@ -50,7 +50,7 @@ def backup_bot_database_to(destination_path: str | Path) -> Path:
 
 
 def create_bot_database_backup() -> str:
-    """Создаёт и проверяет SQLite-бэкап, возвращая путь от корня проекта."""
+    """Creates and checks a SQLite backup, returning the path from the project root."""
     project_root = PROJECT_ROOT.resolve()
     backup_dir = BACKUP_DIR.resolve()
     if backup_dir != project_root and project_root not in backup_dir.parents:

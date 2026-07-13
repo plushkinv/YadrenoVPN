@@ -1,4 +1,4 @@
-"""Универсальный вывод пользовательских custom-страниц."""
+"""Universal output of custom custom pages."""
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
@@ -18,7 +18,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith(CUSTOM_PAGE_CALLBACK_PREFIX))
 async def custom_page_handler(callback: CallbackQuery):
-    """Открывает custom-страницу из таблицы pages."""
+    """Opens a custom page from the pages table."""
     if is_user_banned(callback.from_user.id):
         await callback.answer("⛔ Доступ заблокирован", show_alert=True)
         return

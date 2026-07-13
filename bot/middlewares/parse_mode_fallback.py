@@ -1,9 +1,9 @@
 """
-Кастомная сессия бота с автоматическим fallback при ошибках Markdown/HTML.
+Custom bot session with automatic fallback for Markdown/HTML errors.
 
-Перехватывает все вызовы методов Telegram API и при ошибке парсинга
-автоматически повторяет запрос без parse_mode.
-Поддерживает один или несколько адресов Telegram Bot API из конфига.
+Intercepts all calls to Telegram API methods and in case of parsing error
+automatically retry the request without parse_mode.
+Supports one or more Telegram Bot API addresses from the config.
 """
 import asyncio
 import logging
@@ -23,20 +23,20 @@ from aiogram.methods.base import TelegramType
 
 logger = logging.getLogger(__name__)
 
-# Стандартный адрес Telegram Bot API (фоллбэк)
+# Standard Telegram Bot API address (fallback)
 DEFAULT_TELEGRAM_API_URL = "https://api.telegram.org"
 
 
 def _clean_telegram_api_url(value: str) -> str:
-    """Возвращает URL без пробелов и завершающего слеша."""
+    """Returns a URL without spaces or trailing slash."""
     return value.strip().rstrip("/")
 
 
 def _normalize_telegram_api_urls(value: Any) -> list[str]:
     """
-    Нормализует TELEGRAM_API_URL.
+    Normalizes TELEGRAM_API_URL.
 
-    Поддерживает старый формат строкой и новый формат списком/кортежем строк.
+    Supports the old string format and the new list/tuple string format.
     """
     if value is None:
         return [DEFAULT_TELEGRAM_API_URL]
@@ -70,7 +70,7 @@ def _normalize_telegram_api_urls(value: Any) -> list[str]:
 
 
 def _get_telegram_api_urls() -> list[str]:
-    """Получает адреса Telegram Bot API из конфига с фоллбэком на стандартный."""
+    """Receives Telegram Bot API addresses from the config with a fallback to the standard one."""
     try:
         from config import TELEGRAM_API_URL
         return _normalize_telegram_api_urls(TELEGRAM_API_URL)
@@ -79,7 +79,7 @@ def _get_telegram_api_urls() -> list[str]:
 
 
 def _format_api_server_url(api: TelegramAPIServer) -> str:
-    """Возвращает читаемый URL для TelegramAPIServer, переданного напрямую."""
+    """Returns the readable URL for the TelegramAPIServer passed directly."""
     base_url = getattr(api, 'base', None)
     if isinstance(base_url, str):
         return base_url.replace('/bot{token}/{method}', '').rstrip('/')
@@ -88,14 +88,14 @@ def _format_api_server_url(api: TelegramAPIServer) -> str:
 
 class SafeParseSession(AiohttpSession):
     """
-    Сессия с автоматическим fallback при ошибках Markdown/HTML парсинга.
+    Session with automatic fallback for Markdown/HTML parsing errors.
     
-    Если Telegram возвращает ошибку "can't parse entities", 
-    автоматически повторяет запрос с parse_mode=None.
+    If Telegram returns the error "can't parse entities", 
+    automatically retry the request with parse_mode=None.
     
-    Использует адреса Telegram Bot API из конфига (TELEGRAM_API_URL).
-    Если параметр не указан — фоллбэк на https://api.telegram.org.
-    Если адресов несколько — переключается на следующий после сетевого сбоя.
+    Uses Telegram Bot API addresses from the config (TELEGRAM_API_URL).
+    If the parameter is not specified, the fallback is to https://api.telegram.org.
+    If there are several addresses, it switches to the next one after a network failure.
     """
     
     def __init__(self, **kwargs):
@@ -132,7 +132,7 @@ class SafeParseSession(AiohttpSession):
 
     @property
     def active_api_url(self) -> str:
-        """Возвращает URL текущего Telegram Bot API."""
+        """Returns the URL of the current Telegram Bot API."""
         return self._telegram_api_urls[self._telegram_api_index]
 
     async def _send_prepared_request(
@@ -208,21 +208,21 @@ class SafeParseSession(AiohttpSession):
         except TelegramBadRequest as e:
             error_msg = str(e).lower()
             
-            # Проверяем, что это ошибка парсинга Markdown/HTML
+            # Checking that this is a Markdown/HTML parsing error
             if "can't parse entities" in error_msg:
-                # Проверяем, есть ли у метода атрибут parse_mode
+                # Checking if the method has the parse_mode attribute
                 if hasattr(method, 'parse_mode') and method.parse_mode is not None:
                     logger.warning(
                         f"Ошибка Markdown парсинга в {method.__class__.__name__}, "
                         f"повторяю без форматирования: {e}"
                     )
                     
-                    # Создаём копию метода без parse_mode
-                    # Используем model_copy для Pydantic моделей
+                    # Create a copy of the method without parse_mode
+                    # Using model_copy for Pydantic models
                     method_copy = method.model_copy(update={'parse_mode': None})
                     
-                    # Повторяем запрос без parse_mode
+                    # Repeat the request without parse_mode
                     return await self._request_once(bot, method_copy, timeout)
             
-            # Если это не ошибка парсинга или нет parse_mode — пробрасываем
+            # If this is not a parsing error or there is no parse_mode, forward
             raise

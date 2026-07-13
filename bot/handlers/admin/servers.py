@@ -1,13 +1,13 @@
 """
-Роутер управления серверами.
+Server management router.
 
-Обрабатывает:
-- Список серверов
-- Добавление сервера (6-шаговый диалог)
-- Просмотр сервера
-- Редактирование (листание параметров)
-- Активация/деактивация
-- Удаление
+Processes:
+- List of servers
+- Adding a server (6-step dialog)
+- View server
+- Editing (scrolling through parameters)
+- Activation/deactivation
+- Removal
 """
 import logging
 from aiogram import Router, F
@@ -68,20 +68,20 @@ router = Router()
 
 
 # ============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# AUXILIARY FUNCTIONS
 # ============================================================================
 
 
 
 
 async def get_servers_list_text() -> str:
-    """Формирует подробный мониторинг панелей и нод."""
+    """Generates detailed monitoring of panels and nodes."""
     snapshot = await collect_admin_monitoring_snapshot()
     return build_servers_monitoring_text(snapshot)
 
 
 async def render_server_view(message: Message, server_id: int, state: FSMContext):
-    """Отрисовывает экран просмотра сервера."""
+    """Renders the server browsing screen."""
     server = get_server_by_id(server_id)
 
     if not server:
@@ -90,7 +90,7 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
     await state.set_state(AdminStates.server_view)
     await state.update_data(server_id=server_id)
 
-    # Маскируем пароль
+    # Masking the password
     password_masked = "•" * min(len(server['password']), 8)
 
     status_emoji = "🟢" if server['is_active'] else "🔴"
@@ -127,7 +127,7 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
             logger.warning(f"Ошибка статистики {server['name']}: {e}")
             lines.append(f"   ⚠️ Ошибка подключения")
 
-    # Группы — показываем если групп больше одной
+    # Groups—show if there is more than one group
     groups_count = get_groups_count()
     if groups_count > 1:
         group_ids = get_server_group_ids(server_id)
@@ -146,18 +146,18 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
 
 
 # ============================================================================
-# СПИСОК СЕРВЕРОВ
+# SERVER LIST
 # ============================================================================
 
 @router.callback_query(F.data == "admin_servers")
 async def show_servers_list(callback: CallbackQuery, state: FSMContext):
-    """Показывает список серверов."""
+    """Shows a list of servers."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
     await state.set_state(AdminStates.servers_list)
-    await state.update_data(server_data={})  # Очищаем временные данные
+    await state.update_data(server_data={})  # Clearing temporary data
     
     text = await get_servers_list_text()
     servers = get_all_servers()
@@ -171,7 +171,7 @@ async def show_servers_list(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_servers_refresh")
 async def refresh_servers_list(callback: CallbackQuery, state: FSMContext):
-    """Обновляет статистику серверов."""
+    """Updates server statistics."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -187,17 +187,17 @@ async def refresh_servers_list(callback: CallbackQuery, state: FSMContext):
             reply_markup=servers_list_kb(servers)
         )
     except Exception:
-        # Игнорируем ошибку "message is not modified"
+        # Ignore the error "message is not modified"
         pass
 
 
 # ============================================================================
-# ПРОСМОТР СЕРВЕРА
+# VIEW SERVER
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_server_view:"))
 async def show_server_view(callback: CallbackQuery, state: FSMContext):
-    """Показывает детали сервера."""
+    """Shows server details."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -212,16 +212,16 @@ async def show_server_view(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.server_view)
     await state.update_data(server_id=server_id)
     
-    # Используем helper для отрисовки
+    # Using helper for rendering
     await render_server_view(callback.message, server_id, state)
     await callback.answer()
 
 
 # ============================================================================
-# ДОБАВЛЕНИЕ СЕРВЕРА
+# ADDING A SERVER
 # ============================================================================
 
-# Состояния добавления в порядке
+# Add states are ok
 ADD_STATES = [
     AdminStates.add_server_name,
     AdminStates.add_server_url,
@@ -231,17 +231,17 @@ ADD_STATES = [
 
 
 def get_add_step_text(step: int, data: dict) -> str:
-    """Формирует текст для шага добавления сервера."""
+    """Generates text for the add server step."""
     param = get_param_by_index(step - 1)
     total = get_total_params()
     
     lines = [f"📝 <b>Добавление сервера ({step}/{total})</b>\n"]
     
-    # Показываем уже введённые данные
+    # Showing already entered data
     for i in range(step - 1):
         p = get_param_by_index(i)
         value = data.get(p['key'], '—')
-        # Маскируем пароль
+        # Masking the password
         if p['key'] == 'password':
             value = "•" * min(len(str(value)), 8)
         lines.append(f"✅ {p['label']}: <code>{value}</code>")
@@ -257,12 +257,12 @@ def get_add_step_text(step: int, data: dict) -> str:
 
 @router.callback_query(F.data == "admin_server_add")
 async def start_add_server(callback: CallbackQuery, state: FSMContext):
-    """Начинает диалог добавления сервера."""
+    """Starts the Add Server dialog."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
-    # Если > 1 группы — сначала выбираем группу
+    # If > 1 group, first select the group
     groups_count = get_groups_count()
     if groups_count > 1:
         groups = get_all_groups()
@@ -276,7 +276,7 @@ async def start_add_server(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Одна группа — сразу к вводу
+    # One group - straight to input
     await state.set_state(ADD_STATES[0])
     await state.update_data(server_data={}, add_step=1, selected_group_id=1)
     
@@ -291,7 +291,7 @@ async def start_add_server(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminStates.server_select_group, F.data.startswith("server_group_select:"))
 async def server_group_selected(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора группы для нового сервера."""
+    """Processing group selection for a new server."""
     group_id = int(callback.data.split(":")[1])
     
     await state.set_state(ADD_STATES[0])
@@ -311,7 +311,7 @@ async def server_group_selected(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_server_add_back")
 async def add_server_back(callback: CallbackQuery, state: FSMContext):
-    """Возврат на предыдущий шаг добавления."""
+    """Return to the previous adding step."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -320,11 +320,11 @@ async def add_server_back(callback: CallbackQuery, state: FSMContext):
     current_step = data.get('add_step', 1)
     
     if current_step <= 1:
-        # Возврат к списку серверов
+        # Return to server list
         await show_servers_list(callback, state)
         return
     
-    # На шаг назад
+    # One step back
     new_step = current_step - 1
     await state.set_state(ADD_STATES[new_step - 1])
     await state.update_data(add_step=new_step)
@@ -339,7 +339,7 @@ async def add_server_back(callback: CallbackQuery, state: FSMContext):
 
 
 async def process_add_step(message: Message, state: FSMContext):
-    """Обрабатывает ввод на шаге добавления."""
+    """Processes input during the add step."""
     data = await state.get_data()
     current_step = data.get('add_step', 1)
     server_data = data.get('server_data', {})
@@ -349,14 +349,14 @@ async def process_add_step(message: Message, state: FSMContext):
     param = get_param_by_index(current_step - 1)
     value = get_message_text_for_storage(message, 'plain')
     
-    # Валидация
+    # Validation
     if not param['validate'](value):
         await safe_edit_or_send(message,
             f"❌ {param['error']}\n\nПопробуйте ещё раз:"
         )
         return
     
-    # Парсинг URL
+    # URL parsing
     if param['key'] == 'panel_url':
         url_str = value
         if not url_str.startswith(('http://', 'https://')):
@@ -382,7 +382,7 @@ async def process_add_step(message: Message, state: FSMContext):
             server_data['port'] = port
             server_data['web_base_path'] = path
             
-            # Сохраняем исходный ввод чисто для отображения на следующих шагах
+            # Save the original input purely for display in the next steps
             server_data['panel_url'] = url_str
             
         except Exception as e:
@@ -391,22 +391,22 @@ async def process_add_step(message: Message, state: FSMContext):
             )
             return
     else:
-        # Конвертация (если нужно)
+        # Conversion (if necessary)
         if 'convert' in param:
             value = param['convert'](value)
         
-        # Сохраняем значение
+        # Saving the value
         server_data[param['key']] = value
 
     await state.update_data(server_data=server_data)
     
-    # Удаляем сообщение пользователя (опционально)
+    # Delete a user's message (optional)
     try:
         await message.delete()
     except:
         pass
     
-    # Переход к следующему шагу или подтверждению
+    # Move to next step or confirmation
     if current_step < get_total_params():
         new_step = current_step + 1
         await state.set_state(ADD_STATES[new_step - 1])
@@ -414,15 +414,15 @@ async def process_add_step(message: Message, state: FSMContext):
         
         text = get_add_step_text(new_step, server_data)
         
-        # Редактируем предыдущее сообщение бота
-        # Для этого сохраняем message_id
+        # Editing the previous bot message
+        # To do this, save message_id
         bot_message = await safe_edit_or_send(message,
             text,
             reply_markup=add_server_step_kb(new_step),
             force_new=True
         )
     else:
-        # Все данные введены — проверяем подключение
+        # All data has been entered - check the connection
         await state.set_state(AdminStates.add_server_confirm)
         await state.update_data(add_step=get_total_params() + 1)
         
@@ -431,7 +431,7 @@ async def process_add_step(message: Message, state: FSMContext):
             force_new=True
         )
         
-        # Тестируем подключение
+        # Testing the connection
         test_result = await test_server_connection(server_data)
         
         if test_result['success']:
@@ -457,7 +457,7 @@ async def process_add_step(message: Message, state: FSMContext):
         await safe_edit_or_send(message, text, reply_markup=kb, force_new=True)
 
 
-# Хендлеры для каждого состояния добавления
+# Handlers for each add state
 @router.message(AdminStates.add_server_name)
 async def add_server_name_handler(message: Message, state: FSMContext):
     await process_add_step(message, state)
@@ -480,7 +480,7 @@ async def add_server_password_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_server_add_test")
 async def add_server_retest(callback: CallbackQuery, state: FSMContext):
-    """Повторная проверка подключения."""
+    """Recheck the connection."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -520,7 +520,7 @@ async def add_server_retest(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_server_add_save")
 async def add_server_save(callback: CallbackQuery, state: FSMContext):
-    """Сохраняет новый сервер."""
+    """Saves the new server."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -546,11 +546,11 @@ async def add_server_save(callback: CallbackQuery, state: FSMContext):
             f"🔗 {server_data.get('protocol', 'https')}://{server_data['host']}:{server_data['port']}{server_data['web_base_path']}"
         )
         
-        # Показываем сервер через секунду
+        # Show the server in a second
         await callback.answer("✅ Сервер добавлен!")
         
-        # Перенаправляем на просмотр нового сервера
-        # Перенаправляем на просмотр нового сервера
+        # Redirect to view the new server
+        # Redirect to view the new server
         await render_server_view(callback.message, server_id, state)
         
     except Exception as e:
@@ -563,21 +563,21 @@ async def add_server_save(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# РЕДАКТИРОВАНИЕ СЕРВЕРА
+# EDITING THE SERVER
 # ============================================================================
 
 def get_edit_text(server: dict, current_param: int) -> str:
-    """Формирует текст для экрана редактирования."""
+    """Generates text for the editing screen."""
     param = get_param_by_index(current_param)
     total = get_total_params()
     
-    # Получаем текущее значение
+    # Get the current value
     if param['key'] == 'panel_url':
         current_value = f"{server.get('protocol', 'https')}://{server.get('host', '')}:{server.get('port', '')}{server.get('web_base_path', '')}"
     else:
         current_value = server.get(param['key'], '')
     
-    # Маскируем пароль
+    # Masking the password
     if param['key'] == 'password':
         display_value = "•" * min(len(str(current_value)), 8)
     else:
@@ -596,7 +596,7 @@ def get_edit_text(server: dict, current_param: int) -> str:
 
 @router.callback_query(F.data.startswith("admin_server_edit:"))
 async def start_edit_server(callback: CallbackQuery, state: FSMContext):
-    """Начинает редактирование сервера."""
+    """Starts editing the server."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -622,7 +622,7 @@ async def start_edit_server(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_server_edit_prev")
 async def edit_server_prev(callback: CallbackQuery, state: FSMContext):
-    """Предыдущий параметр при редактировании."""
+    """Previous parameter when editing."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -650,7 +650,7 @@ async def edit_server_prev(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_server_edit_next")
 async def edit_server_next(callback: CallbackQuery, state: FSMContext):
-    """Следующий параметр при редактировании."""
+    """Next parameter when editing."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -678,7 +678,7 @@ async def edit_server_next(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.edit_server)
 async def edit_server_value(message: Message, state: FSMContext):
-    """Обрабатывает ввод нового значения при редактировании."""
+    """Handles the entry of a new value when editing."""
     data = await state.get_data()
     server_id = data.get('server_id')
     current_param = data.get('edit_param', 0)
@@ -688,7 +688,7 @@ async def edit_server_value(message: Message, state: FSMContext):
     param = get_param_by_index(current_param)
     value = get_message_text_for_storage(message, 'plain')
     
-    # Валидация
+    # Validation
     if not param['validate'](value):
         await safe_edit_or_send(message,
             f"❌ {param['error']}"
@@ -715,7 +715,7 @@ async def edit_server_value(message: Message, state: FSMContext):
             if not path.endswith('/'):
                 path += '/'
                 
-            # Сохраняем все 4 параметра в БД
+            # We save all 4 parameters in the database
             update_server_field(server_id, 'protocol', protocol)
             update_server_field(server_id, 'host', host)
             update_server_field(server_id, 'port', port)
@@ -726,27 +726,27 @@ async def edit_server_value(message: Message, state: FSMContext):
             )
             return
     else:
-        # Конвертация
+        # Conversion
         if 'convert' in param:
             value = param['convert'](value)
         
-        # Сохраняем в БД
+        # Saving in the database
         success = update_server_field(server_id, param['key'], value)
     
     if not success:
         await safe_edit_or_send(message, "❌ Ошибка сохранения")
         return
     
-    # Сбрасываем кэш клиента (настройки изменились)
+    # Resetting the client cache (the settings have changed)
     await invalidate_client_cache(server_id)
     
-    # Удаляем сообщение пользователя
+    # Deleting a user's message
     try:
         await message.delete()
     except:
         pass
     
-    # Обновляем экран с новым значением
+    # Refresh the screen with the new value
     server = get_server_by_id(server_id)
     text = get_edit_text(server, current_param)
     
@@ -759,7 +759,7 @@ async def edit_server_value(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_server_edit_done")
 async def edit_server_done(callback: CallbackQuery, state: FSMContext):
-    """Завершение редактирования — возврат к просмотру."""
+    """Finish editing - return to viewing."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -767,24 +767,24 @@ async def edit_server_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     server_id = data.get('server_id')
     
-    # Перенаправляем на просмотр сервера
-    # Перенаправляем на просмотр сервера
+    # Redirect to view server
+    # Redirect to view server
     await render_server_view(callback.message, server_id, state)
 
 
 @router.callback_query(F.data == "admin_server_edit_cancel")
 async def edit_server_cancel(callback: CallbackQuery, state: FSMContext):
-    """Отмена редактирования — возврат к просмотру."""
+    """Cancel editing - return to viewing."""
     await edit_server_done(callback, state)
 
 
 # ============================================================================
-# АКТИВАЦИЯ / ДЕАКТИВАЦИЯ
+# ACTIVATION / DEACTIVATION
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_server_toggle:"))
 async def toggle_server(callback: CallbackQuery, state: FSMContext):
-    """Переключает активность сервера."""
+    """Toggles server activity."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -796,24 +796,24 @@ async def toggle_server(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Сервер не найден", show_alert=True)
         return
     
-    # Сбрасываем кэш
+    # Resetting the cache
     await invalidate_client_cache(server_id)
     
     status_text = "активирован 🟢" if new_status else "деактивирован 🔴"
     await callback.answer(f"Сервер {status_text}")
     
-    # Обновляем экран просмотра
-    # Обновляем экран просмотра
+    # Refresh the viewing screen
+    # Refresh the viewing screen
     await render_server_view(callback.message, server_id, state)
 
 
 # ============================================================================
-# УДАЛЕНИЕ СЕРВЕРА
+# DELETING A SERVER
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_server_delete:"))
 async def confirm_delete_server(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает подтверждение удаления."""
+    """Requests confirmation of deletion."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -840,7 +840,7 @@ async def confirm_delete_server(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_server_delete_confirm:"))
 async def execute_delete_server(callback: CallbackQuery, state: FSMContext):
-    """Удаляет сервер."""
+    """Deletes the server."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -854,11 +854,11 @@ async def execute_delete_server(callback: CallbackQuery, state: FSMContext):
     
     server_name = server['name']
     
-    # Удаляем
+    # Delete
     success = delete_server(server_id)
     
     if success:
-        # Сбрасываем кэш
+        # Resetting the cache
         await invalidate_client_cache(server_id)
         
         await safe_edit_or_send(callback.message, 
@@ -867,14 +867,14 @@ async def execute_delete_server(callback: CallbackQuery, state: FSMContext):
         )
         await callback.answer("✅ Сервер удалён")
         
-        # Возврат к списку
+        # Return to list
         await show_servers_list(callback, state)
     else:
         await callback.answer("❌ Ошибка удаления", show_alert=True)
 
 
 # ============================================================================
-# ИЗМЕНЕНИЕ ГРУПП СЕРВЕРА (toggle many-to-many)
+# CHANGING SERVER GROUPS (toggle many-to-many)
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_server_change_group:"))
@@ -908,7 +908,7 @@ async def server_change_group_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_server_toggle_group:"))
 async def server_toggle_group(callback: CallbackQuery, state: FSMContext):
-    """Переключает принадлежность сервера к группе."""
+    """Switches the server's group membership."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -927,7 +927,7 @@ async def server_toggle_group(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.answer(f"➖ Убран из «{group_name}»")
 
-    # Обновляем экран с обновлённым списком галочек
+    # Refresh the screen with an updated list of checkmarks
     server = get_server_by_id(server_id)
     groups = get_all_groups()
     selected = get_server_group_ids(server_id)

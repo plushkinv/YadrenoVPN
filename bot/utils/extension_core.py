@@ -1,17 +1,17 @@
-"""Ограниченный core facade для custom extensions."""
+"""Limited core facade for custom extensions."""
 from __future__ import annotations
 
 from typing import Any
 
 
 class ExtensionCoreAPI:
-    """Безопасные read/command операции ядра для одного extension_id."""
+    """Safe kernel read/command operations for one extension_id."""
 
     def __init__(self, extension_id: str):
         self.extension_id = extension_id
 
     def get_user_by_telegram_id(self, telegram_id: int) -> dict[str, Any] | None:
-        """Возвращает безопасный профиль пользователя без секретов и служебных полей."""
+        """Returns a secure user profile without secrets and service fields."""
         telegram_id = _normalize_positive_int(telegram_id, 'telegram_id')
         from database.requests import get_user_by_telegram_id
 
@@ -31,7 +31,7 @@ class ExtensionCoreAPI:
         }
 
     def get_user_keys(self, telegram_id: int) -> list[dict[str, Any]]:
-        """Возвращает display-данные ключей пользователя без VPN-секретов."""
+        """Returns display data of the user's keys without VPN secrets."""
         telegram_id = _normalize_positive_int(telegram_id, 'telegram_id')
         from database.requests import get_user_keys_for_display
 
@@ -62,7 +62,7 @@ class ExtensionCoreAPI:
         user_id: int | None = None,
         telegram_id: int | None = None,
     ) -> dict[str, Any]:
-        """Начисляет дни на первый активный ключ пользователя через core-log."""
+        """Accrues days to the user's first active key via core-log."""
         target_user_id = _resolve_user_id(user_id=user_id, telegram_id=telegram_id)
         return await _apply_core_operation(
             extension_id=self.extension_id,
@@ -82,7 +82,7 @@ class ExtensionCoreAPI:
         user_id: int | None = None,
         telegram_id: int | None = None,
     ) -> dict[str, Any]:
-        """Начисляет бонус на баланс пользователя через core-log."""
+        """Credits a bonus to the user's balance via core-log."""
         target_user_id = _resolve_user_id(user_id=user_id, telegram_id=telegram_id)
         return await _apply_core_operation(
             extension_id=self.extension_id,
@@ -91,6 +91,27 @@ class ExtensionCoreAPI:
             target_user_id=target_user_id,
             amount=_normalize_positive_int(cents, 'cents'),
             reason=reason,
+        )
+
+    async def check_telegram_chat_member(
+        self,
+        chat_id: int | str,
+        telegram_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Checks Telegram chat membership through the current bot runtime context."""
+        if telegram_id is None:
+            from bot.utils.custom_extensions import _get_current_extension_telegram_id
+
+            telegram_id = _get_current_extension_telegram_id()
+        if telegram_id is None:
+            raise ValueError('telegram_id is required')
+        from bot.services.telegram_membership import check_telegram_chat_member
+        from bot.utils.custom_extensions import _get_current_extension_bot
+
+        return await check_telegram_chat_member(
+            _get_current_extension_bot(),
+            chat_id=chat_id,
+            telegram_id=_normalize_positive_int(telegram_id, 'telegram_id'),
         )
 
 

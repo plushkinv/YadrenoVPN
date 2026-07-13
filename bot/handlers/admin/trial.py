@@ -1,10 +1,10 @@
 """
-Обработчики раздела «Пробная подписка» в админ-панели.
+Handlers for the “Trial subscription” section in the admin panel.
 
-Управление функцией пробного периода:
-- Включение/выключение
-- Редактирование текста страницы
-- Выбор тарифа (включая неактивные, кроме Admin Tariff)
+Trial feature management:
+- On/off
+- Editing page text
+- Select a tariff (including inactive ones, except Admin Tariff)
 """
 import logging
 from aiogram import Router, F
@@ -24,11 +24,11 @@ router = Router()
 
 
 # ============================================================================
-# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: ОТОБРАЖЕНИЕ МЕНЮ
+# AUXILIARY FUNCTION: DISPLAYING MENU
 # ============================================================================
 
 async def show_trial_menu(callback: CallbackQuery):
-    """Показывает меню настроек пробной подписки."""
+    """Shows the trial subscription settings menu."""
     from database.requests import (
         get_setting, is_trial_enabled, get_trial_tariff_id, get_tariff_by_id
     )
@@ -66,23 +66,23 @@ async def show_trial_menu(callback: CallbackQuery):
 
 
 # ============================================================================
-# ГЛАВНЫЙ ЭКРАН ПРОБНОЙ ПОДПИСКИ
+# MAIN SCREEN FOR TRIAL SUBSCRIPTION
 # ============================================================================
 
 @router.callback_query(F.data == "admin_trial")
 async def admin_trial_menu(callback: CallbackQuery):
-    """Показывает меню управления пробной подпиской."""
+    """Shows the trial subscription management menu."""
     if not is_admin(callback.from_user.id):
         return
     await show_trial_menu(callback)
 
 
 # ============================================================================
-# ВКЛЮЧЕНИЕ / ВЫКЛЮЧЕНИЕ
+# ON/OFF
 # ============================================================================
 
 async def _set_trial_enabled(callback: CallbackQuery, target_enabled: bool):
-    """Устанавливает состояние пробной подписки."""
+    """Sets the trial subscription status."""
     if not is_admin(callback.from_user.id):
         return
 
@@ -105,25 +105,25 @@ async def _set_trial_enabled(callback: CallbackQuery, target_enabled: bool):
 
 @router.callback_query(F.data.startswith("admin_trial_set:"))
 async def admin_trial_set(callback: CallbackQuery):
-    """Включает или выключает пробную подписку выбранным состоянием."""
+    """Enables or disables the trial subscription with the selected state."""
     target_enabled = callback.data.rsplit(":", 1)[1] == "1"
     await _set_trial_enabled(callback, target_enabled)
 
 
 @router.callback_query(F.data == "admin_trial_toggle")
 async def admin_trial_toggle(callback: CallbackQuery):
-    """Совместимый toggle для старых сообщений."""
+    """Compatible toggle for old posts."""
     from database.requests import is_trial_enabled
     await _set_trial_enabled(callback, not is_trial_enabled())
 
 
 # ============================================================================
-# РЕДАКТИРОВАНИЕ ТЕКСТА
+# TEXT EDITING
 # ============================================================================
 
 @router.callback_query(F.data == "admin_trial_edit_text")
 async def admin_trial_edit_text_start(callback: CallbackQuery, state: FSMContext):
-    """Начинает редактирование текста пробной подписки через универсальный редактор."""
+    """Starts editing the text of the trial subscription through the universal editor."""
     if not is_admin(callback.from_user.id):
         return
 
@@ -140,23 +140,23 @@ async def admin_trial_edit_text_start(callback: CallbackQuery, state: FSMContext
 
 
 # ============================================================================
-# ВЫБОР ТАРИФА
+# CHOICE OF TARIFF
 # ============================================================================
 
 @router.callback_query(F.data == "admin_trial_select_tariff")
 async def admin_trial_select_tariff(callback: CallbackQuery):
-    """Показывает список тарифов для выбора пробного периода."""
+    """Shows a list of tariffs for selecting a trial period."""
     if not is_admin(callback.from_user.id):
         return
 
     from database.requests import get_all_tariffs, get_trial_tariff_id
     from bot.keyboards.admin import trial_tariff_select_kb
 
-    # Получаем ВСЕ тарифы включая неактивные
+    # We receive ALL tariffs including inactive ones
     tariffs = get_all_tariffs(include_hidden=True)
     selected_id = get_trial_tariff_id()
 
-    # Фильтруем Admin Tariff
+    # Filtering Admin Tariff
     available = [t for t in tariffs if t.get('name') != 'Admin Tariff']
 
     if not available:
@@ -176,7 +176,7 @@ async def admin_trial_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_trial_set_tariff:"))
 async def admin_trial_set_tariff(callback: CallbackQuery):
-    """Устанавливает выбранный тариф для пробной подписки."""
+    """Sets the selected rate for the trial subscription."""
     if not is_admin(callback.from_user.id):
         return
 

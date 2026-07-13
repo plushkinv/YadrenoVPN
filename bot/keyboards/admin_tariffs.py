@@ -6,12 +6,12 @@ from .admin_misc import back_button, home_button, cancel_button
 
 def tariffs_list_kb(tariffs: List[Dict[str, Any]], include_hidden: bool=True) -> InlineKeyboardMarkup:
     """
-    Клавиатура списка тарифов.
-    При наличии >1 группы тарифы визуально разделяются заголовками.
+    Tariff list keyboard.
+    If there is >1 group, tariffs are visually separated by headings.
     
     Args:
-        tariffs: Список тарифов из БД
-        include_hidden: Показывать скрытые тарифы
+        tariffs: List of tariffs from the database
+        include_hidden: Show hidden rates
     """
     from database.requests import get_groups_count, get_all_groups
     builder = InlineKeyboardBuilder()
@@ -46,12 +46,12 @@ def tariffs_list_kb(tariffs: List[Dict[str, Any]], include_hidden: bool=True) ->
 
 def tariff_view_kb(tariff_id: int, is_active: bool, show_group_button: bool=False) -> InlineKeyboardMarkup:
     """
-    Клавиатура просмотра тарифа.
+    Tariff viewing keyboard.
     
     Args:
-        tariff_id: ID тарифа
-        is_active: Активен ли тариф
-        show_group_button: Показывать ли кнопку «Изменить группу» (при >1 группе)
+        tariff_id: Tariff ID
+        is_active: Is the tariff active?
+        show_group_button: Whether to show the “Change Group” button (for >1 group)
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✏️ Изменить', callback_data=f'admin_tariff_edit:{tariff_id}'))
@@ -67,18 +67,18 @@ def tariff_view_kb(tariff_id: int, is_active: bool, show_group_button: bool=Fals
 
 def add_tariff_step_kb(step: int, total_steps: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура для шага добавления тарифа.
+    Keyboard for adding a tariff step.
     
     Args:
-        step: Текущий шаг (1-N)
-        total_steps: Общее количество шагов
+        step: Current step (1-N)
+        total_steps: Total number of steps
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_tariffs'))
     return builder.as_markup()
 
 def add_tariff_confirm_kb() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения добавления тарифа."""
+    """Keyboard to confirm adding a tariff."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✅ Сохранить', callback_data='admin_tariff_add_save'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_tariffs'))
@@ -86,11 +86,11 @@ def add_tariff_confirm_kb() -> InlineKeyboardMarkup:
 
 def edit_tariff_kb(current_param: int, total_params: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура редактирования тарифа с навигацией.
+    Tariff editing keyboard with navigation.
     
     Args:
-        current_param: Индекс текущего параметра
-        total_params: Общее количество параметров
+        current_param: Index of the current parameter
+        total_params: Total number of parameters
     """
     builder = InlineKeyboardBuilder()
     nav_buttons = []

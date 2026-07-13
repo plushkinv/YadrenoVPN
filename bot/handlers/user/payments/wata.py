@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-# Конфигурация провайдера WATA (общие параметры для create и check)
+# WATA provider configuration (common parameters for create and check)
 _WATA_TITLE = '🌊 <b>WATA</b>'
 _WATA_TYPE = 'wata'
 _WATA_ERROR = 'WATA'
@@ -27,7 +27,7 @@ _WATA_MIN_PRICE = 10
 
 @router.callback_query(F.data == 'pay_wata')
 async def pay_wata_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты через WATA (новый ключ)."""
+    """Selecting a tariff for payment via WATA (new key)."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -58,7 +58,7 @@ async def pay_wata_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('wata_pay:'))
 async def wata_pay_create(callback: CallbackQuery, state: FSMContext):
-    """Создаёт платёжную ссылку WATA для нового ключа и отправляет QR-фото."""
+    """Creates a WATA payment link for the new key and sends a QR photo."""
     from database.requests import get_tariff_by_id, save_wata_link_id
     from bot.services.billing import create_wata_payment
 
@@ -95,7 +95,7 @@ async def wata_pay_create(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('renew_wata_tariff:'))
 async def renew_wata_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты WATA при продлении ключа."""
+    """Selecting a tariff for paying WATA when renewing a key."""
     from database.requests import get_key_details_for_user
     from bot.keyboards.user import renew_tariff_select_kb
     from bot.utils.groups import get_tariffs_for_renewal
@@ -131,7 +131,7 @@ async def renew_wata_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('renew_pay_wata:'))
 async def renew_wata_create(callback: CallbackQuery, state: FSMContext):
-    """Создаёт платёжную ссылку WATA для продления ключа."""
+    """Creates a WATA payment link for key renewal."""
     from database.requests import get_tariff_by_id, get_key_details_for_user, save_wata_link_id
     from bot.services.billing import create_wata_payment
 
@@ -173,9 +173,9 @@ async def renew_wata_create(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('check_wata:'))
 async def check_wata_payment(callback: CallbackQuery, state: FSMContext):
     """
-    Проверяет статус WATA-платежа по нажатию «✅ Я оплатил».
+    Checks the status of the WATA payment by clicking “✅ I paid.”
 
-    WATA имеет лимит — не чаще одного запроса в 30 секунд.
+    WATA has a limit - no more than one request per 30 seconds.
     """
     await _run_wata_check(
         callback.message, state,
@@ -188,7 +188,7 @@ async def check_wata_payment(callback: CallbackQuery, state: FSMContext):
 async def _run_wata_check(message, state, order_id: str,
                           telegram_id: int, callback=None) -> None:
     """
-    Общая проверка WATA-платежа для кнопки «Я оплатил» и deep-link возврата.
+    General verification of WATA payment for the “I paid” button and deep-link return.
     """
     from bot.services.billing import check_wata_payment_status
 
@@ -200,7 +200,7 @@ async def _run_wata_check(message, state, order_id: str,
         payment_type=_WATA_TYPE,
         payment_id_field=_WATA_RESULT_KEY,
         check_func=check_wata_payment_status,
-        check_arg_is_order_id=False,  # WATA: проверяем по wata_link_id через /links/{id}
+        check_arg_is_order_id=False,  # WATA: check by wata_link_id via /links/{id}
         rate_limit_seconds=30,
         rate_limit_prefix='wata',
         pending_hint='Если только что оплатили — подождите 30 секунд (ограничение WATA API).',

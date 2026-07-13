@@ -1,7 +1,7 @@
 """
-Сервис курсов валют.
+Exchange rate service.
 
-Получение курса USD/RUB от ЦБ РФ с fallback в settings.
+Receiving the USD/RUB exchange rate from the Central Bank of the Russian Federation with fallback in settings.
 """
 import logging
 import aiohttp
@@ -15,11 +15,11 @@ DEFAULT_USD_RUB_RATE = '10000'
 
 async def get_usd_rub_rate() -> int:
     """
-    Получить курс USD/RUB в копейках.
-    Сначала пробует ЦБ РФ, при ошибке берёт из settings (fallback).
+    Get the USD/RUB rate in kopecks.
+    First, the Central Bank of the Russian Federation tries, and if there is an error, it takes it from the settings (fallback).
 
     Returns:
-        Курс USD/RUB в копейках (например, 9500 = 95.00 руб)
+        USD/RUB exchange rate in kopecks (for example, 9500 = 95.00 rubles)
     """
     try:
         async with aiohttp.ClientSession() as session:

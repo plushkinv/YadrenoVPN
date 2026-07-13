@@ -1,5 +1,5 @@
 """
-Общие операции жизненного цикла VPN-ключей.
+Common VPN key lifecycle operations.
 """
 import logging
 from typing import Any, Dict, Optional
@@ -14,11 +14,11 @@ async def renew_key_access(
     tariff_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Универсально продлевает или уменьшает срок ключа и синхронизирует панель.
+    Universally extends or reduces the key term and synchronizes the panel.
 
-    БД остаётся источником истины. Если панель недоступна или обновилась
-    частично, изменение в БД не откатывается: повторная синхронизация сможет
-    дожать состояние позже.
+    The database remains the source of truth. If the panel is unavailable or has been updated
+    partially, the change in the database is not rolled back: re-synchronization will be able to
+    make the most of it later.
     """
     from database.requests import extend_vpn_key
     from bot.services.vpn_api import restore_traffic_limit_in_db, sync_key_to_panel_state
@@ -85,7 +85,7 @@ async def renew_key_access(
 
 
 async def emit_key_lifecycle_event_safe(event: str, context: Dict[str, Any]) -> list[dict]:
-    """Вызывает lifecycle hooks и защищает основной flow от ошибок registry."""
+    """Calls lifecycle hooks and protects the main flow from registry errors."""
     try:
         from bot.utils.lifecycle_registry import emit_key_lifecycle_event
 
@@ -96,7 +96,7 @@ async def emit_key_lifecycle_event_safe(event: str, context: Dict[str, Any]) -> 
 
 
 async def process_expired_key_lifecycle_events(limit: Optional[int] = None) -> list[Dict[str, Any]]:
-    """Эмитит key_expired один раз для каждого key_id+expires_at."""
+    """Issue key_expired once for each key_id+expires_at."""
     from database.requests import (
         get_pending_expired_key_events,
         record_key_lifecycle_event_once,
@@ -149,10 +149,10 @@ async def process_expired_key_lifecycle_events(limit: Optional[int] = None) -> l
 
 async def sync_user_keys_panel_access(telegram_id: int) -> Dict[str, Any]:
     """
-    Синхронизирует доступ всех ключей пользователя с панелью после бана/разбана.
+    Synchronizes access of all user keys with the panel after a ban/unban.
 
-    Сам статус бана остаётся в БД. sync_key_to_panel_state() перечитывает ключ
-    вместе с users.is_banned и выставляет enable на панели по актуальному состоянию.
+    The ban status itself remains in the database. sync_key_to_panel_state() rereads the key
+    together with users.is_banned and sets enable on the panel according to the current status.
     """
     from database.requests import get_user_by_telegram_id, get_user_vpn_keys
     from bot.services.vpn_api import sync_key_to_panel_state

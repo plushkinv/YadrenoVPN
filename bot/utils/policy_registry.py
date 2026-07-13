@@ -1,4 +1,4 @@
-"""Доменные policy points для custom extensions."""
+"""Domain policy points for custom extensions."""
 from __future__ import annotations
 
 import inspect
@@ -48,17 +48,17 @@ _ALLOWED_REFERRAL_REWARD_KEYS = {
 
 
 def register_pricing_policy(name: str, func: PricingPolicy, *, replace: bool = False) -> None:
-    """Регистрирует политику расчёта цены."""
+    """Registers the pricing policy."""
     _register_policy(PRICING_POLICIES, name, func, replace=replace)
 
 
 def register_promo_reward_policy(name: str, func: PromoRewardPolicy, *, replace: bool = False) -> None:
-    """Регистрирует будущую политику промо-награды."""
+    """Registers future promotional reward policy."""
     _register_policy(PROMO_REWARD_POLICIES, name, func, replace=replace)
 
 
 def register_referral_reward_policy(name: str, func: ReferralRewardPolicy, *, replace: bool = False) -> None:
-    """Регистрирует будущую политику реферальной награды."""
+    """Registers future referral reward policy."""
     _register_policy(REFERRAL_REWARD_POLICIES, name, func, replace=replace)
 
 
@@ -66,7 +66,7 @@ def apply_pricing_policies(
     quote: Mapping[str, Any],
     context: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Последовательно применяет pricing policies к quote."""
+    """Consistently applies pricing policies to quote."""
     result = dict(quote)
     result.setdefault('pricing_policies', [])
     _validate_quote_amounts(result)
@@ -125,7 +125,7 @@ def apply_pricing_policies(
 
 
 def apply_promo_reward_policies(context: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Собирает декларативные promo rewards, которые затем применяет ядро."""
+    """Collects declarative promo rewards, which the kernel then applies."""
     rewards: list[dict[str, Any]] = []
 
     for name, policy in list(PROMO_REWARD_POLICIES.items()):
@@ -166,7 +166,7 @@ def apply_referral_reward_policies(
     reward: Mapping[str, Any],
     context: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Применяет referral reward policies к расчёту одного уровня."""
+    """Applies referral reward policies to the calculation of one level."""
     result = {
         'reward_cents': _normalize_amount(reward.get('reward_cents', 0), 'reward_cents'),
         'reward_days': _normalize_amount(reward.get('reward_days', 0), 'reward_days'),

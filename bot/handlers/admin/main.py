@@ -1,7 +1,7 @@
 """
-Главный роутер админ-панели.
+Main router of the admin panel.
 
-Обрабатывает вход в админку и главное меню.
+Processes login to the admin panel and the main menu.
 """
 import logging
 from aiogram import Router, F
@@ -23,22 +23,22 @@ router = Router()
 
 
 # ============================================================================
-# ПРОВЕРКА АДМИНИСТРАТОРА
+# ADMINISTRATOR CHECK
 # ============================================================================
 
 
 
 
 # ============================================================================
-# ГЛАВНОЕ МЕНЮ АДМИНКИ
+# ADMIN MAIN MENU
 # ============================================================================
 
 async def get_admin_stats_text() -> str:
     """
-    Формирует короткую сводку главной админки.
+    Generates a short summary of the main admin panel.
     
     Returns:
-        Отформатированный текст для сообщения
+        Formatted text for the message
     """
     snapshot = await collect_admin_monitoring_snapshot()
     return build_admin_summary_text(snapshot)
@@ -48,7 +48,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 @router.callback_query(F.data == "admin_panel")
 async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
-    """Показывает главное меню админ-панели."""
+    """Shows the main menu of the admin panel."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -58,7 +58,7 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
     from bot.services.page_context import clear_page_context
     clear_page_context(callback.from_user.id)
 
-    # Снимаем застрявшую Reply-клавиатуру (например, после поиска пользователя)
+    # Removing a stuck Reply keyboard (for example, after searching for a user)
     import asyncio
     from aiogram.types import ReplyKeyboardRemove
     try:
@@ -86,12 +86,12 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# РАЗДЕЛ МАРКЕТИНГА
+# MARKETING SECTION
 # ============================================================================
 
 @router.callback_query(F.data == "admin_marketing")
 async def show_marketing_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню маркетинговых инструментов."""
+    """Shows a menu of marketing tools."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -113,7 +113,7 @@ async def show_marketing_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_placeholder")
 async def admin_placeholder(callback: CallbackQuery):
-    """Заглушка для временно пустой кнопки в главном меню."""
+    """A placeholder for a temporarily empty button in the main menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer()
         return
@@ -122,12 +122,12 @@ async def admin_placeholder(callback: CallbackQuery):
 
 
 # ============================================================================
-# РАЗДЕЛ ПОДДЕРЖКИ
+# SUPPORT SECTION
 # ============================================================================
 
 @router.callback_query(F.data == "admin_author_support")
 async def show_author_support(callback: CallbackQuery):
-    """Показывает экран поддержки автора."""
+    """Shows the author support screen."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -156,9 +156,9 @@ async def show_author_support(callback: CallbackQuery):
             logger.error(f"Ошибка при показе поддержки автора: {e}")
 
 # ============================================================================
-# ПЕРЕАДРЕСАЦИЯ НА ПОДРОУТЕРЫ
+# READDRESSING TO SUBROOUTERS
 # ============================================================================
 
-# Раздел «Пользователи» реализован в users.py
-# Раздел «Настройки бота» реализован в system.py
+# The Users section is implemented in users.py
+# The “Bot Settings” section is implemented in system.py
 

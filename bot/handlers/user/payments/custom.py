@@ -1,4 +1,4 @@
-"""Generic handlers для кастомных payment providers расширений."""
+"""Generic handlers for custom payment providers extensions."""
 from __future__ import annotations
 
 import logging
@@ -8,7 +8,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
 from bot.utils.page_flow import build_page_flow_context
-from bot.utils.text import escape_html, safe_edit_or_send
+from bot.utils.page_renderer import render_page
+from bot.utils.text import escape_html
 from bot.handlers.user.payments.tariff_select_page import (
     build_payment_tariff_select_page_context,
     show_payment_no_tariffs_page,
@@ -261,11 +262,10 @@ async def _create_custom_payment(
 
     from database.requests import get_key_details_for_user, get_tariff_by_id, get_user_internal_id
     from bot.handlers.user.payments.base import (
+        QR_PAYMENT_PAGE_KEY,
         build_qr_payment_page_context,
-        build_qr_payment_reply_markup,
         complete_promo_free_payment,
-        format_qr_payment_text,
-        remember_qr_payment_page_context,
+        default_qr_payment_page_text,
     )
     from bot.keyboards.admin import home_only_kb
     from bot.keyboards.user import qr_payment_kb
@@ -340,18 +340,6 @@ async def _create_custom_payment(
     )
     payment_context.setdefault('bot_username', bot_info.username)
     payment_context = build_page_flow_context(callback, **payment_context)
-    text = format_qr_payment_text(
-        title=f"💳 <b>{escape_html(provider.title)}</b>",
-        tariff_name=escape_html(tariff['name']),
-        price_str=format_amount(quote['final_amount'], provider.payment_type),
-        days=int(tariff.get('duration_days') or 0),
-        qr_url=payment_url,
-        key_name=escape_html(key['display_name']) if key else None,
-        instruction_text='Перейдите по {payment_link} и завершите оплату.',
-        promo_lines=promo_lines,
-        telegram_id=payment_context.get('telegram_id'),
-        bot_username=payment_context.get('bot_username'),
-    )
 
     runtime_markup = qr_payment_kb(
         order_id,
@@ -360,19 +348,14 @@ async def _create_custom_payment(
         payment_url,
     )
     runtime_rows = getattr(runtime_markup, 'inline_keyboard', None)
-    reply_markup = build_qr_payment_reply_markup(payment_context, runtime_rows) or runtime_markup
-    rendered_message = await safe_edit_or_send(
-        callback.message,
-        text,
-        reply_markup=reply_markup,
-        force_new=True,
-    )
-    remember_qr_payment_page_context(
-        callback.from_user.id,
-        rendered_message,
-        payment_context,
-        reply_markup,
+    await render_page(
+        callback,
+        page_key=QR_PAYMENT_PAGE_KEY,
+        context=payment_context,
         append_buttons=runtime_rows,
+        force_new=True,
+        fallback_text=default_qr_payment_page_text(),
+        media_policy='runtime',
     )
     await callback.answer()
 

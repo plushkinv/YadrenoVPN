@@ -1,4 +1,4 @@
-"""Сборка редактируемого экрана «Мои ключи»."""
+"""Assembling an editable “My Keys” screen."""
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable
@@ -23,12 +23,20 @@ def build_my_keys_item_text(
     inbound_name: str,
     protocol: str,
 ) -> str:
-    """Подставляет данные одного ключа в скрытый шаблон строки списка."""
+    """Substitutes the data of one key into a hidden list string template."""
     expires = format_date_for_display(key.get('expires_at'))
     server = key.get('server_name') or 'Не выбран'
     display_name = key.get('display_name') or f"Ключ #{key.get('id', '')}"
 
     replacements = {
+        '%key_status%': status,
+        '%key_name%': escape_html(str(display_name)),
+        '%key_traffic%': escape_html(str(traffic_text)),
+        '%key_expires_at%': escape_html(str(expires)),
+        '%key_server%': escape_html(str(server)),
+        '%key_inbound%': escape_html(str(inbound_name)),
+        '%key_protocol%': escape_html(str(protocol)),
+        '%key_id%': escape_html(str(key.get('id', ''))),
         '%ключ_статус%': status,
         '%ключ_имя%': escape_html(str(display_name)),
         '%ключ_трафик%': escape_html(str(traffic_text)),
@@ -43,5 +51,5 @@ def build_my_keys_item_text(
 
 
 def build_my_keys_list_text(items: Iterable[str]) -> str:
-    """Собирает элементы списка ключей с пустой строкой между ними."""
+    """Collects the elements of a list of keys with an empty string between them."""
     return '\n\n'.join(item.rstrip() for item in items if item is not None)

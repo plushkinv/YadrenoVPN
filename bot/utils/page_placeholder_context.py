@@ -1,4 +1,4 @@
-"""Before-render наполнение context для canonical-плейсхолдеров страниц."""
+"""Before-render context filling for canonical placeholders of pages."""
 from __future__ import annotations
 
 import re
@@ -15,15 +15,33 @@ from bot.utils.page_dynamic_data import (
 
 _PLACEHOLDER_RE = re.compile(r'%[^%\s]+%')
 
-TARIFF_PLACEHOLDERS = {'%тарифы%', '%без_тарифов%'}
+TARIFF_PLACEHOLDERS = {'%tariffs%', '%тарифы%', '%no_tariffs%', '%без_тарифов%'}
 REFERRAL_PLACEHOLDERS = {
+    '%referral_link%',
+    '%referral_link_url%',
+    '%referral_stats%',
     '%реферальная_ссылка%',
     '%реферальная_ссылка_url%',
     '%реферальная_статистика%',
 }
-SUPPORT_PLACEHOLDERS = {'%поддержка_заголовок%', '%поддержка_инструкция%'}
-MY_KEYS_PLACEHOLDERS = {'%список_ключей%'}
+SUPPORT_PLACEHOLDERS = {
+    '%support_title%',
+    '%support_instruction%',
+    '%поддержка_заголовок%',
+    '%поддержка_инструкция%',
+}
+MY_KEYS_PLACEHOLDERS = {'%keys_list%', '%список_ключей%'}
 USER_PROFILE_PLACEHOLDERS = {
+    '%profile%',
+    '%user_balance%',
+    '%user_name%',
+    '%user_display_name%',
+    '%user_username%',
+    '%user_registered_at%',
+    '%keys_summary%',
+    '%keys_total%',
+    '%keys_active%',
+    '%keys_expired%',
     '%профиль%',
     '%баланс%',
     '%пользователь_имя%',
@@ -43,7 +61,7 @@ def _normalize_placeholders(values: Mapping[str, Any] | None) -> set[str]:
 
 
 def _collect_page_placeholder_names(page_data: Mapping[str, Any]) -> set[str]:
-    """Собирает плейсхолдеры из текста страницы и шаблонизируемых частей кнопок."""
+    """Collects placeholders from page text and templated parts of buttons."""
     sources: list[str] = []
     text = page_data.get('text')
     if isinstance(text, str):
@@ -94,10 +112,10 @@ async def enrich_page_placeholder_context(
     text_replacements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Добавляет в context данные для общих плейсхолдеров, если они нужны странице.
+    Adds data for general placeholders to the context if the page needs them.
 
-    Значения из явных `text_replacements` считаются более точными и не
-    пересчитываются автоматически.
+    Values from explicit `text_replacements` are considered more accurate and not
+    are recalculated automatically.
     """
     enriched = enrich_page_placeholder_context_sync(
         page_key,
@@ -122,11 +140,11 @@ def enrich_page_placeholder_context_sync(
     text_replacements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Sync-safe часть before-render enrichment для текстовых адаптеров страниц.
+    Sync-safe part of before-render enrichment for text page adapters.
 
-    Не наполняет `%список_ключей%`, потому что этот блок может требовать
-    async-запросов к VPN-панели. Для обычного `render_page()` его добавляет
-    async-обёртка `enrich_page_placeholder_context()`.
+    Does not fill the key-list placeholder because this block may require
+    async requests to the VPN panel. For regular `render_page()` it adds
+    async wrapper `enrich_page_placeholder_context()`.
     """
     enriched: dict[str, Any] = _normalize_context(context)
     placeholders = _collect_page_placeholder_names(page_data)

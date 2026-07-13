@@ -1,4 +1,4 @@
-"""Универсальный handler data-driven маршрутов пользовательских страниц."""
+"""Universal handler of data-driven routes of user pages."""
 from __future__ import annotations
 
 import logging
@@ -23,7 +23,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith(PAGE_ROUTE_CALLBACK_PREFIX))
 async def page_route_handler(callback: CallbackQuery):
-    """Открывает страницу через именованный route из БД."""
+    """Opens a page via a named route from the database."""
     telegram_id = callback.from_user.id
     if is_user_banned(telegram_id):
         await callback.answer("⛔ Доступ заблокирован", show_alert=True)

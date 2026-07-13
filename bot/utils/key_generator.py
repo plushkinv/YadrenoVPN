@@ -1,6 +1,6 @@
 """
-Утилиты для генерации ключей доступа (VLESS, VMess, Trojan, Shadowsocks, JSON, QR).
-Мультипротокольная поддержка для 3X-UI панели.
+Utilities for generating access keys (VLESS, VMess, Trojan, Shadowsocks, JSON, QR).
+Multi-protocol support for 3X-UI panel.
 """
 import json
 import base64
@@ -14,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# УНИВЕРСАЛЬНЫЕ РОУТЕРЫ
+# UNIVERSAL ROUTERS
 # ============================================================================
 
 def generate_link(config: Dict[str, Any]) -> str:
     """
-    Генерирует ссылку подключения на основе протокола из конфига.
-    Поддерживает: vless, vmess, trojan, shadowsocks.
+    Generates a connection link based on the protocol from the config.
+    Supports: vless, vmess, trojan, shadowsocks.
     """
     protocol = config.get('protocol', 'vless')
     
@@ -37,8 +37,8 @@ def generate_link(config: Dict[str, Any]) -> str:
 
 def generate_json(config: Dict[str, Any]) -> str:
     """
-    Генерирует JSON-конфигурацию для Xray/V2Ray клиентов.
-    Поддерживает: vless, vmess, trojan, shadowsocks.
+    Generates JSON configuration for Xray/V2Ray clients.
+    Supports: vless, vmess, trojan, shadowsocks.
     """
     protocol = config.get('protocol', 'vless')
     
@@ -54,18 +54,18 @@ def generate_json(config: Dict[str, Any]) -> str:
 
 
 # ============================================================================
-# ОБЩИЕ УТИЛИТЫ
+# GENERAL UTILITIES
 # ============================================================================
 
 def _get_remark(config: Dict[str, Any]) -> str:
-    """Формирует имя подключения (remark)."""
+    """Generates a connection name (remark)."""
     remark_part = config.get('inbound_name', 'VPN')
     email_part = config.get('email', '')
     return f"{remark_part}-{email_part}"
 
 
 def _parse_transport_params(stream: dict, params: dict) -> None:
-    """Извлекает параметры транспорта из stream_settings и добавляет в params."""
+    """Retrieves transport parameters from stream_settings and adds them to params."""
     network = stream.get('network', 'tcp')
     
     if network == 'tcp':
@@ -132,7 +132,7 @@ def _parse_transport_params(stream: dict, params: dict) -> None:
 
 
 def _parse_security_params(stream: dict, params: dict) -> None:
-    """Извлекает параметры безопасности (TLS/Reality) из stream_settings."""
+    """Retrieves security settings (TLS/Reality) from stream_settings."""
     security = stream.get('security', 'none')
     
     if security == 'tls':
@@ -196,7 +196,7 @@ def _parse_security_params(stream: dict, params: dict) -> None:
 
 
 def _search_host(headers: dict) -> str:
-    """Ищет значение Host в заголовках (может быть строкой или списком)."""
+    """Looks for the Host value in the headers (can be a string or a list)."""
     if not headers:
         return ''
     host = headers.get('Host', headers.get('host', ''))
@@ -210,7 +210,7 @@ def _search_host(headers: dict) -> str:
 # ============================================================================
 
 def generate_vless_link(config: Dict[str, Any]) -> str:
-    """Генерирует ссылку vless:// из конфигурации."""
+    """Generates a vless:// link from the configuration."""
     uuid = config['uuid']
     host = config['host']
     port = config['port']
@@ -219,21 +219,21 @@ def generate_vless_link(config: Dict[str, Any]) -> str:
     stream = config.get('stream_settings', {})
     network = stream.get('network', 'tcp')
     
-    # Порядок параметров как у 3X-UI панели
+    # The order of parameters is the same as in the 3X-UI panel
     params = {
         "type": network,
-        "encryption": "none",  # Обязательный параметр для VLESS
+        "encryption": "none",  # Required parameter for VLESS
     }
     
     _parse_transport_params(stream, params)
     _parse_security_params(stream, params)
     
-    # Flow (для VLESS TCP + Reality/TLS)
+    # Flow (for VLESS TCP + Reality/TLS)
     flow = config.get('flow', '')
     if flow:
         params['flow'] = flow
     
-    # safe='' чтобы / кодировался как %2F (как у панели)
+    # safe='' so that / is encoded as %2F (like the panel)
     query = "&".join([f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in params.items() if v])
     link = f"vless://{uuid}@{host}:{port}?{query}#{name}"
     logger.info(f"Generated VLESS link params: security={params.get('security')}, sni={params.get('sni')}, pbk={params.get('pbk','')[:16]}..., flow={params.get('flow')}, fp={params.get('fp')}")
@@ -241,7 +241,7 @@ def generate_vless_link(config: Dict[str, Any]) -> str:
 
 
 def generate_vless_json(config: Dict[str, Any]) -> str:
-    """Генерирует JSON-конфигурацию для VLESS."""
+    """Generates JSON configuration for VLESS."""
     stream = config.get('stream_settings', {})
     network = stream.get('network', 'tcp')
     security = stream.get('security', 'none')
@@ -272,7 +272,7 @@ def generate_vless_json(config: Dict[str, Any]) -> str:
 # ============================================================================
 
 def generate_vmess_link(config: Dict[str, Any]) -> str:
-    """Генерирует ссылку vmess:// из конфигурации (base64 JSON)."""
+    """Generates a vmess:// link from the configuration (base64 JSON)."""
     stream = config.get('stream_settings', {})
     network = stream.get('network', 'tcp')
     security = stream.get('security', 'none')
@@ -289,7 +289,7 @@ def generate_vmess_link(config: Dict[str, Any]) -> str:
         "type": "none",
     }
     
-    # Транспорт
+    # Transport
     if network == 'tcp':
         tcp = stream.get('tcpSettings', {})
         header = tcp.get('header', {})
@@ -337,7 +337,7 @@ def generate_vmess_link(config: Dict[str, Any]) -> str:
         obj['host'] = host
         obj['mode'] = xhttp.get('mode', 'auto')
     
-    # Безопасность
+    # Security
     obj['tls'] = security
     if security == 'tls':
         tls_settings = stream.get('tlsSettings', {})
@@ -355,7 +355,7 @@ def generate_vmess_link(config: Dict[str, Any]) -> str:
 
 
 def generate_vmess_json(config: Dict[str, Any]) -> str:
-    """Генерирует JSON-конфигурацию для VMess."""
+    """Generates JSON configuration for VMess."""
     stream = config.get('stream_settings', {})
     
     outbound = {
@@ -383,7 +383,7 @@ def generate_vmess_json(config: Dict[str, Any]) -> str:
 # ============================================================================
 
 def generate_trojan_link(config: Dict[str, Any]) -> str:
-    """Генерирует ссылку trojan:// из конфигурации."""
+    """Generates a trojan:// link from the configuration."""
     password = config.get('password', config.get('uuid', ''))
     host = config['host']
     port = config['port']
@@ -397,13 +397,13 @@ def generate_trojan_link(config: Dict[str, Any]) -> str:
     _parse_transport_params(stream, params)
     _parse_security_params(stream, params)
     
-    # safe='' чтобы / кодировался как %2F (как у панели 3X-UI)
+    # safe='' so that / is encoded as %2F (like the 3X-UI panel)
     query = "&".join([f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in params.items() if v])
     return f"trojan://{password}@{host}:{port}?{query}#{name}"
 
 
 def generate_trojan_json(config: Dict[str, Any]) -> str:
-    """Генерирует JSON-конфигурацию для Trojan."""
+    """Generates JSON configuration for Trojan."""
     stream = config.get('stream_settings', {})
     password = config.get('password', config.get('uuid', ''))
     
@@ -428,7 +428,7 @@ def generate_trojan_json(config: Dict[str, Any]) -> str:
 # ============================================================================
 
 def generate_shadowsocks_link(config: Dict[str, Any]) -> str:
-    """Генерирует ссылку ss:// из конфигурации."""
+    """Generates an ss:// link from the configuration."""
     method = config.get('method', 'aes-256-gcm')
     password = config.get('password', '')
     server_password = config.get('server_password', '')
@@ -436,14 +436,14 @@ def generate_shadowsocks_link(config: Dict[str, Any]) -> str:
     port = config['port']
     name = urllib.parse.quote(_get_remark(config))
     
-    # Для Shadowsocks 2022 в режиме Multi-User пароль формируется как ServerPassword:ClientPassword
+    # For Shadowsocks 2022 in Multi-User mode, the password is formed as ServerPassword:ClientPassword
     if method.startswith('2022-') and server_password and server_password != password:
         password = f"{server_password}:{password}"
     
-    # Формат: ss://base64(method:password)@host:port
+    # Format: ss://base64(method:password)@host:port
     user_info = base64.urlsafe_b64encode(f"{method}:{password}".encode()).decode().rstrip('=')
     
-    # Добавляем параметры транспорта (как делает 3x-ui: ?type=tcp)
+    # Add transport parameters (as 3x-ui does: ?type=tcp)
     stream = config.get('stream_settings', {})
     network = stream.get('network', 'tcp')
     
@@ -451,7 +451,7 @@ def generate_shadowsocks_link(config: Dict[str, Any]) -> str:
     _parse_transport_params(stream, params)
     _parse_security_params(stream, params)
     
-    # Исключаем security=none чтобы не мусорить, если это дефолт для SS
+    # We exclude security=none so as not to litter if this is the default for SS
     if params.get('security') == 'none':
         del params['security']
         
@@ -464,7 +464,7 @@ def generate_shadowsocks_link(config: Dict[str, Any]) -> str:
 
 
 def generate_shadowsocks_json(config: Dict[str, Any]) -> str:
-    """Генерирует JSON-конфигурацию для Shadowsocks."""
+    """Generates JSON configuration for Shadowsocks."""
     stream = config.get('stream_settings', {})
     
     outbound = {
@@ -485,11 +485,11 @@ def generate_shadowsocks_json(config: Dict[str, Any]) -> str:
 
 
 # ============================================================================
-# ОБЩИЕ ХЕЛПЕРЫ ДЛЯ JSON
+# COMMON HELPERS FOR JSON
 # ============================================================================
 
 def _build_stream_settings(stream: dict) -> dict:
-    """Строит объект streamSettings для JSON-конфига."""
+    """Constructs a streamSettings object for the JSON config."""
     network = stream.get('network', 'tcp')
     security = stream.get('security', 'none')
     
@@ -498,7 +498,7 @@ def _build_stream_settings(stream: dict) -> dict:
         "security": security
     }
     
-    # Транспорт
+    # Transport
     transport_map = {
         'tcp': 'tcpSettings',
         'kcp': 'kcpSettings',
@@ -511,7 +511,7 @@ def _build_stream_settings(stream: dict) -> dict:
     if key and key in stream:
         result[key] = stream[key]
     
-    # Безопасность
+    # Security
     if security == 'tls' and 'tlsSettings' in stream:
         result['tlsSettings'] = stream['tlsSettings']
     elif security == 'reality' and 'realitySettings' in stream:
@@ -521,7 +521,7 @@ def _build_stream_settings(stream: dict) -> dict:
 
 
 def _wrap_outbound(outbound: dict) -> str:
-    """Оборачивает outbound в полный клиентский конфиг Xray."""
+    """Wraps outbound in the full Xray client config."""
     final_config = {
         "log": {"loglevel": "warning"},
         "inbounds": [{
@@ -547,18 +547,18 @@ def _wrap_outbound(outbound: dict) -> str:
 
 
 # ============================================================================
-# QR-КОД
+# QR CODE
 # ============================================================================
 
 def generate_qr_code(data: str) -> bytes:
     """
-    Генерирует QR-код из строки.
+    Generates a QR code from a string.
     
     Args:
-        data: Данные для QR-кода
+        data: Data for the QR code
         
     Returns:
-        Байты изображения (PNG)
+        Image bytes (PNG)
     """
     qr = qrcode.QRCode(
         version=1,

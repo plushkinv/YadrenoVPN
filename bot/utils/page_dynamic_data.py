@@ -1,4 +1,4 @@
-"""Сбор динамических данных для плейсхолдеров пользовательских страниц."""
+"""Collection of dynamic data for placeholders of user pages."""
 from __future__ import annotations
 
 import logging
@@ -25,16 +25,17 @@ def _required_int(value: Any, field_name: str) -> int:
 
 
 def format_price_compact(cents: int) -> str:
-    """Форматирует копейки в компактную строку рублей."""
+    """Formats kopecks into a compact ruble string."""
     if cents >= 10000:
         return f"{cents // 100} ₽"
     return f"{cents / 100:.2f} ₽".replace(".", ",")
 
 
-def build_tariff_text() -> str:
-    """Формирует HTML-блок тарифов для `%тарифы%`."""
+def build_tariff_text(*, group_id: int | None = None, include_title: bool = True) -> str:
+    """Generates an HTML block for the tariff list placeholder."""
     from database.requests import (
         get_all_tariffs,
+        get_tariffs_by_group,
         is_cardlink_configured,
         is_cards_enabled,
         is_crypto_configured,
@@ -54,11 +55,17 @@ def build_tariff_text() -> str:
     cardlink_enabled = is_cardlink_configured()
     demo_enabled = is_demo_payment_enabled()
 
-    tariffs = get_all_tariffs()
+    group_id = _optional_int(group_id)
+    if group_id is not None:
+        if group_id <= 0:
+            return ''
+        tariffs = get_tariffs_by_group(group_id)
+    else:
+        tariffs = get_all_tariffs()
     if not tariffs:
         return ''
 
-    lines = ['📋 <b>Тарифы:</b>']
+    lines = ['📋 <b>Тарифы:</b>'] if include_title else []
     for tariff in tariffs:
         prices = []
         if crypto_enabled:
@@ -83,7 +90,7 @@ def build_tariff_text() -> str:
 
 
 def build_referral_stats_text(user_internal_id: int) -> str:
-    """Формирует HTML-блок статистики для `%реферальная_статистика%`."""
+    """Generates an HTML block for the referral statistics placeholder."""
     from database.requests import (
         get_referral_levels,
         get_referral_reward_type,
@@ -138,7 +145,7 @@ def build_referral_context_values(
     telegram_id: int | None,
     bot_username: str | None,
 ) -> dict[str, str]:
-    """Возвращает context-значения реферальных плейсхолдеров страницы."""
+    """Returns the context values of the page's referral placeholders."""
     telegram_id = _optional_int(telegram_id)
     bot_username = bot_username if isinstance(bot_username, str) else ''
     if not telegram_id or not bot_username:
@@ -165,7 +172,7 @@ def build_referral_context_values(
 
 
 def build_support_context_values(*, thread_id: int | None = None) -> dict[str, str]:
-    """Возвращает context-значения базового блока встроенной поддержки."""
+    """Returns the context values of the underlying native support block."""
     thread_id = _optional_int(thread_id)
     title = "Ответ в поддержку" if thread_id else "Поддержка"
     return {
@@ -205,7 +212,7 @@ def _count_active_keys(keys: list[dict[str, Any]]) -> int:
 
 
 def build_user_profile_context_values(telegram_id: int | None) -> dict[str, Any]:
-    """Возвращает context-значения профильных widgets-плейсхолдеров."""
+    """Returns context values of profile widgets placeholders."""
     telegram_id = _optional_int(telegram_id)
     if not telegram_id:
         return {}
@@ -262,7 +269,7 @@ def build_user_profile_context_values(telegram_id: int | None) -> dict[str, Any]
 
 
 async def build_my_keys_render_data(telegram_id: int):
-    """Готовит список ключей и динамические кнопки для страницы `my_keys`."""
+    """Prepares a list of keys and dynamic buttons for the `my_keys` page."""
     telegram_id = _required_int(telegram_id, 'telegram_id')
     from database.requests import get_setting, get_user_keys_for_display, is_traffic_exhausted
     from bot.services.vpn_api import format_traffic, get_client
@@ -332,7 +339,7 @@ async def build_my_keys_render_data(telegram_id: int):
 
 
 async def build_my_keys_context_values(telegram_id: int | None) -> dict[str, Any]:
-    """Возвращает context-значения списка ключей без runtime-кнопок."""
+    """Returns context values of a list of keys without runtime buttons."""
     telegram_id = _optional_int(telegram_id)
     if not telegram_id:
         return {}

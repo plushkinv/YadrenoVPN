@@ -1,12 +1,12 @@
 """
-Роутер раздела «Группы тарифов».
+Router of the “Tariff Groups” section.
 
-Обрабатывает:
-- Список групп
-- Добавление группы
-- Переименование группы
-- Удаление группы (с переносом тарифов/серверов в «Основную»)
-- Сортировку (⬆️ swap с предыдущей)
+Processes:
+- List of groups
+- Adding a group
+- Renaming a group
+- Deleting a group (with transfer of tariffs/servers to “Main”)
+- Sorting (⬆️ swap with previous)
 """
 import logging
 from aiogram import Router, F
@@ -41,12 +41,12 @@ router = Router()
 
 
 # ============================================================================
-# СПИСОК ГРУПП
+# LIST OF GROUPS
 # ============================================================================
 
 @router.callback_query(F.data == "admin_groups")
 async def show_groups_list(callback: CallbackQuery, state: FSMContext):
-    """Показывает список групп тарифов."""
+    """Shows a list of tariff groups."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -55,7 +55,7 @@ async def show_groups_list(callback: CallbackQuery, state: FSMContext):
     
     groups = get_all_groups()
     
-    # Собираем статистику по каждой группе
+    # We collect statistics for each group
     groups_info = []
     for group in groups:
         tariffs_count = len(get_tariffs_by_group(group['id']))
@@ -91,12 +91,12 @@ async def show_groups_list(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# ДОБАВЛЕНИЕ ГРУППЫ
+# ADDING A GROUP
 # ============================================================================
 
 @router.callback_query(F.data == "admin_group_add")
 async def group_add_start(callback: CallbackQuery, state: FSMContext):
-    """Начинает добавление новой группы."""
+    """Starts adding a new group."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -116,7 +116,7 @@ async def group_add_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.group_add_name)
 async def group_add_name_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод названия новой группы."""
+    """Processes entering the name of a new group."""
     if not is_admin(message.from_user.id):
         return
     
@@ -129,13 +129,13 @@ async def group_add_name_handler(message: Message, state: FSMContext):
         )
         return
     
-    # Удаляем сообщение пользователя
+    # Deleting a user's message
     try:
         await message.delete()
     except:
         pass
     
-    # Создаём группу
+    # Create a group
     group_id = add_group(name)
     
     data = await state.get_data()
@@ -144,7 +144,7 @@ async def group_add_name_handler(message: Message, state: FSMContext):
     
     await state.set_state(AdminStates.payments_menu)
     
-    # Собираем данные для показа списка групп
+    # Collecting data to display a list of groups
     groups = get_all_groups()
     groups_info = []
     for group in groups:
@@ -174,7 +174,7 @@ async def group_add_name_handler(message: Message, state: FSMContext):
         text += f"\n📂 <b>{g['name']}</b>{is_default}\n"
         text += f"   Тарифов: {g['tariffs_count']} | Серверов: {g['servers_count']}\n"
     
-    # Редактируем исходное сообщение с формой
+    # Editing the original message with the form
     if add_chat_id and add_msg_id:
         try:
             from bot.keyboards.admin import groups_list_kb
@@ -193,12 +193,12 @@ async def group_add_name_handler(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# ПРОСМОТР / РЕДАКТИРОВАНИЕ ГРУППЫ
+# VIEW/EDIT GROUP
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_group_view:"))
 async def group_view_handler(callback: CallbackQuery, state: FSMContext):
-    """Показывает информацию о группе."""
+    """Shows information about the group."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -243,7 +243,7 @@ async def group_view_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_group_edit:"))
 async def group_edit_start(callback: CallbackQuery, state: FSMContext):
-    """Начинает переименование группы."""
+    """Starts renaming the group."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -269,7 +269,7 @@ async def group_edit_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.group_edit_name)
 async def group_edit_name_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод нового названия группы."""
+    """Processes the entry of a new group name."""
     if not is_admin(message.from_user.id):
         return
     
@@ -289,19 +289,19 @@ async def group_edit_name_handler(message: Message, state: FSMContext):
         await safe_edit_or_send(message, "❌ Ошибка состояния.")
         return
     
-    # Удаляем сообщение пользователя
+    # Deleting a user's message
     try:
         await message.delete()
     except:
         pass
     
-    # Обновляем название
+    # Updating the name
     success = update_group_name(group_id, name)
     
     await state.set_state(AdminStates.payments_menu)
     
     if success and edit_msg_id:
-        # Паттерн: редактируем исходное сообщение
+        # Pattern: editing the original message
         group = get_group_by_id(group_id)
         tariffs = get_tariffs_by_group(group_id)
         servers = get_active_servers_by_group(group_id)
@@ -330,12 +330,12 @@ async def group_edit_name_handler(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# УДАЛЕНИЕ ГРУППЫ
+# DELETING A GROUP
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_group_delete:"))
 async def group_delete_start(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение удаления группы."""
+    """Group deletion confirmation."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -374,7 +374,7 @@ async def group_delete_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_group_delete_confirm:"))
 async def group_delete_confirm(callback: CallbackQuery, state: FSMContext):
-    """Выполняет удаление группы."""
+    """Performs deletion of a group."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -388,17 +388,17 @@ async def group_delete_confirm(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.answer("❌ Не удалось удалить группу", show_alert=True)
     
-    # Возвращаемся к списку групп
+    # Returning to the list of groups
     await show_groups_list(callback, state)
 
 
 # ============================================================================
-# СОРТИРОВКА ГРУПП (⬆️)
+# SORTING GROUPS (⬆️)
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_group_up:"))
 async def group_move_up_handler(callback: CallbackQuery, state: FSMContext):
-    """Поднимает группу вверх в сортировке."""
+    """Moves the group up in the sorting."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -408,5 +408,5 @@ async def group_move_up_handler(callback: CallbackQuery, state: FSMContext):
     move_group_up(group_id)
     await callback.answer("🔄 Порядок обновлён")
     
-    # Обновляем список
+    # Updating the list
     await show_groups_list(callback, state)

@@ -1,4 +1,4 @@
-"""Core flow для кастомных платёжных провайдеров расширений."""
+"""Core flow for custom payment providers extensions."""
 from __future__ import annotations
 
 import logging
@@ -38,7 +38,7 @@ async def create_custom_payment_order(
     key: Mapping[str, Any] | None = None,
     bot_username: str | None = None,
 ) -> dict[str, Any]:
-    """Создаёт core order, рассчитывает quote и вызывает create_payment provider-а."""
+    """Creates a core order, calculates quote and calls create_payment provider."""
     provider = get_payment_provider(provider_id)
     if provider is None:
         raise ValueError('payment provider не зарегистрирован')
@@ -101,7 +101,7 @@ async def create_custom_payment_order(
 
 
 async def check_custom_payment_order(provider_id: str, order: Mapping[str, Any]) -> dict[str, Any]:
-    """Проверяет внешний статус кастомного платежа и обновляет provider-order."""
+    """Checks the external status of a custom payment and updates the provider-order."""
     provider = get_payment_provider(provider_id)
     if provider is None:
         raise ValueError('payment provider не зарегистрирован')
@@ -140,7 +140,7 @@ async def complete_custom_payment_order(
     bot: Any = None,
     notify_user: bool = False,
 ) -> dict[str, Any]:
-    """Завершает custom payment через core billing без UI/FSM."""
+    """Completes custom payment via core billing without UI/FSM."""
     from bot.services.billing import process_payment_order, process_referral_reward
 
     success, text, order = await process_payment_order(
@@ -200,7 +200,7 @@ async def auto_check_custom_payment_orders(
     bot: Any = None,
     limit: int = 50,
 ) -> dict[str, int]:
-    """Фоново проверяет открытые custom payment orders и закрывает оплаченные через core billing."""
+    """Background checks open custom payment orders and closes those paid through core billing."""
     summary = {
         'queued': 0,
         'checked': 0,
@@ -282,7 +282,7 @@ async def process_custom_payment_webhook(
     *,
     bot: Any = None,
 ) -> dict[str, Any]:
-    """Обрабатывает webhook custom payment provider-а через декларативный contract."""
+    """Processes a custom payment provider's webhook through a declarative contract."""
     try:
         provider = get_payment_provider(provider_id)
     except ValueError:

@@ -1,36 +1,36 @@
 """
-Блокирующее обновление.
+Blocking update.
 
-Этот файл поставляется вместе с блокирующим обновлением.
-После выполнения условий и следующего обычного обновления файл будет перезаписан
-стандартной заглушкой — и блокировка снимется автоматически.
+This file comes with the blocking update.
+Once the conditions are met and the next normal update occurs, the file will be overwritten
+with a standard plug - and the lock will be removed automatically.
 
-=== ИНСТРУКЦИЯ ДЛЯ РАЗРАБОТЧИКА ===
+=== INSTRUCTIONS FOR DEVELOPER ===
 
-При создании блокирующего обновления:
+When creating a blocking update:
 
-1. Коммит должен начинаться с '!' — это маркер блокирующего коммита.
+1. The commit must begin with '!' is a blocking commit marker.
 
-2. В этом файле определите две переменные:
+2. In this file, define two variables:
 
-   BLOCKING_MESSAGE (str) — текст сообщения, которое увидит администратор.
-   Если не задано — показывается текст по умолчанию.
+   BLOCKING_MESSAGE (str) — the text of the message that the administrator will see.
+   If not specified, the default text is shown.
 
-   check_unblock_conditions() — функция, вызывается при каждой проверке обновлений.
-   Должна вернуть True если условия выполнены и блокировку можно снять.
-   Если не определена — блокировка НЕ снимается автоматически.
+   check_unblock_conditions() - function called every time updates are checked.
+   Should return True if the conditions are met and the lock can be removed.
+   If not defined, the lock is NOT removed automatically.
 
-3. При установке блокирующего обновления система автоматически:
-   - Ставит флаг update_blocked в settings
-   - При каждой проверке вызывает check_unblock_conditions()
-   - Если функция вернула True — флаг снимается
+3. When installing a blocking update, the system automatically:
+   - Sets the update_blocked flag in settings
+   - Calls check_unblock_conditions() on each check
+   - If the function returns True, the flag is removed
 
-=== ПРИМЕР ===
+=== EXAMPLE ===
 
 BLOCKING_MESSAGE = (
-    "🔒 <b>Требуется действие!</b>\\n\\n"
-    "Перейдите в раздел Реферальная система и настройте уровни.\\n"
-    "После этого обновления продолжатся автоматически."
+    "🔒 <b>Action required!</b>\\n\\n"
+    "Go to the Referral system section and set up levels.\\n"
+    "After this, updates will continue automatically."
 )
 
 def check_unblock_conditions():
@@ -38,5 +38,5 @@ def check_unblock_conditions():
     return get_setting('referral_enabled', '0') == '1'
 """
 
-# Нет активной блокировки
+# No active blocking
 BLOCKING_MESSAGE = None

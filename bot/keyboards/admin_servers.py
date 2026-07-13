@@ -6,11 +6,11 @@ from .admin_misc import back_button, home_button, cancel_button
 
 def servers_list_kb(servers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """
-    Клавиатура списка серверов.
-    При наличии >1 группы серверы визуально разделяются заголовками.
+    Server list keyboard.
+    If there is >1 group, the servers are visually separated by headers.
     
     Args:
-        servers: Список серверов из БД
+        servers: List of servers from the database
     """
     from database.requests import get_groups_count, get_all_groups, get_server_group_ids
     builder = InlineKeyboardBuilder()
@@ -23,7 +23,7 @@ def servers_list_kb(servers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
         for s in servers:
             g_ids = get_server_group_ids(s['id'])
             if not g_ids:
-                g_ids = [1] # Фолбек если групп нет
+                g_ids = [1] # Fallback if there are no groups
             for g_id in g_ids:
                 if g_id not in grouped_servers:
                     grouped_servers[g_id] = []
@@ -48,12 +48,12 @@ def servers_list_kb(servers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
 
 def server_view_kb(server_id: int, is_active: bool, show_group_button: bool=False) -> InlineKeyboardMarkup:
     """
-    Клавиатура просмотра сервера.
+    Server view keyboard.
 
     Args:
-        server_id: ID сервера
-        is_active: Активен ли сервер
-        show_group_button: Показывать ли кнопку «Изменить группу»
+        server_id: Server ID
+        is_active: Whether the server is active
+        show_group_button: Whether to show the "Edit Group" button
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✏️ Изменить настройки', callback_data=f'admin_server_edit:{server_id}'))
@@ -67,12 +67,12 @@ def server_view_kb(server_id: int, is_active: bool, show_group_button: bool=Fals
 
 def server_groups_kb(server_id: int, all_groups: List[Dict[str, Any]], selected_group_ids: List[int]) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора групп сервера с чекбоксами (toggle).
+    Keyboard for selecting server groups with checkboxes (toggle).
 
     Args:
-        server_id: ID сервера
-        all_groups: Все группы
-        selected_group_ids: ID групп, в которых сервер уже состоит
+        server_id: Server ID
+        all_groups: All groups
+        selected_group_ids: IDs of groups the server is already a member of
     """
     builder = InlineKeyboardBuilder()
     for group in all_groups:
@@ -84,11 +84,11 @@ def server_groups_kb(server_id: int, all_groups: List[Dict[str, Any]], selected_
 
 def add_server_step_kb(step: int, total_steps: int=6) -> InlineKeyboardMarkup:
     """
-    Клавиатура для шага добавления сервера.
+    Keyboard for the add server step.
     
     Args:
-        step: Текущий шаг (1-6)
-        total_steps: Общее количество шагов
+        step: Current step (1-6)
+        total_steps: Total number of steps
     """
     builder = InlineKeyboardBuilder()
     buttons = []
@@ -99,14 +99,14 @@ def add_server_step_kb(step: int, total_steps: int=6) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def add_server_confirm_kb() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения добавления сервера."""
+    """Keyboard to confirm adding a server."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✅ Сохранить', callback_data='admin_server_add_save'))
     builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_server_add_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_servers'))
     return builder.as_markup()
 
 def add_server_test_failed_kb() -> InlineKeyboardMarkup:
-    """Клавиатура при неудачной проверке подключения."""
+    """Keyboard when the connection test fails."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🔄 Проверить снова', callback_data='admin_server_add_test'))
     builder.row(InlineKeyboardButton(text='✅ Сохранить всё равно', callback_data='admin_server_add_save'))
@@ -115,11 +115,11 @@ def add_server_test_failed_kb() -> InlineKeyboardMarkup:
 
 def edit_server_kb(current_param: int, total_params: int=6) -> InlineKeyboardMarkup:
     """
-    Клавиатура редактирования сервера с навигацией.
+    Server editing keyboard with navigation.
     
     Args:
-        current_param: Индекс текущего параметра (0-5)
-        total_params: Общее количество параметров
+        current_param: Index of the current parameter (0-5)
+        total_params: Total number of parameters
     """
     builder = InlineKeyboardBuilder()
     nav_buttons = []
@@ -136,7 +136,7 @@ def edit_server_kb(current_param: int, total_params: int=6) -> InlineKeyboardMar
     return builder.as_markup()
 
 def confirm_delete_kb(server_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения удаления сервера."""
+    """Server deletion confirmation keyboard."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✅ Да, удалить', callback_data=f'admin_server_delete_confirm:{server_id}'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin_server_view:{server_id}'))

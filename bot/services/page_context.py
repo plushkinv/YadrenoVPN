@@ -1,9 +1,9 @@
 """
-Память о последней пользовательской странице, которую видел администратор.
+Memory of the last user page seen by the administrator.
 
-Нужна для команды /yaa: администратор может вызвать её прямо с пользовательской
-страницы, а агент получает точный контекст и после изменения экран можно
-перерисовать без лишних вопросов.
+Needed for the /yaa command: the administrator can call it directly from the user
+pages, and the agent receives the exact context and after changing the screen you can
+redraw without any questions asked.
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ SUPPORTED_YAA_PAGE_KEYS = frozenset({
 
 @dataclass
 class PageContext:
-    """Последний рендер редактируемой пользовательской страницы."""
+    """Latest render of an editable custom page."""
 
     page_key: str
     message: Message
@@ -114,7 +114,7 @@ def _copy_button_rows(
 
 
 def is_supported_yaa_page_key(page_key: str) -> bool:
-    """Проверяет, можно ли запоминать страницу для контекстной команды /yaa."""
+    """Checks whether the page for the /yaa context command can be remembered."""
     if not isinstance(page_key, str):
         raise ValueError("page_key должен быть строкой")
     return page_key in SUPPORTED_YAA_PAGE_KEYS or custom_page_exists(page_key)
@@ -130,7 +130,7 @@ def remember_page_context(
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> None:
-    """Запоминает страницу администратора, если она поддерживает /yaa."""
+    """Remembers the admin page if it supports /yaa."""
     if not is_supported_yaa_page_key(page_key):
         return
     _contexts[telegram_id] = PageContext(
@@ -145,10 +145,10 @@ def remember_page_context(
 
 
 def get_page_context(telegram_id: int) -> Optional[PageContext]:
-    """Возвращает последнюю страницу администратора для /yaa."""
+    """Returns the last admin page for /yaa."""
     return _contexts.get(telegram_id)
 
 
 def clear_page_context(telegram_id: int) -> None:
-    """Очищает сохранённый контекст страницы администратора."""
+    """Clears the saved admin page context."""
     _contexts.pop(telegram_id, None)

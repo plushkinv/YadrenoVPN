@@ -1,5 +1,5 @@
 """
-Утилиты для работы с группами тарифов в пользовательской части.
+Utilities for working with tariff groups in the user area.
 """
 from database.requests import (
     get_all_groups,
@@ -14,14 +14,14 @@ from database.requests import (
 
 def build_groups_data_for_tariffs():
     """
-    Формирует данные для группированного отображения тарифов.
+    Generates data for grouped display of tariffs.
     
-    Группа показывается ТОЛЬКО если в ней есть И активные тарифы И активные серверы (К1).
-    При 1 группе — возвращает None (без группировки).
+    The group is shown ONLY if it contains BOTH active tariffs AND active servers (K1).
+    With 1 group - returns None (without grouping).
     
     Returns:
-        list[dict] или None: Список словарей {'group': {...}, 'tariffs': [...]}
-                             или None если группировка не нужна
+        list[dict] or None: List of dictionaries {'group': {...}, 'tariffs': [...]}
+                             or None if grouping is not needed
     """
     groups_count = get_groups_count()
     if groups_count <= 1:
@@ -34,14 +34,14 @@ def build_groups_data_for_tariffs():
         tariffs = get_tariffs_by_group(group['id'])
         servers = get_active_servers_by_group(group['id'])
         
-        # К1: группа видна только если есть И тарифы И серверы
+        # K1: the group is visible only if there are BOTH tariffs AND servers
         if tariffs and servers:
             groups_data.append({
                 'group': group,
                 'tariffs': tariffs
             })
     
-    # Если осталась только 1 видимая группа — не показываем заголовки
+    # If there is only 1 visible group left, we do not show the headers
     if len(groups_data) <= 1:
         return None
     
@@ -50,43 +50,43 @@ def build_groups_data_for_tariffs():
 
 def get_tariffs_for_renewal(key_tariff_id: int):
     """
-    Получает тарифы, доступные для продления ключа.
-    При >1 группе — только тарифы из группы текущего ключа.
-    При 1 группе — все активные тарифы.
+    Retrieves rates available for key renewal.
+    If >1 group - only tariffs from the group of the current key.
+    For group 1 - all active tariffs.
     
     Args:
-        key_tariff_id: ID тарифа текущего ключа
+        key_tariff_id: Tariff ID of the current key
         
     Returns:
-        Список тарифов для продления
+        List of tariffs for renewal
     """
     groups_count = get_groups_count()
     
     if groups_count <= 1:
         return get_all_tariffs(include_hidden=False)
     
-    # Фильтруем по группе ключа
+    # Filter by key group
     group_id = get_tariff_group_id(key_tariff_id)
     return get_tariffs_by_group(group_id)
 
 
 def get_servers_for_key(key_tariff_id: int):
     """
-    Получает серверы, доступные для ключа (замена или создание).
-    При >1 группе — только серверы из группы тарифа.
-    При 1 группе — все активные серверы.
+    Gets the servers available for the key (replacement or creation).
+    If >1 group - only servers from the tariff group.
+    With group 1 - all active servers.
     
     Args:
-        key_tariff_id: ID тарифа ключа
+        key_tariff_id: Key tariff ID
         
     Returns:
-        Список серверов
+        Server list
     """
     groups_count = get_groups_count()
     
     if groups_count <= 1:
         return get_active_servers()
     
-    # Фильтруем по группе тарифа
+    # Filter by tariff group
     group_id = get_tariff_group_id(key_tariff_id)
     return get_active_servers_by_group(group_id)

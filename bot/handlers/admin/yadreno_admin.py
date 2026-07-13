@@ -1,5 +1,5 @@
 """
-Диалог с агентом Yadreno Admin и контекстная команда /yaa.
+Dialogue with the Yadreno Admin agent and the /yaa context command.
 """
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from bot.services.yadreno_admin import (
     YadrenoAdminLatest,
     YadrenoAdminProgressEvent,
     YadrenoAdminUpload,
+    build_agent_env_context_for_topic,
     cancel_active_dialog,
     detect_public_server_ip,
     fetch_latest_dialog_event,
@@ -64,7 +65,9 @@ from database.requests import (
     get_yadreno_admin_api_key,
     set_yadreno_admin_server_ip,
     set_yadreno_admin_api_key,
+    get_page,
 )
+from bot.utils.page_flow import parse_registry_names
 
 router = Router()
 
@@ -76,6 +79,9 @@ YAA_KEY_DELIVERY_CONTEXT_KEYS = frozenset({
     "key_raw_value",
 })
 YAA_KEY_DELIVERY_PLACEHOLDERS = frozenset({
+    "%key_copy%".casefold(),
+    "%key_link%".casefold(),
+    "%key_link_url%".casefold(),
     "%ключ_для_копирования%".casefold(),
     "%ключ_ссылка%".casefold(),
     "%ключ_ссылка_url%".casefold(),
@@ -110,7 +116,7 @@ _yadreno_album_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
 
 
 def _missing_key_text() -> str:
-    """Текст экрана настройки api_key."""
+    """The text of the api_key setup screen."""
     return (
         "🤖 <b>Yadreno Admin</b>\n\n"
         "Чтобы начать диалог с агентом, сначала укажите свой <code>api_key</code>.\n\n"
@@ -124,10 +130,16 @@ def _missing_key_text() -> str:
 
 
 def _chat_intro_text() -> str:
-    """Текст экрана чата с агентом."""
+    """Agent chat screen text."""
     return (
         "🤖 <b>Yadreno Admin</b>\n\n"
-        "Напишите задачу обычным сообщением — агент сможет смотреть и менять этот сервер.\n\n"
+        "Напишите задачу обычным сообщением — агент поможет с администрированием "
+        "VPN-сервиса: пользователями, ключами, подписками, оплатами, серверами, "
+        "3x-UI, inbound, логами и диагностикой.\n\n"
+        "Это основной универсальный агент без кастомизационного ограничителя: "
+        "он может смотреть и менять этот сервер шире, когда это нужно для обслуживания.\n\n"
+        "Для изменения страниц, кнопок, текстов, медиа и внешнего вида лучше "
+        "используйте раздел <b>🛠 Кастомизация YadrenoVPN</b>.\n\n"
         "Чтобы остановить текущий запрос, отправьте <code>/cancel</code>."
     )
 
@@ -138,23 +150,24 @@ def _customization_intro_text() -> str:
         "🛠 <b>Кастомизация YadrenoVPN</b>\n\n"
         "Этот чат предназначен для настройки страниц, кнопок, текстов, медиа "
         "и пользовательских расширений YadrenoVPN.\n\n"
-        "По умолчанию агент работает через безопасные слои кастомизации: "
-        "поля <code>*_custom</code>, штатные настройки, публичные API и "
-        "<code>custom_extensions/</code>. Изменение ядра проекта отключено "
-        "скрытой настройкой, если администратор явно не разрешил его.\n\n"
         "Опишите, что нужно изменить. Для редактирования конкретной страницы "
-        "удобнее открыть её в боте и вызвать <code>/yaa</code> прямо оттуда."
+        "удобнее открыть её в боте и вызвать <code>/yaa</code> прямо оттуда.\n\n"
+        "Если ограничитель не отключён, изменения в этом разделе вносятся штатно: "
+        "бот сохраняет обновляемость, а системная часть проекта не меняется без "
+        "явного разрешения.\n\n"
+        "Для пользователей, ключей, оплат, серверов, 3x-UI и диагностики "
+        "используйте <b>🤖 Yadreno Admin</b>."
     )
 
 
 def _progress_text(title: str, content: str) -> str:
-    """Форматирует progress-событие хаба для HTML-сообщения Telegram."""
+    """Formats the hub progress event for a Telegram HTML message."""
     body = escape_html(content.strip()) if content else "Обновляю статус..."
     return f"{title}\n\n{body}"
 
 
 def _format_final_response(content: str, viewer_url: str | None = None) -> str:
-    """Форматирует финальный ответ агента для Telegram."""
+    """Formats the final agent response for Telegram."""
     response = content or "Готово."
     if viewer_url:
         response += f'\n\n<a href="{escape_html(viewer_url)}">Полная версия ответа</a>'
@@ -162,7 +175,7 @@ def _format_final_response(content: str, viewer_url: str | None = None) -> str:
 
 
 def _format_latest_event(latest: YadrenoAdminLatest) -> str | None:
-    """Форматирует snapshot для кнопки ручного восстановления."""
+    """Formats a snapshot for the manual recovery button."""
     if latest.final is not None:
         return _format_final_response(
             latest.final.content,
@@ -179,7 +192,7 @@ def _format_latest_event(latest: YadrenoAdminLatest) -> str | None:
 
 
 def _callback_topic_id(data: str | None, prefix: str) -> int:
-    """Достаёт topic_id из callback data, сохраняя legacy fallback."""
+    """Gets topic_id from callback data, saving legacy fallback."""
     raw = data or ""
     if raw == prefix:
         return YADRENO_ADMIN_CHAT_TOPIC_ID
@@ -191,7 +204,7 @@ def _callback_topic_id(data: str | None, prefix: str) -> int:
 
 
 def _normalize_yadreno_topic_id(raw_topic_id: Any) -> int:
-    """Возвращает разрешённый topic_id чата агента."""
+    """Returns the resolved topic_id of the agent chat."""
     try:
         topic_id = int(raw_topic_id)
     except (TypeError, ValueError):
@@ -205,7 +218,7 @@ async def _activate_yadreno_chat_lane(
     state: FSMContext,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> int:
-    """Переводит администратора в чат агента и запоминает активную lane."""
+    """Transfers the administrator to the agent chat and remembers the active lane."""
     normalized_topic_id = _normalize_yadreno_topic_id(topic_id)
     await state.set_state(AdminStates.yadreno_chat)
     await state.update_data(**{YADRENO_ADMIN_FSM_TOPIC_KEY: normalized_topic_id})
@@ -213,13 +226,13 @@ async def _activate_yadreno_chat_lane(
 
 
 async def _current_yadreno_chat_topic_id(state: FSMContext) -> int:
-    """Читает активную lane чата агента из FSM."""
+    """Reads the agent's active chat lane from FSM."""
     data = await state.get_data()
     return _normalize_yadreno_topic_id(data.get(YADRENO_ADMIN_FSM_TOPIC_KEY))
 
 
 class _YadrenoProgressRenderer:
-    """Редактирует промежуточные события Yadreno Admin в текущем чате."""
+    """Edits intermediate Yadreno Admin events in the current chat."""
 
     def __init__(self, anchor: Message, topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID):
         self._anchor = anchor
@@ -234,11 +247,11 @@ class _YadrenoProgressRenderer:
 
     @property
     def final_target(self) -> Message:
-        """Сообщение, которое нужно заменить финальным ответом."""
+        """The message to be replaced with the final response."""
         return self._live_status_message or self._anchor
 
     async def handle(self, event: YadrenoAdminProgressEvent) -> None:
-        """Показывает status/task_update и продолжает polling."""
+        """Shows status/task_update and continues polling."""
         if event.event == "status":
             await self._show_status(event)
             return
@@ -304,7 +317,7 @@ class _YadrenoProgressRenderer:
         self._status_messages["heartbeat"] = self._live_status_message
 
     async def delete_progress_messages(self) -> None:
-        """Удаляет все сообщения progress-рендерера без падения сценария."""
+        """Removes all renderer progress messages without crashing the script."""
         messages = [
             self._anchor,
             self._task_message,
@@ -327,7 +340,7 @@ class _YadrenoProgressRenderer:
 
 
 async def _show_yadreno_entry(target: Message | CallbackQuery, state: FSMContext) -> None:
-    """Показывает экран настройки ключа или открывает режим чата."""
+    """Shows the key setup screen or opens chat mode."""
     api_key = get_yadreno_admin_api_key()
     message = target.message if isinstance(target, CallbackQuery) else target
     if not api_key:
@@ -373,7 +386,7 @@ async def _show_yadreno_customization_entry(
 
 @router.callback_query(F.data == "admin_yadreno")
 async def show_yadreno_admin(callback: CallbackQuery, state: FSMContext):
-    """Открывает раздел Yadreno Admin."""
+    """Opens the Yadreno Admin section."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -393,7 +406,7 @@ async def show_yadreno_customization(callback: CallbackQuery, state: FSMContext)
 
 @router.callback_query(F.data.startswith("admin_yadreno_new_chat"))
 async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
-    """Открывает новый чат, если агент сейчас не занят."""
+    """Opens a new chat if the agent is not currently busy."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -434,7 +447,7 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_yadreno_cancel"))
 async def cancel_yadreno_dialog_button(callback: CallbackQuery):
-    """Отменяет активный запрос агента с кнопки."""
+    """Cancels an active agent request from a button."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -506,7 +519,7 @@ async def cancel_yadreno_dialog_button(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_yadreno_nudge"))
 async def nudge_yadreno_dialog(callback: CallbackQuery):
-    """Показывает последний snapshot через /latest без consume polling."""
+    """Shows the latest snapshot via /latest without consuming polling."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -619,7 +632,7 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin_yadreno_set_key")
 async def start_yadreno_key_input(callback: CallbackQuery, state: FSMContext):
-    """Переводит администратора в режим ввода api_key."""
+    """Switches the administrator to api_key input mode."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -641,7 +654,7 @@ async def start_yadreno_key_input(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.yadreno_waiting_api_key, F.text, ~F.text.startswith('/'))
 async def save_yadreno_key(message: Message, state: FSMContext):
-    """Сохраняет api_key и возвращает администратора в чат."""
+    """Saves the api_key and returns the administrator to the chat."""
     if not is_admin(message.from_user.id):
         return
 
@@ -686,7 +699,7 @@ async def save_yadreno_key(message: Message, state: FSMContext):
 
 @router.message(Command("cancel"), AdminStates.yadreno_chat)
 async def cancel_yadreno_dialog(message: Message, state: FSMContext):
-    """Отменяет текущий запрос агента."""
+    """Cancels the current agent request."""
     if not is_admin(message.from_user.id):
         return
     topic_id = await _current_yadreno_chat_topic_id(state)
@@ -730,7 +743,7 @@ async def cancel_yadreno_dialog(message: Message, state: FSMContext):
 
 @router.message(AdminStates.yadreno_chat, F.text, ~F.text.startswith('/'))
 async def handle_yadreno_chat_message(message: Message, state: FSMContext):
-    """Отправляет сообщение администратора агенту и показывает ответ."""
+    """Sends an admin message to the agent and displays the response."""
     if not is_admin(message.from_user.id):
         return
 
@@ -778,12 +791,12 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
 
 
 def _serialize_for_compare(data: Any) -> str:
-    """Сериализует структуру страницы для сравнения до/после."""
+    """Serializes the page structure for before/after comparison."""
     return json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _get_yaa_editable_state(page_key: str) -> dict[str, Any]:
-    """Возвращает состояние, изменение которого должно перерисовать /yaa-экран."""
+    """Returns the state, changing which should redraw the /yaa screen."""
     state: dict[str, Any] = {
         'page': get_page_data(page_key),
         'display_timezone': get_display_timezone(),
@@ -802,13 +815,13 @@ def _get_yaa_editable_state(page_key: str) -> dict[str, Any]:
 
 
 def _safe_upload_filename(raw_name: str | None, fallback: str) -> str:
-    """Возвращает безопасное имя файла без директорий."""
+    """Returns a safe filename without directories."""
     name = Path(raw_name or "").name.strip()
     return name or fallback
 
 
 def _is_gif_document(document: Any | None) -> bool:
-    """Проверяет, является ли Telegram document GIF-анимацией."""
+    """Checks if a Telegram document is a GIF animation."""
     if document is None:
         return False
     mime_type = (getattr(document, "mime_type", None) or "").lower()
@@ -817,12 +830,12 @@ def _is_gif_document(document: Any | None) -> bool:
 
 
 def _is_metadata_only_media(message: Message) -> bool:
-    """Возвращает True для видео/GIF, которые не скачиваются агентом."""
+    """Returns True for videos/GIFs that are not downloaded by the agent."""
     return bool(message.video or message.animation or _is_gif_document(message.document))
 
 
 def _message_upload_size(message: Message) -> int | None:
-    """Возвращает размер uploadable-вложения без запроса get_file()."""
+    """Returns the size of an uploadable attachment without a get_file() request."""
     if message.photo:
         return getattr(message.photo[-1], "file_size", None)
     if message.document:
@@ -831,12 +844,12 @@ def _message_upload_size(message: Message) -> int | None:
 
 
 def _format_upload_size(size_bytes: int) -> str:
-    """Форматирует размер файла для сообщения администратору."""
+    """Formats the file size for the message to the administrator."""
     return f"{size_bytes / (1024 * 1024):.1f} МБ"
 
 
 def _ensure_upload_size_allowed(message: Message) -> None:
-    """Отклоняет uploadable-файлы больше локального лимита до get_file()."""
+    """Rejects uploadable files larger than the local limit before get_file()."""
     size_bytes = _message_upload_size(message)
     if size_bytes is None or size_bytes <= YADRENO_ADMIN_UPLOAD_MAX_BYTES:
         return
@@ -851,7 +864,7 @@ def _ensure_upload_size_allowed(message: Message) -> None:
 
 
 def _message_upload_meta(message: Message) -> tuple[str, str, str] | None:
-    """Достаёт file_id, имя и MIME только для uploadable photo/document."""
+    """Gets file_id, name and MIME only for uploadable photo/document."""
     if message.photo:
         photo = message.photo[-1]
         filename = f"photo_{message.message_id}.jpg"
@@ -872,7 +885,7 @@ def _message_upload_meta(message: Message) -> tuple[str, str, str] | None:
 
 
 async def _download_yadreno_upload(message: Message) -> list[YadrenoAdminUpload]:
-    """Скачивает вложение Telegram во временный файл для upload API."""
+    """Downloads the Telegram attachment to a temporary file for the upload API."""
     meta = _message_upload_meta(message)
     if meta is None:
         return []
@@ -908,7 +921,7 @@ async def _download_yadreno_upload(message: Message) -> list[YadrenoAdminUpload]
 
 
 def _cleanup_yadreno_uploads(uploads: list[YadrenoAdminUpload]) -> None:
-    """Удаляет временные upload-файлы best-effort."""
+    """Deletes temporary best-effort upload files."""
     for upload in uploads:
         try:
             upload.path.unlink(missing_ok=True)
@@ -917,7 +930,7 @@ def _cleanup_yadreno_uploads(uploads: list[YadrenoAdminUpload]) -> None:
 
 
 def _extract_yaa_attachment_data(message: Message) -> dict[str, str] | None:
-    """Возвращает компактные данные прикреплённого к /yaa файла."""
+    """Returns the compact data of a file attached to /yaa."""
     if message.photo:
         photo = message.photo[-1]
         return {
@@ -985,7 +998,7 @@ def _extract_yaa_attachment_data(message: Message) -> dict[str, str] | None:
 
 
 def _extract_chat_attachment_context(message: Message) -> str:
-    """Возвращает контекст Telegram-вложения для обычного чата Yadreno Admin."""
+    """Returns the context of a Telegram attachment for a regular Yadreno Admin chat."""
     if message.photo:
         photo = message.photo[-1]
         return (
@@ -1226,7 +1239,7 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
 
 
 def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
-    """Извлекает аргумент команды, сохраняя Telegram HTML и custom emoji."""
+    """Extracts the command argument, preserving Telegram HTML and custom emoji."""
     formatted_message = get_message_text_for_storage(message, "html")
     command_text = f"{command.prefix}{command.command}"
     if command.mention:
@@ -1238,7 +1251,7 @@ def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
 
 
 def _redact_yaa_context(page_key: str, runtime_context: dict[str, Any] | None) -> dict[str, Any]:
-    """Возвращает runtime context без пользовательских ключей."""
+    """Returns the runtime context without user keys."""
     result = dict(runtime_context or {})
     if page_key == YAA_KEY_DELIVERY_PAGE:
         for key in YAA_KEY_DELIVERY_CONTEXT_KEYS:
@@ -1251,7 +1264,7 @@ def _redact_yaa_text_replacements(
     page_key: str,
     text_replacements: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Возвращает подстановки без пользовательских ключей для read-only снимков."""
+    """Returns wildcards without user keys for read-only snapshots."""
     if not text_replacements:
         return None
     result = dict(text_replacements)
@@ -1266,7 +1279,7 @@ def _redact_yaa_visible_keyboard_urls(
     page_key: str,
     rows: list[list[dict[str, Any]]],
 ) -> list[list[dict[str, Any]]]:
-    """Делает redacted-значение в URL-снимках читаемым для агента."""
+    """Makes the redacted value in URL snapshots readable to the agent."""
     if page_key != YAA_KEY_DELIVERY_PAGE or not rows:
         return rows
 
@@ -1285,7 +1298,7 @@ def _redact_yaa_visible_keyboard_urls(
 
 
 def _build_yaa_runtime_context(page_key: str, page_context: Any | None) -> dict[str, Any]:
-    """Собирает runtime-часть контекста /yaa в JSON-friendly формате."""
+    """Collects the runtime part of the /yaa context in JSON-friendly format."""
     if page_context is None:
         return {}
 
@@ -1307,6 +1320,20 @@ def _build_yaa_runtime_context(page_key: str, page_context: Any | None) -> dict[
     return runtime
 
 
+def _build_yaa_page_flow_context(page_key: str) -> dict[str, list[str]]:
+    """Collect page-level guard/hook names for the /yaa context."""
+    try:
+        page = get_page(page_key)
+    except Exception:
+        page = None
+    if not page:
+        return {"guard_names": [], "hook_names": []}
+    return {
+        "guard_names": parse_registry_names(page.get("guard_names")),
+        "hook_names": parse_registry_names(page.get("hook_names")),
+    }
+
+
 def _build_yaa_prompt(
     page_key: str,
     task_html: str,
@@ -1314,7 +1341,7 @@ def _build_yaa_prompt(
     attachment: dict[str, str] | None = None,
     page_context: Any | None = None,
 ) -> str:
-    """Формирует компактный JSON-контекст команды /yaa."""
+    """Generates a compact JSON context for the /yaa command."""
     stored_page = get_page_stored_data(page_key) or {
         "text": {"source": "default", "value": "", "custom": None},
         "image": {"source": "default", "value": "", "custom": None},
@@ -1342,7 +1369,9 @@ def _build_yaa_prompt(
 
     context: dict[str, Any] = {
         "source": "/yaa",
+        "env": build_agent_env_context_for_topic(YADRENO_ADMIN_YAA_TOPIC_ID),
         "page_key": page_key,
+        "page_flow": _build_yaa_page_flow_context(page_key),
         "database_path": "database/vpn_bot.db",
         "backup": {
             "created": True,
@@ -1367,7 +1396,7 @@ def _build_yaa_prompt(
 
 @router.message(Command("yaa"))
 async def handle_yaa_command(message: Message, command: CommandObject, state: FSMContext):
-    """Контекстная команда администратора с пользовательской страницы."""
+    """Administrator context command from a user page."""
     if not is_admin(message.from_user.id):
         return
 
@@ -1482,31 +1511,6 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
 
             if await rerender_qr_payment_page_context(page_context, message.from_user.id):
                 return
-        if page_context.page_key == 'crypto_payment':
-            from bot.handlers.user.payments.crypto import rerender_crypto_payment_page_context
-
-            if await rerender_crypto_payment_page_context(page_context, message.from_user.id):
-                return
-        if page_context.page_key == 'balance_payment':
-            from bot.handlers.user.payments.balance import rerender_balance_payment_page_context
-
-            if await rerender_balance_payment_page_context(page_context, message.from_user.id):
-                return
-        if page_context.page_key == 'demo_payment':
-            from bot.handlers.user.payments.demo import rerender_demo_payment_page_context
-
-            if await rerender_demo_payment_page_context(page_context, message.from_user.id):
-                return
-        if page_context.page_key == 'payment_tariff_select':
-            from bot.handlers.user.payments.tariff_select_page import rerender_payment_tariff_select_page_context
-
-            if await rerender_payment_tariff_select_page_context(page_context, message.from_user.id):
-                return
-        if page_context.page_key == 'payment_status':
-            from bot.handlers.user.payments.status_page import rerender_payment_status_page_context
-
-            if await rerender_payment_status_page_context(page_context, message.from_user.id):
-                return
         if page_context.page_key in {'my_keys', 'my_keys_empty'}:
             from bot.handlers.user.keys import rerender_my_keys_page_context
 
@@ -1539,7 +1543,7 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
 
 @router.message(AdminStates.yadreno_chat, F.photo | F.document | F.video | F.animation)
 async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
-    """Отправляет фото, видео, GIF или документ в Yadreno Admin."""
+    """Sends a photo, video, GIF or document to Yadreno Admin."""
     if not is_admin(message.from_user.id):
         return
 

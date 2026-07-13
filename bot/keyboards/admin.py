@@ -1,5 +1,5 @@
 """
-Фасад клавиатур администратора.
+Administrator keyboard façade.
 """
 from .admin_misc import *
 from .admin_servers import *

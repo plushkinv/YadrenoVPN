@@ -1,4 +1,4 @@
-"""Сброс флага блокировки бота при новом обращении пользователя."""
+"""Resetting the bot blocking flag when a new user accesses it."""
 import logging
 from typing import Any, Awaitable, Callable, Dict
 
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class BotBlockedResetMiddleware(BaseMiddleware):
-    """Снимает стоп-флаг массовых отправок, когда пользователь снова пишет боту."""
+    """Clears the bulk sends stop flag when the user writes to the bot again."""
 
     async def __call__(
         self,

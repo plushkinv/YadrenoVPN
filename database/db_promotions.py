@@ -80,7 +80,7 @@ def _clamp_percent(discount_percent: int) -> int:
 
 
 def is_base62_code(code: str) -> bool:
-    """Проверяет, что код состоит только из base62-символов."""
+    """Checks that the code consists of only base62 characters."""
     return bool(code and BASE62_RE.fullmatch(code))
 
 
@@ -89,7 +89,7 @@ def _generate_code(length: int = 10) -> str:
 
 
 def generate_unique_promo_code(length: int = 10) -> str:
-    """Генерирует уникальный base62-код для промокода или купона."""
+    """Generates a unique base62 code for a promotional code or coupon."""
     for _ in range(100):
         code = _generate_code(length)
         if not get_promo_code_by_code(code):
@@ -110,7 +110,7 @@ def create_promo_code(
     issued_to_user_id: Optional[int] = None,
     snapshot_lifetime_days: Optional[int] = None,
 ) -> int:
-    """Создаёт промокод или купон и возвращает ID записи."""
+    """Generates a promotional code or coupon and returns the post ID."""
     code = (code or "").strip()
     if not is_base62_code(code):
         raise ValueError("Код должен состоять только из символов base62: 0-9, A-Z, a-z")
@@ -168,7 +168,7 @@ def create_coupon_batch(
     issued_to_user_id: Optional[int] = None,
     created_by_admin_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Создаёт пачку одноразовых купонов."""
+    """Creates a pack of one-time coupons."""
     percent = _clamp_percent(discount_percent)
     days = int(lifetime_days)
     total = int(count)
@@ -206,7 +206,7 @@ def create_coupon_batch(
 
 
 def create_auto_coupon_for_user(user_id: int) -> Optional[Dict[str, Any]]:
-    """Создаёт один автоматический купон по текущим настройкам автовыдачи."""
+    """Creates one automatic coupon based on the current auto-issuance settings."""
     if not get_coupon_auto_enabled():
         return None
     coupons = create_coupon_batch(
@@ -316,7 +316,7 @@ def get_promo_code_availability(code: str, order_id: Optional[str] = None) -> Di
 
 
 def has_available_promo_codes() -> bool:
-    """Проверяет, есть ли хотя бы один доступный промокод или купон."""
+    """Checks if there is at least one promotional code or coupon available."""
     with get_db() as conn:
         row = conn.execute(
             """

@@ -1,8 +1,8 @@
 """
-Сервис уведомлений администраторов.
+Administrator notification service.
 
-Отправляет уведомления об оплатах всем админам,
-если включена настройка payment_notifications_enabled.
+Sends payment notifications to all admins,
+if the payment_notifications_enabled setting is enabled.
 """
 import logging
 from typing import Optional, Dict, Any
@@ -16,8 +16,8 @@ from bot.utils.text import escape_html
 
 logger = logging.getLogger(__name__)
 
-# Маппинг payment_type → человеко-понятное название.
-# payment_type='cards' — историческое внутреннее имя для TG payments.
+# Mapping payment_type → human-readable name.
+# payment_type='cards' - historical internal name for TG payments.
 PAYMENT_TYPE_LABELS: Dict[str, str] = {
     'stars': '⭐ Telegram Stars',
     'crypto': '💰 Крипто (USDT)',
@@ -48,13 +48,13 @@ def _payment_type_label(payment_type: str) -> str:
 
 def _format_payment_amount(order: Dict[str, Any]) -> str:
     """
-    Форматирует сумму платежа в зависимости от типа оплаты.
+    Formats the payment amount depending on the payment type.
 
     Args:
-        order: Словарь ордера с данными тарифа
+        order: Order dictionary with tariff data
 
     Returns:
-        Отформатированная строка суммы
+        Formatted Amount String
     """
     payment_type = order.get('payment_type', '')
 
@@ -71,7 +71,7 @@ def _format_payment_amount(order: Dict[str, Any]) -> str:
     if payment_type in ('trial', 'promo_free'):
         return 'Бесплатно'
 
-    # Для рублёвых методов (cards, yookassa_qr, wata, platega, cardlink, balance, demo)
+    # For ruble methods (cards, yookassa_qr, wata, platega, cardlink, balance, demo)
     if order.get('final_amount_cents') is not None:
         price_rub = (order.get('final_amount_cents') or 0) / 100
         price_str = f'{price_rub:g}'.replace('.', ',')
@@ -89,10 +89,10 @@ def _format_payment_amount(order: Dict[str, Any]) -> str:
 
 def _get_payment_action(order: Dict[str, Any]) -> str:
     """
-    Возвращает тип операции для уведомления.
+    Returns the operation type for the notification.
 
-    Во время новой покупки биллинг создаёт черновик ключа и привязывает его к ордеру.
-    Поэтому для уже обработанного ордера нельзя определять тип только по vpn_key_id.
+    During a new purchase, billing creates a draft key and links it to the order.
+    Therefore, for an order that has already been processed, the type cannot be determined only by vpn_key_id.
     """
     payment_type = order.get('payment_type', '')
     if payment_type == 'trial':
@@ -107,13 +107,13 @@ def _get_payment_action(order: Dict[str, Any]) -> str:
 
 def _get_action_text(order: Dict[str, Any]) -> str:
     """
-    Определяет тип действия: новый ключ, продление, пробная.
+    Defines the type of action: new key, renewal, trial.
 
     Args:
-        order: Словарь ордера
+        order: Order dictionary
 
     Returns:
-        Текст действия
+        Action text
     """
     action = _get_payment_action(order)
     if action == 'trial':
@@ -124,7 +124,7 @@ def _get_action_text(order: Dict[str, Any]) -> str:
 
 
 def _format_user_name(user: Optional[Dict[str, Any]]) -> str:
-    """Формирует имя пользователя для плейсхолдера %имя%."""
+    """Generates a display name for the name placeholder."""
     if not user:
         return 'пользователь'
 
@@ -145,21 +145,21 @@ def _format_user_name(user: Optional[Dict[str, Any]]) -> str:
 
 
 def _format_user_login(user: Optional[Dict[str, Any]]) -> str:
-    """Формирует логин пользователя для плейсхолдера %логин%."""
+    """Generates a user login for the login placeholder."""
     if user and user.get('username'):
         return f"@{user['username']}"
     return 'не указан'
 
 
 def _format_rub_cents(cents: int) -> str:
-    """Форматирует копейки в рубли без лишних нулей."""
+    """Formats kopecks into rubles without extra zeros."""
     rub = (cents or 0) / 100
     rub_str = f'{rub:g}'.replace('.', ',')
     return f'{rub_str} ₽'
 
 
 def _format_referral_purchase_amount(order: Dict[str, Any], event: Dict[str, Any]) -> str:
-    """Форматирует сумму покупки реферала по фактическому типу оплаты."""
+    """Formats the referral purchase amount by the actual payment type."""
     payment_type = event.get('payment_type') or order.get('payment_type', '')
     amount_raw = event.get('amount_raw') or 0
 
@@ -179,7 +179,7 @@ def _format_referral_purchase_amount(order: Dict[str, Any], event: Dict[str, Any
 
 
 def _format_referral_reward(event: Dict[str, Any]) -> str:
-    """Форматирует начисленный бонус рефовода."""
+    """Formats the accrued referral bonus."""
     if event.get('reward_type') == 'balance':
         return _format_rub_cents(event.get('reward_cents', 0) or 0)
     return f"{event.get('reward_days', 0) or 0} дн."
@@ -187,10 +187,10 @@ def _format_referral_reward(event: Dict[str, Any]) -> str:
 
 async def notify_referrers_new_referral(bot: Bot, referral_id: int) -> None:
     """
-    Отправляет рефоводам скрытое уведомление о новом реферале.
+    Sends a hidden notification to referrals about a new referral.
 
-    Уровни берутся из referral_notification_levels. Ошибки отправки не
-    прерывают регистрацию пользователя.
+    The levels are taken from referral_notification_levels. No sending errors
+    interrupt user registration.
     """
     try:
         from database.requests import (
@@ -258,9 +258,9 @@ async def notify_referrers_purchase(
     referral_events: list[Dict[str, Any]],
 ) -> None:
     """
-    Отправляет рефоводам скрытые уведомления о покупке реферала.
+    Sends hidden notifications to referrals about the referral's purchase.
 
-    Вызывается после успешного внешнего платежа и реферального расчёта.
+    Called after a successful external payment and referral settlement.
     """
     try:
         from database.requests import (
@@ -336,23 +336,23 @@ async def notify_referrers_purchase(
 
 async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
     """
-    Отправляет уведомление об оплате всем администраторам.
+    Sends payment notification to all administrators.
 
-    Проверяет настройку payment_notifications_enabled.
-    Ошибки подавляются — не ломают основной flow.
+    Checks the payment_notifications_enabled setting.
+    Errors are suppressed and do not break the main flow.
 
     Args:
-        bot: Экземпляр aiogram Bot
-        order: Словарь ордера (из find_order_by_order_id или аналогичный)
+        bot: An instance of aiogram Bot
+        order: Order dictionary (from find_order_by_order_id or similar)
     """
     try:
         from database.requests import get_setting, get_user_by_id, get_vpn_key_by_id
 
-        # Проверяем, включены ли уведомления
+        # Checking if notifications are enabled
         if get_setting('payment_notifications_enabled', '0') != '1':
             return
 
-        # Данные пользователя
+        # User data
         user_id_internal = order.get('user_id')
         telegram_id = None
         username = None
@@ -363,10 +363,10 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
                 telegram_id = user.get('telegram_id')
                 username = user.get('username')
 
-        # Данные тарифа
+        # Tariff data
         tariff_name = order.get('tariff_name', '—')
 
-        # Подтягиваем price_rub из тарифа (в ордере нет этого поля)
+        # We pull up price_rub from the tariff (the order does not have this field)
         tariff_id = order.get('tariff_id')
         if tariff_id:
             from database.requests import get_tariff_by_id
@@ -374,7 +374,7 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
             if tariff:
                 order['price_rub'] = tariff.get('price_rub', 0)
 
-        # Данные сервера (из ключа, если привязан)
+        # Server data (from the key, if linked)
         server_name = 'Не выбран'
         vpn_key_id = order.get('vpn_key_id')
         if vpn_key_id:
@@ -382,17 +382,17 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
             if key and key.get('server_name'):
                 server_name = key['server_name']
 
-        # Тип оплаты
+        # Payment type
         payment_type = order.get('payment_type', '—')
         payment_label = _payment_type_label(payment_type)
 
-        # Сумма
+        # Sum
         amount_str = _format_payment_amount(order)
 
-        # Действие
+        # Action
         action = _get_payment_action(order)
 
-        # Заголовок — зависит от действия
+        # Title - depends on the action
         if action == 'trial':
             header = '🎁 <b>Пробная подписка</b>'
         elif action == 'renewal':
@@ -400,10 +400,10 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
         else:
             header = '💰 <b>Новая покупка</b>'
 
-        # Формируем текст
+        # Forming the text
         lines = [header + '\n']
 
-        # Пользователь — ссылка tg://user
+        # User - link tg://user
         if telegram_id:
             user_link = f'<a href="tg://user?id={telegram_id}">{telegram_id}</a>'
             if username:
@@ -412,7 +412,7 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
         else:
             lines.append(f'👤 Пользователь: ID {user_id_internal or "?"}')
 
-        # Хост показываем только для настоящего продления существующего ключа.
+        # We show the host only for a real renewal of an existing key.
         if action == 'renewal' and server_name != 'Не выбран':
             lines.append(f'🌐 Хост: {escape_html(server_name)}')
         lines.append(f'🎫 Тариф: {escape_html(tariff_name)}')
@@ -426,7 +426,7 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
 
         text = '\n'.join(lines)
 
-        # Кнопка для перехода в карточку пользователя в админке
+        # Button to go to the user card in the admin panel
         reply_markup = None
         if telegram_id:
             btn_text = f'👤 @{username}' if username else f'👤 {telegram_id}'
@@ -434,7 +434,7 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
                 InlineKeyboardButton(text=btn_text, callback_data=f'admin_user_view:{telegram_id}')
             ]])
 
-        # Отправляем всем админам
+        # Sent to all admins
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_message(admin_id, text, parse_mode='HTML', reply_markup=reply_markup)

@@ -20,7 +20,7 @@ SUPPORTED_SUPPORT_MEDIA_TYPES = {"text", "photo", "video", "animation"}
 
 
 def extract_support_payload(message: Message) -> Optional[Dict[str, Any]]:
-    """Извлекает поддерживаемое сообщение поддержки без скачивания файлов."""
+    """Retrieves a supported support message without downloading files."""
     media_type = "text"
     media_file_id = None
 
@@ -56,7 +56,7 @@ def support_unsupported_text() -> str:
 
 
 def format_support_user_line(user: Dict[str, Any]) -> str:
-    """Формирует короткое имя пользователя для карточек поддержки."""
+    """Generates a short username for support cards."""
     username = user.get("username")
     if username:
         return f"@{escape_html(username)}"
@@ -78,7 +78,7 @@ def format_admin_support_card(
     user: Dict[str, Any],
     assigned_admin_id: Optional[int],
 ) -> str:
-    """Карточка обращения, которая отправляется админу после копии сообщения."""
+    """A request card that is sent to the admin after a copy of the message."""
     lines = [
         f"💬 <b>{escape_html(title)}</b>",
         "",
@@ -101,7 +101,7 @@ async def copy_support_message(
     source_message: Message,
     reply_markup=None,
 ) -> Optional[int]:
-    """Копирует исходное сообщение и возвращает ID копии."""
+    """Copies the original message and returns the ID of the copy."""
     result = await bot.copy_message(
         chat_id=chat_id,
         from_chat_id=source_message.chat.id,
@@ -119,10 +119,10 @@ async def send_user_message_to_admins(
     source_message: Message,
 ) -> Dict[str, int]:
     """
-    Отправляет сообщение пользователя админам.
+    Sends a user message to admins.
 
-    Для незакреплённой цепочки отправляет всем админам и сохраняет уведомления
-    для последующей очистки кнопок. Для закреплённой — только назначенному админу.
+    For an unpinned chain, sends to all admins and saves notifications
+    for subsequent cleaning of the buttons. For assigned - only to the assigned admin.
     """
     assigned_admin_id = thread.get("assigned_admin_id")
     if assigned_admin_id:
@@ -182,7 +182,7 @@ async def send_admin_message_to_user(
     thread: Dict[str, Any],
     source_message: Message,
 ) -> Optional[int]:
-    """Отправляет копию сообщения админа пользователю с кнопкой ответа."""
+    """Sends a copy of the admin message to the user with a reply button."""
     return await copy_support_message(
         bot,
         chat_id=int(thread["user_telegram_id"]),
@@ -197,7 +197,7 @@ async def cleanup_claimed_admin_notifications(
     thread_id: int,
     claimed_admin_id: int,
 ) -> None:
-    """Убирает кнопку ответа или сообщения у админов, которые не взяли диалог."""
+    """Removes the reply or message button from admins who did not accept the dialogue."""
     notifications = get_support_admin_notifications(
         thread_id,
         exclude_admin_id=claimed_admin_id,

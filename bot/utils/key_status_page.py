@@ -1,4 +1,4 @@
-"""Page-backed статус операций с ключами."""
+"""Page-backed status of key operations."""
 from __future__ import annotations
 
 from typing import Any
@@ -12,12 +12,12 @@ KEY_STATUS_PAGE_KEY = "key_status"
 
 
 def default_key_status_page_text() -> str:
-    """Дефолтный текст статуса операции с ключом."""
+    """Default text of the key operation status."""
     return "%ключ_статус_заголовок%\n\n%ключ_статус_текст%"
 
 
 def build_key_status_page_context(title_html: str, body_html: str) -> dict[str, Any]:
-    """Собирает runtime-контекст статуса операции с ключом."""
+    """Collects the runtime context of the status of an operation with a key."""
     return {
         "key_status_title_html": title_html,
         "key_status_body_html": body_html,
@@ -25,7 +25,7 @@ def build_key_status_page_context(title_html: str, body_html: str) -> dict[str, 
 
 
 def render_key_status_page_text(context: dict[str, Any]) -> str:
-    """Рендерит текст key_status из pages с fallback на дефолт."""
+    """Renders the key_status text from pages with fallback set to default."""
     text = render_page_text(KEY_STATUS_PAGE_KEY, context=context)
     if text is not None:
         return text
@@ -47,7 +47,7 @@ async def render_key_status_page(
     append_buttons: list[list[InlineKeyboardButton]] | None = None,
     force_new: bool = False,
 ) -> Message | None:
-    """Рендерит page-backed статус операции с ключом."""
+    """Renders the page-backed status of the key operation."""
     if body_html is None:
         from bot.utils.text import escape_html
 
@@ -59,4 +59,5 @@ async def render_key_status_page(
         context=build_key_status_page_context(title_html, body_html),
         append_buttons=append_buttons,
         force_new=force_new,
+        fallback_text=default_key_status_page_text(),
     )

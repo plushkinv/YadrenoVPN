@@ -1,7 +1,7 @@
-"""Утилиты для классификации ошибок доставки сообщений."""
+"""Utilities for classifying message delivery errors."""
 from aiogram.exceptions import TelegramForbiddenError
 
 
 def is_bot_blocked_error(error: Exception) -> bool:
-    """Возвращает True только для подтверждённой недоступности бота у пользователя."""
+    """Returns True only for confirmed bot unavailability from the user."""
     return isinstance(error, TelegramForbiddenError)

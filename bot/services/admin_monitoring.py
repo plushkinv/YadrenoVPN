@@ -1,8 +1,8 @@
 """
-Сбор и форматирование мониторинга для админ-панели.
+Collection and formatting of monitoring for the admin panel.
 
-Хендлеры админки не ходят напрямую в БД и панели: они получают готовый snapshot
-и отдают его в HTML-рендеры этого модуля.
+Administrator handlers do not go directly to the database and panels: they receive a ready-made snapshot
+and send it to the HTML renderers of this module.
 """
 from __future__ import annotations
 
@@ -236,7 +236,7 @@ async def _collect_server_entry(server: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def collect_admin_monitoring_snapshot() -> Dict[str, Any]:
-    """Собирает общий snapshot для главной админки и раздела серверов."""
+    """Collects a common snapshot for the main admin panel and the servers section."""
     servers = get_all_servers()
     entries = await asyncio.gather(*[_collect_server_entry(server) for server in servers]) if servers else []
 
@@ -297,7 +297,7 @@ def _snapshot_counts(snapshot: Dict[str, Any]) -> Dict[str, int]:
 
 
 def build_admin_summary_text(snapshot: Dict[str, Any]) -> str:
-    """Формирует короткую сводку главной админки."""
+    """Generates a short summary of the main admin panel."""
     entries = snapshot.get("servers", [])
     if not entries:
         return (
@@ -424,7 +424,7 @@ def _select_nodes_for_display(nodes: List[Dict[str, Any]], limit: int = NODE_DIS
 
 
 def build_servers_monitoring_text(snapshot: Dict[str, Any]) -> str:
-    """Формирует подробный мониторинг для раздела «Сервера»."""
+    """Generates detailed monitoring for the “Servers” section."""
     entries = snapshot.get("servers", [])
     if not entries:
         return (

@@ -1,4 +1,4 @@
-"""Бизнес-история операций с ключами и балансом."""
+"""Business history of key and balance transactions."""
 from __future__ import annotations
 
 import json
@@ -22,7 +22,7 @@ _BALANCE_OPERATION_TYPES = {'credit', 'debit'}
 
 
 def create_business_operation_tables(conn: sqlite3.Connection) -> None:
-    """Создаёт штатные журналы бизнес-операций ядра."""
+    """Creates regular logs of kernel business operations."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS key_operation_log (
@@ -88,7 +88,7 @@ def create_business_operation_tables(conn: sqlite3.Connection) -> None:
 
 
 def get_first_active_key_for_user(user_id: int) -> dict[str, Any] | None:
-    """Возвращает первый активный ключ пользователя для доменных начислений дней."""
+    """Returns the user's first active key for domain accrual days."""
     with get_db() as conn:
         cursor = conn.execute(
             """
@@ -118,7 +118,7 @@ def record_key_operation(
     expires_after: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> int:
-    """Пишет видимую бизнес-историю операции с ключом."""
+    """Writes a visible business history of the key transaction."""
     with get_db() as conn:
         create_business_operation_tables(conn)
         cursor = conn.execute(
@@ -156,7 +156,7 @@ def record_key_operation(
 
 
 def get_key_operation_history(key_id: int) -> list[dict[str, Any]]:
-    """Возвращает неплатёжную историю операций ключа."""
+    """Returns the non-payment transaction history of the key."""
     with get_db() as conn:
         create_business_operation_tables(conn)
         rows = conn.execute(
@@ -195,7 +195,7 @@ def apply_balance_operation(
     performed_by: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Атомарно меняет баланс пользователя и пишет штатную историю."""
+    """Atomically changes the user's balance and writes a regular history."""
     user_id = _positive_int(user_id, 'user_id')
     operation = _balance_operation_type(operation_type)
     amount = _positive_int(cents, 'cents')

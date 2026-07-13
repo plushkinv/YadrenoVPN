@@ -1,11 +1,11 @@
 """
-Сервис для работы с API 3X-UI панели.
+Service for working with the API 3X-UI panel.
 
-Обеспечивает:
-- Авторизацию через сессии
-- Управление клиентами (создание, удаление, обновление)
-- Получение статистики трафика
-- Управление inbound-подключениями
+Provides:
+- Authorization through sessions
+- Client management (creation, deletion, updating)
+- Obtaining traffic statistics
+- Managing inbound connections
 """
 
 import aiohttp
@@ -35,37 +35,37 @@ from bot.utils.inbounds import filter_visible_inbounds
 
 
 class StaleAPIProfileError(Exception):
-    """Панель сменила профиль API; операцию нужно выбрать заново."""
+    """The panel has changed its API profile; the operation must be selected again."""
 
 
 class TransientPanelError(VPNAPIError):
-    """Временная сетевая недоступность панели."""
+    """Temporary network unavailability of the panel."""
 
 
 class XUIClient(BaseVPNClient):
     """
-    Клиент для работы с API 3X-UI панели.
+    Client for working with API 3X-UI panel.
     
-    Использует сессионную аутентификацию (cookie-based).
-    ВАЖНО: Для 3X-UI куки могут быть привязаны к IP, поэтому используем unsafe=True для CookieJar.
+    Uses session authentication (cookie-based).
+    IMPORTANT: For 3X-UI, cookies can be tied to an IP, so we use unsafe=True for CookieJar.
     """
     
     def __init__(self, server: dict):
         """
-        Инициализация клиента.
+        Initializing the client.
 
         Args:
-            server: Словарь с данными сервера из БД
+            server: Dictionary with server data from the database
         """
         self.server = server
         self.server_id = server.get('id')
         self.host = server['host']
         self.port = server['port']
         self.protocol = server.get('protocol', 'https')
-        # Гарантируем, что путь начинается со слеша, но НЕ заканчивается им
-        # strip('/') убирает слеши и с начала, и с конца
+        # We guarantee that the path starts with a slash, but does NOT end with it
+        # strip('/') removes slashes from both the beginning and the end
         path = server.get('web_base_path', '').strip('/')
-        # Теперь добавляем один слеш в начало (если путь не пустой)
+        # Now add one slash to the beginning (if the path is not empty)
         path = f"/{path}" if path else ""
 
         self.base_url = f"{self.protocol}://{self.host}:{self.port}{path}"
@@ -73,13 +73,13 @@ class XUIClient(BaseVPNClient):
         self.session: Optional[aiohttp.ClientSession] = None
         self.is_authenticated = False
 
-        # Поддержка разных поколений 3x-ui.
+        # Support for different generations of 3x-ui.
         # auth_mode/panel_mode:
         #   legacy = v2.x cookie; csrf = v3.0+ cookie + X-CSRF-Token;
-        #   bearer = v3.0+ через Authorization: Bearer для /panel/api/*.
+        #   bearer = v3.0+ via Authorization: Bearer for /panel/api/*.
         # api_profile:
-        #   legacy_inbounds = старые client-операции через /panel/api/inbounds/*
-        #   clients_api = first-class clients API из 3x-ui v3.1.0+.
+        #   legacy_inbounds = legacy client operations via /panel/api/inbounds/*
+        #   clients_api = first-class clients API from 3x-ui v3.1.0+.
         self.panel_mode: Optional[str] = None
         self.auth_mode: Optional[str] = None
         self.cookie_authenticated = False
@@ -90,8 +90,8 @@ class XUIClient(BaseVPNClient):
         self._profile_verified = False
         self.api_token_diagnostic: Optional[str] = None
 
-        # Кеш настроек панели (subPort/subPath/subDomain/...) из setting/all.
-        # Используется build_subscription_url() — за сессию запрашивается один раз.
+        # Panel settings cache (subPort/subPath/subDomain/...) from setting/all.
+        # Use build_subscription_url() - requested once per session.
         self._panel_settings: Optional[Dict[str, Any]] = None
 
         logger.debug(
@@ -100,9 +100,9 @@ class XUIClient(BaseVPNClient):
         )
     
     async def _ensure_session(self) -> aiohttp.ClientSession:
-        """Создаёт сессию если её нет."""
+        """Creates a session if there is none."""
         if self.session is None or self.session.closed:
-            # Unsafe=True важно для IP-адресов и самоподписанных сертификатов
+            # Unsafe=True is important for IP addresses and self-signed certificates
             connector = aiohttp.TCPConnector(ssl=False)
             jar = aiohttp.CookieJar(unsafe=True)
             try:
@@ -118,13 +118,13 @@ class XUIClient(BaseVPNClient):
     
     async def _reset_session(self) -> None:
         """
-        Сбрасывает текущую сессию.
+        Resets the current session.
 
-        Вызывается при ошибках подключения для пересоздания сессии.
-        CSRF-токен очищается — он привязан к серверной сессии.
-        panel_mode и api_token НЕ сбрасываются — это политика, а не сессионное
-        состояние. Их отдельно сбрасывает _invalidate_api_token() при ротации
-        токена в панели.
+        Called when connection errors occur to recreate the session.
+        The CSRF token is cleared - it is tied to the server session.
+        panel_mode and api_token are NOT reset - this is policy, not session
+        condition. They are reset separately by _invalidate_api_token() during rotation
+        token in the panel.
         """
         if self.session and not self.session.closed:
             try:
@@ -139,17 +139,17 @@ class XUIClient(BaseVPNClient):
 
     async def _invalidate_api_token(self) -> None:
         """
-        Сбрасывает Bearer-токен (при ротации в панели или 404 на Bearer-запросе).
+        Resets the Bearer token (when rotating in the panel or 404 on a Bearer request).
 
-        Очищает токен в БД (через update_server_api_token), чтобы при следующем
-        запуске бот не пытался использовать невалидный токен.
+        Clears the token in the database (via update_server_api_token) so that the next time
+        When launched, the bot did not try to use an invalid token.
         """
         if self.api_token is None:
             return
         self.api_token = None
-        # panel_mode пересоздастся при следующем login() — может оказаться 'csrf'
-        # (если токен протух, но панель всё ещё v3.0+) либо 'bearer' снова (если
-        # фоновый login успеет вытянуть новый токен).
+        # panel_mode will be recreated at the next login() - it may turn out to be 'csrf'
+        # (if the token is expired, but the panel is still v3.0+) or 'bearer' again (if
+        # background login will have time to pull out a new token).
         self.panel_mode = None
         self.auth_mode = None
         if self.server_id is not None:
@@ -161,7 +161,7 @@ class XUIClient(BaseVPNClient):
 
     @staticmethod
     def _load_json_field(value: Any, default: Optional[Any] = None) -> Any:
-        """Возвращает dict/list из JSON-строки или уже распакованного значения."""
+        """Returns a dict/list from a JSON string or an already unpacked value."""
         if default is None:
             default = {}
         if value in (None, ""):
@@ -177,7 +177,7 @@ class XUIClient(BaseVPNClient):
 
     @staticmethod
     def _json_field_to_text(value: Any, empty: str = "{}") -> str:
-        """Нормализует JSON-поле inbound к строке для старой логики бота."""
+        """Normalizes the inbound JSON field to a string for old bot logic."""
         if value in (None, ""):
             return empty
         if isinstance(value, str):
@@ -189,7 +189,7 @@ class XUIClient(BaseVPNClient):
 
     @classmethod
     def _normalize_inbound(cls, inbound: Dict[str, Any]) -> Dict[str, Any]:
-        """Приводит inbound v3.1.0 с nested JSON к legacy-форме со строками."""
+        """Converts inbound v3.1.0 with nested JSON to legacy form with strings."""
         if not isinstance(inbound, dict):
             return inbound
         normalized = dict(inbound)
@@ -199,7 +199,7 @@ class XUIClient(BaseVPNClient):
 
     @staticmethod
     def _normalize_tg_id(value: Any) -> int:
-        """3x-ui v3.1.0 хранит tgId как int64; пустые и мусорные значения = 0."""
+        """3x-ui v3.1.0 stores tgId as int64; empty and garbage values = 0."""
         if value in (None, ""):
             return 0
         try:
@@ -209,7 +209,7 @@ class XUIClient(BaseVPNClient):
 
     @staticmethod
     def _client_identifier_from_entry(client: Dict[str, Any]) -> str:
-        """Возвращает технический идентификатор клиента для старых update/delete."""
+        """Returns the technical client ID for old update/delete."""
         if not isinstance(client, dict):
             return ""
         return client.get("id") or client.get("password") or client.get("auth") or ""
@@ -222,7 +222,7 @@ class XUIClient(BaseVPNClient):
         client_uuid: Optional[str] = None,
         email: Optional[str] = None,
     ) -> tuple:
-        """Ищет клиента в уже загруженном списке inbound без дополнительного запроса к панели."""
+        """Searches for a client in the already loaded inbound list without an additional request to the panel."""
         for inbound in inbounds or []:
             if inbound_id is not None and inbound.get("id") != inbound_id:
                 continue
@@ -245,7 +245,7 @@ class XUIClient(BaseVPNClient):
         total_gb: int,
         fallback_sub_id: str,
     ) -> Dict[str, Any]:
-        """Собирает единый результат add_client из фактической записи панели."""
+        """Collects a single add_client result from the actual panel entry."""
         client_uuid = (
             client.get("uuid")
             or cls._client_identifier_from_entry(client)
@@ -261,7 +261,7 @@ class XUIClient(BaseVPNClient):
         }
 
     def _save_api_token(self, token: str) -> None:
-        """Сохраняет Bearer-токен в объекте и БД."""
+        """Saves the Bearer token in the object and database."""
         self.api_token = token
         self.server["api_token"] = token
         if self.server_id is not None:
@@ -272,7 +272,7 @@ class XUIClient(BaseVPNClient):
                 logger.warning(f"Не удалось сохранить api_token в БД: {e}")
 
     def _save_panel_info(self) -> None:
-        """Сохраняет определённые version/profile панели в объекте и БД."""
+        """Saves specific version/profile panels in an object and database."""
         self.server["panel_version"] = self.panel_version
         self.server["panel_api_profile"] = self.api_profile
         if self.server_id is None:
@@ -290,10 +290,10 @@ class XUIClient(BaseVPNClient):
         fallback_uuid: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Преобразует ClientRecord/get_inbounds client в model.Client payload v3.1.0.
+        Converts ClientRecord/get_inbounds client to model.Client payload v3.1.0.
 
-        В ответе /clients/get поле id — числовой ID записи БД, а UUID клиента
-        лежит в uuid. В payload update поле id должно быть именно UUID.
+        In the /clients/get response, the id field is the numeric ID of the database record, and the client's UUID
+        lies in uuid. In payload update, the id field must be exactly UUID.
         """
         if not isinstance(record, dict):
             record = {}
@@ -331,7 +331,7 @@ class XUIClient(BaseVPNClient):
 
     @staticmethod
     def _split_clients_api_record(record: Dict[str, Any]) -> tuple:
-        """Возвращает (client, inboundIds) из ответа /panel/api/clients/get/:email."""
+        """Returns (client, inboundIds) from response /panel/api/clients/get/:email."""
         if not isinstance(record, dict):
             return {}, []
         if isinstance(record.get("client"), dict):
@@ -346,7 +346,7 @@ class XUIClient(BaseVPNClient):
 
     @staticmethod
     def _version_tuple(version: Optional[str]) -> tuple:
-        """Возвращает tuple версии 3x-ui для безопасного сравнения."""
+        """Returns a tuple of the 3x-ui version for safe comparison."""
         if not version:
             return ()
         text = str(version).strip().lstrip("vV")
@@ -368,11 +368,11 @@ class XUIClient(BaseVPNClient):
 
     def _setting_bases(self) -> List[str]:
         """
-        Возвращает порядок namespace для setting routes.
+        Returns the namespace order for setting routes.
 
-        До 3x-ui v3.3.0 настройки жили в /panel/setting/*, начиная с v3.3.0
-        они переехали в /panel/api/setting/*. Если версия неизвестна, сначала
-        пробуем старый путь, чтобы не менять поведение существующих панелей.
+        Before 3x-ui v3.3.0, settings lived in /panel/setting/*, starting from v3.3.0
+        they moved to /panel/api/setting/*. If the version is unknown, first
+        We are trying the old way so as not to change the behavior of existing panels.
         """
         if self._version_at_least(self.panel_version, (3, 3, 0)):
             return [SETTING_BASE_API, SETTING_BASE_LEGACY]
@@ -389,7 +389,7 @@ class XUIClient(BaseVPNClient):
         data: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
     ) -> tuple:
-        """Raw-запрос без login/_request, чтобы probes не зацикливались."""
+        """Raw request without login/_request so that probes don’t get stuck in loops."""
         session = await self._ensure_session()
         url = f"{self.base_url}{endpoint}"
         try:
@@ -405,7 +405,7 @@ class XUIClient(BaseVPNClient):
             return 0, {}
 
     async def _fetch_panel_version(self) -> Optional[str]:
-        """Определяет версию панели через server/status с fallback на updateInfo."""
+        """Determines the panel version via server/status with fallback to updateInfo."""
         headers = self._build_headers("GET")
 
         status, data = await self._raw_json_request(
@@ -436,7 +436,7 @@ class XUIClient(BaseVPNClient):
         return None
 
     async def _detect_api_profile(self) -> str:
-        """Feature-probe: v3.1.0+ имеет /panel/api/clients/list/paged."""
+        """Feature-probe: v3.1.0+ has /panel/api/clients/list/paged."""
         headers = self._build_headers("GET")
         status, data = await self._raw_json_request(
             "GET",
@@ -448,7 +448,7 @@ class XUIClient(BaseVPNClient):
         return API_PROFILE_LEGACY
 
     async def _refresh_panel_metadata(self, force: bool = False) -> None:
-        """Обновляет version/profile панели и пишет кеш в servers."""
+        """Updates the version/profile of the panel and writes the cache to servers."""
         if not force and self.api_profile in (API_PROFILE_LEGACY, API_PROFILE_CLIENTS):
             if self.panel_version:
                 return
@@ -463,7 +463,7 @@ class XUIClient(BaseVPNClient):
         self._save_panel_info()
 
     async def _ensure_api_profile(self) -> str:
-        """Гарантирует, что выбран профиль API для операций с клиентами."""
+        """Ensures that the API profile for customer transactions is selected."""
         if not self.is_authenticated:
             await self.login()
         if self.api_profile in (API_PROFILE_LEGACY, API_PROFILE_CLIENTS) and self._profile_verified:
@@ -474,7 +474,7 @@ class XUIClient(BaseVPNClient):
 
     @staticmethod
     def _is_legacy_client_endpoint(endpoint: str) -> bool:
-        """True для старых client endpoints, исчезнувших в 3x-ui v3.1.0+."""
+        """True for old client endpoints that disappeared in 3x-ui v3.1.0+."""
         if endpoint == "/panel/api/inbounds/addClient":
             return True
         if endpoint == "/panel/api/inbounds/onlines":
@@ -489,10 +489,10 @@ class XUIClient(BaseVPNClient):
 
     async def _raise_if_stale_legacy_profile(self, endpoint: str) -> None:
         """
-        При 404 на старом client endpoint перепроверяет профиль API.
+        With 404 on the old client endpoint, it rechecks the API profile.
 
-        Если панель уже v3.1.0+ и поддерживает clients_api, текущий запрос нельзя
-        ретраить тем же URL: вызывающая операция должна заново выбрать endpoint.
+        If the panel is already v3.1.0+ and supports clients_api, the current request cannot
+        retrace with the same URL: the calling operation must reselect the endpoint.
         """
         if self.api_profile != API_PROFILE_LEGACY:
             return
@@ -515,14 +515,14 @@ class XUIClient(BaseVPNClient):
             raise StaleAPIProfileError("Профиль API панели изменился на clients_api")
 
     async def _run_with_stale_profile_retry(self, operation):
-        """Один раз повторяет операцию, если 404 показал апгрейд API профиля."""
+        """Repeats the operation once if 404 indicates an API profile upgrade."""
         try:
             return await operation()
         except StaleAPIProfileError:
             return await operation()
 
     async def _get_clients_api_record(self, email: str, log_error: bool = False) -> Optional[Dict[str, Any]]:
-        """Возвращает запись клиента v3.1.0 по email или None."""
+        """Returns the v3.1.0 client record by email or None."""
         encoded_email = urllib.parse.quote(email, safe="")
         try:
             result = await self._request(
@@ -546,7 +546,7 @@ class XUIClient(BaseVPNClient):
         total_gb: int,
         fallback_sub_id: str,
     ) -> Optional[Dict[str, Any]]:
-        """Проверяет, успела ли панель создать клиента до сетевого сбоя."""
+        """Checks whether the panel managed to create a client before the network failure."""
         if profile == API_PROFILE_CLIENTS:
             record = await self._get_clients_api_record(email, log_error=False)
             if not record:
@@ -591,7 +591,7 @@ class XUIClient(BaseVPNClient):
         email: Optional[str] = None,
         include_ignored: bool = False,
     ) -> tuple:
-        """Ищет клиента в /inbounds/list и возвращает (inbound, client)."""
+        """Looks up the client in /inbounds/list and returns (inbound, client)."""
         inbounds = await self.get_inbounds(include_ignored=include_ignored)
         for inbound in inbounds:
             if inbound_id is not None and inbound.get("id") != inbound_id:
@@ -606,16 +606,16 @@ class XUIClient(BaseVPNClient):
     
     async def _detect_panel_version(self) -> tuple:
         """
-        Определяет версию панели через probe GET /csrf-token.
+        Determines the panel version via probe GET /csrf-token.
 
-        - HTTP 200 + JSON.obj → v3.0+ (CSRF middleware активен).
-        - HTTP 404 → v2.x (endpoint не существует).
-        - Любая другая ошибка → считаем legacy (безопасный фолбэк).
+        - HTTP 200 + JSON.obj → v3.0+ (CSRF middleware is active).
+        - HTTP 404 → v2.x (endpoint does not exist).
+        - Any other error → consider legacy (safe fallback).
 
-        Запрос идёт напрямую через session, без _request, чтобы не зациклиться.
+        The request goes directly through session, without _request, so as not to get stuck in a loop.
 
         Returns:
-            Кортеж (mode, csrf_token): ('csrf', '<token>') или ('legacy', None).
+            Tuple (mode, csrf_token): ('csrf', '<token>') or ('legacy', None).
         """
         session = await self._ensure_session()
         url = f"{self.base_url}/csrf-token"
@@ -630,7 +630,7 @@ class XUIClient(BaseVPNClient):
                             return ('csrf', token)
                     except (json.JSONDecodeError, aiohttp.ContentTypeError):
                         pass
-                # 404 или прочее — считаем v2.x
+                # 404 or other - consider v2.x
                 logger.debug(f"Probe /csrf-token вернул {resp.status}, считаем v2.x legacy режим")
                 return ('legacy', None)
         except asyncio.TimeoutError as e:
@@ -640,18 +640,18 @@ class XUIClient(BaseVPNClient):
 
     async def _fetch_api_token(self) -> Optional[str]:
         """
-        Тянет Bearer-токен с панели v3.0+.
+        Pulls the Bearer token from the v3.0+ panel.
 
-        На v3.0.2+/v3.1.0 использует /panel/setting/apiTokens.
-        На v3.3.0+ использует /panel/api/setting/apiTokens:
-        - берёт enabled token с именем YadrenoVPN Bot;
-        - если токена нет, создаёт его;
-        - если токен найден disabled, не включает его обратно и остаётся CSRF.
+        On v3.0.2+/v3.1.0 uses /panel/setting/apiTokens.
+        On v3.3.0+ uses /panel/api/setting/apiTokens:
+        - takes an enabled token with the name YadrenoVPN Bot;
+        - if there is no token, creates it;
+        - if the token is found disabled, does not turn it back on and remains CSRF.
 
-        На v3.0.0 падает обратно на старый /panel/setting/getApiToken.
+        On v3.0.0 it falls back to the old /panel/setting/getApiToken.
 
         Returns:
-            Токен или None если получить не удалось.
+            Token or None if it was not possible to obtain.
         """
         if self.csrf_token is None:
             logger.debug("Невозможно вытянуть api_token: csrf_token не установлен")
@@ -659,8 +659,8 @@ class XUIClient(BaseVPNClient):
 
         headers = self._build_headers("GET", force_cookie=True, include_csrf_for_get=True)
 
-        # Новый API токенов появился после v3.0.0. В v3.3.0 он переехал
-        # из /panel/setting/* в /panel/api/setting/*.
+        # The new token API appeared after v3.0.0. In v3.3.0 it moved
+        # from /panel/setting/* to /panel/api/setting/*.
         last_status = None
         last_endpoint = None
         for endpoint in self._setting_endpoints("apiTokens"):
@@ -720,7 +720,7 @@ class XUIClient(BaseVPNClient):
         if last_status not in (0, 404, 405):
             logger.debug(f"GET {last_endpoint} вернул HTTP {last_status}, fallback getApiToken")
 
-        # Старый endpoint v3.0.0.
+        # Old endpoint v3.0.0.
         headers = self._build_headers("GET", force_cookie=True, include_csrf_for_get=True)
         for endpoint in self._setting_endpoints("getApiToken"):
             status, data = await self._raw_json_request(
@@ -741,16 +741,16 @@ class XUIClient(BaseVPNClient):
 
     async def _try_bearer_validate(self) -> bool:
         """
-        Лёгкий probe-запрос для проверки актуальности Bearer-токена.
+        An easy probe request to check the relevance of the Bearer token.
 
-        Делает GET /panel/api/server/status с Authorization: Bearer.
-        - 200 → токен валиден, переходим в режим 'bearer'.
-        - 404/401 → токен невалиден (ротировали в панели).
-        - 0 → панель временно недоступна, токен не очищаем.
-        - Прочее → считаем невалидным.
+        Does GET /panel/api/server/status with Authorization: Bearer.
+        - 200 → token is valid, go to 'bearer' mode.
+        - 404/401 → the token is invalid (rotated in the panel).
+        - 0 → the panel is temporarily unavailable, the token is not cleared.
+        - Other → considered invalid.
 
         Returns:
-            True если токен работает.
+            True if the token is working.
         """
         if not self.api_token:
             return False
@@ -778,13 +778,13 @@ class XUIClient(BaseVPNClient):
         include_csrf_for_get: bool = False,
     ) -> Dict[str, str]:
         """
-        Собирает HTTP-заголовки в зависимости от panel_mode.
+        Collects HTTP headers depending on panel_mode.
 
-        - legacy: только базовые AJAX-заголовки.
-        - csrf: добавляет X-CSRF-Token для unsafe-методов.
-        - bearer: добавляет Authorization: Bearer (CSRF не нужен).
-        - force_cookie: для старого /panel/setting/* Bearer не подходит, нужен cookie+CSRF.
-          Новый /panel/api/setting/* работает как обычный API namespace.
+        - legacy: only basic AJAX headers.
+        - csrf: adds X-CSRF-Token for unsafe methods.
+        - bearer: adds Authorization: Bearer (CSRF is not needed).
+        - force_cookie: for the old /panel/setting/* Bearer is not suitable, you need cookie+CSRF.
+          The new /panel/api/setting/* works like a regular namespace API.
         """
         headers = {
             "Accept": "application/json",
@@ -807,19 +807,19 @@ class XUIClient(BaseVPNClient):
         log_error: bool = True
     ) -> Dict[str, Any]:
         """
-        Выполняет HTTP-запрос к API.
+        Makes an HTTP request to the API.
         
         Args:
-            method: HTTP метод (GET, POST)
-            endpoint: Относительный путь (начинается с /panel/... или /login)
-            data: Данные для POST запроса
-            retry: Повторять ли при ошибках
+            method: HTTP method (GET, POST)
+            endpoint: Relative path (starts with /panel/... or /login)
+            data: Data for POST request
+            retry: Whether to repeat on errors
             
         Returns:
-            Ответ API в виде словаря
+            API response as a dictionary
             
         Raises:
-            VPNAPIError: При ошибке запроса
+            VPNAPIError: When the request failed
         """
         # URL = https://ip:port/secret_path/panel/...
         url = f"{self.base_url}{endpoint}"
@@ -830,18 +830,18 @@ class XUIClient(BaseVPNClient):
 
         for attempt in range(attempts):
             try:
-                # Получаем актуальную сессию (важно, так как она может быть пересоздана в _reset_session)
+                # We get the current session (important, since it can be recreated in _reset_session)
                 session = await self._ensure_session()
 
-                # Если нужна авторизация и мы не авторизованы (и это не запрос логина)
+                # If authorization is required and we are not authorized (and this is not a login request)
                 if not self.is_authenticated and endpoint != "/login":
                     await self.login()
 
                 if is_cookie_setting_route and endpoint != "/login":
                     await self._ensure_cookie_auth()
 
-                # Заголовки собираются ПОСЛЕ login() — там определяется panel_mode
-                # и устанавливаются csrf_token/api_token, нужные для _build_headers.
+                # Headers are collected AFTER login() - panel_mode is defined there
+                # and csrf_token/api_token needed for _build_headers are installed.
                 headers = self._build_headers(
                     method,
                     force_cookie=is_cookie_setting_route,
@@ -853,7 +853,7 @@ class XUIClient(BaseVPNClient):
                 async with session.request(method, url, json=data, headers=headers) as response:
                     text = await response.text()
 
-                    # Bearer протух (ротировали в панели) — обнуляем токен, перелогиниваемся
+                    # Bearer is rotten (rotated in the panel) - reset the token, re-login
                     if response.status == 401 and self.panel_mode == 'bearer' and not is_cookie_setting_route:
                         logger.warning(
                             f"HTTP 401 в режиме bearer — токен невалиден, "
@@ -864,7 +864,7 @@ class XUIClient(BaseVPNClient):
                         if attempt < attempts - 1:
                             continue
 
-                    # CSRF-токен устарел (рестарт панели и т.п.) — переподтянуть и повторить
+                    # CSRF token is out of date (panel restart, etc.) - re-upgrade and repeat
                     if response.status == 403 and (self.panel_mode == 'csrf' or is_cookie_setting_route):
                         logger.info("HTTP 403 — переподтягиваем CSRF-токен")
                         mode, token = await self._detect_panel_version()
@@ -873,40 +873,40 @@ class XUIClient(BaseVPNClient):
                             if attempt < attempts - 1:
                                 continue
 
-                    # Обработка статусов
+                    # Status processing
                     if response.status == 200:
                         try:
                             result = json.loads(text)
                             if result.get("success"):
                                 return result
                             
-                            # Бывает success=False но есть msg
+                            # Sometimes success=False but there is msg
                             if "msg" in result and not result["success"]:
                                 msg = result["msg"].lower()
-                                # Проверяем на признаки истечения сессии
+                                # Checking for signs of session expiration
                                 if any(x in msg for x in ["login", "auth", "session", "token"]):
                                     logger.warning(f"Сессия возможно истекла (msg='{result['msg']}'), пересоздаём...")
                                     await self._reset_session()
                                     if attempt < attempts - 1:
-                                        # Сессия будет пересоздана при следующем запросе
+                                        # The session will be recreated on the next request
                                         continue
                                         
                                 raise VPNAPIError(result["msg"])
                             return result
                         except json.JSONDecodeError:
-                            # Иногда возвращает HTML при редиректе на логин
+                            # Sometimes it returns HTML when redirecting to login
                             if "login" in text.lower():
                                 logger.warning("Сессия истекла (редирект на логин), пересоздаём...")
                                 await self._reset_session()
                                 if attempt < attempts - 1:
-                                    # Сессия будет пересоздана при следующем запросе
+                                    # The session will be recreated on the next request
                                     continue
                             logger.error(f"Невалидный JSON: {text[:100]}")
                             raise VPNAPIError("Некорректный ответ сервера")
                     elif response.status == 404:
                          await self._raise_if_stale_legacy_profile(endpoint)
-                         # Некоторые версии X-UI возвращают 404 если сессия истекла
-                         # Пытаемся пересоздать сессию
+                         # Some versions of X-UI return 404 if the session has expired
+                         # We are trying to recreate the session
                          logger.warning(f"HTTP 404 (Endpoint not found) для {url}, сессия возможно истекла. Попытка {attempt+1}/{attempts}")
                          await self._reset_session()
                          if attempt < attempts - 1:
@@ -933,7 +933,7 @@ class XUIClient(BaseVPNClient):
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 reason = "таймаут подключения" if isinstance(e, asyncio.TimeoutError) else str(e)
                 logger.warning(f"Ошибка подключения (попытка {attempt+1}/{attempts}): {reason}")
-                # Сбрасываем сессию при ошибках подключения, чтобы пересоздать её
+                # We reset the session in case of connection errors in order to recreate it
                 await self._reset_session()
                 if attempt < attempts - 1:
                     await asyncio.sleep(delays[min(attempt, len(delays) - 1)])
@@ -951,11 +951,11 @@ class XUIClient(BaseVPNClient):
 
     async def _login_with_cookie(self, fetch_token: bool = True) -> bool:
         """
-        Обычный login через cookie. Для v3.0+ добавляет CSRF.
+        Regular login via cookie. For v3.0+ adds CSRF.
 
-        fetch_token=True используется основным login(), чтобы после cookie-логина
-        получить Bearer. Для старого /panel/setting/* fetch_token=False, чтобы не вызвать
-        рекурсию при обслуживании setting routes.
+        fetch_token=True is used by the main login() so that after the cookie login
+        receive Bearer. For the old /panel/setting/* fetch_token=False, so as not to call
+        recursion when servicing setting routes.
         """
         mode, csrf_token = await self._detect_panel_version()
         self.panel_mode = mode
@@ -1025,7 +1025,7 @@ class XUIClient(BaseVPNClient):
         return True
 
     async def _ensure_cookie_auth(self) -> bool:
-        """Гарантирует cookie-сессию для старого /panel/setting/* даже в Bearer-режиме."""
+        """Guarantees a cookie session for the old /panel/setting/* even in Bearer mode."""
         if self.cookie_authenticated and self.session is not None and not self.session.closed:
             return True
         bearer_token = self.api_token
@@ -1040,20 +1040,20 @@ class XUIClient(BaseVPNClient):
 
     async def login(self) -> bool:
         """
-        Авторизация в панели 3X-UI с авто-определением auth/API профиля.
+        Authorization in the 3X-UI panel with auto-detection of the auth/API profile.
 
-        Алгоритм:
-        1. Если есть сохранённый api_token — пробуем Bearer-валидацию (без логина).
-           На успехе ставим panel_mode='bearer' и проверяем version/profile.
-        2. Probe GET /csrf-token → 200 значит v3.0+, 404 значит v2.x.
-        3. На v3.0+: логинимся с X-CSRF-Token, затем тянем/создаём api_token.
-        4. На v2.x: обычный POST /login без CSRF.
+        Algorithm:
+        1. If there is a saved api_token, try Bearer validation (without login).
+           If successful, set panel_mode='bearer' and check version/profile.
+        2. Probe GET /csrf-token → 200 means v3.0+, 404 means v2.x.
+        3. On v3.0+: log in with X-CSRF-Token, then pull/create api_token.
+        4. On v2.x: regular POST /login without CSRF.
 
         Returns:
-            True при успешной авторизации
+            True if authorization is successful
 
         Raises:
-            VPNAPIError: При ошибке авторизации
+            VPNAPIError: Authorization error
         """
         logger.info(f"Авторизация на {self.server['name']}...")
 
@@ -1074,13 +1074,13 @@ class XUIClient(BaseVPNClient):
 
     async def get_inbounds(self, include_ignored: bool = False) -> List[Dict[str, Any]]:
         """
-        Получает список подключений (Inbounds).
+        Gets a list of connections (Inbounds).
 
         Args:
-            include_ignored: True — вернуть также inbound'ы с префиксом --! в remark.
+            include_ignored: True — also return inbounds with the prefix --! in remark.
 
         Returns:
-            Список inbound-подключений
+            List of inbound connections
         """
         result = await self._request("GET", "/panel/api/inbounds/list")
         obj = result.get("obj", [])
@@ -1097,29 +1097,29 @@ class XUIClient(BaseVPNClient):
     
     async def get_server_status(self) -> Dict[str, Any]:
         """
-        Получает статус сервера (CPU, память, uptime).
+        Gets the server status (CPU, memory, uptime).
         
         Returns:
-            Словарь со статусом сервера
+            Dictionary with server status
         """
         try:
             result = await self._request("GET", "/panel/api/server/status")
             return result.get("obj", {})
         except VPNAPIError:
-            # Некоторые версии 3X-UI не имеют этого endpoint
+            # Some versions of 3X-UI do not have this endpoint
             return {}
 
     async def get_stats(self) -> Dict[str, Any]:
         """
-        Получает статистику сервера.
+        Gets server statistics.
         
         Returns:
-            Словарь со статистикой:
-            - total_clients: Общее количество клиентов
-            - active_clients: Количество активных клиентов (enable=True)
-            - total_traffic_bytes: Общий трафик (up + down)
-            - cpu_percent: Загрузка CPU (если доступно)
-            - online: True если сервер доступен
+            Dictionary with statistics:
+            - total_clients: Total number of clients
+            - active_clients: Number of active clients (enable=True)
+            - total_traffic_bytes: Total traffic (up + down)
+            - cpu_percent: CPU load (if available)
+            - online: True if the server is available
         """
         try:
             inbounds = await self.get_inbounds()
@@ -1129,7 +1129,7 @@ class XUIClient(BaseVPNClient):
             total_traffic = 0
             
             for inbound in inbounds:
-                # Парсим настройки клиентов
+                # Parsing client settings
                 settings = self._load_json_field(inbound.get("settings", "{}"))
                 clients = settings.get("clients", [])
                 total_clients += len(clients)
@@ -1138,11 +1138,11 @@ class XUIClient(BaseVPNClient):
                     if client.get("enable", True):
                         active_clients += 1
                 
-                # Трафик inbound
+                # Traffic inbound
                 total_traffic += inbound.get("up", 0)
                 total_traffic += inbound.get("down", 0)
             
-            # Пробуем получить статус сервера (CPU)
+            # Trying to get the server status (CPU)
             cpu_percent = None
             try:
                 status = await self.get_server_status()
@@ -1184,10 +1184,10 @@ class XUIClient(BaseVPNClient):
 
     async def get_nodes(self) -> List[Dict[str, Any]]:
         """
-        Получает список нод, подключённых к мастер-панели 3X-UI.
+        Gets a list of nodes connected to the 3X-UI master panel.
 
-        Старые панели и панели без Node API возвращают 404. Для мониторинга это
-        не ошибка: у такой панели просто нет доступного списка нод.
+        Old panels and panels without Node API return 404. For monitoring this
+        not a mistake: such a panel simply does not have an accessible list of nodes.
         """
         try:
             result = await self._request(
@@ -1210,10 +1210,10 @@ class XUIClient(BaseVPNClient):
 
     async def _get_online_clients_count_impl(self) -> int:
         """
-        Получает количество пользователей онлайн.
+        Gets the number of users online.
         
         Returns:
-            Количество пользователей онлайн
+            Number of users online
         """
         try:
             profile = await self._ensure_api_profile()
@@ -1272,26 +1272,26 @@ class XUIClient(BaseVPNClient):
         sub_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Добавляет клиента в inbound.
+        Adds the client to inbound.
 
         Args:
-            inbound_id: ID inbound-подключения
-            email: Уникальный идентификатор клиента (используем user_{id})
-            total_gb: Лимит трафика в ГБ (0 = без лимита)
-            expire_days: Срок действия в днях (0 = бессрочно)
-            limit_ip: Ограничение по IP (1 = 1 устройство)
-            enable: Активен ли клиент
-            tg_id: Telegram ID для уведомлений панели
-            flow: Параметр flow (напр. 'xtls-rprx-vision' для VLESS Reality/TLS TCP)
-            sub_id: Subscription ID. Если передан — используется как есть (для
-                режима subscription, где один subId должен быть на всех клиентах
-                с одним email). Если None — генерируется новый uuid.
+            inbound_id: ID of the inbound connection
+            email: Unique client identifier (use user_{id})
+            total_gb: Traffic limit in GB (0 = no limit)
+            expire_days: Expiration date in days (0 = unlimited)
+            limit_ip: IP limit (1 = 1 device)
+            enable: Whether the client is active
+            tg_id: Telegram ID for panel notifications
+            flow: Flow parameter (e.g. 'xtls-rprx-vision' for VLESS Reality/TLS TCP)
+            sub_id: Subscription ID. If transferred, it is used as is (for
+                subscription mode, where one subId must be on all clients
+                with one email). If None, a new uuid is generated.
 
         Returns:
-            Словарь с данными созданного клиента
+            Dictionary with created client data
 
         Raises:
-            ValueError: Если expire_days <= 0
+            ValueError: If expire_days <= 0
         """
         if expire_days <= 0:
             raise ValueError("Срок действия ключа должен быть больше 0 дней")
@@ -1311,7 +1311,7 @@ class XUIClient(BaseVPNClient):
             if delay:
                 await asyncio.sleep(delay)
 
-        # Определяем протокол inbound для правильной структуры клиента
+        # Defining the inbound protocol for the correct client structure
         protocol = ""
         method = ""
         inbounds = []
@@ -1328,7 +1328,7 @@ class XUIClient(BaseVPNClient):
 
         client_uuid = str(uuid.uuid4())
         
-        # Для Shadowsocks 2022 требуется base64 пароль определенной длины
+        # Shadowsocks 2022 requires a base64 password of a certain length
         if protocol == 'shadowsocks':
             import base64
             import os
@@ -1338,16 +1338,16 @@ class XUIClient(BaseVPNClient):
                 else:
                     client_uuid = base64.b64encode(os.urandom(32)).decode('utf-8')
             else:
-                # Для обычного SS лучше тоже использовать base64 (надежнее, чем uuid с дефисами)
+                # For regular SS it is better to use base64 too (more reliable than uuid with hyphens)
                 client_uuid = base64.urlsafe_b64encode(os.urandom(16)).decode('utf-8').rstrip('=')
 
-        # Время истечения (timestamp в мс)
+        # Expiration time (timestamp in ms)
         expire_time = int((time.time() + expire_days * 86400) * 1000) if expire_days > 0 else 0
         
-        # Лимит трафика (байты)
+        # Traffic limit (bytes)
         total_bytes = total_gb * 1024 * 1024 * 1024 if total_gb > 0 else 0
         
-        # Базовая структура клиента
+        # Basic client structure
         client_entry = {
             "email": email,
             "limitIp": limit_ip,
@@ -1359,21 +1359,21 @@ class XUIClient(BaseVPNClient):
             "reset": 0,
         }
         
-        # Протокол-зависимые поля
+        # Protocol-dependent fields
         if protocol == 'trojan':
-            # Trojan использует password вместо id
+            # Trojan uses password instead of id
             client_entry["password"] = client_uuid
             client_entry["flow"] = flow
         elif protocol == 'shadowsocks':
-            # Shadowsocks — клиенты наследуют password/method из inbound
+            # Shadowsocks - clients inherit password/method from inbound
             client_entry["password"] = client_uuid
             client_entry["method"] = ""
         else:
-            # VLESS / VMess — используют id (UUID)
+            # VLESS / VMess - use id (UUID)
             client_entry["id"] = client_uuid
             client_entry["flow"] = flow
         
-        # Структура для 3X-UI
+        # Structure for 3X-UI
         client_data = {
             "id": inbound_id,
             "settings": json.dumps({
@@ -1547,8 +1547,8 @@ class XUIClient(BaseVPNClient):
     
     async def get_inbound_flow(self, inbound_id: int) -> str:
         """
-        Определяет нужное значение flow для inbound.
-        Flow = 'xtls-rprx-vision' нужен только для VLESS + TCP + (Reality или TLS).
+        Defines the desired flow value for inbound.
+        Flow = 'xtls-rprx-vision' is only needed for VLESS + TCP + (Reality or TLS).
         """
         try:
             inbounds = await self.get_inbounds()
@@ -1567,7 +1567,7 @@ class XUIClient(BaseVPNClient):
                     network = stream.get('network', 'tcp')
                     security = stream.get('security', 'none')
                     
-                    # Flow нужен только для VLESS + TCP + (reality | tls)
+                    # Flow is only needed for VLESS + TCP + (reality | tls)
                     if network == 'tcp' and security in ('reality', 'tls'):
                         return 'xtls-rprx-vision'
                     return ""
@@ -1577,7 +1577,7 @@ class XUIClient(BaseVPNClient):
     
     @staticmethod
     def _traffic_int(value: Any) -> Optional[int]:
-        """Нормализует числовые поля трафика из разных версий API."""
+        """Normalizes numeric traffic fields from different API versions."""
         if value is None or value == "":
             return None
         try:
@@ -1622,7 +1622,7 @@ class XUIClient(BaseVPNClient):
         payload: Any,
         source: str,
     ) -> Optional[Dict[str, Any]]:
-        """Приводит ответы /clients/traffic и /clients/get к старому формату get_client_stats()."""
+        """Converts /clients/traffic and /clients/get responses to the old get_client_stats() format."""
         if not isinstance(payload, dict):
             return None
 
@@ -1666,17 +1666,17 @@ class XUIClient(BaseVPNClient):
         resolve_inbound: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """
-        Получает статистику трафика и протокол конкретного клиента.
+        Retrieves traffic statistics and protocol for a specific client.
         
         Args:
-            email: Email/идентификатор клиента
+            email: Email/client ID
             
         Returns:
-            Словарь со статистикой или None:
-            - up: Трафик за всё время (up) байт
-            - down: Трафик за всё время (down) байт
-            - total: Лимит трафика (байт)
-            - protocol: Протокол соединения (vless, vmess и т.д.)
+            Dictionary with statistics or None:
+            - up: Traffic for all time (up) bytes
+            - down: Traffic for all time (down) bytes
+            - total: Traffic limit (bytes)
+            - protocol: Connection protocol (vless, vmess, etc.)
         """
         try:
             profile = await self._ensure_api_profile()
@@ -1747,14 +1747,14 @@ class XUIClient(BaseVPNClient):
 
     async def _delete_client_impl(self, inbound_id: int, client_uuid: str) -> bool:
         """
-        Удаляет клиента из inbound.
+        Removes a client from inbound.
 
         Args:
-            inbound_id: ID inbound-подключения
-            client_uuid: UUID клиента
+            inbound_id: ID of the inbound connection
+            client_uuid: Client UUID
 
         Returns:
-            True при успешном удалении
+            True if deletion was successful
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
@@ -1791,16 +1791,16 @@ class XUIClient(BaseVPNClient):
 
     async def _delete_clients_by_email_on_server_impl(self, email: str) -> int:
         """
-        Удаляет ВСЕХ клиентов с указанным email во всех inbound сервера.
+        Removes ALL clients with the specified email from all inbound servers.
 
-        Используется в режиме subscription при замене ключа, удалении ключа
-        и при переключении на режим keys (зачистка дубликатов).
+        Used in subscription mode when replacing a key or deleting a key
+        and when switching to keys mode (clearing duplicates).
 
         Args:
-            email: Email/идентификатор клиента
+            email: Email/client ID
 
         Returns:
-            Количество фактически удалённых клиентов
+            Number of actually deleted clients
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
@@ -1841,18 +1841,18 @@ class XUIClient(BaseVPNClient):
 
     async def _set_clients_enabled_by_email_impl(self, email: str, enable: bool) -> int:
         """
-        Включает/отключает ВСЕХ клиентов с указанным email во всех inbound сервера.
+        Enables/disables ALL clients with the specified email in all inbound servers.
 
-        Используется при истечении трафика или срока действия в режиме subscription:
-        панель сама не отключает клиента по нашему счётчику (только по своему totalGB),
-        поэтому отключаем вручную.
+        Used when traffic expires or expires in subscription mode:
+        the panel itself does not disconnect the client according to our counter (only according to its totalGB),
+        so we turn it off manually.
 
         Args:
-            email: Email клиента
-            enable: True — включить, False — отключить
+            email: Client email
+            enable: True - enable, False - disable
 
         Returns:
-            Количество обновлённых клиентов
+            Number of updated clients
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
@@ -1884,7 +1884,7 @@ class XUIClient(BaseVPNClient):
                 cid = cl.get('id') or cl.get('password')
                 if not cid:
                     continue
-                # Сохраняем все поля клиента, меняем только enable
+                # We save all client fields, change only enable
                 updated_client = dict(cl)
                 updated_client['enable'] = enable
                 data = {
@@ -1908,18 +1908,18 @@ class XUIClient(BaseVPNClient):
 
     async def get_panel_settings(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         """
-        Получает настройки панели через setting/all.
+        Gets panel settings via setting/all.
 
-        В частности возвращает поля subscription server: subEnable, subListen,
+        In particular, it returns the subscription server fields: subEnable, subListen,
         subPort, subPath, subDomain, subURI, subCertFile, subKeyFile, subEncrypt.
 
-        Результат кешируется на уровне клиента; повторные вызовы не делают запросов.
+        The result is cached at the client level; repeated calls do not make requests.
 
         Args:
-            force_refresh: True — игнорировать кеш и сделать новый запрос.
+            force_refresh: True - ignore the cache and make a new request.
 
         Returns:
-            Словарь настроек или None, если не удалось получить.
+            Settings dictionary or None if getting failed.
         """
         if not force_refresh and self._panel_settings is not None:
             return self._panel_settings
@@ -1953,19 +1953,19 @@ class XUIClient(BaseVPNClient):
 
     async def build_subscription_url(self, sub_id: str) -> Optional[str]:
         """
-        Возвращает HTTP-URL подписки для пользователя, собранный по настройкам
-        subscription-server из API панели (subDomain/subPort/subPath/subURI).
+        Returns the HTTP subscription URL for the user, collected by settings
+        subscription-server from the API panel (subDomain/subPort/subPath/subURI).
 
-        НЕ угадывает порт/путь по host:port API — берёт реальные значения с панели.
-        Если у панели subEnable=false или настройки получить не удалось — возвращает
-        None: пусть вызывающий код покажет пользователю осмысленную ошибку, а не
-        выдаст битый URL.
+        DOES NOT guess the port/path using the host:port API - takes real values from the panel.
+        If the panel has subEnable=false or the settings could not be obtained, it returns
+        None: Let the calling code show the user a meaningful error rather than
+        will show a broken URL.
 
         Args:
-            sub_id: Subscription ID клиента
+            sub_id: Subscription ID of the client
 
         Returns:
-            Полный URL вида 'https://host:2096/sub/{sub_id}' или None.
+            Full URL like 'https://host:2096/sub/{sub_id}'' or None.
         """
         settings = await self.get_panel_settings()
         if not settings:
@@ -1975,7 +1975,7 @@ class XUIClient(BaseVPNClient):
             )
             return None
 
-        # Подписка вообще включена?
+        # Is the subscription even included?
         if not settings.get("subEnable"):
             logger.warning(
                 f"build_subscription_url: на панели {self.server.get('name', self.server_id)} "
@@ -1983,18 +1983,18 @@ class XUIClient(BaseVPNClient):
             )
             return None
 
-        # Если админ задал кастомный subURI — это готовый префикс, добавляем только sub_id.
+        # If the admin has set a custom subURI - this is a ready-made prefix, we add only the sub_id.
         sub_uri = (settings.get("subURI") or "").strip()
         if sub_uri:
             if not sub_uri.endswith("/"):
                 sub_uri = sub_uri + "/"
             return f"{sub_uri}{sub_id}"
 
-        # Собираем URL из компонент.
+        # We collect URLs from components.
         from urllib.parse import urlparse
         sub_domain = (settings.get("subDomain") or "").strip()
         if not sub_domain:
-            # Берём хост панели (без http://)
+            # Take the panel host (without http://)
             parsed = urlparse(self.base_url)
             sub_domain = parsed.hostname or self.host
 
@@ -2004,15 +2004,15 @@ class XUIClient(BaseVPNClient):
         except (TypeError, ValueError):
             sub_port = 0
 
-        # Путь: 3X-UI кладёт его как '/sub/' или 'sub/' — нормализуем.
+        # Path: 3X-UI puts it as '/sub/' or 'sub/' - let's normalize it.
         sub_path = settings.get("subPath") or "/"
         if not sub_path.startswith("/"):
             sub_path = "/" + sub_path
         if not sub_path.endswith("/"):
             sub_path = sub_path + "/"
 
-        # Схема: HTTPS если у sub-server задан сертификат, иначе HTTP.
-        # subKeyFile + subCertFile вместе означают TLS на sub-port.
+        # Scheme: HTTPS if the sub-server has a certificate, otherwise HTTP.
+        # subKeyFile + subCertFile together means TLS on the sub-port.
         cert_file = (settings.get("subCertFile") or "").strip()
         key_file = (settings.get("subKeyFile") or "").strip()
         scheme = "https" if (cert_file and key_file) else "http"
@@ -2045,16 +2045,16 @@ class XUIClient(BaseVPNClient):
         total_gb: int
     ) -> bool:
         """
-        Обновляет лимит трафика существующего клиента.
+        Updates the traffic limit of an existing client.
         
         Args:
-            inbound_id: ID inbound-подключения
-            client_uuid: UUID клиента
-            email: Email/идентификатор клиента
-            total_gb: Новый лимит трафика в ГБ (0 = без лимита)
+            inbound_id: ID of the inbound connection
+            client_uuid: Client UUID
+            email: Email/client ID
+            total_gb: New traffic limit in GB (0 = no limit)
             
         Returns:
-            True при успешном обновлении
+            True if update is successful
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
@@ -2065,7 +2065,7 @@ class XUIClient(BaseVPNClient):
                 total_gb_bytes=total_gb * 1024 * 1024 * 1024 if total_gb > 0 else 0,
             )
 
-        # Получаем текущие данные клиента
+        # We receive current client data
         inbounds = await self.get_inbounds()
         target_inbound = None
         target_client = None
@@ -2085,11 +2085,11 @@ class XUIClient(BaseVPNClient):
         if not target_inbound or not target_client:
             raise VPNAPIError(f"Клиент {email} не найден в inbound {inbound_id}")
         
-        # Обновляем лимит трафика
+        # Updating the traffic limit
         total_bytes = total_gb * 1024 * 1024 * 1024 if total_gb > 0 else 0
         target_client['totalGB'] = total_bytes
         
-        # Формируем данные для обновления
+        # Generating data for updating
         update_data = {
             "id": inbound_id,
             "settings": json.dumps({
@@ -2119,11 +2119,11 @@ class XUIClient(BaseVPNClient):
 
     async def _disable_reset_for_all_clients_impl(self) -> int:
         """
-        Отключает автопродление (сброс трафика/дней) при наступлении 1-го числа месяца для всех клиентов.
-        Устанавливает поле reset = 0 для всех клиентов во всех inbounds.
+        Disables auto-renewal (traffic/day reset) on the 1st of the month for all clients.
+        Sets the reset field to 0 for all clients in all inbounds.
         
         Returns:
-            Количество обновленных клиентов.
+            Number of clients updated.
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
@@ -2163,13 +2163,13 @@ class XUIClient(BaseVPNClient):
             clients = settings.get('clients', [])
             
             for client in clients:
-                if client.get('reset', 0) != 0:  # только если reset не 0
+                if client.get('reset', 0) != 0:  # only if reset is not 0
                     
-                    # clientId — это id(uuid) для vless/vmess, password для trojan/shadowsocks
+                    # clientId is id(uuid) for vless/vmess, password for trojan/shadowsocks
                     client_id = client.get('id') or client.get('password')
                     
                     if client_id:
-                        # Формируем правильную структуру клиента для обновления, сохраняя нужные поля
+                        # We form the correct client structure for updating, saving the necessary fields
                         updated_client = {
                             "id": client.get('id', ''),
                             "password": client.get('password', ''),
@@ -2181,10 +2181,10 @@ class XUIClient(BaseVPNClient):
                             "enable": client.get('enable', True),
                             "tgId": client.get('tgId', ''),
                             "subId": client.get('subId', ''),
-                            "reset": 0  # Сбрасываем reset
+                            "reset": 0  # Reset
                         }
                         
-                        # Удаляем пустые поля (важно для разных протоколов)
+                        # Removing empty fields (important for different protocols)
                         updated_client = {k: v for k, v in updated_client.items() if v != ''}
                         
                         client_data = {
@@ -2193,9 +2193,9 @@ class XUIClient(BaseVPNClient):
                         }
                         
                         try:
-                            # В 3x-ui мы отправляем POST /panel/api/inbounds/updateClient/:clientId
-                            # А в теле запроса передаем id инбаунда и новый объект clients
-                            # Кодируем ID/пароль для URL, чтобы слеши в base64 (Shadowsocks) не ломали HTTP-маршрутизацию
+                            # In 3x-ui we send POST /panel/api/inbounds/updateClient/:clientId
+                            # And in the body of the request we pass the inbound id and a new clients object
+                            # We encode the ID/password for the URL so that slashes in base64 (Shadowsocks) do not break HTTP routing
                             encoded_id = urllib.parse.quote(client_id, safe='')
                             await self._request(
                                 "POST",
@@ -2250,26 +2250,26 @@ class XUIClient(BaseVPNClient):
         flow: Optional[str] = None,
     ) -> bool:
         """
-        Обновляет ВСЕ параметры клиента на панели данными из нашей БД.
-        Единственная функция записи на панель (кроме создания/удаления).
+        Updates ALL client parameters on the panel with data from our database.
+        The only recording function on the panel (except for creating/deleting).
         
-        Протокольные поля (flow, tgId) читаются с панели,
-        но expiryTime, totalGB, enable, subId и limitIp при явной передаче берутся
-        из параметров (из нашей БД).
+        Protocol fields (flow, tgId) are read from the panel,
+        but expiryTime, totalGB, enable, subId and limitIp are taken when passed explicitly
+        from parameters (from our database).
         
         Args:
-            inbound_id: ID inbound-подключения
-            client_uuid: UUID клиента
-            email: Email/идентификатор клиента
-            expiry_time_ms: Срок действия в миллисекундах (из нашей БД, 0 = бессрочный)
-            total_gb_bytes: Лимит трафика в байтах (из нашей БД, 0 = безлимит)
-            enable: Явный статус клиента. None = сохранить текущее значение панели
-            sub_id: Явный subscription ID. None = сохранить текущее значение панели
-            limit_ip: Явный лимит устройств. None = сохранить текущее значение панели
-            flow: Явный flow. None = сохранить текущее значение панели
+            inbound_id: ID of the inbound connection
+            client_uuid: Client UUID
+            email: Email/client ID
+            expiry_time_ms: Expiration time in milliseconds (from our database, 0 = never expire)
+            total_gb_bytes: Traffic limit in bytes (from our database, 0 = unlimited)
+            enable: Explicit client status. None = save current panel value
+            sub_id: Explicit subscription ID. None = save current panel value
+            limit_ip: Explicit device limit. None = save current panel value
+            flow: Explicit flow. None = save current panel value
             
         Returns:
-            True при успешном обновлении
+            True if update is successful
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
@@ -2317,7 +2317,7 @@ class XUIClient(BaseVPNClient):
             )
             return True
 
-        # Читаем текущие данные клиента с панели — только для протокольных полей
+        # Reading current client data from the panel - only for protocol fields
         inbounds = await self.get_inbounds()
         target_client = None
         
@@ -2335,23 +2335,23 @@ class XUIClient(BaseVPNClient):
         if not target_client:
             raise VPNAPIError(f"Клиент {email} не найден в inbound {inbound_id}")
         
-        # Формируем данные: expiryTime и totalGB из ПАРАМЕТРОВ (нашей БД),
-        # остальное — из текущих данных клиента на панели
+        # We generate data: expiryTime and totalGB from PARAMETERS (our database),
+        # the rest is from the client’s current data on the panel
         updated_client = {
             "id": target_client.get('id', ''),
             "password": target_client.get('password', ''),
             "flow": target_client.get('flow', '') if flow is None else flow,
             "email": target_client.get('email', email),
             "limitIp": target_client.get('limitIp', 1) if limit_ip is None else limit_ip,
-            "totalGB": total_gb_bytes,          # ← Из нашей БД!
-            "expiryTime": expiry_time_ms,        # ← Из нашей БД!
+            "totalGB": total_gb_bytes,          # ← From our database!
+            "expiryTime": expiry_time_ms,        # ← From our database!
             "enable": target_client.get('enable', True) if enable is None else enable,
             "tgId": target_client.get('tgId', ''),
             "subId": target_client.get('subId', '') if sub_id is None else sub_id,
-            "reset": 0  # Не используем auto-reset панели
+            "reset": 0  # We do not use auto-reset panels
         }
         
-        # Удаляем пустые строковые поля (для разных протоколов)
+        # Removing empty string fields (for different protocols)
         updated_client = {k: v for k, v in updated_client.items() if v != ''}
         
         update_data = {
@@ -2395,17 +2395,17 @@ class XUIClient(BaseVPNClient):
         days: int
     ) -> bool:
         """
-        Продлевает срок действия клиента на указанное количество дней.
-        Если срок уже истек, прибавляет дни к текущему времени.
+        Extends the client's validity period by the specified number of days.
+        If the time limit has already expired, adds days to the current time.
         
         Args:
-            inbound_id: ID inbound-подключения
-            client_uuid: UUID клиента
-            email: Email/идентификатор клиента
-            days: Количество дней для продления
+            inbound_id: ID of the inbound connection
+            client_uuid: Client UUID
+            email: Email/client ID
+            days: Number of days to extend
             
         Returns:
-            True при успешном обновлении
+            True if update is successful
         """
         import time
 
@@ -2446,7 +2446,7 @@ class XUIClient(BaseVPNClient):
             logger.info(f"Продлен ключ клиента {email} через clients API на {days} дней. Новый expiry: {new_expiry}")
             return True
         
-        # Получаем текущие данные клиента
+        # We receive current client data
         inbounds = await self.get_inbounds()
         target_inbound = None
         target_client = None
@@ -2469,21 +2469,21 @@ class XUIClient(BaseVPNClient):
         current_time_ms = int(time.time() * 1000)
         current_expiry = target_client.get('expiryTime', 0)
         
-        # Расчет нового времени истечения
+        # Calculation of new expiration time
         extension_ms = days * 86400 * 1000
         if current_expiry == 0:
-            # Бесконечный ключ остается бесконечным
+            # The infinite key remains infinite
             new_expiry = 0
         elif current_expiry < current_time_ms:
-            # Если ключ уже истек, прибавляем к текущему моменту
+            # If the key has already expired, add it to the current moment
             new_expiry = current_time_ms + extension_ms
         else:
-            # Если еще активен, прибавляем к текущему сроку окончания
+            # If still active, add to the current expiration date
             new_expiry = current_expiry + extension_ms
             
         target_client['expiryTime'] = new_expiry
         
-        # Формируем данные для обновления
+        # Generating data for updating
         update_data = {
             "id": inbound_id,
             "settings": json.dumps({
@@ -2503,7 +2503,7 @@ class XUIClient(BaseVPNClient):
             })
         }
         
-        # Удаляем пустые поля (важно для разных протоколов, где id или password могут отсутствовать)
+        # Removing empty fields (important for different protocols, where id or password may be missing)
         clients_array = json.loads(update_data["settings"])["clients"][0]
         clients_array = {k: v for k, v in clients_array.items() if v != ''}
         update_data["settings"] = json.dumps({"clients": [clients_array]})
@@ -2515,13 +2515,13 @@ class XUIClient(BaseVPNClient):
 
     async def get_client_config(self, email: str) -> Optional[Dict[str, Any]]:
         """
-        Получает полную конфигурацию клиента для подключения.
+        Retrieves the complete client configuration for the connection.
         
         Args:
-            email: Email/идентификатор клиента
+            email: Email/client ID
             
         Returns:
-            Словарь с настройками подключения или None
+            Dictionary with connection settings or None
         """
         try:
             inbounds = await self.get_inbounds()
@@ -2536,11 +2536,11 @@ class XUIClient(BaseVPNClient):
                         break
                 
                 if target_client:
-                    # Нашли клиента, возвращаем конфигурацию
+                    # We found the client, return the configuration
                     stream_settings = self._load_json_field(inbound.get("streamSettings", "{}"))
                     protocol = inbound.get("protocol", "vless")
                     
-                    # DEBUG: логируем stream_settings для отладки Reality-параметров
+                    # DEBUG: logging stream_settings to debug Reality parameters
                     logger.debug(f"Stream settings for {email}: {json.dumps(stream_settings, ensure_ascii=False)}")
                     if stream_settings.get("security") == "reality":
                         reality = stream_settings.get("realitySettings", {})
@@ -2558,12 +2558,12 @@ class XUIClient(BaseVPNClient):
                         "flow": target_client.get("flow", "")
                     }
                     
-                    # Протокол-специфичные поля
+                    # Protocol-specific fields
                     if protocol == 'trojan':
                         result["password"] = target_client.get("password", target_client.get("id", ""))
                     elif protocol == 'shadowsocks':
-                        # Для Shadowsocks method хранится в inbound settings, 
-                        # а пароль у каждого клиента свой (с fallback на общие)
+                        # For Shadowsocks method is stored in inbound settings,
+                        # and each client has its own password (from fallback to general)
                         result["method"] = settings.get("method", "aes-256-gcm")
                         result["password"] = target_client.get("password", settings.get("password", ""))
                         result["server_password"] = settings.get("password", "")
@@ -2577,13 +2577,13 @@ class XUIClient(BaseVPNClient):
 
     async def get_subscription_link(self, sub_id: str) -> Optional[str]:
         """
-        Получает VLESS-ссылку через endpoint подписки.
+        Receives a VLESS link through the subscription endpoint.
         
         Args:
-            sub_id: Subscription ID клиента
+            sub_id: Subscription ID of the client
             
         Returns:
-            Готовая VLESS-ссылка или None если не удалось получить
+            Ready VLESS link or None if it was not possible to receive
         """
         try:
             profile = await self._ensure_api_profile()
@@ -2607,10 +2607,10 @@ class XUIClient(BaseVPNClient):
 
         session = await self._ensure_session()
         
-        # Строим список URL кандидатов
-        # 1. С base_path
-        # 2. Без base_path
-        # 3. /subscribe/ вместо /sub/ (иногда бывает)
+        # Building a list of candidate URLs
+        # 1. With base_path
+        # 2. Without base_path
+        # 3. /subscribe/ instead of /sub/ (sometimes it happens)
         
         from urllib.parse import urlparse
         parsed = urlparse(self.base_url)
@@ -2625,7 +2625,7 @@ class XUIClient(BaseVPNClient):
         
         for url in candidates:
             try:
-                # Важно: Не используем _request, так как это публичный endpoint
+                # Important: We do not use _request, since this is a public endpoint
                 async with session.get(url, ssl=False) as response:
                     logger.info(f"Sub URL probe: {url} -> {response.status}")
 
@@ -2633,14 +2633,14 @@ class XUIClient(BaseVPNClient):
                         text = await response.text()
                         text = text.strip()
 
-                        # Если вернул VLESS
+                        # If returned VLESS
                         if text.startswith("vless://") or text.startswith("vmess://") or text.startswith("trojan://"):
                             return text
 
-                        # Если вернул base64
+                        # If returned base64
                         try:
                             import base64
-                            # Добавляем паддинг если нужно
+                            # Add padding if necessary
                             missing_padding = len(text) % 4
                             if missing_padding:
                                 text += '=' * (4 - missing_padding)
@@ -2648,7 +2648,7 @@ class XUIClient(BaseVPNClient):
                             if decoded.startswith("vless://") or decoded.startswith("vmess://") or decoded.startswith("trojan://"):
                                 return decoded
                         except:
-                            # Логируем, если это что-то странное
+                            # Log it if it's something strange
                             if len(text) < 200:
                                 logger.debug(f"Unknown response text: {text}")
                             pass
@@ -2659,7 +2659,7 @@ class XUIClient(BaseVPNClient):
 
     @staticmethod
     def _detect_database_backup(data: bytes) -> Optional[PanelDatabaseBackup]:
-        """Определяет формат backup-файла 3X-UI по сигнатуре."""
+        """Determines the format of the 3X-UI backup file by signature."""
         if data.startswith(b'SQLite format 3\x00'):
             return PanelDatabaseBackup(data=data, extension=".db", db_kind="sqlite")
         if data.startswith(b'PGDMP'):
@@ -2668,19 +2668,19 @@ class XUIClient(BaseVPNClient):
 
     async def get_database_backup(self) -> PanelDatabaseBackup:
         """
-        Скачивает резервную копию базы данных панели.
+        Downloads a backup copy of the panel database.
         
-        Endpoint: GET /panel/api/server/getDb (или фолбэки)
+        Endpoint: GET /panel/api/server/getDb (or fallbacks)
         
         Returns:
-            PanelDatabaseBackup с байтами файла, расширением и типом БД
+            PanelDatabaseBackup with file bytes, extension and database type
             
         Raises:
-            VPNAPIError: При ошибке скачивания
+            VPNAPIError: There was a download error
         """
         session = await self._ensure_session()
 
-        # Авторизуемся если нужно
+        # Log in if necessary
         if not self.is_authenticated:
             await self.login()
 
@@ -2688,11 +2688,11 @@ class XUIClient(BaseVPNClient):
             "Accept": "application/octet-stream",
             "X-Requested-With": "XMLHttpRequest"
         }
-        # На v3.0+ через Bearer — обходим необходимость в cookie + CSRF
+        # On v3.0+ via Bearer - bypass the need for cookies + CSRF
         if self.panel_mode == 'bearer' and self.api_token:
             headers["Authorization"] = f"Bearer {self.api_token}"
 
-        # Разные версии X-UI / 3X-UI используют разные пути для скачивания БД
+        # Different versions of X-UI / 3X-UI use different paths to download the database
         endpoints = [
             "/panel/api/server/getDb",
             "/panel/setting/getDb",
@@ -2756,16 +2756,16 @@ class XUIClient(BaseVPNClient):
 
     async def _reset_client_traffic_impl(self, inbound_id: int, email: str) -> bool:
         """
-        Сбрасывает счётчики трафика (up/down) клиента на панели.
+        Resets the client's traffic counters (up/down) on the panel.
         
         Endpoint: POST /panel/api/inbounds/{inbound_id}/resetClientTraffic/{email}
         
         Args:
-            inbound_id: ID inbound-подключения
-            email: Email/идентификатор клиента
+            inbound_id: ID of the inbound connection
+            email: Email/client ID
             
         Returns:
-            True при успешном сбросе
+            True on successful reset
         """
         profile = await self._ensure_api_profile()
         encoded_email = urllib.parse.quote(email, safe='')
@@ -2803,16 +2803,16 @@ class XUIClient(BaseVPNClient):
         total_gb_bytes: int
     ) -> bool:
         """
-        Обновляет лимит трафика (totalGB) клиента на панели.
+        Updates the client's traffic limit (totalGB) on the panel.
         
         Args:
-            inbound_id: ID inbound-подключения
-            client_uuid: UUID клиента
-            email: Email/идентификатор клиента
-            total_gb_bytes: Новый лимит в байтах
+            inbound_id: ID of the inbound connection
+            client_uuid: Client UUID
+            email: Email/client ID
+            total_gb_bytes: New limit in bytes
             
         Returns:
-            True при успешном обновлении
+            True if update is successful
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
@@ -2839,7 +2839,7 @@ class XUIClient(BaseVPNClient):
                 sub_id=target_client.get('subId', ''),
             )
 
-        # Получаем текущие данные клиента
+        # We receive current client data
         inbounds = await self.get_inbounds()
         target_client = None
         
@@ -2857,10 +2857,10 @@ class XUIClient(BaseVPNClient):
         if not target_client:
             raise VPNAPIError(f"Клиент {email} не найден в inbound {inbound_id}")
         
-        # Обновляем totalGB
+        # Update totalGB
         target_client['totalGB'] = total_gb_bytes
         
-        # Формируем данные для обновления
+        # Generating data for updating
         updated_client = {
             "id": target_client.get('id', ''),
             "password": target_client.get('password', ''),
@@ -2875,7 +2875,7 @@ class XUIClient(BaseVPNClient):
             "reset": target_client.get('reset', 0)
         }
         
-        # Удаляем пустые строковые поля (важно для разных протоколов)
+        # Removing empty string fields (important for different protocols)
         updated_client = {k: v for k, v in updated_client.items() if v != ''}
         
         update_data = {
@@ -2891,7 +2891,7 @@ class XUIClient(BaseVPNClient):
         return True
 
     async def close(self):
-        """Закрывает сессию."""
+        """Closes the session."""
         if self.session and not self.session.closed:
             await self.session.close()
         self.session = None
@@ -2901,5 +2901,5 @@ class XUIClient(BaseVPNClient):
 
 
 # ============================================================================
-# Глобальный кэш клиентов и вспомогательные функции
+# Global Client Cache and Helper Functions
 # ============================================================================

@@ -30,15 +30,15 @@ USERS_PER_PAGE = 20
 
 def generate_unique_email(user: dict) -> str:
     """
-    Генерирует уникальный email для панели 3X-UI.
-    Формат: user_{username/id}_{random_suffix}
+    Generates a unique email for the 3X-UI panel.
+    Format: user_{username/id}_{random_suffix}
     """
     suffix = uuid.uuid4().hex[:5]
     return f'{get_panel_email_prefix(user)}{suffix}'
 
 @router.callback_query(F.data.startswith('admin_key_view:'))
 async def show_key_view(callback: CallbackQuery, state: FSMContext):
-    """Показывает экран управления ключом."""
+    """Shows the key management screen."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -117,7 +117,7 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_key_extend:'))
 async def start_key_extend(callback: CallbackQuery, state: FSMContext):
-    """Начало продления ключа."""
+    """Start of key renewal."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -129,7 +129,7 @@ async def start_key_extend(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.key_extend_days, F.text, ~F.text.startswith('/'))
 async def process_key_extend(message: Message, state: FSMContext):
-    """Обработка ввода дней для продления."""
+    """Processing the entry of days for extension."""
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage
@@ -156,7 +156,7 @@ async def process_key_extend(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_key_reset_traffic:'))
 async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
-    """Сброс трафика ключа."""
+    """Reset key traffic."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -169,10 +169,10 @@ async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
         await callback.answer('❌ Сервер неактивен', show_alert=True)
         return
     try:
-        # Обнуляем traffic_used и пороги уведомлений в БД
+        # Resetting traffic_used and notification thresholds in the database
         from database.requests import reset_key_traffic_notification
         reset_key_traffic_notification(key_id)
-        # Синхронизируем все клиенты ключа с панелью
+        # Synchronize all key clients with the panel
         from bot.services.vpn_api import sync_key_to_panel_state
         stats = await sync_key_to_panel_state(key_id, reset_traffic=True)
         if not stats.get('ok'):
@@ -188,7 +188,7 @@ async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_key_change_traffic:'))
 async def start_change_traffic_limit(callback: CallbackQuery, state: FSMContext):
-    """Начало изменения лимита трафика."""
+    """Start of changing the traffic limit."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -209,7 +209,7 @@ async def start_change_traffic_limit(callback: CallbackQuery, state: FSMContext)
 
 @router.message(AdminStates.key_change_traffic, F.text, ~F.text.startswith('/'))
 async def process_change_traffic_limit(message: Message, state: FSMContext):
-    """Обработка ввода нового лимита трафика."""
+    """Processing the entry of a new traffic limit."""
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage
@@ -225,10 +225,10 @@ async def process_change_traffic_limit(message: Message, state: FSMContext):
         await safe_edit_or_send(message, '❌ Ключ не найден')
         return
     try:
-        # Сначала обновляем лимит в БД
+        # First we update the limit in the database
         from database.requests import update_key_traffic_limit
         update_key_traffic_limit(key_id, traffic_gb * (1024**3))
-        # Синхронизируем все клиенты ключа с панелью
+        # Synchronize all key clients with the panel
         from bot.services.vpn_api import sync_key_to_panel_state
         stats = await sync_key_to_panel_state(key_id)
         traffic_text = f'{traffic_gb} ГБ' if traffic_gb > 0 else 'без лимита'
@@ -246,7 +246,7 @@ async def process_change_traffic_limit(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_user_add_key:'))
 async def start_add_key(callback: CallbackQuery, state: FSMContext):
-    """Начало добавления ключа."""
+    """Start adding a key."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -266,7 +266,7 @@ async def start_add_key(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_add_key_server:'))
 async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
-    """Выбор сервера для нового ключа."""
+    """Selecting a server for a new key."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -279,7 +279,7 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
         return
     await state.update_data(add_key_server_id=server_id)
 
-    # Subscription mode: пропускаем выбор inbound — ключ создаётся во всех
+    # Subscription mode: skip the inbound selection - the key is created in all
     if is_subscription_mode():
         try:
             client = get_client_from_server_data(server)
@@ -312,7 +312,7 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_add_key_inbound:'))
 async def select_add_key_inbound(callback: CallbackQuery, state: FSMContext):
-    """Выбор inbound для нового ключа."""
+    """Selecting inbound for the new key."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -324,7 +324,7 @@ async def select_add_key_inbound(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.add_key_traffic, F.text, ~F.text.startswith('/'))
 async def process_add_key_traffic(message: Message, state: FSMContext):
-    """Обработка ввода лимита трафика."""
+    """Processing the entry of a traffic limit."""
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage
@@ -339,7 +339,7 @@ async def process_add_key_traffic(message: Message, state: FSMContext):
 
 @router.message(AdminStates.add_key_days, F.text, ~F.text.startswith('/'))
 async def process_add_key_days(message: Message, state: FSMContext):
-    """Обработка ввода срока действия."""
+    """Processing expiration date input."""
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage
@@ -358,7 +358,7 @@ async def process_add_key_days(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == 'admin_add_key_confirm')
 async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Подтверждение и создание ключа."""
+    """Confirmation and key creation."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -450,7 +450,7 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data == 'admin_user_add_key_cancel')
 async def cancel_add_key(callback: CallbackQuery, state: FSMContext):
-    """Отмена добавления ключа."""
+    """Cancel adding a key."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -463,7 +463,7 @@ async def cancel_add_key(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == 'admin_add_key_back')
 async def add_key_back(callback: CallbackQuery, state: FSMContext):
-    """Шаг назад при добавлении ключа."""
+    """Step back when adding a key."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -478,7 +478,7 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
     elif (current_state == AdminStates.add_key_traffic.state
           and is_subscription_mode()
           and data.get('add_key_inbound_id') is None):
-        # В subscription шага inbound нет — возвращаемся сразу на выбор сервера
+        # There is no inbound step in subscription - we go straight back to choosing a server
         servers = get_active_servers()
         await state.set_state(AdminStates.add_key_server)
         user = get_user_by_telegram_id(data.get('add_key_user_telegram_id'))
@@ -488,7 +488,7 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == 'admin_sync_db_to_panel')
 async def sync_db_to_panel(callback: CallbackQuery, state: FSMContext):
-    """Выгрузка данных из БД в панель (БД → Панель)."""
+    """Uploading data from the database to the panel (DB → Panel)."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -541,7 +541,7 @@ async def sync_db_to_panel(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == 'admin_sync_panel_to_db')
 async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
-    """Загрузка данных из панели в БД (Панель → БД)."""
+    """Loading data from the panel into the database (Panel → DB)."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -558,7 +558,7 @@ async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
         await safe_edit_or_send(callback.message, '✅ Нет активных ключей для загрузки.', reply_markup=back_and_home_kb('admin_users'))
         return
     
-    # Группируем по серверам
+    # Grouping by servers
     keys_by_server = {}
     for key in keys:
         sid = key['server_id']
@@ -595,20 +595,20 @@ async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
                 
                 try:
                     from datetime import timezone, timedelta
-                    # Обновляем expires_at из панели
+                    # Update expires_at from the panel
                     panel_ms = panel['expiryTime']
                     max_expires = datetime.now(timezone.utc) + timedelta(days=99999)
                     
                     if panel_ms == 0:
-                        # Бесконечный ключ на панели → ставим максимум
+                        # Infinite key on the panel → set to maximum
                         panel_dt = max_expires
                     else:
                         panel_dt = datetime.fromtimestamp(panel_ms / 1000, tz=timezone.utc)
-                        # Ограничиваем слишком далёкие даты
+                        # We limit dates that are too distant
                         if panel_dt > max_expires:
                             panel_dt = max_expires
                     
-                    # Для БД SQLite используем наивную строку (которая подразумевается в UTC)
+                    # For the SQLite database we use a naive string (which is implied in UTC)
                     panel_expires_str = panel_dt.replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S')
                     
                     db_expires = key.get('expires_at')
@@ -619,7 +619,7 @@ async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
                         if db_dt.tzinfo is None:
                             db_dt = db_dt.replace(tzinfo=timezone.utc)
                             
-                        # Обновляем если разница больше суток
+                        # We update if the difference is more than a day
                         if abs((panel_dt - db_dt).total_seconds()) > 86400:
                             need_update = True
                     else:
@@ -634,14 +634,14 @@ async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
                             )
                         changed = True
                     
-                    # Обновляем traffic_limit из панели
+                    # Update traffic_limit from the panel
                     panel_total_bytes = panel['totalGB']
                     db_limit = key.get('traffic_limit', 0) or 0
                     if panel_total_bytes != db_limit:
                         update_key_traffic_limit(key['id'], panel_total_bytes)
                         changed = True
                     
-                    # Обновляем traffic_used из панели
+                    # Update traffic_used from the panel
                     panel_traffic = panel['traffic_used']
                     db_traffic = key.get('traffic_used', 0) or 0
                     if panel_traffic != db_traffic:

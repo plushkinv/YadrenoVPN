@@ -1,11 +1,11 @@
 """
-Рендер страниц пользователя.
+Rendering of user pages.
 
-Единая точка формирования и отправки страниц из таблицы pages.
-Реализует трёхслойную систему видимости кнопок:
-  1. buttons_default.is_hidden — дефолт разработчика
-  2. buttons_custom (мёрж по id) — кастомизация админа
-  3. runtime — visibility dict по button id, system handlers и page/route-переходы
+A single point for generating and sending pages from the pages table.
+Implements a three-layer button visibility system:
+  1. buttons_default.is_hidden — developer default
+  2. buttons_custom (merge by id) - admin customization
+  3. runtime - visibility dict by button id, system handlers and page/route transitions
 """
 import json
 import logging
@@ -27,7 +27,7 @@ from bot.utils.page_placeholder_context import (
 
 logger = logging.getLogger(__name__)
 
-# Максимальное количество кнопок в одном ряду
+# Maximum number of buttons in one row
 MAX_BUTTONS_PER_ROW = 2
 PAGE_MEDIA_TYPES = {'photo', 'video', 'animation'}
 
@@ -40,12 +40,12 @@ def _normalize_page_media_type(media_type: Optional[str], media_file_id: Optiona
 
 def _page_image_value(row: Dict[str, Any]) -> Optional[str]:
     """
-    Возвращает итоговый file_id медиа страницы.
+    Returns the final file_id of the media page.
 
-    Для pages.image_custom используется три состояния:
-    - NULL: использовать image_default;
-    - пустая строка: админ явно отключил медиа;
-    - file_id: использовать кастомное медиа.
+    Pages.image_custom uses three states:
+    - NULL: use image_default;
+    - empty line: the admin has explicitly disabled the media;
+    - file_id: use custom media.
     """
     custom_image = row.get('image_custom')
     if custom_image is not None:
@@ -63,18 +63,18 @@ def _page_media_type_value(row: Dict[str, Any], image: Optional[str]) -> Optiona
 
 def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
     """
-    Возвращает итоговые данные страницы с учётом кастомизации.
+    Returns the final page data taking into account customization.
 
-    Текст: custom если есть, иначе default.
-    Медиа: image_custom если не NULL, иначе image_default; пустой image_custom отключает медиа.
-    Кнопки: мёрж buttons_default + buttons_custom по id.
+    Text: custom if available, otherwise default.
+    Media: image_custom if not NULL, otherwise image_default; empty image_custom disables media.
+    Buttons: merge buttons_default + buttons_custom by id.
 
     Args:
-        page_key: Ключ страницы в таблице pages
+        page_key: Key of the page in the pages table
 
     Returns:
         {"text": str, "image": str|None, "media_type": str|None, "buttons": list[dict]}
-        или None если страница не найдена
+        or None if page not found
     """
     from database.requests import get_page
 
@@ -82,12 +82,12 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
     if not row:
         return None
 
-    # Текст: custom → default
+    # Text: custom → default
     text = row.get('text_custom') or row.get('text_default') or ''
     image = _page_image_value(row)
     media_type = _page_media_type_value(row, image)
 
-    # Кнопки: мёрж по id
+    # Buttons: merge by id
     buttons = _merge_buttons_by_id(
         buttons_default_json=row.get('buttons_default', '[]'),
         buttons_custom_json=row.get('buttons_custom'),
@@ -102,7 +102,7 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
 
 
 def _parse_buttons_json(raw: Optional[str]) -> List[Dict[str, Any]]:
-    """Безопасный парсинг JSON массива кнопок."""
+    """Secure parsing of JSON array of buttons."""
     if not raw:
         return []
     try:
@@ -138,15 +138,15 @@ def _merge_buttons_by_id(
     buttons_custom_json: Optional[str],
 ) -> List[Dict]:
     """
-    Мержит два массива кнопок по полю id.
+    Merges two arrays of buttons based on the id field.
 
-    Алгоритм:
-    1. Парсим buttons_default и buttons_custom.
-    2. Если buttons_custom пуст (NULL) — возвращаем buttons_default as-is.
-    3. Для каждой кнопки из default: если в custom есть кнопка с тем же id →
-       берём custom-версию (приоритет кастомных).
-    4. Кнопки из custom, которых нет в default → добавленные админом, дописываем.
-    5. Сортируем по (row, col).
+    Algorithm:
+    1. Parse buttons_default and buttons_custom.
+    2. If buttons_custom is empty (NULL) - return buttons_default as-is.
+    3. For each button from default: if in custom there is a button with the same id →
+       take the custom version (custom priority).
+    4. We add buttons from custom that are not in default → added by the admin.
+    5. Sort by (row, col).
     """
     defaults = _parse_buttons_json(buttons_default_json)
     customs = _parse_buttons_json(buttons_custom_json)
@@ -154,7 +154,7 @@ def _merge_buttons_by_id(
     if not customs:
         return defaults
 
-    # Индексируем custom-кнопки по id
+    # Indexing custom buttons by id
     custom_map = {btn.get('id'): btn for btn in customs if _valid_button_id(btn.get('id'))}
     used_custom_ids = set()
 
@@ -162,20 +162,20 @@ def _merge_buttons_by_id(
     for btn in defaults:
         btn_id = btn.get('id')
         if btn_id and btn_id in custom_map:
-            # Кастомная версия — приоритет
+            # Custom version is priority
             merged.append(custom_map[btn_id])
             used_custom_ids.add(btn_id)
         else:
-            # Нет кастомной — берём дефолтную
+            # There is no custom one - we take the default one
             merged.append(btn)
 
-    # Добавленные админом кнопки (нет в default)
+    # Buttons added by the admin (not in default)
     for btn in customs:
         btn_id = btn.get('id')
         if _valid_button_id(btn_id) and btn_id not in used_custom_ids:
             merged.append(btn)
 
-    # Сортировка по (row, col)
+    # Sort by (row, col)
     merged.sort(key=_button_sort_key)
 
     return merged
@@ -186,10 +186,10 @@ def _merge_buttons_by_id_with_source(
     buttons_custom_json: Optional[str],
 ) -> List[Dict[str, Any]]:
     """
-    Мержит кнопки для /yaa-снимка и помечает источник каждой effective-кнопки.
+    Merges buttons for /yaa snapshot and marks the source of each effective button.
 
-    Если у кнопки есть custom-версия, default не дублируется: агенту для правки
-    нужен текущий редактируемый вариант и понимание, откуда он взят.
+    If a button has a custom version, default is not duplicated: to the agent for editing
+    you need the current edited version and an understanding of where it came from.
     """
     defaults = _parse_buttons_json(buttons_default_json)
     customs = _parse_buttons_json(buttons_custom_json)
@@ -223,7 +223,7 @@ def _merge_buttons_by_id_with_source(
 
 
 def _stored_text_value(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Возвращает компактное состояние текста страницы для /yaa."""
+    """Returns the compact state of the page text for /yaa."""
     text_custom = row.get('text_custom')
     if text_custom:
         return {'source': 'custom', 'value': text_custom}
@@ -235,7 +235,7 @@ def _stored_text_value(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _stored_image_value(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Возвращает компактное состояние медиа страницы для /yaa."""
+    """Returns the compact state of the media page for /yaa."""
     image_custom = row.get('image_custom')
     if image_custom is not None:
         return {
@@ -254,10 +254,10 @@ def _stored_image_value(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_page_stored_data(page_key: str) -> Optional[Dict[str, Any]]:
     """
-    Возвращает DB-first состояние страницы для /yaa без дубля default/custom.
+    Returns the DB-first page state for /yaa without the default/custom duplicate.
 
-    Значения с custom показываются только как custom. Значения без custom
-    показываются как default с явным custom=None.
+    Values with custom are shown only as custom. Values without custom
+    are shown as default with explicit custom=None.
     """
     from database.requests import get_page
 
@@ -284,10 +284,10 @@ def _build_keyboard(
     append_buttons: Optional[List[List[InlineKeyboardButton]]],
 ) -> InlineKeyboardMarkup:
     """
-    Собирает InlineKeyboardMarkup из списка кнопок.
+    Collects InlineKeyboardMarkup from a list of buttons.
 
-    Применяет слой 3 (runtime): visibility dict и system handlers.
-    Правила размещения: по row, max 2 кнопки в ряд, фолбэк при коллизиях.
+    Applies layer 3 (runtime): visibility dict and system handlers.
+    Placement rules: by row, max 2 buttons in a row, fallback in case of collisions.
     """
     from bot.utils.action_registry import (
         ACTION_REGISTRY,
@@ -338,7 +338,7 @@ def _build_keyboard(
             return None
         return rendered
 
-    # Обрабатываем каждую кнопку: определяем action, label, hidden
+    # We process each button: define action, label, hidden
     resolved_buttons: List[Dict] = []
 
     for btn in buttons:
@@ -370,13 +370,13 @@ def _build_keyboard(
             logger.warning("row/col кнопки '%s' должны быть int — пропускаем", btn_id)
             continue
 
-        # Слой 3: visibility dict по button id для всех action_type.
+        # Layer 3: visibility dict by button id for all action_types.
         if btn_id in invalid_visibility_ids:
             is_hidden = True
         elif btn_id in visibility:
             is_hidden = not visibility[btn_id]
 
-        # Обработка по типу
+        # Processing by type
         callback_data = None
         url = None
 
@@ -394,15 +394,15 @@ def _build_keyboard(
                 continue
 
             if result is None:
-                # System handler решил скрыть кнопку
+                # System handler decided to hide the button
                 continue
 
             callback_data = result.get('callback_data')
             url = result.get('url')
-            # System handler может переопределить label
+            # System handler can override label
             if result.get('label'):
                 label = result['label']
-            # System handler может скрыть кнопку
+            # System handler can hide the button
             if result.get('hidden', False):
                 continue
             if url:
@@ -470,7 +470,7 @@ def _build_keyboard(
             logger.warning(f"Неизвестный action_type '{action_type}' для кнопки '{btn_id}' — пропускаем")
             continue
 
-        # Пропускаем скрытые кнопки (после всех 3 слоёв)
+        # Skip hidden buttons (after all 3 layers)
         if is_hidden:
             continue
 
@@ -488,16 +488,16 @@ def _build_keyboard(
             'col': col,
         })
 
-    # Группируем по row и строим клавиатуру
+    # Group by row and build a keyboard
     builder = InlineKeyboardBuilder()
 
-    # Добавляем prepend_buttons перед кнопками страницы.
+    # Add prepend_buttons before the page buttons.
     if prepend_buttons:
         for row_btns in prepend_buttons:
             builder.row(*row_btns)
 
     if resolved_buttons:
-        # Группируем кнопки по row
+        # Grouping buttons by row
         rows_map: Dict[int, List[Dict]] = {}
         for btn in resolved_buttons:
             r = btn['row']
@@ -505,10 +505,10 @@ def _build_keyboard(
                 rows_map[r] = []
             rows_map[r].append(btn)
 
-        # Сортируем ряды по номеру
+        # Sort rows by number
         for row_num in sorted(rows_map.keys()):
             row_buttons = rows_map[row_num]
-            # Формируем InlineKeyboardButton объекты
+            # Forming InlineKeyboardButton objects
             kb_buttons = []
             for btn in row_buttons:
                 if btn['url']:
@@ -536,12 +536,12 @@ def _build_keyboard(
                         )
                     )
 
-            # Фолбэк: по MAX_BUTTONS_PER_ROW в ряд
+            # Fallback: MAX_BUTTONS_PER_ROW in a row
             for i in range(0, len(kb_buttons), MAX_BUTTONS_PER_ROW):
                 chunk = kb_buttons[i:i + MAX_BUTTONS_PER_ROW]
                 builder.row(*chunk)
 
-    # Добавляем append_buttons (кнопки вне БД, например «Админ-панель»)
+    # Add append_buttons (buttons outside the database, for example “Admin Panel”)
     if append_buttons:
         for row_btns in append_buttons:
             builder.row(*row_btns)
@@ -550,7 +550,7 @@ def _build_keyboard(
 
 
 def _normalize_runtime_visibility(raw_visibility: Optional[Dict[str, bool]]) -> tuple[Dict[str, bool], set[str]]:
-    """Нормализует runtime visibility: не-bool override безопасно скрывает кнопку."""
+    """Normalizes runtime visibility: non-bool override safely hides the button."""
     if raw_visibility is None:
         return {}, set()
     if not isinstance(raw_visibility, Mapping):
@@ -572,7 +572,7 @@ def _normalize_runtime_visibility(raw_visibility: Optional[Dict[str, bool]]) -> 
 
 
 def _is_allowed_button_url(url: str) -> bool:
-    """Разрешает только безопасные схемы URL-кнопок после подстановки."""
+    """Allows only safe URL button schemes after wildcarding."""
     parsed = urlparse(url)
     if parsed.scheme not in {'http', 'https', 'tg'}:
         return False
@@ -621,7 +621,7 @@ def _apply_text_replacements(
     text_replacements: Optional[Dict[str, str]],
     context: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Применяет HTML-подстановки страницы так же, как render_page()."""
+    """Applies HTML page substitutions in the same way as render_page()."""
     rendered_text = apply_page_placeholders(
         text or '',
         text_replacements,
@@ -637,10 +637,10 @@ def render_page_text(
     text_replacements: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """
-    Рендерит только текст страницы без отправки сообщения и без клавиатуры.
+    Renders only page text without sending a message and without the keyboard.
 
-    Нужен для технических экранов, где текст уже хранится в pages, но отправка
-    остаётся специальной: например оплата по QR с фото и runtime-клавиатурой.
+    Needed for technical screens, where the text is already stored in pages, but sending
+    remains special: for example, payment via QR with a photo and a runtime keyboard.
     """
     page_data = get_page_data(page_key)
     if page_data is None:
@@ -665,7 +665,7 @@ def render_page_text(
 def serialize_inline_button_rows(
     rows: Optional[List[List[InlineKeyboardButton]]],
 ) -> List[List[Dict[str, Any]]]:
-    """Сериализует inline-кнопки в компактный JSON-friendly формат."""
+    """Serializes inline buttons into a compact JSON-friendly format."""
     if not rows:
         return []
 
@@ -698,7 +698,7 @@ def serialize_inline_button_rows(
 def serialize_inline_keyboard(
     markup: Optional[InlineKeyboardMarkup],
 ) -> List[List[Dict[str, Any]]]:
-    """Сериализует InlineKeyboardMarkup в компактные ряды кнопок."""
+    """Serializes InlineKeyboardMarkup into compact rows of buttons."""
     if markup is None:
         return []
     return serialize_inline_button_rows(getattr(markup, 'inline_keyboard', None))
@@ -712,7 +712,7 @@ def build_visible_keyboard_snapshot(
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> List[List[Dict[str, Any]]]:
-    """Собирает компактный read-only снимок видимой inline-клавиатуры."""
+    """Collects a compact read-only snapshot of a visible inline keyboard."""
     render_context: Dict[str, Any] = _normalize_context_mapping(context)
     normalized_buttons = _normalize_snapshot_buttons(buttons)
     render_context = enrich_page_placeholder_context_sync(
@@ -740,7 +740,7 @@ def build_page_render_snapshot(
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> Dict[str, Any]:
-    """Собирает фактически отрендеренный вид страницы для контекста /yaa."""
+    """Collects the actual rendered view of the page for the /yaa context."""
     page_data = _normalize_snapshot_page_data(page_data)
     page_buttons = _normalize_snapshot_buttons(page_data.get('buttons'))
     render_context: Dict[str, Any] = _normalize_context_mapping(context)
@@ -771,9 +771,9 @@ def build_page_render_snapshot(
 
 def _resolve_button_style(color: Optional[str]) -> Optional[str]:
     """
-    Преобразует цвет из JSON кнопки в поддерживаемый Telegram style.
+    Converts the color from JSON of a button to a supported Telegram style.
 
-    secondary — это обычный стиль клиента Telegram, его не передаём явно.
+    secondary is the usual style of the Telegram client, we do not transfer it explicitly.
     """
     if not isinstance(color, str):
         return None
@@ -790,7 +790,7 @@ def build_page_keyboard(
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> Optional[InlineKeyboardMarkup]:
-    """Собирает клавиатуру страницы из таблицы pages без отправки сообщения."""
+    """Collects the page keyboard from the pages table without sending a message."""
     page_data = get_page_data(page_key)
     if page_data is None:
         return None
@@ -853,6 +853,30 @@ def _build_render_context(
     return render_context
 
 
+def _build_fallback_page_data(fallback_text: str) -> Dict[str, Any]:
+    return {
+        'text': fallback_text,
+        'image': None,
+        'media_type': None,
+        'buttons': [],
+    }
+
+
+def _resolve_render_media(
+    page_data: Dict[str, Any],
+    media_policy: str,
+    runtime_media: Any,
+    runtime_media_type: Optional[str],
+) -> tuple[Any, Optional[str]]:
+    if media_policy == 'page':
+        return page_data.get('image'), page_data.get('media_type')
+    if media_policy == 'runtime':
+        if runtime_media is None:
+            return None, None
+        return runtime_media, _normalize_page_media_type(runtime_media_type, runtime_media)
+    raise ValueError("media_policy must be 'page' or 'runtime'")
+
+
 async def render_page(
     target,
     page_key: str,
@@ -862,34 +886,49 @@ async def render_page(
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     force_new: bool = False,
+    fallback_text: Optional[str] = None,
+    send_func=None,
+    media_policy: str = 'page',
+    runtime_media: Any = None,
+    runtime_media_type: Optional[str] = None,
 ) -> Optional[Message]:
     """
-    Получает страницу из БД и отправляет/редактирует сообщение.
+    Retrieves a page from the database and sends/edits a message.
 
     Args:
-        target: Message или CallbackQuery (определяет send vs edit)
-        page_key: Ключ страницы в таблице pages
-        visibility: Переопределение видимости по button id
-                    {button_id: True/False}. True = показать, False = скрыть
-        context: Контекст для system-кнопок (order_id, telegram_id, ...)
-        text_replacements: Словарь canonical-плейсхолдеров для подстановки
-                          {"%тарифы%": "<b>Тарифы:</b>...", "%ключ_имя%": "Основной"}
-        prepend_buttons: Доп. ряды кнопок перед кнопками страницы
-                       Список списков InlineKeyboardButton
-        append_buttons: Доп. ряды кнопок вне БД (например, «Админ-панель»)
-                       Список списков InlineKeyboardButton
-        force_new: Принудительно отправить новое сообщение (не редактировать)
+        target: Message or CallbackQuery (defines send vs edit)
+        page_key: Key of the page in the pages table
+        visibility: Override visibility by button id
+                    {button_id: True/False}. True = show, False = hide
+        context: Context for system buttons (order_id, telegram_id, ...)
+        text_replacements: Dictionary of canonical placeholders for substitution
+                          {"<tariffs placeholder>": "<b>Tariffs:</b>...", "<key name placeholder>": "Basic"}
+        prepend_buttons: Prepend. rows of buttons in front of page buttons
+                       List of lists InlineKeyboardButton
+        append_buttons: Add. rows of buttons outside the database (for example, “Admin panel”)
+                       List of lists InlineKeyboardButton
+        force_new: Force a new message to be sent (do not edit)
+        fallback_text: Text rendered through the same pipeline if the page row is absent
+        send_func: safe_edit_or_send-compatible sender override
+        media_policy: "page" uses pages media, "runtime" uses runtime_media
+        runtime_media: Technical media object/file_id used with media_policy="runtime"
+        runtime_media_type: Runtime media type: photo, video or animation
     """
     from bot.utils.text import safe_edit_or_send
 
-    # 1. Получаем данные страницы
+    sender = send_func or safe_edit_or_send
+
+    # 1. Get page data
     page_data = get_page_data(page_key)
 
-    if page_data is None:
+    if page_data is None and fallback_text is None:
         logger.error(f"Страница '{page_key}' не найдена в БД")
         msg = target.message if isinstance(target, CallbackQuery) else target
-        await safe_edit_or_send(msg, "⚠️ Страница не настроена")
+        await sender(msg, "⚠️ Страница не настроена", force_new=force_new)
         return None
+
+    if page_data is None:
+        page_data = _build_fallback_page_data(fallback_text or '')
 
     render_context = _build_render_context(target, page_key, context)
     render_context = await enrich_page_placeholder_context(
@@ -899,10 +938,10 @@ async def render_page(
         text_replacements,
     )
 
-    # 2. Обработка текста
+    # 2. Text processing
     text = _apply_text_replacements(page_data["text"], text_replacements, render_context)
 
-    # 3. Собираем клавиатуру
+    # 3. Assembling the keyboard
     kb = _build_keyboard(
         buttons=page_data["buttons"],
         visibility=visibility,
@@ -912,33 +951,31 @@ async def render_page(
         append_buttons=append_buttons,
     )
 
-    # 4. Определяем медиа
-    image = page_data.get("image")
-    media_type = page_data.get("media_type")
+    # 4. Define the media
+    media, media_type = _resolve_render_media(
+        page_data,
+        media_policy,
+        runtime_media,
+        runtime_media_type,
+    )
 
-    # 5. Отправляем/редактируем
+    # 5. Submit/edit
     msg = target.message if isinstance(target, CallbackQuery) else target
-    rendered_message = await safe_edit_or_send(
+    rendered_message = await sender(
         msg,
         text,
         reply_markup=kb,
-        media=image,
+        media=media,
         media_type=media_type,
         force_new=force_new,
     )
 
-    # 6. Запоминаем редактируемую пользовательскую страницу для /yaa.
+    # 6. Remember the editable user page for /yaa.
     try:
         from config import ADMIN_IDS
         from bot.services.page_context import remember_page_context
 
-        if isinstance(target, CallbackQuery):
-            viewer_id = target.from_user.id
-        elif target.from_user and not target.from_user.is_bot:
-            viewer_id = target.from_user.id
-        else:
-            chat = getattr(target, 'chat', None)
-            viewer_id = chat.id if chat and getattr(chat, 'type', None) == 'private' else None
+        viewer_id = _target_viewer_id(target)
 
         if viewer_id in ADMIN_IDS:
             remember_page_context(

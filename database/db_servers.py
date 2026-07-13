@@ -28,10 +28,10 @@ SERVER_SELECT_FIELDS = """
 
 def get_all_servers() -> List[Dict[str, Any]]:
     """
-    Получает список всех VPN-серверов.
+    Gets a list of all VPN servers.
 
     Returns:
-        Список словарей с данными серверов
+        List of dictionaries with server data
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -43,13 +43,13 @@ def get_all_servers() -> List[Dict[str, Any]]:
 
 def get_server_by_id(server_id: int) -> Optional[Dict[str, Any]]:
     """
-    Получает сервер по ID.
+    Gets the server by ID.
 
     Args:
-        server_id: ID сервера
+        server_id: Server ID
 
     Returns:
-        Словарь с данными сервера или None
+        Dictionary with server data or None
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -62,10 +62,10 @@ def get_server_by_id(server_id: int) -> Optional[Dict[str, Any]]:
 
 def get_active_servers() -> List[Dict[str, Any]]:
     """
-    Получает список активных VPN-серверов.
+    Gets a list of active VPN servers.
 
     Returns:
-        Список словарей с данными активных серверов
+        List of dictionaries with data from active servers
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -87,20 +87,20 @@ def add_server(
     group_id: int = 1
 ) -> int:
     """
-    Добавляет новый VPN-сервер.
+    Adds a new VPN server.
     
     Args:
-        name: Название сервера
-        host: IP-адрес или домен
-        port: Порт панели 3X-UI
-        web_base_path: Секретный путь API
-        login: Логин для панели
-        password: Пароль для панели
-        protocol: Протокол подключения (http/https)
-        group_id: ID группы тарифов (по умолчанию 1 — «Основная»)
+        name: Server name
+        host: IP address or domain
+        port: 3X-UI panel port
+        web_base_path: Secret API path
+        login: Login for the panel
+        password: Password for the panel
+        protocol: Connection protocol (http/https)
+        group_id: tariff group ID (default 1 - “Main”)
         
     Returns:
-        ID созданного сервера
+        ID of the created server
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -109,7 +109,7 @@ def add_server(
         """, (name, host, port, web_base_path, login, password, protocol))
         server_id = cursor.lastrowid
         
-        # Добавляем сервер в таблицу связей server_groups
+        # Add the server to the server_groups connection table
         conn.execute(
             "INSERT INTO server_groups (server_id, group_id) VALUES (?, ?)",
             (server_id, group_id)
@@ -120,14 +120,14 @@ def add_server(
 
 def update_server(server_id: int, **fields) -> bool:
     """
-    Обновляет поля сервера.
+    Updates server fields.
     
     Args:
-        server_id: ID сервера
-        **fields: Поля для обновления (name, host, port, web_base_path, login, password, protocol)
+        server_id: Server ID
+        **fields: Fields to update (name, host, port, web_base_path, login, password, protocol)
         
     Returns:
-        True если обновление успешно
+        True if update is successful
     """
     allowed_fields = {
         'name', 'host', 'port', 'web_base_path', 'login', 'password',
@@ -155,18 +155,18 @@ def update_server(server_id: int, **fields) -> bool:
 
 def update_server_api_token(server_id: int, token: Optional[str]) -> bool:
     """
-    Атомарно обновляет Bearer-токен сервера (3x-ui v3.0+).
+    Atomically updates the server's Bearer token (3x-ui v3.0+).
 
-    Передаётся token=None для очистки (например, после ротации токена админом
-    в UI панели — наш сохранённый токен становится невалидным и его надо стереть,
-    чтобы следующий логин подтянул новый).
+    Token=None is passed for cleaning (for example, after the token is rotated by the admin
+    in the UI panel - our saved token becomes invalid and must be erased,
+    so that the next login will pull up a new one).
 
     Args:
-        server_id: ID сервера
-        token: API-токен из 3x-ui (строка ~48 символов) или None для очистки
+        server_id: Server ID
+        token: API token from 3x-ui (~48 characters string) or None to clear
 
     Returns:
-        True если сервер существует
+        True if the server exists
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -188,15 +188,15 @@ def update_server_panel_info(
     api_profile: Optional[str],
 ) -> bool:
     """
-    Обновляет кеш диагностики API панели 3x-ui.
+    Updates the 3x-ui panel API diagnostic cache.
 
     Args:
-        server_id: ID сервера
-        version: Версия панели, если удалось определить
-        api_profile: 'legacy_inbounds' или 'clients_api'
+        server_id: Server ID
+        version: Panel version, if it was possible to determine
+        api_profile: 'legacy_inbounds' or 'clients_api'
 
     Returns:
-        True если сервер существует
+        True if the server exists
     """
     checked_at = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     with get_db() as conn:
@@ -221,30 +221,30 @@ def update_server_panel_info(
 
 def update_server_field(server_id: int, field: str, value: Any) -> bool:
     """
-    Обновляет одно поле сервера.
+    Updates one server field.
     
     Args:
-        server_id: ID сервера
-        field: Название поля
-        value: Новое значение
+        server_id: Server ID
+        field: Field name
+        value: New value
         
     Returns:
-        True если обновление успешно
+        True if update is successful
     """
     return update_server(server_id, **{field: value})
 
 def delete_server(server_id: int) -> bool:
     """
-    Удаляет сервер.
+    Deletes the server.
     
     Args:
-        server_id: ID сервера
+        server_id: Server ID
         
     Returns:
-        True если удаление успешно
+        True if deletion is successful
     """
     with get_db() as conn:
-        # Сначала отвязываем ключи от этого сервера, чтобы не нарушить Foreign Key
+        # First, we unbind the keys from this server so as not to break the Foreign Key
         conn.execute("UPDATE vpn_keys SET server_id = NULL WHERE server_id = ?", (server_id,))
         
         cursor = conn.execute("DELETE FROM servers WHERE id = ?", (server_id,))
@@ -255,13 +255,13 @@ def delete_server(server_id: int) -> bool:
 
 def toggle_server_active(server_id: int) -> Optional[bool]:
     """
-    Переключает активность сервера.
+    Toggles server activity.
     
     Args:
-        server_id: ID сервера
+        server_id: Server ID
         
     Returns:
-        Новый статус (True = активен) или None если сервер не найден
+        New status (True = active) or None if the server is not found
     """
     server = get_server_by_id(server_id)
     if not server:

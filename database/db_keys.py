@@ -39,13 +39,13 @@ __all__ = [
 
 def get_user_vpn_keys(user_id: int) -> List[Dict[str, Any]]:
     """
-    Получает все VPN-ключи пользователя с данными о тарифе и сервере.
+    Receives all the user's VPN keys with data about the tariff and server.
     
     Args:
-        user_id: Внутренний ID пользователя (users.id)
+        user_id: Internal user ID (users.id)
     
     Returns:
-        Список ключей с полной информацией
+        List of keys with full information
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -64,13 +64,13 @@ def get_user_vpn_keys(user_id: int) -> List[Dict[str, Any]]:
 
 def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
     """
-    Получает VPN-ключ по ID с полной информацией.
+    Receives a VPN key by ID with complete information.
     
     Args:
-        key_id: ID ключа
+        key_id: Key ID
     
     Returns:
-        Словарь с данными ключа или None
+        Dictionary with key data or None
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -93,14 +93,14 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
 
 def extend_vpn_key(key_id: int, days: int) -> bool:
     """
-    Продлевает VPN-ключ на указанное количество дней.
+    Extends the VPN key for the specified number of days.
     
     Args:
-        key_id: ID ключа
-        days: Количество дней для продления
+        key_id: Key ID
+        days: Number of days to extend
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         modifier = f"{days:+} days"
@@ -134,20 +134,20 @@ def create_vpn_key_admin(
     traffic_limit: int = 0
 ) -> int:
     """
-    Создаёт VPN-ключ администратором (без оплаты).
+    Creates a VPN key by the administrator (without payment).
     
     Args:
-        user_id: Внутренний ID пользователя
-        server_id: ID сервера
-        tariff_id: ID тарифа
-        panel_inbound_id: ID inbound в панели
-        panel_email: Email (идентификатор) клиента в панели
-        client_uuid: UUID клиента
-        days: Срок действия в днях
-        traffic_limit: Лимит трафика в байтах (0 = безлимит)
+        user_id: Internal user ID
+        server_id: Server ID
+        tariff_id: Tariff ID
+        panel_inbound_id: ID inbound in the panel
+        panel_email: Email (identifier) of the client in the panel
+        client_uuid: Client UUID
+        days: Validity period in days
+        traffic_limit: Traffic limit in bytes (0 = unlimited)
     
     Returns:
-        ID созданного ключа
+        Created key ID
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -170,20 +170,20 @@ def update_vpn_key_connection(
     sub_id: Optional[str] = ...,
 ) -> bool:
     """
-    Обновляет технические данные ключа (сервер, UUID, inbound).
-    Используется при замене ключа.
+    Updates the technical data of the key (server, UUID, inbound).
+    Used when replacing a key.
 
     Args:
-        key_id: ID ключа
-        server_id: ID нового сервера
-        panel_inbound_id: ID inbound в панели
-        panel_email: Email (идентификатор) клиента в панели
-        client_uuid: Новый UUID клиента
-        sub_id: Subscription ID. Если передан (включая None) — обновляется
-                в БД. По умолчанию (Ellipsis) — поле не трогается.
+        key_id: Key ID
+        server_id: ID of the new server
+        panel_inbound_id: ID inbound in the panel
+        panel_email: Email (identifier) of the client in the panel
+        client_uuid: New client UUID
+        sub_id: Subscription ID. If passed (including None) - updated
+                in the database. Default (Ellipsis) - the field is not touched.
 
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         if sub_id is ...:
@@ -222,8 +222,8 @@ def create_vpn_key(
     traffic_limit: int = 0
 ) -> int:
     """
-    Создаёт полностью настроенный VPN-ключ (обертка над create_vpn_key_admin).
-    Для создания черновика используйте create_initial_vpn_key.
+    Creates a fully configured VPN key (wrapper over create_vpn_key_admin).
+    To create a draft, use create_initial_vpn_key.
     """
     return create_vpn_key_admin(
         user_id, server_id, tariff_id, panel_inbound_id, 
@@ -237,17 +237,17 @@ def create_initial_vpn_key(
     traffic_limit: int = 0
 ) -> int:
     """
-    Создаёт начальный (черновой) VPN-ключ без привязки к серверу.
-    Ключ создается сразу после оплаты.
+    Creates an initial (draft) VPN key without being tied to a server.
+    The key is created immediately after payment.
     
     Args:
-        user_id: ID пользователя
-        tariff_id: ID тарифа
-        days: Срок действия (дней)
-        traffic_limit: Лимит трафика в байтах (0 = безлимит)
+        user_id: User ID
+        tariff_id: Tariff ID
+        days: Validity period (days)
+        traffic_limit: Traffic limit in bytes (0 = unlimited)
         
     Returns:
-        ID созданного ключа
+        Created key ID
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -259,18 +259,18 @@ def create_initial_vpn_key(
 
 def is_key_active(key: dict) -> bool:
     """
-    Проверяет активность ключа (дата + трафик).
-    Единая точка проверки статуса ключа для всего проекта.
+    Checks the activity of the key (date + traffic).
+    A single point of checking key status for the entire project.
     
     Args:
-        key: Словарь с данными ключа (должен содержать expires_at, traffic_limit, traffic_used)
+        key: Dictionary with key data (must contain expires_at, traffic_limit, traffic_used)
     
     Returns:
-        True если ключ активен
+        True if the key is active
     """
     from datetime import datetime
     
-    # Проверка срока действия
+    # Checking expiration date
     expires_at = key.get('expires_at')
     if expires_at:
         try:
@@ -285,7 +285,7 @@ def is_key_active(key: dict) -> bool:
 
             pass
     
-    # Проверка трафика
+    # Traffic check
     traffic_limit = key.get('traffic_limit', 0) or 0
     traffic_used = key.get('traffic_used', 0) or 0
     if traffic_limit > 0 and traffic_used >= traffic_limit:
@@ -295,10 +295,10 @@ def is_key_active(key: dict) -> bool:
 
 def is_traffic_exhausted(key: dict) -> bool:
     """
-    Проверяет, исчерпан ли трафик ключа.
+    Checks whether the key has exhausted traffic.
     
     Returns:
-        True если трафик исчерпан (traffic_used >= traffic_limit > 0)
+        True if traffic is exhausted (traffic_used >= traffic_limit > 0)
     """
     traffic_limit = key.get('traffic_limit', 0) or 0
     traffic_used = key.get('traffic_used', 0) or 0
@@ -306,11 +306,11 @@ def is_traffic_exhausted(key: dict) -> bool:
 
 def get_all_active_keys_with_server() -> List[Dict[str, Any]]:
     """
-    Получает все активные ключи с данными сервера.
-    Для планировщика синхронизации трафика.
+    Retrieves all active keys with server data.
+    For traffic synchronization scheduler.
     
     Returns:
-        Список ключей с данными сервера и пользователя
+        List of keys with server and user data
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -331,11 +331,11 @@ def get_all_active_keys_with_server() -> List[Dict[str, Any]]:
 
 def get_all_keys_with_server() -> List[Dict[str, Any]]:
     """
-    Получает ВСЕ ключи с привязкой к серверу (включая истёкшие).
-    Для синхронизации удалённых ключей.
+    Receives ALL keys associated with the server (including expired ones).
+    To synchronize remote keys.
     
     Returns:
-        Список ключей с данными сервера и пользователя
+        List of keys with server and user data
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -354,10 +354,10 @@ def get_all_keys_with_server() -> List[Dict[str, Any]]:
 
 def bulk_update_traffic(updates: List[tuple]) -> None:
     """
-    Массовое обновление трафика для ключей.
+    Massive traffic update for keys.
     
     Args:
-        updates: Список кортежей (traffic_used, key_id)
+        updates: List of tuples (traffic_used, key_id)
     """
     if not updates:
         return
@@ -372,11 +372,11 @@ def bulk_update_traffic(updates: List[tuple]) -> None:
 
 def update_key_traffic(key_id: int, traffic_used: int) -> None:
     """
-    Обновляет трафик для одного ключа.
+    Updates traffic for one key.
     
     Args:
-        key_id: ID ключа
-        traffic_used: Израсходованный трафик в байтах
+        key_id: Key ID
+        traffic_used: Traffic consumed in bytes
     """
     with get_db() as conn:
         conn.execute("""
@@ -387,11 +387,11 @@ def update_key_traffic(key_id: int, traffic_used: int) -> None:
 
 def update_key_notified_pct(key_id: int, pct: int) -> None:
     """
-    Обновляет последний порог уведомления о трафике.
+    Updates the latest traffic notification threshold.
     
     Args:
-        key_id: ID ключа
-        pct: Порог в % (10, 5, 3, 2, 1, 0)
+        key_id: Key ID
+        pct: Threshold in % (10, 5, 3, 2, 1, 0)
     """
     with get_db() as conn:
         conn.execute("""
@@ -400,11 +400,11 @@ def update_key_notified_pct(key_id: int, pct: int) -> None:
 
 def reset_key_traffic_notification(key_id: int) -> None:
     """
-    Сбрасывает уведомления о трафике и кеш использования.
-    Вызывается при продлении ключа (когда трафик сброшен на сервере).
+    Resets traffic notifications and usage cache.
+    Called when a key is renewed (when traffic is dropped on the server).
     
     Args:
-        key_id: ID ключа
+        key_id: Key ID
     """
     with get_db() as conn:
         conn.execute("""
@@ -415,12 +415,12 @@ def reset_key_traffic_notification(key_id: int) -> None:
 
 def update_key_traffic_limit(key_id: int, traffic_limit_bytes: int) -> None:
     """
-    Обновляет лимит трафика для ключа.
-    Используется при замене ключа (перенос остатка) и при ежемесячном сбросе.
+    Updates the traffic limit for the key.
+    Used when replacing a key (remaining transfer) and during monthly reset.
     
     Args:
-        key_id: ID ключа
-        traffic_limit_bytes: Новый лимит трафика в байтах
+        key_id: Key ID
+        traffic_limit_bytes: New traffic limit in bytes
     """
     with get_db() as conn:
         conn.execute("""
@@ -433,11 +433,11 @@ def update_vpn_key_tariff_and_traffic_limit(
     traffic_limit_bytes: int
 ) -> bool:
     """
-    Применяет оплаченный тариф к существующему ключу и добавляет пакет трафика.
+    Applies the paid tariff to the existing key and adds a traffic package.
 
-    traffic_limit_bytes=0 означает покупку безлимита. Для перехода с безлимита
-    на лимитный тариф новый лимит становится traffic_used + купленный пакет,
-    чтобы пользователь получил полный новый остаток с текущего момента.
+    traffic_limit_bytes=0 means purchasing unlimited. To switch from unlimited
+    for a limit tariff, the new limit becomes traffic_used + purchased package,
+    so that the user receives a full new balance from the current moment.
     """
     with get_db() as conn:
         row = conn.execute("""
@@ -484,20 +484,20 @@ def update_vpn_key_config(
     sub_id: Optional[str] = ...,
 ) -> bool:
     """
-    Обновляет конфигурацию ключа (привязывает к серверу).
-    Используется для завершения настройки ключа.
+    Updates the key configuration (binds it to the server).
+    Used to complete the key setup.
 
     Args:
-        key_id: ID ключа
-        server_id: ID сервера
-        panel_inbound_id: ID inbound на панели
-        panel_email: Email на панели
-        client_uuid: UUID клиента
-        sub_id: Subscription ID. Если передан (включая None) — обновляется
-                в БД. По умолчанию (Ellipsis) — поле не трогается.
+        key_id: Key ID
+        server_id: Server ID
+        panel_inbound_id: ID inbound on the panel
+        panel_email: Panel email
+        client_uuid: Client UUID
+        sub_id: Subscription ID. If passed (including None) - updated
+                in the database. Default (Ellipsis) - the field is not touched.
 
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         if sub_id is ...:
@@ -524,14 +524,14 @@ def update_vpn_key_config(
 
 def update_vpn_key_sub_id(key_id: int, sub_id: Optional[str]) -> bool:
     """
-    Обновляет sub_id ключа.
+    Updates the sub_id of the key.
 
     Args:
-        key_id: ID ключа
-        sub_id: Новый subscription ID (или None для очистки)
+        key_id: Key ID
+        sub_id: New subscription ID (or None to clear)
 
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -553,23 +553,23 @@ def create_vpn_key_subscription_admin(
     traffic_limit: int = 0,
 ) -> int:
     """
-    Создаёт VPN-ключ администратором в режиме subscription.
+    Creates a VPN key by the administrator in subscription mode.
 
-    Аналогичен create_vpn_key_admin, но дополнительно записывает sub_id.
+    Similar to create_vpn_key_admin, but additionally records sub_id.
 
     Args:
-        user_id: Внутренний ID пользователя
-        server_id: ID сервера
-        tariff_id: ID тарифа
-        panel_inbound_id: ID минимального inbound (для совместимости)
-        panel_email: Email клиента (общий для всех inbound)
-        client_uuid: UUID клиента из минимального inbound
-        sub_id: Subscription ID (один на все inbound этого ключа)
-        days: Срок действия в днях
-        traffic_limit: Лимит трафика в байтах (0 = безлимит)
+        user_id: Internal user ID
+        server_id: Server ID
+        tariff_id: Tariff ID
+        panel_inbound_id: Minimum inbound ID (for compatibility)
+        panel_email: Client email (common for all inbound)
+        client_uuid: UUID of the client from the minimum inbound
+        sub_id: Subscription ID (one for all inbounds of this key)
+        days: Validity period in days
+        traffic_limit: Traffic limit in bytes (0 = unlimited)
 
     Returns:
-        ID созданного ключа
+        Created key ID
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -588,22 +588,22 @@ def create_vpn_key_subscription_admin(
 
 def delete_vpn_key(key_id: int) -> bool:
     """
-    Удаляет VPN-ключ из базы данных.
-    Также удаляет связь с платежами и логи уведомлений, чтобы не нарушать FOREIGN KEY.
+    Removes the VPN key from the database.
+    Also deletes connections with payments and notification logs so as not to violate FOREIGN KEY.
     
     Args:
-        key_id: ID ключа
+        key_id: Key ID
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
-        # Убираем привязку в истории оплат (чтобы сохранить саму историю)
+        # Remove the link in the payment history (to save the history itself)
         conn.execute("UPDATE payments SET vpn_key_id = NULL WHERE vpn_key_id = ?", (key_id,))
-        # Удаляем логи уведомлений
+        # Deleting notification logs
         conn.execute("DELETE FROM notification_log WHERE vpn_key_id = ?", (key_id,))
         
-        # Удаляем сам ключ
+        # We delete the key itself
         cursor = conn.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
         success = cursor.rowcount > 0
         if success:
@@ -612,14 +612,14 @@ def delete_vpn_key(key_id: int) -> bool:
 
 def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
     """
-    Получает ключи пользователя для отображения в разделе «Мои ключи».
+    Retrieves the user's keys for display in the My Keys section.
     
     Args:
-        telegram_id: Telegram ID пользователя
+        telegram_id: Telegram user ID
     
     Returns:
-        Список ключей с полями: id, display_name, server_name, protocol,
-        expires_at, is_active (не истёк), is_enabled, traffic_info
+        List of keys with fields: id, display_name, server_name, protocol,
+        expires_at, is_active (not expired), is_enabled, traffic_info
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -642,7 +642,7 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
         keys = []
         for row in cursor.fetchall():
             key = dict(row)
-            # Формируем display_name
+            # Forming display_name
             if key['custom_name']:
                 key['display_name'] = key['custom_name']
             elif key['client_uuid']:
@@ -659,14 +659,14 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
 
 def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str, Any]]:
     """
-    Получает детальную информацию о ключе с проверкой принадлежности.
+    Receives detailed information about the key with verification of ownership.
     
     Args:
-        key_id: ID ключа
-        telegram_id: Telegram ID пользователя
+        key_id: Key ID
+        telegram_id: Telegram user ID
     
     Returns:
-        Словарь с данными ключа или None если не найден или не принадлежит
+        Dictionary with key data or None if not found or not owned
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -691,7 +691,7 @@ def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str
             return None
         
         key = dict(row)
-        # Формируем display_name
+        # Forming display_name
         if key['custom_name']:
             key['display_name'] = key['custom_name']
         elif key['client_uuid']:
@@ -707,15 +707,15 @@ def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str
 
 def update_key_custom_name(key_id: int, telegram_id: int, new_name: str) -> bool:
     """
-    Обновляет пользовательское имя ключа.
+    Updates the custom key name.
     
     Args:
-        key_id: ID ключа
-        telegram_id: Telegram ID владельца
-        new_name: Новое имя (или пустая строка для сброса)
+        key_id: Key ID
+        telegram_id: Telegram ID of the owner
+        new_name: New name (or empty string to reset)
     
     Returns:
-        True если успешно
+        True if successful
     """
     if new_name and len(new_name) > 30:
         logger.warning(f"Попытка установить слишком длинное имя ключа {key_id}: {new_name}")
@@ -734,14 +734,14 @@ def update_key_custom_name(key_id: int, telegram_id: int, new_name: str) -> bool
 
 def add_days_to_first_active_key(user_id: int, days: int) -> bool:
     """
-    Добавить дни к первому активному ключу пользователя.
+    Add days to the user's first active key.
     
     Args:
-        user_id: Внутренний ID пользователя
-        days: Количество дней для добавления
+        user_id: Internal user ID
+        days: Number of days to add
     
     Returns:
-        True если успешно, False если нет активных ключей
+        True if successful, False if there are no active keys
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -768,13 +768,13 @@ def add_days_to_first_active_key(user_id: int, days: int) -> bool:
 
 def get_user_by_panel_email(email: str) -> Optional[Dict[str, Any]]:
     """
-    Находит пользователя-владельца ключа по panel_email из панели 3X-UI.
+    Finds the key owner user by panel_email from the 3X-UI panel.
     
     Args:
-        email: Email (идентификатор клиента) в панели прокси
+        email: Email (client ID) in the proxy panel
     
     Returns:
-        Словарь с данными пользователя или None
+        Dictionary with user data or None
     """
     with get_db() as conn:
         cursor = conn.execute("""

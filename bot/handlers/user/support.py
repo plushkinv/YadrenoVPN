@@ -32,17 +32,17 @@ SUPPORT_STATUS_PAGE_KEY = "support_status"
 
 
 def default_support_start_page_text() -> str:
-    """Дефолтный текст входа во встроенную поддержку."""
+    """Default login text for built-in support."""
     return "%поддержка_заголовок%\n\n%поддержка_инструкция%"
 
 
 def build_support_start_page_context(*, thread_id: int | None = None) -> dict[str, str]:
-    """Собирает context для страницы входа в поддержку."""
+    """Collects context for the support login page."""
     return build_support_context_values(thread_id=thread_id)
 
 
 def build_support_status_page_context(*, title_html: str, body_html: str) -> dict[str, str]:
-    """Собирает context для страницы результата обращения в поддержку."""
+    """Collects context for the support request result page."""
     return {
         "support_status_title_html": title_html,
         "support_status_body_html": body_html,
@@ -59,7 +59,7 @@ async def render_support_status_page(
     append_buttons: list[list[InlineKeyboardButton]] | None = None,
     force_new: bool = False,
 ) -> None:
-    """Рендерит page-backed статус обращения в поддержку."""
+    """Renders the page-backed status of a support request."""
     if body_html is None:
         from bot.utils.text import escape_html
 
@@ -79,7 +79,7 @@ async def render_support_status_page(
 
 
 def render_support_start_page_text(context: dict[str, str]) -> str:
-    """Рендерит текст support_start из pages с fallback на дефолт."""
+    """Renders the text support_start from pages with fallback set to default."""
     text = render_page_text(SUPPORT_START_PAGE_KEY, context=context)
     if text is not None:
         return text
@@ -117,25 +117,26 @@ async def _start_support_dialog(
         context=build_support_start_page_context(thread_id=thread_id),
         append_buttons=support_user_cancel_kb().inline_keyboard,
         force_new=not isinstance(target, CallbackQuery),
+        fallback_text=default_support_start_page_text(),
     )
 
 
 @router.message(Command("support"), StateFilter("*"))
 async def cmd_support(message: Message, state: FSMContext):
-    """Команда входа в поддержку."""
+    """Support login command."""
     await _start_support_dialog(message, state)
 
 
 @router.callback_query(F.data == "support_start")
 async def support_start_callback(callback: CallbackQuery, state: FSMContext):
-    """Кнопка входа в поддержку с главной страницы."""
+    """Button to login to support from the main page."""
     await _start_support_dialog(callback, state)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("support_reply:"))
 async def support_reply_callback(callback: CallbackQuery, state: FSMContext):
-    """Пользователь отвечает в существующей цепочке поддержки."""
+    """The user responds in the existing support chain."""
     try:
         thread_id = int(callback.data.split(":", 1)[1])
     except (TypeError, ValueError, IndexError):
@@ -153,7 +154,7 @@ async def support_reply_callback(callback: CallbackQuery, state: FSMContext):
 
 @router.message(SupportUserStates.waiting_for_message, ~F.text.startswith("/"))
 async def process_support_message(message: Message, state: FSMContext):
-    """Принимает сообщение пользователя и отправляет его админу или всем админам."""
+    """Receives a user's message and sends it to the admin or all admins."""
     user_id = message.from_user.id
     if is_user_banned(user_id):
         await render_access_blocked_page(message, force_new=True)

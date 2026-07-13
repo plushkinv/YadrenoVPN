@@ -23,14 +23,14 @@ router = Router()
 USERS_PER_PAGE = 20
 
 def format_user_display(user: dict) -> str:
-    """Форматирует имя пользователя для отображения."""
+    """Formats the username for display."""
     if user.get('username'):
         return f"@{user['username']}"
     return f"ID: {user['telegram_id']}"
 
 @router.callback_query(F.data.startswith('admin_user_view:'))
 async def show_user_view_callback(callback: CallbackQuery, state: FSMContext):
-    """Показывает карточку пользователя (из callback)."""
+    """Shows the user card (from callback)."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -38,7 +38,7 @@ async def show_user_view_callback(callback: CallbackQuery, state: FSMContext):
     await _show_user_view_edit(callback, state, telegram_id)
 
 async def _show_user_view(message: Message, state: FSMContext, telegram_id: int):
-    """Показывает карточку пользователя (новое сообщение)."""
+    """Shows the user card (new message)."""
     user = get_user_by_telegram_id(telegram_id)
     if not user:
         await safe_edit_or_send(message, f'❌ Пользователь с ID {telegram_id} не найден', reply_markup=home_only_kb(), force_new=True)
@@ -49,7 +49,7 @@ async def _show_user_view(message: Message, state: FSMContext, telegram_id: int)
     await safe_edit_or_send(message, text, reply_markup=keyboard, force_new=True)
 
 async def _show_user_view_edit(callback: CallbackQuery, state: FSMContext, telegram_id: int):
-    """Показывает карточку пользователя (редактирование сообщения)."""
+    """Shows the user card (editing a message)."""
     user = get_user_by_telegram_id(telegram_id)
     if not user:
         await callback.answer('Пользователь не найден', show_alert=True)
@@ -61,7 +61,7 @@ async def _show_user_view_edit(callback: CallbackQuery, state: FSMContext, teleg
     await callback.answer()
 
 def _format_user_card(user: dict) -> tuple[str, any]:
-    """Форматирует карточку пользователя."""
+    """Formats a user card."""
     telegram_id = user['telegram_id']
     username = user.get('username')
     is_banned = bool(user.get('is_banned'))
@@ -148,7 +148,7 @@ def _format_user_card(user: dict) -> tuple[str, any]:
 
 @router.callback_query(F.data.startswith('admin_user_toggle_ban:'))
 async def request_ban_confirmation(callback: CallbackQuery, state: FSMContext):
-    """Запрос подтверждения бана/разбана."""
+    """Request confirmation of ban/unban."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -168,7 +168,7 @@ async def request_ban_confirmation(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_user_ban_confirm:'))
 async def confirm_ban_toggle(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение и выполнение бана/разбана."""
+    """Confirmation and execution of ban/unban."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -199,7 +199,7 @@ async def confirm_ban_toggle(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_user_coefficient:'))
 async def start_coefficient_edit(callback: CallbackQuery, state: FSMContext):
-    """Начало редактирования коэффициента."""
+    """Start editing the coefficient."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -216,7 +216,7 @@ async def start_coefficient_edit(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.waiting_coefficient, F.text, ~F.text.startswith('/'))
 async def process_coefficient_input(message: Message, state: FSMContext):
-    """Обработка ввода коэффициента."""
+    """Processing coefficient input."""
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage
@@ -246,7 +246,7 @@ async def process_coefficient_input(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.regexp('^admin_user_balance_add:(\\d+)$'))
 async def start_balance_add(callback: CallbackQuery, state: FSMContext):
-    """Начало пополнения баланса пользователя."""
+    """Start of replenishing the user's balance."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -264,7 +264,7 @@ async def start_balance_add(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.regexp('^admin_user_balance_deduct:(\\d+)$'))
 async def start_balance_deduct(callback: CallbackQuery, state: FSMContext):
-    """Начало списания баланса пользователя."""
+    """Start of debiting the user's balance."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -282,7 +282,7 @@ async def start_balance_deduct(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.waiting_balance_amount, F.text, ~F.text.startswith('/'))
 async def process_balance_amount(message: Message, state: FSMContext):
-    """Обработка ввода суммы баланса."""
+    """Processing the balance amount entry."""
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage

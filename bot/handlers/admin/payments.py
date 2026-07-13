@@ -1,11 +1,11 @@
 """
-Роутер раздела «Оплаты».
+Router of the “Payments” section.
 
-Обрабатывает:
-- Главный экран оплат
-- Toggle для Stars/Crypto
-- Настройка крипто-платежей
-- Редактирование крипто-настроек
+Processes:
+- Main payment screen
+- Toggle for Stars/Crypto
+- Setting up crypto payments
+- Editing crypto settings
 """
 import logging
 from aiogram import Router, F
@@ -54,12 +54,12 @@ router = Router()
 
 
 # ============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# AUXILIARY FUNCTIONS
 # ============================================================================
 
 
 def has_crypto_data() -> bool:
-    """Проверяет, заполнены ли данные крипто-платежей в БД."""
+    """Checks whether crypto payment data is filled in the database."""
     url = get_setting('crypto_item_url', '')
     secret = get_setting('crypto_secret_key', '')
     return bool(url and secret)
@@ -67,18 +67,18 @@ def has_crypto_data() -> bool:
 
 def parse_item_id_from_url(url: str) -> str:
     """
-    Извлекает item_id из ссылки на товар Ya.Seller.
+    Retrieves the item_id from the Ya.Seller product link.
     
-    Формат: https://t.me/Ya_SellerBot?start=item-{item_id}...
+    Format: https://t.me/Ya_SellerBot?start=item-{item_id}...
     """
     try:
         if '?start=item-' in url:
             start_part = url.split('?start=item-')[1]
-            # item_id — это первая часть до следующего дефиса или конца строки
+            # item_id is the first part up to the next hyphen or end of line
             item_id = start_part.split('-')[0]
             return item_id
         elif '?start=item0-' in url:
-            # Тестовый режим
+            # Test mode
             start_part = url.split('?start=item0-')[1]
             item_id = start_part.split('-')[0]
             return item_id
@@ -88,12 +88,12 @@ def parse_item_id_from_url(url: str) -> str:
 
 
 # ============================================================================
-# ГЛАВНЫЙ ЭКРАН ОПЛАТ
+# MAIN PAYMENT SCREEN
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments")
 async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает главный экран раздела оплат."""
+    """Shows the main screen of the payment section."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -175,7 +175,7 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_toggle_monthly_reset")
 async def toggle_monthly_reset(callback: CallbackQuery, state: FSMContext):
-    """Переключение автосброса трафика 1-го числа."""
+    """Switching traffic auto-reset on the 1st."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -184,13 +184,13 @@ async def toggle_monthly_reset(callback: CallbackQuery, state: FSMContext):
     new_val = '0' if current == '1' else '1'
     set_setting('monthly_traffic_reset_enabled', new_val)
     
-    # Перерисовываем меню оплат
+    # Redrawing the payment menu
     await show_payments_menu(callback, state)
 
 
 @router.callback_query(F.data == "admin_toggle_payment_notify")
 async def toggle_payment_notify(callback: CallbackQuery, state: FSMContext):
-    """Переключение уведомлений об оплатах."""
+    """Switch payment notifications."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -202,7 +202,7 @@ async def toggle_payment_notify(callback: CallbackQuery, state: FSMContext):
     status = "включены 🔔" if new_val == '1' else "выключены"
     await callback.answer(f"Уведомления об оплатах {status}")
     
-    # Перерисовываем меню оплат
+    # Redrawing the payment menu
     await show_payments_menu(callback, state)
 
 
@@ -212,7 +212,7 @@ async def toggle_payment_notify(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_payments_toggle_stars")
 async def toggle_stars(callback: CallbackQuery, state: FSMContext):
-    """Переключает Telegram Stars."""
+    """Switches Telegram Stars."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -224,7 +224,7 @@ async def toggle_stars(callback: CallbackQuery, state: FSMContext):
     status = "включены ⭐" if new_value == '1' else "выключены"
     await callback.answer(f"Telegram Stars {status}")
     
-    # Обновляем экран
+    # Refresh the screen
     await show_payments_menu(callback, state)
 
 
@@ -234,7 +234,7 @@ async def toggle_stars(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_payments_toggle_demo")
 async def toggle_demo(callback: CallbackQuery, state: FSMContext):
-    """Переключает демо оплату РФ картой."""
+    """Switches demo payment by RF card."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -246,7 +246,7 @@ async def toggle_demo(callback: CallbackQuery, state: FSMContext):
     status = "включена" if new_value == '1' else "выключена"
     await callback.answer(f"Демо оплата {status}")
     
-    # Обновляем экран
+    # Refresh the screen
     await show_payments_menu(callback, state)
 
 
@@ -256,30 +256,30 @@ async def toggle_demo(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_payments_toggle_crypto")
 async def toggle_crypto(callback: CallbackQuery, state: FSMContext):
-    """Открывает настройку или меню управления крипто-платежами."""
+    """Opens the settings or menu for managing crypto payments."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
-    # Проверяем, есть ли данные в БД
+    # Checking if there is data in the database
     if has_crypto_data():
-        # Если данные есть → меню управления
+        # If there is data → control menu
         await show_crypto_management_menu(callback, state)
     else:
-        # Если данных нет → диалог настройки
+        # If there is no data → settings dialog
         await start_crypto_setup(callback, state)
 
 
 # ============================================================================
-# НАСТРОЙКА КРИПТО-ПЛАТЕЖЕЙ
+# SETTING UP CRYPTO PAYMENTS
 # ============================================================================
 
 async def start_crypto_setup(callback: CallbackQuery, state: FSMContext):
-    """Начинает диалог настройки крипто-платежей."""
+    """Starts the crypto payment settings dialog."""
     await state.set_state(AdminStates.crypto_setup_url)
     await state.update_data(crypto_data={}, crypto_step=1)
     
-    # Получаем username бота для инструкции
+    # Getting the username of the bot for instructions
     bot_username = callback.bot.my_username if hasattr(callback.bot, 'my_username') else "YOUR_BOT"
     callback_url = f"https://t.me/{bot_username}"
     
@@ -308,12 +308,12 @@ async def start_crypto_setup(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.crypto_setup_url)
 async def process_crypto_url(message: Message, state: FSMContext):
-    """Обрабатывает ввод ссылки на товар."""
+    """Processes the input of a link to a product."""
     from bot.utils.text import get_message_text_for_storage
     
     url = get_message_text_for_storage(message, 'plain')
     
-    # Валидация
+    # Validation
     param = get_crypto_param_by_index(0)
     if not param['validate'](url):
         await safe_edit_or_send(message,
@@ -321,18 +321,18 @@ async def process_crypto_url(message: Message, state: FSMContext):
         )
         return
     
-    # Удаляем сообщение
+    # Delete the message
     try:
         await message.delete()
     except:
         pass
     
-    # Проверяем режим
+    # Checking the mode
     data = await state.get_data()
     edit_mode = data.get('edit_mode', False)
     
     if edit_mode:
-        # Режим редактирования - сохраняем и возвращаемся в меню
+        # Editing mode - save and return to the menu
         set_setting('crypto_item_url', url)
         await state.update_data(edit_mode=False)
         
@@ -341,7 +341,7 @@ async def process_crypto_url(message: Message, state: FSMContext):
             force_new=True
         )
         
-        # Создаём фейковый callback для показа меню
+        # Create a fake callback to display the menu
         class FakeCallback:
             def __init__(self, msg, user):
                 self.message = msg
@@ -353,12 +353,12 @@ async def process_crypto_url(message: Message, state: FSMContext):
         fake = FakeCallback(message, message.from_user)
         await show_crypto_management_menu(fake, state)
     else:
-        # Режим настройки - сохраняем во временные данные
+        # Setting mode - saving to temporary data
         crypto_data = data.get('crypto_data', {})
         crypto_data['crypto_item_url'] = url
         await state.update_data(crypto_data=crypto_data, crypto_step=2)
         
-        # Переходим к вводу секретного ключа
+        # Let's proceed to entering the secret key
         await state.set_state(AdminStates.crypto_setup_secret)
         
         bot_username = message.bot.my_username if hasattr(message.bot, 'my_username') else "YOUR_BOT"
@@ -378,12 +378,12 @@ async def process_crypto_url(message: Message, state: FSMContext):
 
 @router.message(AdminStates.crypto_setup_secret)
 async def process_crypto_secret(message: Message, state: FSMContext):
-    """Обрабатывает ввод секретного ключа."""
+    """Processes the entry of a secret key."""
     from bot.utils.text import get_message_text_for_storage
     
     secret = get_message_text_for_storage(message, 'plain')
     
-    # Валидация
+    # Validation
     param = get_crypto_param_by_index(1)
     if not param['validate'](secret):
         await safe_edit_or_send(message,
@@ -391,23 +391,23 @@ async def process_crypto_secret(message: Message, state: FSMContext):
         )
         return
     
-    # Удаляем сообщение (там секретный ключ!)
+    # We delete the message (there is a secret key!)
     try:
         await message.delete()
     except:
         pass
     
-    # Проверяем режим
+    # Checking the mode
     data = await state.get_data()
     edit_mode = data.get('edit_mode', False)
     
     if edit_mode:
-        # Режим редактирования - сохраняем и возвращаемся в меню
+        # Editing mode - save and return to the menu
         set_setting('crypto_secret_key', secret)
         await state.update_data(edit_mode=False)
         await safe_edit_or_send(message, "✅ Секретный ключ обновлён!", force_new=True)
         
-        # Создаём фейковый callback для показа меню
+        # Create a fake callback to display the menu
         class FakeCallback:
             def __init__(self, msg, user):
                 self.message = msg
@@ -419,12 +419,12 @@ async def process_crypto_secret(message: Message, state: FSMContext):
         fake = FakeCallback(message, message.from_user)
         await show_crypto_management_menu(fake, state)
     else:
-        # Режим настройки - сохраняем во временные данные
+        # Setting mode - saving to temporary data
         crypto_data = data.get('crypto_data', {})
         crypto_data['crypto_secret_key'] = secret
         await state.update_data(crypto_data=crypto_data)
         
-        # Переходим к подтверждению
+        # Let's move on to confirmation
         await state.set_state(AdminStates.payments_menu)
         
         item_url = crypto_data.get('crypto_item_url', '')
@@ -441,7 +441,7 @@ async def process_crypto_secret(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_crypto_setup_back")
 async def crypto_setup_back(callback: CallbackQuery, state: FSMContext):
-    """Возврат на предыдущий шаг настройки крипто."""
+    """Return to the previous crypto setup step."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -450,10 +450,10 @@ async def crypto_setup_back(callback: CallbackQuery, state: FSMContext):
     step = data.get('crypto_step', 1)
     
     if step <= 1:
-        # Возврат к меню оплат
+        # Return to payment menu
         await show_payments_menu(callback, state)
     else:
-        # Возврат к вводу URL
+        # Return to URL entry
         await state.set_state(AdminStates.crypto_setup_url)
         await state.update_data(crypto_step=1)
         await start_crypto_setup(callback, state)
@@ -463,7 +463,7 @@ async def crypto_setup_back(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_crypto_setup_save")
 async def crypto_setup_save(callback: CallbackQuery, state: FSMContext):
-    """Сохраняет настройки крипто и включает их."""
+    """Saves crypto settings and enables them."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -475,7 +475,7 @@ async def crypto_setup_save(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Данные не полные", show_alert=True)
         return
     
-    # Сохраняем
+    # Save
     set_setting('crypto_item_url', crypto_data['crypto_item_url'])
     set_setting('crypto_secret_key', crypto_data['crypto_secret_key'])
     set_setting('crypto_enabled', '1')
@@ -487,16 +487,16 @@ async def crypto_setup_save(callback: CallbackQuery, state: FSMContext):
         "Теперь пользователи смогут оплачивать криптовалютой."
     )
     
-    # Показываем меню оплат
+    # Showing the payment menu
     await show_payments_menu(callback, state)
 
 
 # ============================================================================
-# МЕНЮ УПРАВЛЕНИЯ КРИПТО-ПЛАТЕЖАМИ
+# CRYPTO PAYMENT MANAGEMENT MENU
 # ============================================================================
 
 async def show_crypto_management_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню управления крипто-платежами."""
+    """Shows the menu for managing crypto payments."""
     await state.set_state(AdminStates.payments_menu)
     
     is_enabled = is_crypto_enabled()
@@ -539,7 +539,7 @@ async def show_crypto_management_menu(callback: CallbackQuery, state: FSMContext
 
 
 async def _set_crypto_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
-    """Устанавливает состояние крипто-платежей без потери данных."""
+    """Sets the status of crypto payments without data loss."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -564,20 +564,20 @@ async def _set_crypto_enabled(callback: CallbackQuery, state: FSMContext, target
 
 @router.callback_query(F.data.startswith("admin_crypto_mgmt_set:"))
 async def crypto_mgmt_set(callback: CallbackQuery, state: FSMContext):
-    """Включает или выключает крипто-платежи выбранным состоянием."""
+    """Enables or disables crypto payments with the selected state."""
     target_enabled = callback.data.rsplit(":", 1)[1] == "1"
     await _set_crypto_enabled(callback, state, target_enabled)
 
 
 @router.callback_query(F.data == "admin_crypto_mgmt_toggle")
 async def crypto_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Совместимый toggle для старых сообщений."""
+    """Compatible toggle for old posts."""
     await _set_crypto_enabled(callback, state, not is_crypto_enabled())
 
 
 @router.callback_query(F.data == "admin_crypto_mgmt_edit_url")
 async def crypto_mgmt_edit_url(callback: CallbackQuery, state: FSMContext):
-    """Начинает редактирование ссылки на товар."""
+    """Starts editing the product link."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -625,7 +625,7 @@ async def crypto_mgmt_edit_url(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_crypto_mgmt_edit_secret")
 async def crypto_mgmt_edit_secret(callback: CallbackQuery, state: FSMContext):
-    """Начинает редактирование секретного ключа."""
+    """Begins editing the secret key."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -654,7 +654,7 @@ async def crypto_mgmt_edit_secret(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_crypto_management")
 async def back_to_crypto_management(callback: CallbackQuery, state: FSMContext):
-    """Возврат в меню управления крипто-платежами."""
+    """Return to the crypto payment management menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -663,12 +663,12 @@ async def back_to_crypto_management(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# РЕДАКТИРОВАНИЕ КРИПТО-НАСТРОЕК
+# EDITING CRYPTO SETTINGS
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_crypto_settings")
 async def start_edit_crypto(callback: CallbackQuery, state: FSMContext):
-    """Начинает редактирование крипто-настроек."""
+    """Starts editing crypto settings."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -680,13 +680,13 @@ async def start_edit_crypto(callback: CallbackQuery, state: FSMContext):
 
 
 async def show_crypto_edit_screen(callback: CallbackQuery, state: FSMContext, param_index: int):
-    """Показывает экран редактирования крипто-настройки."""
+    """Shows the crypto setting editing screen."""
     param = get_crypto_param_by_index(param_index)
     total = get_total_crypto_params()
     
     current_value = get_setting(param['key'], '')
     
-    # Маскируем секретный ключ
+    # Masking the secret key
     if param['key'] == 'crypto_secret_key' and current_value:
         display_value = '•' * min(len(current_value), 16)
     else:
@@ -708,7 +708,7 @@ async def show_crypto_edit_screen(callback: CallbackQuery, state: FSMContext, pa
 
 @router.callback_query(F.data == "admin_crypto_edit_prev")
 async def crypto_edit_prev(callback: CallbackQuery, state: FSMContext):
-    """Предыдущий параметр крипто-настроек."""
+    """Previous crypto settings parameter."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -724,7 +724,7 @@ async def crypto_edit_prev(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_crypto_edit_next")
 async def crypto_edit_next(callback: CallbackQuery, state: FSMContext):
-    """Следующий параметр крипто-настроек."""
+    """The next parameter is crypto settings."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -741,7 +741,7 @@ async def crypto_edit_next(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.edit_crypto)
 async def edit_crypto_value(message: Message, state: FSMContext):
-    """Обрабатывает ввод нового значения крипто-настройки."""
+    """Processes the entry of a new crypto setting value."""
     if not is_admin(message.from_user.id):
         return
     
@@ -753,30 +753,30 @@ async def edit_crypto_value(message: Message, state: FSMContext):
     param = get_crypto_param_by_index(param_index)
     value = get_message_text_for_storage(message, 'plain')
     
-    # Валидация
+    # Validation
     if not param['validate'](value):
         await safe_edit_or_send(message,
             f"❌ {param['error']}"
         )
         return
     
-    # Сохраняем в БД
+    # Saving in the database
     set_setting(param['key'], value)
     
-    # Удаляем сообщение
+    # Delete the message
     try:
         await message.delete()
     except:
         pass
     
-    # Показываем обновлённый экран
+    # Showing the updated screen
     await safe_edit_or_send(message,
         f"✅ <b>{param['label']}</b> обновлено!",
         force_new=True
     )
     
-    # Создаём фейковый callback для показа экрана
-    # Это хак, но работает
+    # Creating a fake callback to show the screen
+    # It's a hack, but it works
     class FakeCallback:
         def __init__(self, msg, user):
             self.message = msg
@@ -792,7 +792,7 @@ async def edit_crypto_value(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_crypto_edit_done")
 async def crypto_edit_done(callback: CallbackQuery, state: FSMContext):
-    """Завершение редактирования крипто-настроек."""
+    """Finish editing crypto settings."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -802,12 +802,12 @@ async def crypto_edit_done(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# УПРАВЛЕНИЕ TG PAYMENTS
+# TG PAYMENTS MANAGEMENT
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_cards")
 async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню управления TG payments."""
+    """Shows the TG payments management menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -821,7 +821,7 @@ async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext)
     status_text = "включено" if is_enabled else "выключено"
     
     if token:
-        # Маскируем токен: первые 4 и последние 4 символа
+        # Masking the token: first 4 and last 4 characters
         masked_token = f"{token[:4]}...{token[-4:]}"
         token_display = f"Установлен ✅ (<code>{masked_token}</code>)"
     else:
@@ -846,7 +846,7 @@ async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext)
 
 
 async def _set_cards_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
-    """Устанавливает состояние TG payments."""
+    """Sets the status of TG payments."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -857,7 +857,7 @@ async def _set_cards_enabled(callback: CallbackQuery, state: FSMContext, target_
         await callback.answer(f"TG payments {status}")
         return
 
-    # Нельзя включить, если нет токена
+    # Cannot be enabled if there is no token
     if target_enabled and not get_setting('cards_provider_token', ''):
         await callback.answer("❌ Сначала укажите Provider Token!", show_alert=True)
         return
@@ -872,26 +872,26 @@ async def _set_cards_enabled(callback: CallbackQuery, state: FSMContext, target_
 
 @router.callback_query(F.data.startswith("admin_cards_mgmt_set:"))
 async def cards_mgmt_set(callback: CallbackQuery, state: FSMContext):
-    """Включает или выключает TG payments выбранным состоянием."""
+    """Enables or disables TG payments with the selected state."""
     target_enabled = callback.data.rsplit(":", 1)[1] == "1"
     await _set_cards_enabled(callback, state, target_enabled)
 
 
 @router.callback_query(F.data == "admin_cards_mgmt_toggle")
 async def cards_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Совместимый toggle для старых сообщений."""
+    """Compatible toggle for old posts."""
     await _set_cards_enabled(callback, state, not is_cards_enabled())
 
 
 @router.callback_query(F.data == "admin_cards_mgmt_edit_token")
 async def cards_mgmt_edit_token(callback: CallbackQuery, state: FSMContext):
-    """Начинает редактирование токена ЮКасса."""
+    """Begins editing the YuKassa token."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
     await state.set_state(AdminStates.cards_setup_token)
-    # Сохраняем ID сообщения, чтобы потом его отредактировать
+    # Save the message ID so you can edit it later
     await state.update_data(last_menu_msg_id=callback.message.message_id)
     
     text = (
@@ -915,7 +915,7 @@ async def cards_mgmt_edit_token(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.cards_setup_token)
 async def cards_setup_token_value(message: Message, state: FSMContext):
-    """Обрабатывает ввод токена ЮКасса."""
+    """Processes the input of the YuKassa token."""
     from bot.utils.text import get_message_text_for_storage
     
     data = await state.get_data()
@@ -934,21 +934,21 @@ async def cards_setup_token_value(message: Message, state: FSMContext):
     except:
         pass
     
-    # Если у нас есть ID сообщения меню, используем его для редактирования
+    # If we have a menu message ID, use it to edit
     menu_message = message
     if last_menu_msg_id:
         try:
-            # Создаем объект сообщения с нужным ID для редактирования
+            # Create a message object with the required ID for editing
             menu_message = await message.bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=last_menu_msg_id,
                 text="⌛ Сохранение..."
             )
         except Exception:
-            # Если не вышло (например, сообщение удалено), будем отвечать новым
+            # If it doesn’t work out (for example, the message is deleted), we will respond with new ones
             menu_message = await safe_edit_or_send(message, "⌛ Сохранение...", force_new=True)
 
-    # Возвращаемся в меню через FakeCallback
+    # Returning to the menu via FakeCallback
     class FakeCallback:
         def __init__(self, msg, user, success_msg=None):
             self.message = msg
@@ -958,10 +958,10 @@ async def cards_setup_token_value(message: Message, state: FSMContext):
             self.success_msg = success_msg
         
         async def answer(self, text=None, show_alert=False, *args, **kwargs):
-            # Если передали текст для popup, запоминаем его (он будет показан при нажатии кнопок)
-            # Но так как в AIOGram answerCallbackQuery работает только для реальных инстансов,
-            # мы просто выведем информацию в консоль или пропустим.
-            # Для пользователя мы добавим текст в само сообщение.
+            # If you passed the text for the popup, remember it (it will be shown when the buttons are pressed)
+            # But since AIOGram's answerCallbackQuery only works for real instances,
+            # we'll just print the information to the console or skip it.
+            # For the user, we will add text to the message itself.
             pass
 
     fake = FakeCallback(menu_message, message.from_user)
@@ -969,12 +969,12 @@ async def cards_setup_token_value(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# НАСТРОЙКА ЮКАССЫ (прямой API)
+# SETTING UP YUKASSA (direct API)
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_qr")
 async def show_qr_management_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню управления QR-оплатой ЮКасса."""
+    """Shows the YuKassa QR payment management menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1014,7 +1014,7 @@ async def show_qr_management_menu(callback: CallbackQuery, state: FSMContext):
 
 
 async def _set_qr_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
-    """Устанавливает состояние QR-оплаты ЮКасса."""
+    """Sets the status of the YuKass QR payment."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1027,7 +1027,7 @@ async def _set_qr_enabled(callback: CallbackQuery, state: FSMContext, target_ena
         await callback.answer(f"ЮКасса {status}")
         return
 
-    # Нельзя включить без реквизитов
+    # Cannot be enabled without details
     if target_enabled:
         shop_id = get_setting('yookassa_shop_id', '')
         secret_key = get_setting('yookassa_secret_key', '')
@@ -1045,21 +1045,21 @@ async def _set_qr_enabled(callback: CallbackQuery, state: FSMContext, target_ena
 
 @router.callback_query(F.data.startswith("admin_qr_mgmt_set:"))
 async def qr_mgmt_set(callback: CallbackQuery, state: FSMContext):
-    """Включает или выключает QR-оплату ЮКасса выбранным состоянием."""
+    """Enables or disables YuKass QR payment with the selected state."""
     target_enabled = callback.data.rsplit(":", 1)[1] == "1"
     await _set_qr_enabled(callback, state, target_enabled)
 
 
 @router.callback_query(F.data == "admin_qr_mgmt_toggle")
 async def qr_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Совместимый toggle для старых сообщений."""
+    """Compatible toggle for old posts."""
     from database.requests import is_yookassa_qr_enabled
     await _set_qr_enabled(callback, state, not is_yookassa_qr_enabled())
 
 
 @router.callback_query(F.data == "admin_qr_edit_shop_id")
 async def qr_edit_shop_id(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает Shop ID ЮКасса."""
+    """Requests YuKass Shop ID."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1081,7 +1081,7 @@ async def qr_edit_shop_id(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.qr_setup_shop_id)
 async def qr_setup_shop_id_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод Shop ID."""
+    """Processes Shop ID input."""
     from bot.utils.text import get_message_text_for_storage
     
     shop_id = get_message_text_for_storage(message, 'plain')
@@ -1126,7 +1126,7 @@ async def qr_setup_shop_id_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_qr_edit_secret")
 async def qr_edit_secret(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает Secret Key ЮКасса."""
+    """UKassa requests Secret Key."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1145,7 +1145,7 @@ async def qr_edit_secret(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.qr_setup_secret_key)
 async def qr_setup_secret_key_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод Secret Key."""
+    """Processes Secret Key input."""
     from bot.utils.text import get_message_text_for_storage
     
     secret_key = get_message_text_for_storage(message, 'plain')
@@ -1188,12 +1188,12 @@ async def qr_setup_secret_key_handler(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# НАСТРОЙКА WATA
+# WATA SETUP
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_wata")
 async def show_wata_management_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню управления оплатой через WATA."""
+    """Shows the WATA payment management menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1248,7 +1248,7 @@ async def show_wata_management_menu(callback: CallbackQuery, state: FSMContext):
 
 
 async def _set_wata_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
-    """Устанавливает состояние оплаты через WATA."""
+    """Sets the payment status via WATA."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1275,20 +1275,20 @@ async def _set_wata_enabled(callback: CallbackQuery, state: FSMContext, target_e
 
 @router.callback_query(F.data.startswith("admin_wata_mgmt_set:"))
 async def wata_mgmt_set(callback: CallbackQuery, state: FSMContext):
-    """Включает или выключает WATA выбранным состоянием."""
+    """Enables or disables WATA by the selected state."""
     target_enabled = callback.data.rsplit(":", 1)[1] == "1"
     await _set_wata_enabled(callback, state, target_enabled)
 
 
 @router.callback_query(F.data == "admin_wata_mgmt_toggle")
 async def wata_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Совместимый toggle для старых сообщений."""
+    """Compatible toggle for old posts."""
     await _set_wata_enabled(callback, state, not is_wata_enabled())
 
 
 @router.callback_query(F.data == "admin_wata_mgmt_edit_token")
 async def wata_edit_token(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает JWT-токен WATA."""
+    """Requests a WATA JWT token."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1309,7 +1309,7 @@ async def wata_edit_token(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.wata_setup_token)
 async def wata_setup_token_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод JWT-токена WATA."""
+    """Processes WATA JWT token input."""
     from bot.utils.text import get_message_text_for_storage
 
     token = get_message_text_for_storage(message, 'plain').strip()
@@ -1352,12 +1352,12 @@ async def wata_setup_token_handler(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# НАСТРOЙКА PLATEGA
+# SETTING UP PLATEGA
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_platega")
 async def show_platega_management_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню управления оплатой через Platega."""
+    """Shows the payment management menu through Platega."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1412,7 +1412,7 @@ async def show_platega_management_menu(callback: CallbackQuery, state: FSMContex
 
 
 async def _set_platega_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
-    """Устанавливает состояние оплаты через Platega."""
+    """Sets the payment status through Platega."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1440,20 +1440,20 @@ async def _set_platega_enabled(callback: CallbackQuery, state: FSMContext, targe
 
 @router.callback_query(F.data.startswith("admin_platega_mgmt_set:"))
 async def platega_mgmt_set(callback: CallbackQuery, state: FSMContext):
-    """Включает или выключает Platega выбранным состоянием."""
+    """Enables or disables Platega with the selected state."""
     target_enabled = callback.data.rsplit(":", 1)[1] == "1"
     await _set_platega_enabled(callback, state, target_enabled)
 
 
 @router.callback_query(F.data == "admin_platega_mgmt_toggle")
 async def platega_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Совместимый toggle для старых сообщений."""
+    """Compatible toggle for old posts."""
     await _set_platega_enabled(callback, state, not is_platega_enabled())
 
 
 @router.callback_query(F.data == "admin_platega_mgmt_edit_merchant")
 async def platega_edit_merchant(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает Merchant ID Platega."""
+    """Requests Merchant ID Platega."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1473,7 +1473,7 @@ async def platega_edit_merchant(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.platega_setup_merchant)
 async def platega_setup_merchant_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод Merchant ID Platega."""
+    """Processes Platega Merchant ID input."""
     from bot.utils.text import get_message_text_for_storage
 
     merchant_id = get_message_text_for_storage(message, 'plain').strip()
@@ -1517,7 +1517,7 @@ async def platega_setup_merchant_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_platega_mgmt_edit_secret")
 async def platega_edit_secret(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает Secret Platega."""
+    """Requests Secret Platega."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1537,7 +1537,7 @@ async def platega_edit_secret(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.platega_setup_secret)
 async def platega_setup_secret_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод Secret Platega."""
+    """Processes Secret Platega input."""
     from bot.utils.text import get_message_text_for_storage
 
     secret = get_message_text_for_storage(message, 'plain').strip()
@@ -1580,12 +1580,12 @@ async def platega_setup_secret_handler(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# НАСТРOЙКА CARDLINK
+# CARDLINK SETUP
 # ============================================================================
 
 @router.callback_query(F.data == "admin_payments_cardlink")
 async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню управления оплатой через Cardlink."""
+    """Shows the Cardlink payment management menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1615,7 +1615,7 @@ async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMConte
     else:
         token_display = "❌ Не задан"
 
-    # bot_name для возвратных ссылок
+    # bot_name for return links
     try:
         bot_info = await callback.bot.get_me()
         bot_username = bot_info.username or "your_bot"
@@ -1657,7 +1657,7 @@ async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMConte
 
 
 async def _set_cardlink_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
-    """Устанавливает состояние оплаты через Cardlink."""
+    """Sets the payment status via Cardlink."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1685,20 +1685,20 @@ async def _set_cardlink_enabled(callback: CallbackQuery, state: FSMContext, targ
 
 @router.callback_query(F.data.startswith("admin_cardlink_mgmt_set:"))
 async def cardlink_mgmt_set(callback: CallbackQuery, state: FSMContext):
-    """Включает или выключает Cardlink выбранным состоянием."""
+    """Enables or disables Cardlink with the selected state."""
     target_enabled = callback.data.rsplit(":", 1)[1] == "1"
     await _set_cardlink_enabled(callback, state, target_enabled)
 
 
 @router.callback_query(F.data == "admin_cardlink_mgmt_toggle")
 async def cardlink_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
-    """Совместимый toggle для старых сообщений."""
+    """Compatible toggle for old posts."""
     await _set_cardlink_enabled(callback, state, not is_cardlink_enabled())
 
 
 @router.callback_query(F.data == "admin_cardlink_mgmt_edit_shop_id")
 async def cardlink_edit_shop_id(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает Shop ID Cardlink."""
+    """Requests Shop ID Cardlink."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1718,7 +1718,7 @@ async def cardlink_edit_shop_id(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.cardlink_setup_shop_id)
 async def cardlink_setup_shop_id_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод Shop ID Cardlink."""
+    """Processes Shop ID Cardlink input."""
     from bot.utils.text import get_message_text_for_storage
 
     shop_id = get_message_text_for_storage(message, 'plain').strip()
@@ -1762,7 +1762,7 @@ async def cardlink_setup_shop_id_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_cardlink_mgmt_edit_api_token")
 async def cardlink_edit_api_token(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает API-токен Cardlink."""
+    """Requests a Cardlink API token."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1782,7 +1782,7 @@ async def cardlink_edit_api_token(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.cardlink_setup_api_token)
 async def cardlink_setup_api_token_handler(message: Message, state: FSMContext):
-    """Обрабатывает ввод API-токена Cardlink."""
+    """Handles Cardlink API token input."""
     from bot.utils.text import get_message_text_for_storage
 
     api_token = get_message_text_for_storage(message, 'plain').strip()

@@ -1,4 +1,4 @@
-"""Доменные операции с балансом пользователя."""
+"""Domain operations with user balance."""
 from __future__ import annotations
 
 from typing import Any
@@ -15,7 +15,7 @@ async def credit_user_balance(
     performed_by: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Пополняет баланс через единый сервисный путь и пишет историю."""
+    """Replenishes the balance through a single service path and writes history."""
     return await _apply_balance_operation(
         user_id,
         cents,
@@ -40,7 +40,7 @@ async def debit_user_balance(
     performed_by: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Списывает баланс через единый сервисный путь и пишет историю."""
+    """Writes off the balance through a single service path and writes history."""
     return await _apply_balance_operation(
         user_id,
         cents,

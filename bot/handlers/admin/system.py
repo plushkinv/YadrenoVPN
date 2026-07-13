@@ -1,9 +1,10 @@
 """
-Обработчики раздела «Настройки бота».
+Handlers for the “Bot Settings” section.
 
-Управление обновлением, остановкой бота и редактированием текстов.
+Manage updating, stopping the bot and editing texts.
 """
 import asyncio
+import hashlib
 import logging
 import os
 import sys
@@ -12,6 +13,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import GITHUB_REPO_URL
 from bot.utils.admin import is_admin
@@ -53,7 +55,7 @@ from database.requests import get_yadreno_admin_api_key
 
 logger = logging.getLogger(__name__)
 
-from bot.utils.text import escape_html, safe_edit_or_send
+from bot.utils.text import escape_html, get_message_text_for_storage, safe_edit_or_send
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock, set_update_blocked
 
 router = Router()
@@ -81,17 +83,22 @@ _EXTENSION_REGISTRATION_LABELS = {
     'referral_reward_policies': 'referral rewards',
     'key_lifecycle_hooks': 'key lifecycle',
     'payment_providers': 'payment providers',
+    'callback_handlers': 'callbacks',
+    'user_access_guards': 'user access',
     'schemas': 'schemas',
+    'settings': 'settings',
 }
+
+_EXTENSION_UI_TOKENS: dict[str, dict[str, object]] = {}
 
 
 # ============================================================================
-# ГЛАВНОЕ МЕНЮ НАСТРОЕК
+# MAIN SETTINGS MENU
 # ============================================================================
 
 @router.callback_query(F.data == "admin_bot_settings")
 async def show_bot_settings(callback: CallbackQuery, state: FSMContext):
-    """Показывает меню настроек бота."""
+    """Shows the bot settings menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -126,7 +133,7 @@ async def show_bot_settings(callback: CallbackQuery, state: FSMContext):
 
 
 async def _show_bot_mode_confirm(callback: CallbackQuery, target: str):
-    """Показывает подтверждение переключения режима работы бота."""
+    """Shows confirmation of switching the bot's operating mode."""
     if target == 'subscription':
         warning = (
             "⚠️ <b>Переключение в режим Подписка</b>\n\n"
@@ -157,7 +164,7 @@ async def _show_bot_mode_confirm(callback: CallbackQuery, target: str):
 
 @router.callback_query(F.data == "admin_extensions_diagnostics")
 async def show_extensions_diagnostics(callback: CallbackQuery, state: FSMContext):
-    """Показывает read-only диагностику пользовательских расширений."""
+    """Shows read-only diagnostics for custom extensions."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -168,7 +175,7 @@ async def show_extensions_diagnostics(callback: CallbackQuery, state: FSMContext
     await safe_edit_or_send(
         callback.message,
         _format_extensions_diagnostics(diagnostics),
-        reply_markup=extensions_diagnostics_kb(),
+        reply_markup=extensions_diagnostics_kb(_extension_settings_menu_buttons(diagnostics)),
     )
     await callback.answer()
 
@@ -250,9 +257,347 @@ def _format_extension_registration_summary(items: dict) -> str:
     return ", ".join(parts) if parts else "нет зарегистрированных объектов"
 
 
+def _extension_settings_menu_buttons(diagnostics: dict) -> list[dict[str, str]]:
+    settings = dict(diagnostics.get('settings') or {})
+    buttons: list[dict[str, str]] = []
+    for extension_id, fields in sorted(settings.items()):
+        if not fields:
+            continue
+        token = _extension_ui_token('extension', extension_id)
+        buttons.append({
+            'text': f'🧩 {extension_id}',
+            'callback_data': f'admin_ext_settings:{token}',
+        })
+    return buttons
+
+
+@router.callback_query(F.data.startswith("admin_ext_settings:"))
+async def show_extension_settings(callback: CallbackQuery, state: FSMContext):
+    """Shows settings of one custom extension."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    token_data = _resolve_extension_ui_token(callback, 'extension')
+    if token_data is None:
+        await callback.answer("Обновите экран расширений", show_alert=True)
+        return
+    await state.clear()
+    extension_id = str(token_data['extension_id'])
+    await _render_extension_settings_screen(callback.message, extension_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_ext_edit:"))
+async def edit_extension_setting(callback: CallbackQuery, state: FSMContext):
+    """Starts FSM editing for one extension setting."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    token_data = _resolve_extension_ui_token(callback, 'field')
+    if token_data is None:
+        await callback.answer("Обновите экран расширений", show_alert=True)
+        return
+
+    extension_id = str(token_data['extension_id'])
+    field_key = str(token_data['field_key'])
+    from bot.utils.extension_settings import get_extension_setting_field
+
+    field = get_extension_setting_field(extension_id, field_key)
+    if field['type'] == 'choice':
+        await safe_edit_or_send(
+            callback.message,
+            _format_extension_choice_text(extension_id, field),
+            reply_markup=_extension_choice_kb(extension_id, field_key),
+        )
+        await callback.answer()
+        return
+    if field['type'] == 'bool':
+        await callback.answer("Используйте переключатель", show_alert=True)
+        return
+
+    await state.set_state(AdminStates.extension_setting_value)
+    await state.update_data(
+        extension_id=extension_id,
+        field_key=field_key,
+        editing_message=callback.message,
+    )
+    await safe_edit_or_send(
+        callback.message,
+        _format_extension_setting_edit_prompt(extension_id, field),
+        reply_markup=_extension_setting_cancel_kb(extension_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_ext_set:"))
+async def set_extension_setting(callback: CallbackQuery, state: FSMContext):
+    """Saves a quick setting value from button callbacks."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    token_data = _resolve_extension_ui_token(callback, 'set')
+    if token_data is None:
+        await callback.answer("Обновите экран расширений", show_alert=True)
+        return
+    extension_id = str(token_data['extension_id'])
+    field_key = str(token_data['field_key'])
+    value = token_data['value']
+    from bot.utils.extension_settings import save_extension_setting
+
+    try:
+        save_extension_setting(extension_id, field_key, value)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    await state.clear()
+    await _render_extension_settings_screen(callback.message, extension_id)
+    await callback.answer("Сохранено")
+
+
+@router.callback_query(F.data.startswith("admin_ext_clear:"))
+async def clear_extension_setting(callback: CallbackQuery, state: FSMContext):
+    """Clears a saved extension setting value."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    token_data = _resolve_extension_ui_token(callback, 'field')
+    if token_data is None:
+        await callback.answer("Обновите экран расширений", show_alert=True)
+        return
+    extension_id = str(token_data['extension_id'])
+    field_key = str(token_data['field_key'])
+    from bot.utils.extension_settings import clear_extension_setting
+
+    clear_extension_setting(extension_id, field_key)
+    await state.clear()
+    await _render_extension_settings_screen(callback.message, extension_id)
+    await callback.answer("Очищено")
+
+
+@router.message(AdminStates.extension_setting_value, ~F.text.startswith('/'))
+async def save_extension_setting_from_message(message: Message, state: FSMContext):
+    """Saves an extension setting from admin plain text input."""
+    if not is_admin(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    extension_id = data.get('extension_id')
+    field_key = data.get('field_key')
+    editing_message = data.get('editing_message')
+    if not extension_id or not field_key:
+        await state.clear()
+        await safe_edit_or_send(message, "❌ Ошибка состояния.", force_new=True)
+        return
+
+    from bot.utils.extension_settings import (
+        get_extension_setting_field,
+        parse_extension_setting_input,
+        save_extension_setting,
+    )
+
+    field = get_extension_setting_field(str(extension_id), str(field_key))
+    raw_value = get_message_text_for_storage(message, 'plain')
+    try:
+        value = parse_extension_setting_input(field, raw_value)
+        save_extension_setting(str(extension_id), str(field_key), value)
+    except ValueError as exc:
+        target = editing_message or message
+        await safe_edit_or_send(
+            target,
+            _format_extension_setting_edit_prompt(str(extension_id), field, error=str(exc)),
+            reply_markup=_extension_setting_cancel_kb(str(extension_id)),
+            force_new=editing_message is None,
+        )
+        return
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await state.clear()
+
+    if editing_message:
+        await _render_extension_settings_screen(editing_message, str(extension_id))
+    else:
+        await _render_extension_settings_screen(message, str(extension_id), force_new=True)
+
+
+def _format_extension_settings_text(extension_id: str) -> str:
+    from bot.utils.extension_settings import get_extension_settings_state
+
+    states = get_extension_settings_state(extension_id)
+    lines = [
+        "🧩 <b>Настройки расширения</b>",
+        "",
+        f"<b>Расширение:</b> <code>{escape_html(extension_id)}</code>",
+    ]
+    if not states:
+        lines.extend(["", "У расширения нет редактируемых настроек."])
+        return "\n".join(lines)
+
+    lines.append("")
+    for item in states:
+        field = item['field']
+        label = escape_html(str(field.get('label') or field.get('key')))
+        display = escape_html(str(item.get('display_value') or ''))
+        warning = " ⚠️" if item.get('is_saved_invalid') else ""
+        lines.append(f"• <b>{label}</b>: <code>{display}</code>{warning}")
+        if item.get('is_saved_invalid'):
+            lines.append("  <i>Сохранённое значение не подходит к текущему описанию поля, используется значение по умолчанию.</i>")
+        help_text = str(field.get('help') or '').strip()
+        if help_text:
+            lines.append(f"  <i>{escape_html(help_text)}</i>")
+    return "\n".join(lines)
+
+
+def _format_extension_choice_text(extension_id: str, field: dict) -> str:
+    return (
+        "🧩 <b>Выбор значения расширения</b>\n\n"
+        f"<b>Расширение:</b> <code>{escape_html(extension_id)}</code>\n"
+        f"<b>Поле:</b> {escape_html(str(field.get('label') or field.get('key')))}"
+    )
+
+
+def _format_extension_setting_edit_prompt(extension_id: str, field: dict, *, error: str = '') -> str:
+    from bot.utils.extension_settings import get_extension_settings_state
+
+    state = next(
+        (item for item in get_extension_settings_state(extension_id) if item['field']['key'] == field['key']),
+        None,
+    )
+    current = state.get('display_value') if state else field.get('default', '')
+    lines = [
+        "✏️ <b>Изменение настройки расширения</b>",
+        "",
+        f"<b>Расширение:</b> <code>{escape_html(extension_id)}</code>",
+        f"<b>Поле:</b> {escape_html(str(field.get('label') or field.get('key')))}",
+        f"<b>Текущее значение:</b> <code>{escape_html(str(current))}</code>",
+    ]
+    help_text = str(field.get('help') or '').strip()
+    placeholder = str(field.get('placeholder') or '').strip()
+    if help_text:
+        lines.extend(["", escape_html(help_text)])
+    if placeholder:
+        lines.append(f"<i>Пример: {escape_html(placeholder)}</i>")
+    if error:
+        lines.extend(["", f"❌ <b>Ошибка:</b> {escape_html(error)}"])
+    lines.extend(["", "Отправьте новое значение одним сообщением."])
+    return "\n".join(lines)
+
+
+async def _render_extension_settings_screen(target, extension_id: str, *, force_new: bool = False) -> None:
+    await safe_edit_or_send(
+        target,
+        _format_extension_settings_text(extension_id),
+        reply_markup=_extension_settings_kb(extension_id),
+        force_new=force_new,
+    )
+
+
+def _extension_settings_kb(extension_id: str):
+    from bot.utils.extension_settings import get_extension_settings_state
+
+    builder = InlineKeyboardBuilder()
+    for item in get_extension_settings_state(extension_id):
+        field = item['field']
+        key = field['key']
+        label = _short_button_label(str(field.get('label') or key))
+        field_type = field['type']
+        if field_type == 'bool':
+            current = bool(item.get('value'))
+            true_token = _extension_ui_token('set', extension_id, key, True)
+            false_token = _extension_ui_token('set', extension_id, key, False)
+            builder.row(
+                InlineKeyboardButton(
+                    text=(f'🟢 {label}: Включено' if current else f'⚪ {label}: Включено'),
+                    callback_data=f'admin_ext_set:{true_token}',
+                ),
+                InlineKeyboardButton(
+                    text=(f'⚪ {label}: Выключено' if current else f'🔴 {label}: Выключено'),
+                    callback_data=f'admin_ext_set:{false_token}',
+                ),
+            )
+        elif field_type == 'choice':
+            token = _extension_ui_token('field', extension_id, key)
+            builder.row(InlineKeyboardButton(text=f'🎚 {label}', callback_data=f'admin_ext_edit:{token}'))
+        elif field_type == 'secret':
+            token = _extension_ui_token('field', extension_id, key)
+            builder.row(
+                InlineKeyboardButton(text=f'🔐 Изменить: {label}', callback_data=f'admin_ext_edit:{token}'),
+                InlineKeyboardButton(text='🧹 Очистить', callback_data=f'admin_ext_clear:{token}'),
+            )
+        else:
+            token = _extension_ui_token('field', extension_id, key)
+            builder.row(InlineKeyboardButton(text=f'✏️ {label}', callback_data=f'admin_ext_edit:{token}'))
+    builder.row(
+        InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_extensions_diagnostics'),
+        InlineKeyboardButton(text='🈴 На главную', callback_data='start'),
+    )
+    return builder.as_markup()
+
+
+def _extension_choice_kb(extension_id: str, field_key: str):
+    from bot.utils.extension_settings import get_extension_config, get_extension_setting_field
+
+    field = get_extension_setting_field(extension_id, field_key)
+    current = get_extension_config(extension_id).get(field_key)
+    builder = InlineKeyboardBuilder()
+    for choice in field.get('choices') or []:
+        value = choice['value']
+        token = _extension_ui_token('set', extension_id, field_key, value)
+        prefix = '🟢' if value == current else '⚪'
+        builder.row(InlineKeyboardButton(text=f"{prefix} {choice['label']}", callback_data=f'admin_ext_set:{token}'))
+    back_token = _extension_ui_token('extension', extension_id)
+    builder.row(
+        InlineKeyboardButton(text='⬅️ Назад', callback_data=f'admin_ext_settings:{back_token}'),
+        InlineKeyboardButton(text='🈴 На главную', callback_data='start'),
+    )
+    return builder.as_markup()
+
+
+def _extension_setting_cancel_kb(extension_id: str):
+    token = _extension_ui_token('extension', extension_id)
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin_ext_settings:{token}'))
+    return builder.as_markup()
+
+
+def _extension_ui_token(kind: str, extension_id: str, field_key: str = '', value: object = None) -> str:
+    raw = f'{kind}|{extension_id}|{field_key}|{repr(value)}'
+    token = hashlib.sha1(raw.encode('utf-8')).hexdigest()[:14]
+    _EXTENSION_UI_TOKENS[token] = {
+        'kind': kind,
+        'extension_id': extension_id,
+        'field_key': field_key,
+        'value': value,
+    }
+    return token
+
+
+def _resolve_extension_ui_token(callback: CallbackQuery, expected_kind: str) -> dict[str, object] | None:
+    data_text = str(callback.data or '')
+    token = data_text.split(':', 1)[1] if ':' in data_text else ''
+    data = _EXTENSION_UI_TOKENS.get(token)
+    if not data or data.get('kind') != expected_kind:
+        return None
+    return data
+
+
+def _short_button_label(label: str, limit: int = 34) -> str:
+    text = label.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit - 1].rstrip() + '…'
+
+
 @router.callback_query(F.data.startswith("admin_select_bot_mode:"))
 async def admin_select_bot_mode(callback: CallbackQuery, state: FSMContext):
-    """Открывает подтверждение только при выборе другого режима."""
+    """Opens confirmation only when selecting another mode."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -274,7 +619,7 @@ async def admin_select_bot_mode(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_toggle_bot_mode")
 async def admin_toggle_bot_mode(callback: CallbackQuery, state: FSMContext):
-    """Совместимый toggle для старых сообщений."""
+    """Compatible toggle for old posts."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -287,7 +632,7 @@ async def admin_toggle_bot_mode(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_set_bot_mode:"))
 async def admin_set_bot_mode(callback: CallbackQuery, state: FSMContext):
-    """Сохраняет новый режим работы бота в settings."""
+    """Saves the new bot operating mode in settings."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -312,16 +657,16 @@ async def admin_set_bot_mode(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# РУЧНОЕ ОБНОВЛЕНИЕ БОТА (КОМАНДОЙ /UPDATE)
+# MANUAL UPDATE OF THE BOT (COMMAND /UPDATE)
 # ============================================================================
 
 @router.message(Command("update"))
 async def admin_update_cmd(message: Message, state: FSMContext):
-    """Скрытая команда экстренного обновления для администраторов."""
+    """Hidden emergency update command for administrators."""
     if not is_admin(message.from_user.id):
         return
         
-    # Проверяем и обновляем remote URL если нужно
+    # Check and update remote URL if necessary
     current_remote = get_remote_url()
     if current_remote != GITHUB_REPO_URL and GITHUB_REPO_URL:
         set_remote_url(GITHUB_REPO_URL)
@@ -350,7 +695,7 @@ async def admin_update_cmd(message: Message, state: FSMContext):
     await state.clear()
     await asyncio.sleep(2)
     
-    # Устанавливаем/обновляем зависимости
+    # Install/update dependencies
     success, req_message = install_requirements()
     if not success:
         logger.error(f"Ошибка установки зависимостей: {req_message}")
@@ -365,17 +710,17 @@ async def admin_update_cmd(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# ОБНОВЛЕНИЕ БОТА (ИНТЕРФЕЙС)
+# BOT UPDATE (INTERFACE)
 # ============================================================================
 
 @router.callback_query(F.data == "admin_update_bot")
 async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
-    """Показывает подтверждение обновления."""
+    """Shows update confirmation."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
-    # Проверяем настроен ли GitHub
+    # Checking if GitHub is configured
     if not GITHUB_REPO_URL:
         await safe_edit_or_send(callback.message, 
             "❌ <b>GitHub не настроен</b>\n\n"
@@ -386,12 +731,12 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Проверяем и обновляем remote URL если нужно
+    # Check and update remote URL if necessary
     current_remote = get_remote_url()
     if current_remote != GITHUB_REPO_URL:
         set_remote_url(GITHUB_REPO_URL)
 
-    # Проверяем условия разблокировки
+    # Checking the unlock conditions
     try_unblock()
 
     if is_update_blocked():
@@ -402,13 +747,13 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Показываем сообщение о проверке
+    # Showing a verification message
     await safe_edit_or_send(callback.message, 
         "🔍 <b>Проверка обновлений...</b>\n\n"
         "Подключаюсь к GitHub..."
     )
     
-    # Проверяем наличие обновлений
+    # Checking for updates
     success, commits_behind, log_text, has_blocking, blocking_commit, is_beta_only = check_for_updates()
     
     if not success:
@@ -430,18 +775,18 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
     last_commit = get_last_commit_info(target_rev)
     previous_commits = get_previous_commits_info(5, target_rev)
     
-    # Формируем текст с коммитами
+    # Generating text with commits
     commits_text = f"🔹 <b>Последний коммит:</b>\n``<code>\n{last_commit}\n</code>``\n"
     if previous_commits != "Нет предыдущих коммитов":
          commits_text += f"\n🔸 <b>Предыдущие 5 коммитов:</b>\n``<code>\n{previous_commits}\n</code>``"
     
-    # Сохраняем данные о блокирующем коммите в FSM state
+    # We save data about the blocking commit in the FSM state
     await state.update_data(
         has_blocking=has_blocking,
         blocking_commit=blocking_commit
     )
     
-    # Если обновлений нет
+    # If there are no updates
     if commits_behind == 0:
         await safe_edit_or_send(callback.message, 
             "✅ <b>Обновление не требуется, у вас последняя версия</b>\n\n"
@@ -450,8 +795,8 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             reply_markup=update_confirm_kb(has_updates=False)
         )
     elif has_blocking and blocking_commit:
-        # Есть блокирующее обновление — показываем предупреждение
-        # Убираем маркер ! из сообщения при отображении
+        # There is a blocking update - display a warning
+        # Remove the marker! from message when displayed
         blocking_msg = blocking_commit['message'].lstrip('!')
         blocking_hash = blocking_commit['hash'][:8]
         
@@ -468,7 +813,7 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             reply_markup=update_confirm_kb(has_updates=True, has_blocking=True)
         )
     elif is_beta_only:
-        # Только бета-обновления
+        # Beta updates only
         await safe_edit_or_send(callback.message, 
             f"🧪 <b>Доступна бета-версия!</b>\n\n"
             f"📦 <b>Доступно бета-коммитов:</b> {commits_behind}\n"
@@ -478,7 +823,7 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             reply_markup=update_confirm_kb(has_updates=True, has_blocking=False, is_beta_only=True)
         )
     else:
-        # Есть обычные обновления
+        # There are regular updates
         await safe_edit_or_send(callback.message, 
             f"📦 <b>Доступно обновлений:</b> {commits_behind}\n\n"
             f"Текущая версия: <code>{commit_hash}</code>\n\n"
@@ -493,23 +838,23 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_update_bot_confirm")
 async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
-    """Выполняет обновление и перезапуск бота."""
+    """Updates and restarts the bot."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
-    # Проверяем и обновляем remote URL если нужно
+    # Check and update remote URL if necessary
     current_remote = get_remote_url()
     if current_remote != GITHUB_REPO_URL:
         set_remote_url(GITHUB_REPO_URL)
     
-    # Получаем данные о блокирующем коммите из FSM state
+    # Getting data about a blocking commit from FSM state
     data = await state.get_data()
     has_blocking = data.get('has_blocking', False)
     blocking_commit = data.get('blocking_commit')
     
     if has_blocking and blocking_commit:
-        # Блокирующее обновление — обновляем до конкретного коммита
+        # Blocking update - update to a specific commit
         await safe_edit_or_send(callback.message, 
             "🔄 <b>Блокирующее обновление...</b>\n\n"
             f"Обновляю до коммита <code>{blocking_commit['hash'][:8]}</code>..."
@@ -517,7 +862,7 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
         
         success, message = pull_to_commit(blocking_commit['hash'])
     else:
-        # Обычное обновление — git pull
+        # Regular update - git pull
         await safe_edit_or_send(callback.message, 
             "🔄 <b>Обновление...</b>\n\n"
             "Загружаю изменения с GitHub..."
@@ -533,7 +878,7 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Успешное обновление — показываем лог и перезапускаем
+    # Successful update - show the log and restart
     logger.info(f"🔄 Бот обновлён администратором {callback.from_user.id}")
     
     if has_blocking:
@@ -551,13 +896,13 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer("Бот перезапускается...", show_alert=True)
     
-    # Очищаем FSM state
+    # Clearing FSM state
     await state.clear()
     
-    # Даём время на отправку сообщения
+    # We give time to send the message
     await asyncio.sleep(2)
     
-    # Устанавливаем/обновляем зависимости
+    # Install/update dependencies
     success, req_message = install_requirements()
     if not success:
         logger.error(f"Ошибка установки зависимостей: {req_message}")
@@ -567,19 +912,19 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    # Перезапускаем бота
+    # Restarting the bot
     restart_bot()
 
 
 
 @router.callback_query(F.data == "admin_force_overwrite")
 async def show_force_overwrite(callback: CallbackQuery, state: FSMContext):
-    """Показывает предупреждение перед принудительной перезаписью."""
+    """Shows a warning before a forced overwrite."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
-    # Проверяем настроен ли GitHub
+    # Checking if GitHub is configured
     if not GITHUB_REPO_URL:
         await safe_edit_or_send(callback.message, 
             "❌ <b>GitHub не настроен</b>\n\n"
@@ -602,12 +947,12 @@ async def show_force_overwrite(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_force_overwrite_confirm")
 async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
-    """Выполняет принудительную перезапись и перезапуск бота."""
+    """Performs a forced rewrite and restart of the bot."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
-    # Проверяем и обновляем remote URL если нужно
+    # Check and update remote URL if necessary
     current_remote = get_remote_url()
     if current_remote != GITHUB_REPO_URL and GITHUB_REPO_URL:
         set_remote_url(GITHUB_REPO_URL)
@@ -617,14 +962,14 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
         "Связываюсь с репозиторием и проверяю обновления..."
     )
     
-    # Проверяем наличие блокирующих коммитов перед перезаписью
+    # Checking for blocking commits before rewriting
     from bot.utils.git_utils import get_pending_commits_list, find_first_blocking_commit
     
     success_fetch, pending_commits = get_pending_commits_list()
     blocking_commit = find_first_blocking_commit(pending_commits) if success_fetch else None
     
     if blocking_commit:
-        # Есть блокирующий коммит — обновляемся только до него (через reset --hard)
+        # There is a blocking commit - we update only to it (via reset --hard)
         success, message = pull_to_commit(blocking_commit['hash'])
         
         if not success:
@@ -635,7 +980,7 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
             await callback.answer()
             return
         
-        # Ставим блокировку обновлений
+        # Block updates
         set_update_blocked()
         
         blocking_msg = blocking_commit['message'].lstrip('!')
@@ -651,7 +996,7 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
             "🔄 Перезапуск бота через 2 секунды..."
         )
     else:
-        # Нет блокирующих коммитов — полная перезапись
+        # No blocking commits - full rewrite
         success, message = force_pull_updates()
         
         if not success:
@@ -671,13 +1016,13 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer("Бот перезапускается...", show_alert=True)
     
-    # Очищаем FSM state
+    # Clearing FSM state
     await state.clear()
     
-    # Даём время на отправку сообщения
+    # We give time to send the message
     await asyncio.sleep(2)
     
-    # Устанавливаем/обновляем зависимости
+    # Install/update dependencies
     success, req_message = install_requirements()
     if not success:
         logger.error(f"Ошибка установки зависимостей: {req_message}")
@@ -687,23 +1032,23 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    # Перезапускаем бота
+    # Restarting the bot
     restart_bot()
 
 
 # ============================================================================
-# ИЗМЕНЕНИЕ ТЕКСТОВ (ЗАГЛУШКА)
+# CHANGING TEXTS (STUB)
 # ============================================================================
 
 # ============================================================================
-# ИЗМЕНЕНИЕ ТЕКСТОВ
+# CHANGING TEXTS
 # ============================================================================
 
 from bot.states.admin_states import AdminStates
 
 @router.callback_query(F.data == "admin_edit_texts")
 async def edit_texts_menu(callback: CallbackQuery, state: FSMContext):
-    """Меню выбора текста для редактирования."""
+    """Menu for selecting text for editing."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -732,7 +1077,7 @@ async def edit_texts_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("edit_text:"))
 async def edit_text_start(callback: CallbackQuery, state: FSMContext):
-    """Начало редактирования конкретного текста через универсальный редактор."""
+    """Start editing specific text using a universal editor."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -741,7 +1086,7 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
     
     key = callback.data.split(":")[1]
     
-    # Белый список допустимых ключей — защита от инъекции произвольного ключа настроек
+    # White list of valid keys - protection against injection of an arbitrary settings key
     ALLOWED_KEYS = {
         'main',
         'help',
@@ -753,7 +1098,7 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Недопустимый параметр", show_alert=True)
         return
     
-    # Тексты справки для каждого ключа
+    # Help texts for each key
     help_texts = {
         'main': (
             "📝 <b>Справка: Текст главной страницы</b>\n\n"
@@ -787,7 +1132,7 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# РЕДАКТИРОВАНИЕ КНОПОК-ССЫЛОК (НОВОСТИ, ПОДДЕРЖКА) в JSON страницы help
+# EDITING LINK BUTTONS (NEWS, SUPPORT) in JSON help pages
 # ============================================================================
 
 import json
@@ -834,7 +1179,7 @@ def _update_help_button(btn_id: str, updates: dict) -> None:
 
 @router.callback_query(F.data.startswith("edit_link:"))
 async def edit_link_menu(callback: CallbackQuery, state: FSMContext):
-    """Меню редактирования кнопки-ссылки."""
+    """Link button editing menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -853,11 +1198,11 @@ async def edit_link_menu(callback: CallbackQuery, state: FSMContext):
     current_url = btn_data.get('action_value', 'Не задано')
     is_hidden = btn_data.get('is_hidden', False)
     
-    # Label хранится с эмодзи '📢 ' или '💬 ', попробуем отрезать, если есть
+    # Label is stored with '📢' or '💬' emoji, let's try to cut it off if there is one
     raw_label = btn_data.get('label', 'Новости' if link_type == 'news' else 'Поддержка')
     button_name = raw_label[2:] if raw_label.startswith('📢 ') or raw_label.startswith('💬 ') else raw_label
     
-    # Названия для заголовка
+    # Titles for the header
     titles = {
         'news': 'Новости',
         'support': 'Поддержка'
@@ -896,7 +1241,7 @@ async def edit_link_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("edit_link_url:"))
 async def edit_link_url_start(callback: CallbackQuery, state: FSMContext):
-    """Начало редактирования URL ссылки."""
+    """Start editing the link URL."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -932,7 +1277,7 @@ async def edit_link_url_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.waiting_for_link_url, ~F.text.startswith('/'))
 async def edit_link_url_save(message: Message, state: FSMContext):
-    """Сохранение новой ссылки."""
+    """Saving a new link."""
     if not is_admin(message.from_user.id):
         return
     
@@ -951,7 +1296,7 @@ async def edit_link_url_save(message: Message, state: FSMContext):
     
     new_value = get_message_text_for_storage(message, 'plain')
     
-    # Валидация URL
+    # URL Validation
     if not new_value.startswith(('http://', 'https://')):
         await safe_edit_or_send(message,
             "❌ <b>Ошибка:</b> Ссылка должна начинаться с <code>http://</code> или <code>https://</code>\n\n"
@@ -961,7 +1306,7 @@ async def edit_link_url_save(message: Message, state: FSMContext):
         )
         return
     
-    # Удаляем сообщение пользователя
+    # Deleting a user's message
     try:
         await message.delete()
     except Exception:
@@ -970,7 +1315,7 @@ async def edit_link_url_save(message: Message, state: FSMContext):
     _update_help_button(btn_id, {'action_type': 'url', 'action_value': new_value})
     await state.clear()
     
-    # Перерисовываем сообщение
+    # Redrawing the message
     if editing_message:
         try:
             await safe_edit_or_send(editing_message,
@@ -993,7 +1338,7 @@ async def edit_link_url_save(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("toggle_link_hidden:"))
 async def toggle_link_hidden(callback: CallbackQuery, state: FSMContext):
-    """Переключение видимости кнопки-ссылки."""
+    """Switching the visibility of a link button."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1010,13 +1355,13 @@ async def toggle_link_hidden(callback: CallbackQuery, state: FSMContext):
     
     _update_help_button(btn_id, {'is_hidden': not current_status})
     
-    # Возвращаемся в меню редактирования ссылки
+    # Returning to the link editing menu
     await edit_link_menu(callback, state)
 
 
 @router.callback_query(F.data.startswith("edit_link_name:"))
 async def edit_link_name_start(callback: CallbackQuery, state: FSMContext):
-    """Начало редактирования названия кнопки-ссылки."""
+    """Start editing the name of the link button."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1054,7 +1399,7 @@ async def edit_link_name_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.waiting_for_link_button_name)
 async def edit_link_name_save(message: Message, state: FSMContext):
-    """Сохранение нового названия кнопки-ссылки."""
+    """Saving the new name of the link button."""
     from bot.keyboards.admin import back_and_home_kb
     
     data = await state.get_data()
@@ -1093,12 +1438,12 @@ async def edit_link_name_save(message: Message, state: FSMContext):
 
 
 # ============================================================================
-# ОСТАНОВКА БОТА
+# STOP BOT
 # ============================================================================
 
 @router.callback_query(F.data == "admin_stop_bot")
 async def show_stop_bot_confirm(callback: CallbackQuery, state: FSMContext):
-    """Показывает окно подтверждения остановки бота."""
+    """Shows a confirmation window for stopping the bot."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1115,7 +1460,7 @@ async def show_stop_bot_confirm(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_stop_bot_confirm")
 async def stop_bot_confirmed(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение остановки бота — останавливает polling."""
+    """Bot stop confirmation - stops polling."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1128,20 +1473,20 @@ async def stop_bot_confirmed(callback: CallbackQuery, state: FSMContext):
     
     logger.info(f"🛑 Бот остановлен администратором {callback.from_user.id}")
     
-    # Даём время на отправку сообщения
+    # We give time to send the message
     await asyncio.sleep(1)
     
-    # Завершаем работу скрипта
+    # Finishing the script
     sys.exit(0)
 
 
 # ============================================================================
-# СКАЧИВАНИЕ ЛОГОВ
+# DOWNLOADING LOGS
 # ============================================================================
 
 @router.callback_query(F.data == "admin_logs_menu")
 async def show_logs_menu(callback: CallbackQuery, state: FSMContext):
-    """Меню скачивания логов."""
+    """Log download menu."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1155,7 +1500,7 @@ async def show_logs_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_download_log_full")
 async def download_log_full(callback: CallbackQuery, state: FSMContext):
-    """Скачивание полного лога."""
+    """Download the full log."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1165,7 +1510,7 @@ async def download_log_full(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Файл логов не найден.", show_alert=True)
         return
     
-    # Отвечаем на коллбек до отправки файла, чтобы избежать таймаута
+    # We respond to the callback before sending the file to avoid a timeout
     await callback.answer()
     
     await callback.message.answer_document(
@@ -1176,7 +1521,7 @@ async def download_log_full(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_download_log_errors")
 async def download_log_errors(callback: CallbackQuery, state: FSMContext):
-    """Скачивание лога с ошибками."""
+    """Downloading a log with errors."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1192,7 +1537,7 @@ async def download_log_errors(callback: CallbackQuery, state: FSMContext):
         with open(log_path, 'r', encoding='utf-8') as f_in, open(error_log_path, 'w', encoding='utf-8') as f_out:
             capturing = False
             for line in f_in:
-                # Начало новой записи в логе формата [2026-...
+                # Start of a new entry in the log format [2026-...
                 if line.startswith('['):
                     if ' [ERROR] ' in line or ' [WARNING] ' in line or ' [CRITICAL] ' in line or ' [EXCEPTION] ' in line:
                         capturing = True
@@ -1200,7 +1545,7 @@ async def download_log_errors(callback: CallbackQuery, state: FSMContext):
                     else:
                         capturing = False
                 elif capturing:
-                    # Строки traceback
+                    # Traceback lines
                     f_out.write(line)
     except Exception as e:
         logger.error(f"Ошибка при формировании лога ошибок: {e}")
@@ -1211,7 +1556,7 @@ async def download_log_errors(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ошибок не найдено! 🎉", show_alert=True)
         return
     
-    # Отвечаем на коллбек до отправки файла, чтобы избежать таймаута
+    # We respond to the callback before sending the file to avoid a timeout
     await callback.answer()
         
     await callback.message.answer_document(
@@ -1222,7 +1567,7 @@ async def download_log_errors(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_send_log_to_yadreno")
 async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
-    """Отправляет bot.log в Yadreno Admin для анализа."""
+    """Sends bot.log to Yadreno Admin for analysis."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1287,7 +1632,7 @@ async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_clear_logs_confirm")
 async def confirm_clear_logs(callback: CallbackQuery, state: FSMContext):
-    """Показывает предупреждение перед очисткой логов."""
+    """Shows a warning before clearing logs."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1309,7 +1654,7 @@ async def confirm_clear_logs(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_clear_logs_do")
 async def do_clear_logs(callback: CallbackQuery, state: FSMContext):
-    """Очищает файлы логов."""
+    """Clears log files."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1317,13 +1662,13 @@ async def do_clear_logs(callback: CallbackQuery, state: FSMContext):
     try:
         import glob
         
-        # Очищаем текущие файлы
+        # Clearing current files
         for log_path in ["logs/bot.log", "logs/errors.log"]:
             if os.path.exists(log_path):
                 with open(log_path, 'w', encoding='utf-8') as f:
                     f.write("") 
                     
-        # Удаляем старые лог-файлы (bot.log.1, bot.log.2, и т.д.)
+        # Delete old log files (bot.log.1, bot.log.2, etc.)
         for old_log in glob.glob("logs/bot.log.*"):
             if os.path.exists(old_log):
                 try:

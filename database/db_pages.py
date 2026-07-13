@@ -1,11 +1,11 @@
 """
-Модуль работы со страницами пользователя.
+Module for working with user pages.
 
-Таблица pages хранит текст, медиа и кнопки для каждого экрана.
-Кнопки хранятся в двух JSON-полях:
-  - buttons_default — дефолты разработчика (обновляются только миграциями)
-  - buttons_custom — кастомизация админа (обновляется через админ-панель)
-Функции *_default вызываются ТОЛЬКО из миграций.
+The pages table stores the text, media, and buttons for each screen.
+Buttons are stored in two JSON fields:
+  - buttons_default — developer defaults (updated only by migrations)
+  - buttons_custom — admin customization (updated via the admin panel)
+*_default functions are called ONLY from migrations.
 """
 import json
 import logging
@@ -25,13 +25,13 @@ __all__ = [
 
 def get_page(page_key: str) -> Optional[Dict[str, Any]]:
     """
-    Возвращает данные страницы из таблицы pages.
+    Returns page data from the pages table.
 
     Args:
-        page_key: Ключ страницы
+        page_key: Page key
 
     Returns:
-        Словарь с полями таблицы или None если страница не найдена
+        Dictionary with table fields or None if page not found
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -50,16 +50,16 @@ def update_page_custom(
     buttons: Optional[str] = None,
 ) -> None:
     """
-    Обновляет кастомные поля страницы.
-    НЕ трогает *_default поля.
+    Updates custom page fields.
+    DOES NOT touch *_default fields.
 
     Args:
-        page_key: Ключ страницы
-        text: Кастомный текст (None = не менять)
-        image: Кастомный file_id изображения (None = не менять)
-        buttons: Кастомный JSON кнопок (None = не менять)
+        page_key: Page key
+        text: Custom text (None = do not change)
+        image: Custom image file_id (None = do not change)
+        buttons: Custom JSON buttons (None = do not change)
     """
-    # Собираем только переданные поля
+    # We collect only the transmitted fields
     updates = []
     params = []
     if text is not None:
@@ -97,10 +97,10 @@ def update_page_flow(
     hook_names: list[str] | tuple[str, ...] | str | None = None,
 ) -> None:
     """
-    Обновляет page-level guards/hooks для прямых переходов page:<custom_*>
-    и route-переходов на эту страницу.
+    Updates page-level guards/hooks for direct transitions page:<custom_*>
+    and route transitions to this page.
 
-    None означает "не менять поле"; для очистки передавайте [] или '[]'.
+    None means "don't change the field"; to clear, pass [] or '[]'.
     """
     updates = []
     params = []
@@ -133,23 +133,23 @@ def upsert_page_defaults(
     media_type: Optional[str] = None,
 ) -> None:
     """
-    Вставляет или обновляет ТОЛЬКО дефолтные поля страницы.
-    Вызывается ИСКЛЮЧИТЕЛЬНО из миграций!
-    НИКОГДА не трогает *_custom поля.
+    Inserts or updates ONLY default page fields.
+    Called EXCLUSIVELY from migrations!
+    NEVER touches *_custom fields.
 
     Args:
-        page_key: Ключ страницы
-        text: Дефолтный текст (HTML)
-        image: Дефолтный file_id медиа (или None)
-        media_type: Тип дефолтного медиа: photo, video или animation
-        buttons: JSON-строка массива кнопок
+        page_key: Page key
+        text: Default text (HTML)
+        image: Default media file_id (or None)
+        media_type: Default media type: photo, video or animation
+        buttons: JSON string of button array
     """
     normalized_media_type = media_type if media_type in {'photo', 'video', 'animation'} else None
     if image and normalized_media_type is None:
         normalized_media_type = 'photo'
 
     with get_db() as conn:
-        # Пробуем вставить новую запись
+        # Trying to insert a new record
         conn.execute(
             """
             INSERT OR IGNORE INTO pages (page_key, text_default, image_default, media_type_default, buttons_default)
@@ -157,7 +157,7 @@ def upsert_page_defaults(
             """,
             (page_key, text, image, normalized_media_type, buttons)
         )
-        # Обновляем *_default поля (для уже существующих записей)
+        # Update *_default fields (for existing records)
         conn.execute(
             """
             UPDATE pages

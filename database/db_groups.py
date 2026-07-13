@@ -25,10 +25,10 @@ __all__ = [
 
 def get_all_groups() -> List[Dict[str, Any]]:
     """
-    Получает список всех групп тарифов, отсортированных по sort_order.
+    Gets a list of all rate groups sorted by sort_order.
     
     Returns:
-        Список словарей с данными групп
+        List of dictionaries with group data
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -40,13 +40,13 @@ def get_all_groups() -> List[Dict[str, Any]]:
 
 def get_group_by_id(group_id: int) -> Optional[Dict[str, Any]]:
     """
-    Получает группу по ID.
+    Gets a group by ID.
     
     Args:
-        group_id: ID группы
+        group_id: Group ID
         
     Returns:
-        Словарь с данными группы или None
+        Dictionary with group data or None
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -59,17 +59,17 @@ def get_group_by_id(group_id: int) -> Optional[Dict[str, Any]]:
 
 def add_group(name: str) -> int:
     """
-    Добавляет новую группу тарифов.
-    sort_order = максимальный существующий + 1 (но не больше 99).
+    Adds a new tariff group.
+    sort_order = maximum existing + 1 (but not more than 99).
     
     Args:
-        name: Название группы
+        name: Group name
         
     Returns:
-        ID созданной группы
+        ID of the created group
     """
     with get_db() as conn:
-        # Определяем следующий sort_order
+        # Define the next sort_order
         cursor = conn.execute("SELECT MAX(sort_order) FROM tariff_groups")
         max_order = cursor.fetchone()[0] or 0
         new_order = min(max_order + 1, 99)
@@ -84,14 +84,14 @@ def add_group(name: str) -> int:
 
 def update_group_name(group_id: int, name: str) -> bool:
     """
-    Переименовывает группу тарифов.
+    Renames a tariff group.
     
     Args:
-        group_id: ID группы
-        name: Новое название
+        group_id: Group ID
+        name: New name
         
     Returns:
-        True если обновление успешно
+        True if update is successful
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -106,21 +106,21 @@ def update_group_name(group_id: int, name: str) -> bool:
 
 def delete_group(group_id: int) -> bool:
     """
-    Удаляет группу тарифов. Группу id=1 («Основная») удалить нельзя.
-    Тарифы и серверы из удалённой группы переносятся в группу id=1.
+    Deletes a tariff group. Group id=1 (“Main”) cannot be deleted.
+    Tariffs and servers from the deleted group are transferred to group id=1.
     
     Args:
-        group_id: ID группы для удаления
+        group_id: Group ID to delete
         
     Returns:
-        True если удаление успешно, False если группа не найдена или id=1
+        True if deletion is successful, False if group not found or id=1
     """
     if group_id == 1:
         logger.warning("Попытка удалить группу «Основная» (id=1) — запрещено")
         return False
     
     with get_db() as conn:
-        # Переносим тарифы и серверы в «Основную»
+        # We transfer tariffs and servers to “Main”
         conn.execute("UPDATE tariffs SET group_id = 1 WHERE group_id = ?", (group_id,))
         conn.execute("""
             INSERT OR IGNORE INTO server_groups (server_id, group_id)
@@ -135,17 +135,17 @@ def delete_group(group_id: int) -> bool:
 
 def move_group_up(group_id: int) -> bool:
     """
-    Поднимает группу вверх в сортировке (swap с предыдущей).
-    Группа с минимальным sort_order при нажатии ⬆️ уходит в конец (получает макс. sort_order).
+    Moves a group up in sorting (swap from the previous one).
+    When you press ⬆️, the group with the minimum sort_order goes to the end (receives the maximum sort_order).
     
     Args:
-        group_id: ID группы для перемещения
+        group_id: ID of the group to move
         
     Returns:
-        True если перемещение выполнено
+        True if the move is complete
     """
     with get_db() as conn:
-        # Получаем текущую группу
+        # Getting the current group
         cursor = conn.execute("SELECT id, sort_order FROM tariff_groups WHERE id = ?", (group_id,))
         current = cursor.fetchone()
         if not current:
@@ -153,7 +153,7 @@ def move_group_up(group_id: int) -> bool:
         
         current_order = current['sort_order']
         
-        # Ищем предыдущую группу (ближайшую с sort_order < текущего)
+        # We are looking for the previous group (the closest one with sort_order < current)
         cursor = conn.execute("""
             SELECT id, sort_order FROM tariff_groups
             WHERE sort_order < ?
@@ -163,12 +163,12 @@ def move_group_up(group_id: int) -> bool:
         prev_group = cursor.fetchone()
         
         if prev_group:
-            # Swap sort_order между текущей и предыдущей
+            # Swap sort_order between current and previous
             conn.execute("UPDATE tariff_groups SET sort_order = ? WHERE id = ?", (prev_group['sort_order'], group_id))
             conn.execute("UPDATE tariff_groups SET sort_order = ? WHERE id = ?", (current_order, prev_group['id']))
             logger.info(f"Группа ID {group_id}: swap sort_order {current_order} <-> {prev_group['sort_order']}")
         else:
-            # Текущая группа уже первая — перемещаем в конец
+            # The current group is already the first - move it to the end
             cursor = conn.execute("SELECT MAX(sort_order) FROM tariff_groups")
             max_order = cursor.fetchone()[0] or 1
             if max_order != current_order:
@@ -179,10 +179,10 @@ def move_group_up(group_id: int) -> bool:
 
 def get_groups_count() -> int:
     """
-    Возвращает количество групп тарифов.
+    Returns the number of tariff groups.
     
     Returns:
-        Число групп
+        Number of groups
     """
     with get_db() as conn:
         cursor = conn.execute("SELECT COUNT(*) FROM tariff_groups")
@@ -190,13 +190,13 @@ def get_groups_count() -> int:
 
 def get_tariffs_by_group(group_id: int) -> List[Dict[str, Any]]:
     """
-    Получает активные тарифы указанной группы.
+    Retrieves active tariffs of the specified group.
     
     Args:
-        group_id: ID группы
+        group_id: Group ID
         
     Returns:
-        Список тарифов группы
+        List of group rates
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -210,7 +210,7 @@ def get_tariffs_by_group(group_id: int) -> List[Dict[str, Any]]:
 
 def get_active_servers_by_group(group_id: int) -> List[Dict[str, Any]]:
     """
-    Получает активные серверы указанной группы (many-to-many через server_groups).
+    Gets the active servers of the specified group (many-to-many via server_groups).
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -226,7 +226,7 @@ def get_active_servers_by_group(group_id: int) -> List[Dict[str, Any]]:
 
 def get_server_group_ids(server_id: int) -> List[int]:
     """
-    Возвращает список ID групп, в которые входит сервер.
+    Returns a list of group IDs that the server is a member of.
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -237,11 +237,11 @@ def get_server_group_ids(server_id: int) -> List[int]:
 
 def toggle_server_group(server_id: int, group_id: int) -> bool:
     """
-    Добавляет или удаляет сервер из группы (toggle).
-    Нельзя удалить из последней группы — сервер должен быть хотя бы в одной.
+    Adds or removes a server from a group (toggle).
+    You cannot remove from the last group - the server must be in at least one.
 
     Returns:
-        True если сервер теперь входит в группу, False если удалён
+        True if the server is now part of the group, False if deleted
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -251,14 +251,14 @@ def toggle_server_group(server_id: int, group_id: int) -> bool:
         exists = cursor.fetchone() is not None
 
         if exists:
-            # Нельзя удалять последнюю группу
+            # You can't delete the last group
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM server_groups WHERE server_id = ?",
                 (server_id,)
             )
             if cursor.fetchone()[0] <= 1:
                 logger.warning(f"Сервер ID {server_id}: нельзя удалить последнюю группу {group_id}")
-                return True  # Остаётся в группе
+                return True  # Stays in the group
             conn.execute(
                 "DELETE FROM server_groups WHERE server_id = ? AND group_id = ?",
                 (server_id, group_id)
@@ -275,13 +275,13 @@ def toggle_server_group(server_id: int, group_id: int) -> bool:
 
 def get_tariff_group_id(tariff_id: int) -> int:
     """
-    Получает group_id тарифа.
+    Gets the group_id of the tariff.
     
     Args:
-        tariff_id: ID тарифа
+        tariff_id: Tariff ID
         
     Returns:
-        ID группы тарифа (1 по умолчанию если не найден)
+        Fare group ID (1 by default if not found)
     """
     with get_db() as conn:
         cursor = conn.execute("SELECT group_id FROM tariffs WHERE id = ?", (tariff_id,))

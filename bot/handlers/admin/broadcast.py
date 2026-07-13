@@ -1,9 +1,9 @@
 """
-Обработчики раздела «Рассылка» в админ-панели.
+Handlers for the “Mailmail” section in the admin panel.
 
-Функционал:
-- Рассылка сообщений всем пользователям с фильтрами
-- Настройка автоуведомлений об истечении ключей
+Functional:
+- Sending messages to all users with filters
+- Setting up auto-notifications about key expiration
 """
 import json
 import asyncio
@@ -47,7 +47,7 @@ _broadcast_state_lock = asyncio.Lock()
 
 
 # ============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# AUXILIARY FUNCTIONS
 # ============================================================================
 
 
@@ -55,10 +55,10 @@ _broadcast_state_lock = asyncio.Lock()
 
 def get_broadcast_message() -> dict | None:
     """
-    Получает сохранённое сообщение для рассылки.
+    Receives a saved message for distribution.
     
     Returns:
-        Словарь с ключами 'text' и 'photo_file_id' или None
+        Dictionary with keys 'text' and 'photo_file_id' or None
     """
     msg_json = get_setting('broadcast_message')
     if msg_json:
@@ -70,56 +70,56 @@ def get_broadcast_message() -> dict | None:
 
 
 def save_broadcast_message(text: str, photo_file_id: str | None = None) -> None:
-    """Сохраняет сообщение для рассылки."""
+    """Saves the message for distribution."""
     data = {'text': text, 'photo_file_id': photo_file_id}
     set_setting('broadcast_message', json.dumps(data, ensure_ascii=False))
 
 
 def render_broadcast_message_text(text: str, telegram_id: int | None) -> str:
-    """Рендерит текст рассылки в event-контексте конкретного получателя."""
+    """Renders the mailing text in the event context of a specific recipient."""
     context = build_user_event_context(telegram_id)
     return render_event_placeholders(text, 'broadcast', context, mode='html')
 
 
 def is_broadcast_in_progress() -> bool:
-    """Проверяет, идёт ли рассылка сейчас."""
+    """Checks whether the mailing is currently in progress."""
     return get_setting(BROADCAST_IN_PROGRESS_KEY, '0') == '1'
 
 
 def set_broadcast_in_progress(value: bool) -> None:
-    """Устанавливает флаг рассылки."""
+    """Sets the broadcast flag."""
     set_setting(BROADCAST_IN_PROGRESS_KEY, '1' if value else '0')
 
 
 def is_broadcast_stop_requested() -> bool:
-    """Проверяет, запросил ли администратор остановку текущей рассылки."""
+    """Checks whether the administrator has requested to stop the current distribution."""
     return get_setting(BROADCAST_STOP_REQUESTED_KEY, '0') == '1'
 
 
 def set_broadcast_stop_requested(value: bool) -> None:
-    """Устанавливает флаг мягкой остановки рассылки."""
+    """Sets the soft stop flag for broadcasting."""
     set_setting(BROADCAST_STOP_REQUESTED_KEY, '1' if value else '0')
 
 
 def is_broadcast_runtime_active() -> bool:
-    """Возвращает True, если цикл рассылки жив в текущем процессе бота."""
+    """Returns True if the mailing loop is alive in the current bot process."""
     return _broadcast_runtime_active
 
 
 def _set_broadcast_runtime_active(value: bool) -> None:
-    """Обновляет in-memory признак живой рассылки."""
+    """Updates the in-memory flag of live mailing."""
     global _broadcast_runtime_active
     _broadcast_runtime_active = value
 
 
 def reset_broadcast_state() -> None:
-    """Сбрасывает все флаги состояния рассылки."""
+    """Resets all distribution status flags."""
     set_broadcast_in_progress(False)
     set_broadcast_stop_requested(False)
 
 
 async def try_mark_broadcast_started() -> bool:
-    """Атомарно резервирует право на запуск рассылки."""
+    """Atomically reserves the right to launch a newsletter."""
     async with _broadcast_state_lock:
         if is_broadcast_runtime_active() or is_broadcast_in_progress():
             return False
@@ -131,7 +131,7 @@ async def try_mark_broadcast_started() -> bool:
 
 
 async def finish_broadcast_state() -> None:
-    """Снимает runtime-признак и сбрасывает флаги после завершения рассылки."""
+    """Removes the runtime flag and resets the flags after the broadcast is completed."""
     async with _broadcast_state_lock:
         _set_broadcast_runtime_active(False)
         reset_broadcast_state()
@@ -139,10 +139,10 @@ async def finish_broadcast_state() -> None:
 
 async def request_broadcast_stop_or_reset() -> str:
     """
-    Запрашивает остановку живой рассылки или сбрасывает зависший DB-флаг.
+    Requests to stop live broadcasting or resets a stuck DB flag.
 
     Returns:
-        Один из BROADCAST_STOP_REQUESTED, BROADCAST_STALE_RESET, BROADCAST_IDLE.
+        One of BROADCAST_STOP_REQUESTED, BROADCAST_STALE_RESET, BROADCAST_IDLE.
     """
     async with _broadcast_state_lock:
         if is_broadcast_runtime_active():
@@ -157,7 +157,7 @@ async def request_broadcast_stop_or_reset() -> str:
 
 
 def get_broadcast_menu_text(in_progress: bool = False) -> str:
-    """Формирует текст главного экрана рассылки."""
+    """Generates the text of the main mailing screen."""
     text = (
         "📢 <b>Рассылка</b>\n\n"
         "Отправьте сообщение всем пользователям бота.\n\n"
@@ -177,7 +177,7 @@ async def render_broadcast_menu(
     current_filter: str | None = None,
     force_new: bool = False,
 ) -> None:
-    """Показывает актуальный главный экран рассылки."""
+    """Shows the current mailing main screen."""
     msg_data = get_broadcast_message()
     has_message = msg_data is not None and msg_data.get('text')
     current_filter = current_filter or get_setting('broadcast_filter', 'all')
@@ -193,12 +193,12 @@ async def render_broadcast_menu(
 
 
 # ============================================================================
-# ГЛАВНЫЙ ЭКРАН РАССЫЛКИ
+# MAIN NEWSLETTER SCREEN
 # ============================================================================
 
 @router.callback_query(F.data == "admin_broadcast")
 async def show_broadcast_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает главный экран раздела рассылки."""
+    """Shows the main screen of the mailing section."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -210,7 +210,7 @@ async def show_broadcast_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "noop")
 async def noop_callback(callback: CallbackQuery):
-    """Пустой обработчик для разделителя."""
+    """An empty handler for the separator."""
     if not is_admin(callback.from_user.id):
         await callback.answer()
         return
@@ -218,12 +218,12 @@ async def noop_callback(callback: CallbackQuery):
 
 
 # ============================================================================
-# РЕДАКТИРОВАНИЕ СООБЩЕНИЯ
+# EDITING A MESSAGE
 # ============================================================================
 
 @router.callback_query(F.data == "broadcast_edit_message")
 async def broadcast_edit_message(callback: CallbackQuery, state: FSMContext):
-    """Начинает редактирование сообщения для рассылки."""
+    """Starts editing the message for distribution."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -248,7 +248,7 @@ async def broadcast_edit_message(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.broadcast_waiting_message)
 async def broadcast_save_message(message: Message, state: FSMContext):
-    """Сохраняет сообщение для рассылки."""
+    """Saves the message for distribution."""
     if not is_admin(message.from_user.id):
         return
     
@@ -276,19 +276,19 @@ async def broadcast_save_message(message: Message, state: FSMContext):
         "Теперь можете посмотреть превью или начать рассылку."
     )
     
-    # Возвращаемся в меню рассылки
+    # Returning to the mailing menu
     await state.set_state(AdminStates.broadcast_menu)
     
     await render_broadcast_menu(message, force_new=True)
 
 
 # ============================================================================
-# ПРЕВЬЮ СООБЩЕНИЯ
+# PREVIEW MESSAGE
 # ============================================================================
 
 @router.callback_query(F.data == "broadcast_preview")
 async def broadcast_preview(callback: CallbackQuery):
-    """Показывает превью сообщения для рассылки."""
+    """Shows a preview of the message for the newsletter."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -306,7 +306,7 @@ async def broadcast_preview(callback: CallbackQuery):
         callback.from_user.id,
     )
 
-    # Отправляем превью как отдельное сообщение
+    # Send the preview as a separate message
     if msg_data.get('photo_file_id'):
         await safe_edit_or_send(callback.message,
             photo=msg_data['photo_file_id'],
@@ -321,12 +321,12 @@ async def broadcast_preview(callback: CallbackQuery):
 
 
 # ============================================================================
-# ФИЛЬТРЫ
+# FILTERS
 # ============================================================================
 
 @router.callback_query(F.data.startswith("broadcast_filter:"))
 async def broadcast_set_filter(callback: CallbackQuery):
-    """Устанавливает фильтр получателей."""
+    """Sets the recipient filter."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -344,22 +344,22 @@ async def broadcast_set_filter(callback: CallbackQuery):
 
 
 # ============================================================================
-# ЗАПУСК РАССЫЛКИ
+# LAUNCH NEWSLETTER
 # ============================================================================
 
 @router.callback_query(F.data == "broadcast_start")
 async def broadcast_start(callback: CallbackQuery):
-    """Показывает подтверждение рассылки."""
+    """Shows confirmation of mailing."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
-    # Проверяем, не идёт ли уже рассылка
+    # Checking to see if the mailing is already in progress
     if is_broadcast_in_progress():
         await callback.answer("⏳ Рассылка уже идёт!", show_alert=True)
         return
     
-    # Проверяем наличие сообщения
+    # Checking for a message
     msg_data = get_broadcast_message()
     if not msg_data or not msg_data.get('text'):
         await callback.answer("❌ Сначала задайте сообщение!", show_alert=True)
@@ -390,7 +390,7 @@ async def broadcast_start(callback: CallbackQuery):
 
 @router.callback_query(F.data == "broadcast_in_progress")
 async def broadcast_in_progress_callback(callback: CallbackQuery):
-    """Уведомление о том, что рассылка уже идёт."""
+    """Notification that the mailing is already underway."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -399,7 +399,7 @@ async def broadcast_in_progress_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data == "broadcast_stop")
 async def broadcast_stop(callback: CallbackQuery):
-    """Останавливает текущую рассылку или сбрасывает зависший флаг."""
+    """Stops the current broadcast or resets a stuck flag."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -426,7 +426,7 @@ async def broadcast_stop(callback: CallbackQuery):
 
 @router.callback_query(F.data == "broadcast_confirm")
 async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
-    """Запускает рассылку."""
+    """Launches a newsletter."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -508,7 +508,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
 
             processed = sent + blocked + failed
 
-            # Обновляем прогресс каждые 10 обработанных получателей.
+            # We update progress every 10 processed recipients.
             if processed % 10 == 0 or processed == total:
                 try:
                     await safe_edit_or_send(
@@ -520,7 +520,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                         reply_markup=broadcast_stop_kb(),
                     )
                 except TelegramBadRequest:
-                    pass  # Сообщение не изменилось
+                    pass  # The message has not changed
 
             if processed < total and is_broadcast_stop_requested():
                 stopped = True
@@ -582,12 +582,12 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
 
 
 # ============================================================================
-# НАСТРОЙКИ АВТОУВЕДОМЛЕНИЙ
+# AUTO NOTIFICATION SETTINGS
 # ============================================================================
 
 @router.callback_query(F.data == "broadcast_notifications")
 async def broadcast_notifications(callback: CallbackQuery, state: FSMContext):
-    """Показывает настройки автоуведомлений."""
+    """Shows auto notification settings."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -610,7 +610,7 @@ async def broadcast_notifications(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "broadcast_notify_days")
 async def broadcast_notify_days(callback: CallbackQuery, state: FSMContext):
-    """Начинает ввод количества дней."""
+    """Begins entering the number of days."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -634,7 +634,7 @@ async def broadcast_notify_days(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.broadcast_waiting_notify_days)
 async def broadcast_save_notify_days(message: Message, state: FSMContext):
-    """Сохраняет количество дней для уведомления."""
+    """Stores the number of days for notification."""
     if not is_admin(message.from_user.id):
         return
     
@@ -659,7 +659,7 @@ async def broadcast_save_notify_days(message: Message, state: FSMContext):
         f"✅ Теперь уведомления будут отправляться за <b>{days}</b> дней до истечения."
     )
     
-    # Возвращаемся в настройки уведомлений
+    # Returning to notification settings
     await state.set_state(AdminStates.broadcast_menu)
     
     text = (
@@ -678,7 +678,7 @@ async def broadcast_save_notify_days(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "broadcast_notify_text")
 async def broadcast_notify_text(callback: CallbackQuery, state: FSMContext):
-    """Показывает/редактирует текст уведомления через универсальный редактор."""
+    """Shows/edits notification text through a universal editor."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return

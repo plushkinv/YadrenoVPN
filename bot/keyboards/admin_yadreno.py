@@ -1,4 +1,4 @@
-"""Клавиатуры раздела Yadreno Admin."""
+"""Keyboards of the Yadreno Admin section."""
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -6,7 +6,7 @@ from .admin_misc import back_button, home_button
 
 
 def yadreno_admin_no_key_kb() -> InlineKeyboardMarkup:
-    """Клавиатура экрана, где api_key ещё не задан."""
+    """Screen keyboard where api_key has not yet been set."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -26,7 +26,7 @@ def yadreno_admin_no_key_kb() -> InlineKeyboardMarkup:
 
 
 def yadreno_admin_chat_kb(topic_id: int = 0) -> InlineKeyboardMarkup:
-    """Входная клавиатура чата с агентом."""
+    """Agent chat input keyboard."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -43,7 +43,7 @@ def yadreno_admin_chat_kb(topic_id: int = 0) -> InlineKeyboardMarkup:
 
 
 def yadreno_admin_agent_kb(topic_id: int = 0) -> InlineKeyboardMarkup:
-    """Клавиатура сообщений агента."""
+    """Agent message keyboard."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -59,7 +59,7 @@ def yadreno_admin_agent_kb(topic_id: int = 0) -> InlineKeyboardMarkup:
 
 
 def yadreno_admin_cancel_key_kb() -> InlineKeyboardMarkup:
-    """Клавиатура отмены ввода api_key."""
+    """Keyboard to cancel input api_key."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(

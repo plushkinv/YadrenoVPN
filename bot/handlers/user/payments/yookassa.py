@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-# Конфигурация провайдера ЮКасса
+# YuKassa provider configuration
 _YK_TITLE = '📱 <b>ЮКасса</b>'
 _YK_TYPE = 'yookassa_qr'
 _YK_ERROR = 'ЮКасса'
@@ -30,12 +30,12 @@ _YK_LOADING = '⏳ Создаём оплату через ЮКассу...'
 
 
 # ============================================================================
-# TG PAYMENTS (историческое внутреннее имя cards)
+# TG PAYMENTS (historical internal name cards)
 # ============================================================================
 
 @router.callback_query(F.data.startswith('pay_cards'))
 async def pay_cards_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты через TG payments (новый ключ)."""
+    """Selecting a tariff for payment via TG payments (new key)."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -65,7 +65,7 @@ async def pay_cards_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('cards_pay:'))
 async def pay_cards_invoice(callback: CallbackQuery, state: FSMContext):
-    """Создание инвойса для оплаты через TG payments (новый ключ)."""
+    """Creating an invoice for payment via TG payments (new key)."""
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, get_user_internal_id, create_pending_order, update_order_tariff, get_setting
     parts = callback.data.split(':')
@@ -182,7 +182,7 @@ async def pay_cards_invoice(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('renew_cards_tariff:'))
 async def renew_cards_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для продления (Картой)."""
+    """Selecting a tariff for renewal (by Card)."""
     from database.requests import get_key_details_for_user, get_all_tariffs
     from bot.keyboards.user import renew_tariff_select_kb
     parts = callback.data.split(':')
@@ -218,7 +218,7 @@ async def renew_cards_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('renew_pay_cards:'))
 async def renew_cards_invoice(callback: CallbackQuery, state: FSMContext):
-    """Инвойс для продления через TG payments."""
+    """Invoice for renewal via TG payments."""
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, get_user_internal_id, create_pending_order, get_key_details_for_user, update_order_tariff, get_setting
     parts = callback.data.split(':')
@@ -335,12 +335,12 @@ async def renew_cards_invoice(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# ЮКАССА (прямой API, refactored → общие функции base.py)
+# YUKASSA (direct API, refactored → common base.py functions)
 # ============================================================================
 
 @router.callback_query(F.data == 'pay_qr')
 async def pay_qr_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты через ЮКассу (новый ключ)."""
+    """Selecting a tariff for payment via YuKassa (new key)."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -369,7 +369,7 @@ async def pay_qr_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('qr_pay:'))
 async def qr_pay_create(callback: CallbackQuery, state: FSMContext):
-    """Создаёт QR-платёж ЮКасса для нового ключа и отправляет QR-фото."""
+    """Creates a YCass QR payment for a new key and sends a QR photo."""
     from database.requests import get_tariff_by_id, save_yookassa_payment_id
     from bot.services.billing import create_yookassa_qr_payment
 
@@ -408,10 +408,10 @@ async def qr_pay_create(callback: CallbackQuery, state: FSMContext):
 
 async def _yookassa_referral_amount(order: dict, state: FSMContext) -> int:
     """
-    Расчёт реферального вознаграждения для ЮКассы.
+    Calculation of referral reward for YuKassa.
 
-    При частичной оплате (баланс + QR) — берём remaining_cents из FSM state,
-    иначе — стандартная цена тарифа.
+    For partial payment (balance + QR) - take remaining_cents from FSM state,
+    otherwise - the standard tariff price.
     """
     state_data = await state.get_data()
     remaining_cents = state_data.get('remaining_cents', 0)
@@ -426,7 +426,7 @@ async def _yookassa_referral_amount(order: dict, state: FSMContext) -> int:
 
 @router.callback_query(F.data.startswith('check_yookassa_qr:'))
 async def check_yookassa_payment(callback: CallbackQuery, state: FSMContext):
-    """Проверяет статус QR-платежа ЮКасса по нажатию «✅ Я оплатил»."""
+    """Checks the status of the YuKass QR payment by clicking “✅ I paid.”"""
     await _run_yookassa_check(
         callback.message, state,
         order_id=callback.data.split(':', 1)[1],
@@ -438,7 +438,7 @@ async def check_yookassa_payment(callback: CallbackQuery, state: FSMContext):
 async def _run_yookassa_check(message, state, order_id: str,
                               telegram_id: int, callback=None) -> None:
     """
-    Общая проверка ЮКасса QR-платежа для кнопки «Я оплатил» и deep-link возврата.
+    General check of YuKass QR payment for the “I paid” button and deep-link return.
     """
     from bot.services.billing import check_yookassa_payment_status
 
@@ -458,7 +458,7 @@ async def _run_yookassa_check(message, state, order_id: str,
 
 @router.callback_query(F.data.startswith('renew_qr_tariff:'))
 async def renew_qr_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты через ЮКассу при продлении ключа."""
+    """Selecting a tariff for payment through YuKassa when renewing the key."""
     from database.requests import get_key_details_for_user
     from bot.keyboards.user import renew_tariff_select_kb
     from bot.utils.groups import get_tariffs_for_renewal
@@ -492,7 +492,7 @@ async def renew_qr_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('renew_pay_qr:'))
 async def renew_qr_create(callback: CallbackQuery, state: FSMContext):
-    """Создаёт QR-платёж ЮКасса для продления ключа."""
+    """Creates a YCass QR payment to renew the key."""
     from database.requests import get_tariff_by_id, get_key_details_for_user, save_yookassa_payment_id
     from bot.services.billing import create_yookassa_qr_payment
 

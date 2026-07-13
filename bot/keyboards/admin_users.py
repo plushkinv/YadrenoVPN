@@ -8,10 +8,10 @@ USERS_FILTERS = {'all': '👤 Все', 'active': '✅ Активные', 'inacti
 
 def users_menu_kb(stats: Dict[str, int]) -> InlineKeyboardMarkup:
     """
-    Главное меню раздела пользователей.
+    Main menu of the users section.
     
     Args:
-        stats: Статистика пользователей по фильтрам
+        stats: User statistics by filters
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=f"📋 Все пользователи ({stats.get('total', 0)})", callback_data='admin_users_list'))
@@ -24,13 +24,13 @@ def users_menu_kb(stats: Dict[str, int]) -> InlineKeyboardMarkup:
 
 def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, current_filter: str='all') -> InlineKeyboardMarkup:
     """
-    Клавиатура списка пользователей с пагинацией и фильтрами.
+    User list keyboard with pagination and filters.
     
     Args:
-        users: Список пользователей на текущей странице
-        page: Номер текущей страницы (начиная с 0)
-        total_pages: Общее количество страниц
-        current_filter: Текущий фильтр
+        users: List of users on the current page
+        page: Current page number (starting from 0)
+        total_pages: Total number of pages
+        current_filter: Current filter
     """
     builder = InlineKeyboardBuilder()
     filter_buttons = []
@@ -60,14 +60,14 @@ def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, curr
 
 def user_view_kb(telegram_id: int, vpn_keys: List[Dict[str, Any]], is_banned: bool, balance_cents: int=0, referral_coefficient: float=1.0) -> InlineKeyboardMarkup:
     """
-    Клавиатура просмотра пользователя.
+    User view keyboard.
     
     Args:
-        telegram_id: Telegram ID пользователя
-        vpn_keys: Список VPN-ключей пользователя
-        is_banned: Забанен ли пользователь
-        balance_cents: Баланс в копейках
-        referral_coefficient: Реферальный коэффициент
+        telegram_id: Telegram user ID
+        vpn_keys: List of user's VPN keys
+        is_banned: Whether the user is banned
+        balance_cents: Balance in kopecks
+        referral_coefficient: Referral coefficient
     """
     builder = InlineKeyboardBuilder()
     for key in vpn_keys:
@@ -101,11 +101,11 @@ def user_view_kb(telegram_id: int, vpn_keys: List[Dict[str, Any]], is_banned: bo
 
 def user_ban_confirm_kb(telegram_id: int, is_banned: bool) -> InlineKeyboardMarkup:
     """
-    Клавиатура подтверждения бана/разбана.
+    Ban/unban confirmation keyboard.
     
     Args:
-        telegram_id: Telegram ID пользователя
-        is_banned: Текущий статус (True = забанен)
+        telegram_id: Telegram user ID
+        is_banned: Current status (True = banned)
     """
     builder = InlineKeyboardBuilder()
     if is_banned:
@@ -118,11 +118,11 @@ def user_ban_confirm_kb(telegram_id: int, is_banned: bool) -> InlineKeyboardMark
 
 def key_view_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура управления VPN-ключом.
+    VPN key management keyboard.
     
     Args:
-        key_id: ID ключа
-        user_telegram_id: Telegram ID владельца (для возврата)
+        key_id: Key ID
+        user_telegram_id: Telegram owner ID (for return)
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='📅 Продлить', callback_data=f'admin_key_extend:{key_id}'))
@@ -134,10 +134,10 @@ def key_view_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMarkup:
 
 def add_key_server_kb(servers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора сервера для нового ключа.
+    Server selection keyboard for a new key.
     
     Args:
-        servers: Список активных серверов
+        servers: List of active servers
     """
     builder = InlineKeyboardBuilder()
     for server in servers:
@@ -147,10 +147,10 @@ def add_key_server_kb(servers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
 
 def add_key_inbound_kb(inbounds: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора inbound для нового ключа.
+    Keyboard selection inbound for new key.
     
     Args:
-        inbounds: Список inbound-подключений
+        inbounds: List of inbound connections
     """
     builder = InlineKeyboardBuilder()
     for inbound in inbounds:
@@ -163,10 +163,10 @@ def add_key_inbound_kb(inbounds: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
 
 def add_key_step_kb(step: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура для шагов добавления ключа (трафик, дни).
+    Keyboard for steps to add a key (traffic, days).
     
     Args:
-        step: Текущий шаг
+        step: Current step
     """
     builder = InlineKeyboardBuilder()
     buttons = []
@@ -177,33 +177,33 @@ def add_key_step_kb(step: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def add_key_confirm_kb() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения создания ключа."""
+    """Keyboard confirmation for key creation."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✅ Создать ключ', callback_data='admin_add_key_confirm'))
     builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_add_key_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_user_add_key_cancel'))
     return builder.as_markup()
 
 def users_input_cancel_kb() -> InlineKeyboardMarkup:
-    """Клавиатура отмены ввода."""
+    """Cancel keyboard."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_users'))
     return builder.as_markup()
 
 def key_action_cancel_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура отмены действия с ключом."""
+    """Undo keypad with key."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin_key_view:{key_id}'))
     return builder.as_markup()
 
 def key_delete_confirm_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения удаления ключа."""
+    """Keypad to confirm key deletion."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🗑️ Да, удалить', callback_data=f'admin_key_delete_confirm:{key_id}'))
     builder.row(InlineKeyboardButton(text='❌ Оставить', callback_data=f'admin_key_view:{key_id}'))
     return builder.as_markup()
 
 def sync_deleted_menu_kb() -> InlineKeyboardMarkup:
-    """Подменю синхронизации удалённых ключей."""
+    """Submenu for synchronizing remote keys."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🧹 Очистить панель', callback_data='admin_sync_deleted_panel_ask'))
     builder.row(InlineKeyboardButton(text='🗑️ Очистить базу', callback_data='admin_sync_deleted_db_ask'))
@@ -211,38 +211,38 @@ def sync_deleted_menu_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def sync_deleted_panel_confirm_kb() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения очистки панели."""
+    """Panel clear confirmation keypad."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🧹 Да, очистить панель', callback_data='admin_sync_deleted_panel_confirm'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_deleted_db_confirm_kb() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения запуска сканирования базы."""
+    """Keyboard confirmation to start scanning the database."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🔍 Начать сканирование', callback_data='admin_sync_deleted_db_confirm'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_deleted_db_report_kb(report: Dict[str, Any]) -> InlineKeyboardMarkup:
-    """Клавиатура отчёта сканирования БД — кнопка для каждой категории проблемных ключей."""
+    """Database scan report keyboard - a button for each category of problematic keys."""
     builder = InlineKeyboardBuilder()
 
-    # Категория 1: ключи без сервера
+    # Category 1: Serverless keys
     if report.get('null_total', 0) > 0:
         builder.row(InlineKeyboardButton(
             text=f"🗑️ Без сервера ({report['null_total']})",
             callback_data='admin_sync_db_orphans_ask'
         ))
 
-    # Категория 2: удалённые серверы
+    # Category 2: remote servers
     for sid, count in report.get('deleted_srv_keys', {}).items():
         builder.row(InlineKeyboardButton(
             text=f"👻 Удалённый сервер ID {sid} ({count})",
             callback_data=f'admin_sync_db_gone_ask:{sid}'
         ))
 
-    # Категории 3-5: по серверам
+    # Categories 3-5: by server
     for r in report.get('server_results', []):
         if r['status'] == 'reachable' and r.get('missing_count', 0) > 0:
             builder.row(InlineKeyboardButton(
@@ -261,28 +261,28 @@ def sync_deleted_db_report_kb(report: Dict[str, Any]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def sync_db_orphans_confirm_kb() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения удаления ключей без сервера."""
+    """Keyboard confirmation for deleting keys without a server."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🗑️ Да, удалить', callback_data='admin_sync_db_orphans_confirm'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_db_gone_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения удаления ключей удалённого сервера."""
+    """Keyboard for confirming the deletion of remote server keys."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🗑️ Да, удалить', callback_data=f'admin_sync_db_gone_confirm:{server_id}'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_db_missing_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения удаления ключей, отсутствующих на панели."""
+    """Keyboard to confirm deletion of keys missing from the panel."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🗑️ Да, удалить', callback_data=f'admin_sync_db_missing_confirm:{server_id}'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_db_unreach_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения удаления ключей недоступного сервера."""
+    """Confirmation keyboard for deleting unavailable server keys."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🚨 ДА, УДАЛИТЬ КЛЮЧИ', callback_data=f'admin_sync_db_unreach_confirm:{server_id}'))
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))

@@ -1,5 +1,5 @@
 """
-Обработчики удаления ключей и синхронизации удалённых ключей (админка).
+Handlers for deleting keys and synchronizing remote keys (admin panel).
 """
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
@@ -29,11 +29,11 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-# ──────────────────────────── Удаление одного ключа ────────────────────────────
+# Removing one key ────────────────────────────
 
 @router.callback_query(F.data.startswith('admin_key_delete_ask:'))
 async def on_key_delete_ask(callback: CallbackQuery):
-    """Подтверждение удаления отдельного ключа."""
+    """Confirmation of deletion of an individual key."""
     key_id = int(callback.data.split(':')[1])
     key = get_vpn_key_by_id(key_id)
 
@@ -54,7 +54,7 @@ async def on_key_delete_ask(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('admin_key_delete_confirm:'))
 async def on_key_delete_confirm(callback: CallbackQuery):
-    """Удаление ключа: сначала из БД, потом с панели."""
+    """Deleting a key: first from the database, then from the panel."""
     key_id = int(callback.data.split(':')[1])
     key = get_vpn_key_by_id(key_id)
 
@@ -64,17 +64,17 @@ async def on_key_delete_confirm(callback: CallbackQuery):
 
     user_telegram_id = key.get('telegram_id', 0)
 
-    # 1. Сначала удаляем из БД — это главный источник правды
+    # 1. First we remove it from the database - this is the main source of truth
     delete_vpn_key(key_id)
     logger.info(f"Ключ #{key_id} удалён из БД (админ)")
 
-    # 2. Затем пытаемся удалить с панели, если ключ был привязан
+    # 2. Then we try to remove it from the panel if the key has been linked
     panel_deleted = await _delete_key_from_panel(key)
 
     status = "✅ Ключ удалён из БД и с панели" if panel_deleted else "✅ Ключ удалён из БД"
     await callback.answer(status, show_alert=True)
 
-    # Возвращаемся в профиль пользователя
+    # Returning to the user profile
     if user_telegram_id:
         from database.requests import get_user_by_telegram_id
         user = get_user_by_telegram_id(user_telegram_id)
@@ -93,7 +93,7 @@ async def on_key_delete_confirm(callback: CallbackQuery):
             )
             return
 
-    # Фолбэк — меню пользователей
+    # Fallback - user menu
     stats = get_users_stats()
     await safe_edit_or_send(
         callback.message,
@@ -103,7 +103,7 @@ async def on_key_delete_confirm(callback: CallbackQuery):
 
 
 async def _delete_key_from_panel(key: dict) -> bool:
-    """Удаляет ключ с панели, учитывая subscription-ключи во всех inbound."""
+    """Removes a key from the panel, taking into account subscription keys in all inbound."""
     key_id = key.get('id')
     if not (key.get('server_active') and key.get('host')):
         return False
@@ -139,11 +139,11 @@ async def _delete_key_from_panel(key: dict) -> bool:
         return False
 
 
-# ──────────────────── Синхронизация удалённых ключей ────────────────────────
+# ──────────────────── Synchronizing remote keys ────────────────────────
 
 @router.callback_query(F.data == 'admin_sync_deleted_menu')
 async def on_sync_deleted_menu(callback: CallbackQuery):
-    """Подменю синхронизации удаленных ключей."""
+    """Submenu for synchronizing remote keys."""
     await safe_edit_or_send(
         callback.message,
         "🗑️ <b>Синхронизация удалённых ключей</b>\n\n"
@@ -156,11 +156,11 @@ async def on_sync_deleted_menu(callback: CallbackQuery):
     await callback.answer()
 
 
-# ──────────────── Очистка панели (удалить сирот с серверов) ─────────────────
+# ──────────────── Cleaning the panel (remove orphans from servers) ─────────────────
 
 @router.callback_query(F.data == 'admin_sync_deleted_panel_ask')
 async def on_sync_deleted_panel_ask(callback: CallbackQuery):
-    """Спрашиваем подтверждение на очистку панели."""
+    """We ask for confirmation to clean the panel."""
     await safe_edit_or_send(
         callback.message,
         "🧹 <b>Очистка панели</b>\n\n"
@@ -174,7 +174,7 @@ async def on_sync_deleted_panel_ask(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'admin_sync_deleted_panel_confirm')
 async def on_sync_deleted_panel_confirm(callback: CallbackQuery):
-    """Удаление 'осиротевших' ключей с VPN-серверов."""
+    """Removing 'orphaned' keys from VPN servers."""
     await safe_edit_or_send(
         callback.message,
         "⏳ <b>Очистка панели: собираю данные...</b>\n\nПожалуйста, подождите."
@@ -182,7 +182,7 @@ async def on_sync_deleted_panel_confirm(callback: CallbackQuery):
 
     servers = get_active_servers()
 
-    # Собираем ВСЕ panel_email из БД (включая ключи без server_id)
+    # Collecting ALL panel_emails from the database (including keys without server_id)
     from database.connection import get_db
     with get_db() as conn:
         rows = conn.execute(
@@ -206,7 +206,7 @@ async def on_sync_deleted_panel_confirm(callback: CallbackQuery):
 
                 for cl in clients:
                     cl_email = cl.get('email', '')
-                    # Только ключи нашего бота (user_*), которых нет в БД
+                    # Only the keys of our bot (user_*), which are not in the database
                     if cl_email.lower().startswith('user_') and cl_email.lower() not in db_emails_all:
                         try:
                             client_uuid = cl.get('id') or cl.get('password')
@@ -237,11 +237,11 @@ async def on_sync_deleted_panel_confirm(callback: CallbackQuery):
     await callback.answer()
 
 
-# ───────────── Очистка базы (сканирование + покатегорийное удаление) ──────────
+# ───────────── Cleaning the database (scanning + categorical deletion) ──────────
 
 @router.callback_query(F.data == 'admin_sync_deleted_db_ask')
 async def on_sync_deleted_db_ask(callback: CallbackQuery):
-    """Предлагаем запустить сканирование БД."""
+    """We suggest running a database scan."""
     await safe_edit_or_send(
         callback.message,
         "🔍 <b>Сканирование базы данных</b>\n\n"
@@ -259,7 +259,7 @@ async def on_sync_deleted_db_ask(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'admin_sync_deleted_db_confirm')
 async def on_sync_deleted_db_scan(callback: CallbackQuery):
-    """Сканирование БД и серверов — показ отчёта-меню с категориями."""
+    """Scanning databases and servers - displaying a report-menu with categories."""
     await safe_edit_or_send(
         callback.message,
         "⏳ <b>Сканирование: проверяю серверы...</b>\n\nПожалуйста, подождите."
@@ -277,11 +277,11 @@ async def on_sync_deleted_db_scan(callback: CallbackQuery):
     await callback.answer()
 
 
-# ──────────── Категория 1: ключи без сервера (server_id = NULL) ─────────────
+# ──────────── Category 1: keys without server (server_id = NULL)
 
 @router.callback_query(F.data == 'admin_sync_db_orphans_ask')
 async def on_sync_db_orphans_ask(callback: CallbackQuery):
-    """Подтверждение удаления ключей без сервера."""
+    """Confirmation of deleting keys without a server."""
     from database.connection import get_db
     with get_db() as conn:
         total = conn.execute(
@@ -316,7 +316,7 @@ async def on_sync_db_orphans_ask(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'admin_sync_db_orphans_confirm')
 async def on_sync_db_orphans_confirm(callback: CallbackQuery):
-    """Удаление ключей без сервера."""
+    """Removing keys without a server."""
     from database.connection import get_db
     with get_db() as conn:
         rows = conn.execute(
@@ -339,11 +339,11 @@ async def on_sync_db_orphans_confirm(callback: CallbackQuery):
     await callback.answer()
 
 
-# ──────── Категория 2: ключи удалённого сервера (нет в таблице servers) ─────────
+# ──────── Category 2: remote server keys (not in the servers table) ─────────
 
 @router.callback_query(F.data.startswith('admin_sync_db_gone_ask:'))
 async def on_sync_db_gone_ask(callback: CallbackQuery):
-    """Подтверждение удаления ключей удалённого сервера."""
+    """Confirmation of deletion of remote server keys."""
     server_id = int(callback.data.split(':')[1])
 
     from database.connection import get_db
@@ -370,7 +370,7 @@ async def on_sync_db_gone_ask(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('admin_sync_db_gone_confirm:'))
 async def on_sync_db_gone_confirm(callback: CallbackQuery):
-    """Удаление ключей удалённого сервера."""
+    """Removing keys from a remote server."""
     server_id = int(callback.data.split(':')[1])
 
     from database.connection import get_db
@@ -395,11 +395,11 @@ async def on_sync_db_gone_confirm(callback: CallbackQuery):
     await callback.answer()
 
 
-# ───────── Категория 3: ключи, отсутствующие на отвечающем сервере ──────────
+# ───────── Category 3: keys not present on the responding server ──────────
 
 @router.callback_query(F.data.startswith('admin_sync_db_missing_ask:'))
 async def on_sync_db_missing_ask(callback: CallbackQuery):
-    """Подтверждение удаления ключей, отсутствующих на панели (пересканирование)."""
+    """Confirmation of deletion of keys missing from the panel (rescanning)."""
     server_id = int(callback.data.split(':')[1])
     from database.requests import get_server_by_id
     server = get_server_by_id(server_id)
@@ -464,7 +464,7 @@ async def on_sync_db_missing_ask(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('admin_sync_db_missing_confirm:'))
 async def on_sync_db_missing_confirm(callback: CallbackQuery):
-    """Удаление ключей, отсутствующих на панели (с повторной проверкой)."""
+    """Removing keys that are missing from the panel (with re-checking)."""
     server_id = int(callback.data.split(':')[1])
     from database.requests import get_server_by_id
     server = get_server_by_id(server_id)
@@ -521,11 +521,11 @@ async def on_sync_db_missing_confirm(callback: CallbackQuery):
     await callback.answer()
 
 
-# ────────── Категория 4: ключи недоступного сервера (force delete) ──────────
+# ────────── Category 4: inaccessible server keys (force delete) ──────────
 
 @router.callback_query(F.data.startswith('admin_sync_db_unreach_ask:'))
 async def on_sync_db_unreach_ask(callback: CallbackQuery):
-    """Подтверждение принудительного удаления ключей недоступного сервера."""
+    """Confirmation of forced deletion of keys for an inaccessible server."""
     server_id = int(callback.data.split(':')[1])
     all_servers = get_all_servers()
     server_name = next((s['name'] for s in all_servers if s['id'] == server_id), f"ID {server_id}")
@@ -557,7 +557,7 @@ async def on_sync_db_unreach_ask(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('admin_sync_db_unreach_confirm:'))
 async def on_sync_db_unreach_confirm(callback: CallbackQuery):
-    """Принудительное удаление ключей недоступного сервера."""
+    """Forced deletion of keys for an inaccessible server."""
     server_id = int(callback.data.split(':')[1])
 
     await safe_edit_or_send(
@@ -588,14 +588,14 @@ async def on_sync_db_unreach_confirm(callback: CallbackQuery):
     await callback.answer()
 
 
-# ──────────────────────── Утилиты ────────────────────────
+# ──────────────────────── Utilities ────────────────────────
 
 async def _scan_db_keys() -> dict:
     """
-    Сканирует все ключи в БД и серверы, классифицирует по категориям.
+    Scans all keys into the database and servers, classifies them into categories.
     
     Returns:
-        Словарь с результатами сканирования по категориям
+        Dictionary with scan results by category
     """
     all_servers = get_all_servers()
     all_server_ids = {s['id'] for s in all_servers}
@@ -607,12 +607,12 @@ async def _scan_db_keys() -> dict:
         ).fetchall()
     all_keys = [dict(r) for r in rows]
 
-    # Категория 1: server_id = NULL
+    # Category 1: server_id = NULL
     null_server_keys = [k for k in all_keys if k.get('server_id') is None]
     null_total = len(null_server_keys)
     null_unconfigured = len([k for k in null_server_keys if not k.get('panel_email')])
 
-    # Категория 2: server_id указывает на несуществующий сервер
+    # Category 2: server_id points to a non-existent server
     deleted_srv_keys = {}
     for key in all_keys:
         sid = key.get('server_id')
@@ -621,7 +621,7 @@ async def _scan_db_keys() -> dict:
                 deleted_srv_keys[sid] = 0
             deleted_srv_keys[sid] += 1
 
-    # Категории 3-5: результаты по серверам
+    # Categories 3-5: results by server
     server_results = []
     for server in all_servers:
         sid = server['id']
@@ -674,11 +674,11 @@ async def _scan_db_keys() -> dict:
 
 
 def _build_scan_report_text(report: dict) -> str:
-    """Формирует текст отчёта из результатов сканирования."""
+    """Generates report text from scan results."""
     lines = ["🔍 <b>Результаты сканирования</b>\n"]
     has_issues = False
 
-    # Категория 1: без сервера
+    # Category 1: no server
     if report['null_total'] > 0:
         has_issues = True
         text = f"📋 Ключи без сервера: <b>{report['null_total']}</b>"
@@ -686,12 +686,12 @@ def _build_scan_report_text(report: dict) -> str:
             text += f"\n  ⚠️ Из них <b>{report['null_unconfigured']}</b> — ненастроенные (купленные, не активированные)"
         lines.append(text)
 
-    # Категория 2: удалённые серверы
+    # Category 2: remote servers
     for sid, count in report['deleted_srv_keys'].items():
         has_issues = True
         lines.append(f"\n👻 Удалённый сервер (ID {sid}): <b>{count}</b> ключей")
 
-    # Категории 3-5: по серверам
+    # Categories 3-5: by server
     for r in report['server_results']:
         if r['status'] == 'reachable':
             if r.get('missing_count', 0) > 0:
@@ -718,7 +718,7 @@ def _build_scan_report_text(report: dict) -> str:
 
 
 def _build_server_data(key: dict) -> dict:
-    """Формирует server_data из данных ключа для get_client_from_server_data."""
+    """Generates server_data from the key data for get_client_from_server_data."""
     return {
         'id': key.get('server_id'),
         'name': key.get('server_name'),

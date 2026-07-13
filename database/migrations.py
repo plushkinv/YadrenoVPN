@@ -1,12 +1,12 @@
 """
-Система миграций базы данных.
+Database migration system.
 
-Миграции применяются автоматически при запуске бота.
-Каждая миграция имеет уникальный номер версии.
+Migrations are applied automatically when the bot is launched.
+Each migration has a unique version number.
 
-INITIAL_VERSION — версия, на которой произведено сжатие миграций.
-Все миграции до этой версии включены в migration_initial().
-Новые инкрементальные миграции добавляются в словарь MIGRATIONS.
+INITIAL_VERSION — the version on which migrations were compressed.
+All migrations prior to this version are included in migration_initial().
+New incremental migrations are added to the MIGRATIONS dictionary.
 """
 import sqlite3
 import logging
@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
     """
-    Добавляет колонку в таблицу, игнорируя ошибку если колонка уже существует.
-    Используется в миграциях для идемпотентного добавления колонок.
+    Adds a column to the table, ignoring the error if the column already exists.
+    Used in migrations to idempotently add columns.
     """
     try:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
@@ -31,15 +31,15 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
             raise
 
 
-# Версия, на которой произведено сжатие (migration_initial создаёт БД этой версии)
+# The version on which the compression was performed (migration_initial creates a database of this version)
 INITIAL_VERSION = 21
 
-# Текущая версия схемы БД (инкрементируется при добавлении новых миграций)
+# Current version of the database schema (incremented when new migrations are added)
 LATEST_VERSION = 72
 
 
 def _my_keys_item_template() -> str:
-    """Скрытый дефолт формата одного ключа на странице «Мои ключи»."""
+    """Hidden default of one key format on the “My Keys” page."""
     return (
         "%ключ_статус%<b>%ключ_имя%</b> - %ключ_трафик% - до %ключ_дата_окончания%\n"
         "     📍%ключ_сервер% - %ключ_инбаунд% (%ключ_протокол%)"
@@ -47,7 +47,7 @@ def _my_keys_item_template() -> str:
 
 
 def _my_keys_page_text() -> str:
-    """Дефолтный текст страницы списка ключей."""
+    """Default text of the key list page."""
     return (
         "🔑 <b>Мои ключи</b>\n\n"
         "%список_ключей%\n\n"
@@ -56,14 +56,14 @@ def _my_keys_page_text() -> str:
 
 
 def _my_keys_page_buttons() -> str:
-    """Дефолтные кнопки страницы списка ключей."""
+    """Default buttons on the key list page."""
     return json.dumps([
         {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
     ], ensure_ascii=False)
 
 
 def _custom_profile_page_text() -> str:
-    """Дефолтная custom-страница личного кабинета."""
+    """Default custom page for your personal account."""
     return (
         "👤 <b>Личный кабинет</b>\n\n"
         "%профиль%\n\n"
@@ -73,7 +73,7 @@ def _custom_profile_page_text() -> str:
 
 
 def _custom_profile_page_buttons() -> str:
-    """Дефолтные кнопки страницы личного кабинета."""
+    """Default buttons on the personal account page."""
     return json.dumps([
         {"id": "btn_profile_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_my_keys"},
         {"id": "btn_profile_buy", "label": "💳 Купить ключ", "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_buy"},
@@ -85,7 +85,7 @@ def _custom_profile_page_buttons() -> str:
 
 
 def _my_keys_empty_page_text() -> str:
-    """Дефолтный текст пустой страницы «Мои ключи»."""
+    """Default text of the empty “My Keys” page."""
     return (
         "🔑 <b>Мои ключи</b>\n\n"
         "У вас пока нет VPN-ключей.\n\n"
@@ -94,7 +94,7 @@ def _my_keys_empty_page_text() -> str:
 
 
 def _my_keys_empty_page_buttons() -> str:
-    """Дефолтные кнопки пустой страницы «Мои ключи»."""
+    """Default buttons on the empty “My Keys” page."""
     return json.dumps([
         {"id": "btn_buy_key",   "label": "💳 Купить ключ", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_buy"},
         {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
@@ -102,7 +102,7 @@ def _my_keys_empty_page_buttons() -> str:
 
 
 def _renew_payment_page_text() -> str:
-    """Дефолтный текст страницы выбора способа оплаты при продлении."""
+    """Default text on the payment method selection page for renewal."""
     return (
         "💳 <b>Продление ключа</b>\n\n"
         "🔑 Ключ: <b>%ключ_имя%</b>\n\n"
@@ -111,7 +111,7 @@ def _renew_payment_page_text() -> str:
 
 
 def _renew_payment_page_buttons() -> str:
-    """Дефолтные кнопки страницы выбора способа оплаты при продлении."""
+    """Default buttons on the page for selecting a payment method when renewing."""
     return json.dumps([
         {"id": "btn_renew_pay_crypto",  "label": "🪙 Оплатить USDT",              "color": "secondary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_renew_pay_stars",   "label": "⭐ Оплатить звёздами",          "color": "secondary",   "row": 1, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
@@ -128,7 +128,7 @@ def _renew_payment_page_buttons() -> str:
 
 
 def _qr_payment_page_text() -> str:
-    """Дефолтный текст технической страницы QR-оплаты."""
+    """Default text of the QR payment technical page."""
     return (
         "%платеж_провайдер%\n\n"
         "%платеж_ключ_строка%"
@@ -142,7 +142,7 @@ def _qr_payment_page_text() -> str:
 
 
 def _crypto_payment_page_text() -> str:
-    """Дефолтный текст экрана перехода к крипто-оплате."""
+    """Default text of the transition screen to crypto-payment."""
     return (
         "%платеж_провайдер%\n\n"
         "%платеж_ключ_строка%"
@@ -154,7 +154,7 @@ def _crypto_payment_page_text() -> str:
 
 
 def _balance_payment_page_text() -> str:
-    """Дефолтный текст экрана оплаты с баланса."""
+    """Default text of the balance payment screen."""
     return (
         "💳 <b>Оплата тарифа «%платеж_тариф%»</b>\n\n"
         "💰 Сумма: %платеж_сумма%\n"
@@ -167,7 +167,7 @@ def _balance_payment_page_text() -> str:
 
 
 def _demo_payment_page_text() -> str:
-    """Дефолтный текст демонстрационного экрана оплаты."""
+    """Default text of the payment demo screen."""
     return (
         "%платеж_провайдер%\n\n"
         "%платеж_инструкция%\n\n"
@@ -180,7 +180,7 @@ def _demo_payment_page_text() -> str:
 
 
 def _payment_tariff_select_page_text() -> str:
-    """Дефолтный текст экрана выбора тарифа оплаты."""
+    """Default text of the payment tariff selection screen."""
     return (
         "%платеж_провайдер%\n\n"
         "%платеж_ключ_строка%"
@@ -190,7 +190,7 @@ def _payment_tariff_select_page_text() -> str:
 
 
 def _payment_status_page_text() -> str:
-    """Дефолтный текст экрана статуса платежа."""
+    """Default text of the payment status screen."""
     return (
         "%платеж_провайдер%\n\n"
         "%платеж_инструкция%"
@@ -199,7 +199,7 @@ def _payment_status_page_text() -> str:
 
 
 def _support_start_page_text() -> str:
-    """Дефолтный текст входа во встроенную поддержку."""
+    """Default login text for built-in support."""
     return (
         "%поддержка_заголовок%\n\n"
         "%поддержка_инструкция%"
@@ -207,7 +207,7 @@ def _support_start_page_text() -> str:
 
 
 def _support_status_page_text() -> str:
-    """Дефолтный текст результата обращения в поддержку."""
+    """Default text of the result of a support request."""
     return (
         "%поддержка_статус_заголовок%\n\n"
         "%поддержка_статус_текст%"
@@ -215,7 +215,7 @@ def _support_status_page_text() -> str:
 
 
 def _promo_enter_page_text() -> str:
-    """Дефолтный текст ввода промокода или купона."""
+    """Default text for entering a promotional code or coupon."""
     return (
         "🎟 <b>Промокод</b>\n\n"
         "Отправьте промокод или одноразовый купон одним сообщением.\n\n"
@@ -224,7 +224,7 @@ def _promo_enter_page_text() -> str:
 
 
 def _promo_status_page_text() -> str:
-    """Дефолтный текст результата обработки промокода или купона."""
+    """Default text of the result of processing a promotional code or coupon."""
     return (
         "%промо_статус_заголовок%\n\n"
         "%промо_статус_текст%"
@@ -232,7 +232,7 @@ def _promo_status_page_text() -> str:
 
 
 def _key_status_page_text() -> str:
-    """Дефолтный текст статуса операции с ключом."""
+    """Default text of the key operation status."""
     return (
         "%ключ_статус_заголовок%\n\n"
         "%ключ_статус_текст%"
@@ -240,7 +240,7 @@ def _key_status_page_text() -> str:
 
 
 def _show_id_page_text() -> str:
-    """Дефолтный текст страницы Telegram ID."""
+    """Default text of the Telegram ID page."""
     return (
         "🆔 <b>Ваш Telegram ID</b>\n\n"
         "<code>%telegram_id%</code>"
@@ -248,7 +248,7 @@ def _show_id_page_text() -> str:
 
 
 def _prepayment_unavailable_page_text() -> str:
-    """Дефолт страницы, когда способы покупки недоступны."""
+    """Page defaults when purchase methods are not available."""
     return (
         "💳 <b>Купить ключ</b>\n\n"
         "😔 К сожалению, сейчас оплата недоступна.\n\n"
@@ -257,7 +257,7 @@ def _prepayment_unavailable_page_text() -> str:
 
 
 def _access_blocked_page_text() -> str:
-    """Дефолт страницы заблокированного доступа."""
+    """Blocked access page default."""
     return (
         "⛔ <b>Доступ заблокирован</b>\n\n"
         "Ваш аккаунт заблокирован. Обратитесь в поддержку."
@@ -265,19 +265,19 @@ def _access_blocked_page_text() -> str:
 
 
 def _empty_page_buttons() -> str:
-    """Дефолт без кнопок страницы."""
+    """Default without page buttons."""
     return '[]'
 
 
 def _home_only_page_buttons() -> str:
-    """Дефолтная кнопка возврата на главную."""
+    """Default button to return to home."""
     return json.dumps([
         {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
     ], ensure_ascii=False)
 
 
 def _referral_new_ref_notification_text() -> str:
-    """Скрытый дефолт уведомления рефоводу о новом реферале."""
+    """Hidden default notification to the referral provider about a new referral."""
     return (
         "👥 <b>Новый реферал</b>\n\n"
         "По вашей ссылке зарегистрировался пользователь.\n\n"
@@ -288,7 +288,7 @@ def _referral_new_ref_notification_text() -> str:
 
 
 def _referral_purchase_notification_text() -> str:
-    """Скрытый дефолт уведомления рефоводу о покупке реферала."""
+    """Hidden default notification to the referral provider about the purchase of a referral."""
     return (
         "💳 <b>Покупка реферала</b>\n\n"
         "Пользователь <b>%покупатель_имя%</b> (%покупатель_логин%) оплатил тариф.\n\n"
@@ -301,7 +301,7 @@ def _referral_purchase_notification_text() -> str:
 
 
 def _key_navigation_page_buttons() -> str:
-    """Статические кнопки навигации после операций с ключом."""
+    """Static navigation buttons after key operations."""
     return json.dumps([
         {"id": "btn_help",      "label": "📄 Инструкция", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_help"},
         {"id": "btn_my_keys",   "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_my_keys"},
@@ -310,7 +310,7 @@ def _key_navigation_page_buttons() -> str:
 
 
 def _key_details_page_buttons() -> str:
-    """Кнопки карточки ключа: действия и нижняя навигация."""
+    """Key card buttons: actions and bottom navigation."""
     return json.dumps([
         {"id": "btn_key_show_key",          "label": "📋 Показать ключ",      "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "system",   "action_value": None},
         {"id": "btn_key_show_subscription", "label": "📋 Показать подписку", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "system",   "action_value": None},
@@ -325,7 +325,7 @@ def _key_details_page_buttons() -> str:
 
 
 def _renew_payment_unavailable_buttons() -> str:
-    """Кнопки страницы, когда способы продления недоступны."""
+    """Page buttons when renewal options are not available."""
     return json.dumps([
         {"id": "btn_renew_back", "label": "⬅️ Назад", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
         {"id": "btn_back_main",  "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
@@ -333,12 +333,12 @@ def _renew_payment_unavailable_buttons() -> str:
 
 
 def _key_details_page_text() -> str:
-    """Дефолт карточки конкретного ключа."""
+    """Default of a specific key card."""
     return "%ключ_информация%\n%ключ_история_операций%"
 
 
 def _key_show_unconfigured_page_text() -> str:
-    """Дефолт страницы показа ещё не настроенного ключа."""
+    """Default of the page showing a key that has not yet been configured."""
     return (
         "📋 <b>Показать ключ</b>\n\n"
         "⚠️ Ключ ещё не создан на сервере.\n"
@@ -347,7 +347,7 @@ def _key_show_unconfigured_page_text() -> str:
 
 
 def _renew_payment_unavailable_page_text() -> str:
-    """Дефолт страницы недоступного продления."""
+    """Unavailable renewal page default."""
     return (
         "💳 <b>Продление ключа</b>\n\n"
         "😔 Способы оплаты временно недоступны.\n"
@@ -356,7 +356,7 @@ def _renew_payment_unavailable_page_text() -> str:
 
 
 def _key_replace_server_select_page_text() -> str:
-    """Дефолт выбора сервера для замены ключа."""
+    """Server selection default for key replacement."""
     return (
         "🔄 <b>Замена ключа</b>\n\n"
         "%экран_данные%\n\n"
@@ -365,7 +365,7 @@ def _key_replace_server_select_page_text() -> str:
 
 
 def _key_replace_inbound_select_page_text() -> str:
-    """Дефолт выбора протокола для замены ключа."""
+    """Protocol selection default for key replacement."""
     return (
         "🖥️ <b>Выбор протокола</b>\n\n"
         "%экран_данные%\n\n"
@@ -374,7 +374,7 @@ def _key_replace_inbound_select_page_text() -> str:
 
 
 def _key_replace_confirm_page_text() -> str:
-    """Дефолт подтверждения замены ключа."""
+    """Key replacement confirmation default."""
     return (
         "⚠️ <b>Подтверждение замены</b>\n\n"
         "%замена_ключа_данные%\n\n"
@@ -383,7 +383,7 @@ def _key_replace_confirm_page_text() -> str:
 
 
 def _key_rename_prompt_page_text() -> str:
-    """Дефолт запроса нового имени ключа."""
+    """New key name request defaulted."""
     return (
         "✏️ <b>Переименование ключа</b>\n\n"
         "%ключ_переименование_данные%\n\n"
@@ -393,7 +393,7 @@ def _key_rename_prompt_page_text() -> str:
 
 
 def _new_key_server_select_page_text() -> str:
-    """Дефолт выбора сервера после оплаты."""
+    """Server selection default after payment."""
     return (
         "🎉 <b>Оплата прошла успешно!</b>\n\n"
         "%экран_данные%"
@@ -401,7 +401,7 @@ def _new_key_server_select_page_text() -> str:
 
 
 def _new_key_inbound_select_page_text() -> str:
-    """Дефолт выбора протокола после оплаты."""
+    """Protocol selection default after payment."""
     return (
         "🖥️ <b>Выбор протокола</b>\n\n"
         "%экран_данные%\n\n"
@@ -410,7 +410,7 @@ def _new_key_inbound_select_page_text() -> str:
 
 
 def _new_key_no_servers_page_text() -> str:
-    """Дефолт страницы отсутствия серверов после оплаты."""
+    """The page defaults to no servers after payment."""
     return (
         "🎉 <b>Оплата прошла успешно!</b>\n\n"
         "⚠️ К сожалению, сейчас нет доступных серверов.\n"
@@ -419,7 +419,7 @@ def _new_key_no_servers_page_text() -> str:
 
 
 def _key_runtime_page_defaults() -> dict:
-    """Дефолты страниц ключей, редактируемых только через /yaa."""
+    """Defaults on key pages edited only via /yaa."""
     return {
         'key_details': (_key_details_page_text(), _key_details_page_buttons()),
         'key_show_unconfigured': (_key_show_unconfigured_page_text(), _key_navigation_page_buttons()),
@@ -436,13 +436,13 @@ def _key_runtime_page_defaults() -> dict:
 
 def get_current_version() -> int:
     """
-    Получает текущую версию схемы БД.
+    Gets the current version of the database schema.
     
     Returns:
-        int: Номер версии (0 если таблица версий не существует)
+        int: Version number (0 if version table does not exist)
     """
     with get_db() as conn:
-        # Проверяем существование таблицы schema_version
+        # Checking the existence of the schema_version table
         cursor = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
         )
@@ -456,41 +456,41 @@ def get_current_version() -> int:
 
 def set_version(conn: sqlite3.Connection, version: int) -> None:
     """
-    Устанавливает версию схемы БД.
+    Sets the database schema version.
     
     Args:
-        conn: Соединение с БД
-        version: Номер версии
+        conn: Connection to the database
+        version: Version number
     """
     conn.execute("DELETE FROM schema_version")
     conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Начальная миграция (сжатие v1–v21)
+# Initial migration (v1–v21 compression)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def migration_initial(conn: sqlite3.Connection) -> None:
     """
-    Начальная миграция: создаёт полную актуальную схему БД (v21).
+    Initial migration: creates a complete up-to-date database schema (v21).
     
-    Вызывается только при новой установке (version = 0).
-    Сжимает миграции v1–v21 в одну функцию.
+    Called only on new installations (version = 0).
+    Condenses v1–v21 migrations into a single function.
     
-    Таблицы:
-    - schema_version: версия схемы
-    - settings: глобальные настройки бота
-    - users: пользователи Telegram
-    - tariffs: тарифные планы
-    - tariff_groups: группы тарифов
-    - servers: VPN-серверы (3X-UI)
-    - server_groups: связь серверов с группами (many-to-many)
-    - vpn_keys: ключи/подписки пользователей
-    - payments: история оплат
-    - notification_log: лог уведомлений
-    - referral_levels: уровни реферальной системы
-    - referral_stats: статистика по рефералам
-    - pages: страницы пользовательского интерфейса
+    Tables:
+    - schema_version: schema version
+    - settings: global bot settings
+    - users: Telegram users
+    - tariffs: tariff plans
+    - tariff_groups: tariff groups
+    - servers: VPN servers (3X-UI)
+    - server_groups: connection of servers with groups (many-to-many)
+    - vpn_keys: user keys/subscriptions
+    - payments: payment history
+    - notification_log: notification log
+    - referral_levels: referral system levels
+    - referral_stats: referral statistics
+    - pages: user interface pages
     """
     logger.info("Создание БД (актуальная схема v21)...")
 
@@ -551,10 +551,10 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('update_notifications_enabled', '1'),
         ('display_timezone', 'Europe/Moscow'),
         ('my_keys_item_template', _my_keys_item_template()),
-        # Режим работы бота для новых установок — Subscription
-        # (бот выдаёт subscription URL, ключи во всех inbound с единым subId).
-        # На существующих ботах migration_28 ставит 'key' — там уже есть рабочие
-        # одиночные ключи, и режим менять нельзя без явного действия админа.
+        # The bot operating mode for new installations is Subscription
+        # (the bot issues a subscription URL, keys in all inbound with a single subId).
+        # On existing bots migration_28 sets 'key' - there are already workers there
+        # single keys, and the mode cannot be changed without explicit action by the administrator.
         ('bot_mode', 'subscription'),
     ]
     for key, value in default_settings:
@@ -600,7 +600,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         )
     """)
 
-    # Скрытый тариф для админских ключей
+    # Hidden tariff for admin keys
     conn.execute("""
         INSERT INTO tariffs (name, duration_days, price_cents, price_stars, display_order, is_active)
         SELECT 'Admin Tariff', 365, 0, 0, 999, 0
@@ -768,7 +768,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         )
     """)
 
-    # Дефолтные данные страниц (тексты в HTML, кнопки в JSON)
+    # Default page data (texts in HTML, buttons in JSON)
     page_defaults = {
         'main': {
             'text': (
@@ -910,33 +910,33 @@ def migration_initial(conn: sqlite3.Connection) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Инкрементальные миграции (добавляются ниже по мере развития проекта)
+# Incremental migrations (added below as the project develops)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Пример добавления новой миграции:
+# Example of adding a new migration:
 #
 def migration_22(conn):
     """
-    Миграция v22: удаление стандартного режима крипто-оплаты.
+    Migration v22: removal of standard crypto payment mode.
     
-    - Удаляет настройку crypto_integration_mode из settings
-    - Удаляет колонку external_id из таблицы tariffs
+    - Removes the crypto_integration_mode setting from settings
+    - Removes the external_id column from the tariffs table
     """
-    # 1. Удаляем настройку crypto_integration_mode
+    # 1. Remove the crypto_integration_mode setting
     conn.execute("DELETE FROM settings WHERE key = 'crypto_integration_mode'")
     
-    # 2. Удаляем колонку external_id из tariffs
-    # ALTER TABLE DROP COLUMN поддерживается с SQLite 3.35.0 (март 2021)
-    # Фоллбэк через пересоздание таблицы для старых версий
+    # 2. Remove the external_id column from tariffs
+    # ALTER TABLE DROP COLUMN supported since SQLite 3.35.0 (March 2021)
+    # Fallback via table re-creation for old versions
     try:
         conn.execute("ALTER TABLE tariffs DROP COLUMN external_id")
         logger.info("Колонка external_id удалена через DROP COLUMN")
     except Exception as e:
         if "no such column" in str(e).lower():
-            # Колонки уже нет — всё ок
+            # The column is no longer there - everything is ok
             logger.info("Колонка external_id уже отсутствует — пропускаем")
         else:
-            # Старый SQLite — пересоздаём таблицу без external_id
+            # Old SQLite - recreate the table without external_id
             logger.info(f"DROP COLUMN не поддерживается ({e}), пересоздаём таблицу tariffs")
             conn.execute("""
                 CREATE TABLE tariffs_new (
@@ -968,20 +968,20 @@ def migration_22(conn):
 
 def migration_23(conn):
     """
-    Миграция v23: добавление платёжного метода WATA.
+    Migration v23: adding WATA payment method.
 
-    - Добавляет настройки wata_enabled и wata_jwt_token
-    - Добавляет колонку wata_link_id в таблицу payments
-    - Добавляет кнопку btn_pay_wata в дефолтную раскладку страницы prepayment
+    - Adds wata_enabled and wata_jwt_token settings
+    - Adds the wata_link_id column to the payments table
+    - Adds the btn_pay_wata button to the default layout of the prepayment page
     """
-    # 1. Настройки WATA
+    # 1. WATA settings
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('wata_enabled', '0')")
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('wata_jwt_token', '')")
 
-    # 2. Колонка wata_link_id для отслеживания платежей WATA
+    # 2. Column wata_link_id for tracking WATA payments
     _add_column(conn, "payments", "wata_link_id TEXT")
 
-    # 3. Обновляем buttons_default страницы prepayment — вставляем btn_pay_wata после btn_pay_qr
+    # 3. Update the buttons_default of the prepayment page - insert btn_pay_wata after btn_pay_qr
     cursor = conn.execute("SELECT buttons_default FROM pages WHERE page_key = 'prepayment'")
     row = cursor.fetchone()
     if row:
@@ -992,7 +992,7 @@ def migration_23(conn):
 
         existing_ids = {b.get('id') for b in buttons if isinstance(b, dict)}
         if 'btn_pay_wata' not in existing_ids:
-            # Находим строку btn_pay_qr и вставляем wata после него, сдвигая остальные строки
+            # Find the line btn_pay_qr and insert wata after it, shifting the remaining lines
             qr_row = None
             for b in buttons:
                 if isinstance(b, dict) and b.get('id') == 'btn_pay_qr':
@@ -1000,10 +1000,10 @@ def migration_23(conn):
                     break
 
             if qr_row is None:
-                # Нет btn_pay_qr — вставляем перед btn_back_main или в конец
+                # No btn_pay_qr - insert before btn_back_main or at the end
                 max_row = max((b.get('row', 0) for b in buttons if isinstance(b, dict)), default=-1)
                 new_row = max_row + 1
-                # Если последняя кнопка — btn_back_main, вставляем перед ней
+                # If the last button is btn_back_main, insert it before it
                 for b in buttons:
                     if isinstance(b, dict) and b.get('id') == 'btn_back_main':
                         new_row = b.get('row', new_row)
@@ -1020,7 +1020,7 @@ def migration_23(conn):
                     "action_value": None,
                 })
             else:
-                # Сдвигаем все строки > qr_row вниз на 1
+                # Shift all rows > qr_row down by 1
                 for b in buttons:
                     if isinstance(b, dict) and b.get('row', 0) > qr_row:
                         b['row'] = b['row'] + 1
@@ -1046,21 +1046,21 @@ def migration_23(conn):
 
 def migration_24(conn):
     """
-    Миграция v24: добавление платёжного метода Platega.
+    Migration v24: adding the Platega payment method.
 
-    - Добавляет настройки platega_enabled, platega_merchant_id, platega_secret
-    - Добавляет колонку platega_transaction_id в таблицу payments
-    - Добавляет кнопку btn_pay_platega в дефолтную раскладку страницы prepayment
+    - Adds settings platega_enabled, platega_merchant_id, platega_secret
+    - Adds the platega_transaction_id column to the payments table
+    - Adds the btn_pay_platega button to the default layout of the prepayment page
     """
-    # 1. Настройки Platega
+    # 1. Platega settings
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('platega_enabled', '0')")
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('platega_merchant_id', '')")
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('platega_secret', '')")
 
-    # 2. Колонка platega_transaction_id для отслеживания платежей Platega
+    # 2. Column platega_transaction_id for tracking Platega payments
     _add_column(conn, "payments", "platega_transaction_id TEXT")
 
-    # 3. Обновляем buttons_default страницы prepayment — вставляем btn_pay_platega после btn_pay_wata
+    # 3. Update the buttons_default of the prepayment page - insert btn_pay_platega after btn_pay_wata
     cursor = conn.execute("SELECT buttons_default FROM pages WHERE page_key = 'prepayment'")
     row = cursor.fetchone()
     if row:
@@ -1078,7 +1078,7 @@ def migration_24(conn):
                     break
 
             if wata_row is None:
-                # Нет btn_pay_wata — вставляем перед btn_back_main или в конец
+                # No btn_pay_wata - insert before btn_back_main or at the end
                 max_row = max((b.get('row', 0) for b in buttons if isinstance(b, dict)), default=-1)
                 new_row = max_row + 1
                 for b in buttons:
@@ -1097,7 +1097,7 @@ def migration_24(conn):
                     "action_value": None,
                 })
             else:
-                # Сдвигаем все строки > wata_row вниз на 1
+                # Shift all rows > wata_row down by 1
                 for b in buttons:
                     if isinstance(b, dict) and b.get('row', 0) > wata_row:
                         b['row'] = b['row'] + 1
@@ -1123,21 +1123,21 @@ def migration_24(conn):
 
 def migration_25(conn):
     """
-    Миграция v25: добавление платёжного метода Cardlink (cardlink.link).
+    Migration v25: adding the Cardlink payment method (cardlink.link).
 
-    - Добавляет настройки cardlink_enabled, cardlink_shop_id, cardlink_api_token
-    - Добавляет колонку cardlink_bill_id в таблицу payments
-    - Добавляет кнопку btn_pay_cardlink в дефолтную раскладку страницы prepayment
+    - Adds settings cardlink_enabled, cardlink_shop_id, cardlink_api_token
+    - Adds the cardlink_bill_id column to the payments table
+    - Adds the btn_pay_cardlink button to the default layout of the prepayment page
     """
-    # 1. Настройки Cardlink
+    # 1. Cardlink settings
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('cardlink_enabled', '0')")
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('cardlink_shop_id', '')")
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('cardlink_api_token', '')")
 
-    # 2. Колонка cardlink_bill_id для отслеживания платежей Cardlink
+    # 2. Cardlink_bill_id column for tracking Cardlink payments
     _add_column(conn, "payments", "cardlink_bill_id TEXT")
 
-    # 3. Обновляем buttons_default страницы prepayment — вставляем btn_pay_cardlink после btn_pay_platega
+    # 3. Update the buttons_default of the prepayment page - insert btn_pay_cardlink after btn_pay_platega
     cursor = conn.execute("SELECT buttons_default FROM pages WHERE page_key = 'prepayment'")
     row = cursor.fetchone()
     if row:
@@ -1198,7 +1198,7 @@ def migration_25(conn):
 
 def migration_26(conn):
     """
-    Миграция v26: добавление настроек времени ежедневных задач и проверки обновлений.
+    Migration v26: adding time settings for daily tasks and checking for updates.
     """
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('daily_tasks_time', '03:00')")
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('update_check_time', '12:00')")
@@ -1207,13 +1207,13 @@ def migration_26(conn):
 
 def migration_27(conn):
     """
-    Миграция v27: добавление колонки api_token в servers для поддержки 3x-ui v3.0+.
+    Migration v27: adding api_token column to servers to support 3x-ui v3.0+.
 
-    На v3.0+ панель требует CSRF-токен на всех POST-запросах, но имеет альтернативу —
-    Bearer-токен через заголовок Authorization, который полностью обходит CSRF.
-    Бот автоматически вытягивает токен через GET /panel/setting/getApiToken после
-    первого успешного логина на v3.0+ панель и сохраняет его в это поле.
-    Для v2.x панелей поле остаётся NULL — используется старый cookie-flow.
+    On v3.0+, the panel requires a CSRF token on all POST requests, but has an alternative -
+    Bearer token via Authorization header, which completely bypasses CSRF.
+    The bot automatically pulls the token via GET /panel/setting/getApiToken after
+    the first successful login to the v3.0+ panel and saves it in this field.
+    For v2.x panels, the field remains NULL - the old cookie flow is used.
     """
     _add_column(conn, "servers", "api_token TEXT")
     logger.info("Миграция v27 применена: добавлена колонка servers.api_token для 3x-ui v3.0+")
@@ -1221,16 +1221,16 @@ def migration_27(conn):
 
 def migration_28(conn):
     """
-    Миграция v28: введение режима Subscription.
+    Migration v28: introduction of Subscription mode.
 
-    - Добавляет vpn_keys.sub_id — идентификатор подписки (общий для всех клиентов
-      с этим email на одном сервере). NULL для legacy ключей (режим Keys).
-    - Создаёт индекс (server_id, panel_email) для быстрого поиска клиентов
-      одной подписки в синхронизации.
-    - Устанавливает bot_mode='key' для существующих ботов: они уже работают
-      с одиночными ключами, и менять режим без явного решения админа нельзя.
-      На новых установках migration_initial кладёт 'subscription' раньше —
-      INSERT OR IGNORE ниже не перезапишет его.
+    - Adds vpn_keys.sub_id - subscription identifier (common for all clients
+      with this email on the same server). NULL for legacy keys (Keys mode).
+    - Creates an index (server_id, panel_email) for quickly searching for clients
+      one subscription in synchronization.
+    - Sets bot_mode='key' for existing bots: they are already running
+      with single keys, and you cannot change the mode without an explicit decision from the admin.
+      On new installations migration_initial puts 'subscription' before -
+      INSERT OR IGNORE below will not overwrite it.
     """
     _add_column(conn, "vpn_keys", "sub_id TEXT")
     conn.execute(
@@ -1245,11 +1245,11 @@ def migration_28(conn):
 
 def migration_29(conn):
     """
-    Миграция v29: обычный стиль дефолтных кнопок главной страницы.
+    Migration v29: normal style of default home page buttons.
 
-    Меняет только pages.buttons_default для страницы main.
-    pages.buttons_custom не трогается: пользовательские настройки остаются
-    пользовательскими и имеют приоритет при рендеринге.
+    Only changes pages.buttons_default for the main page.
+    pages.buttons_custom is not touched: custom settings remain
+    custom and have priority when rendering.
     """
     row = conn.execute("SELECT buttons_default FROM pages WHERE page_key = 'main'").fetchone()
     if not row:
@@ -1285,7 +1285,7 @@ def migration_29(conn):
 
 def migration_30(conn):
     """
-    Миграция v30: добавление поля max_ips в таблицу tariffs.
+    Migration v30: adding the max_ips field to the tariffs table.
     """
     try:
         from config import DEFAULT_LIMIT_IP
@@ -1299,10 +1299,10 @@ def migration_30(conn):
 
 def migration_31(conn):
     """
-    Миграция v31: перенос выбора способа оплаты при продлении в таблицу pages.
+    Migration v31: moving the choice of payment method during renewal to the pages table.
 
-    Создаёт страницу renew_payment с дефолтным текстом и системными кнопками.
-    Кастомные поля text_custom/image_custom/buttons_custom не изменяются.
+    Creates a renew_payment page with default text and system buttons.
+    Custom fields text_custom/image_custom/buttons_custom are not changed.
     """
     text_default = _renew_payment_page_text()
     buttons_default = _renew_payment_page_buttons()
@@ -1328,11 +1328,11 @@ def migration_31(conn):
 
 def migration_32(conn):
     """
-    Миграция v32: кеш диагностики панели 3x-ui.
+    Migration v32: 3x-ui panel diagnostic cache.
 
-    panel_version хранит определённую версию панели, panel_api_profile — выбранный
-    профиль API ('legacy_inbounds' или 'clients_api'), panel_checked_at — время
-    последней успешной проверки.
+    panel_version stores a specific version of the panel, panel_api_profile stores the selected one
+    API profile ('legacy_inbounds' or 'clients_api'), panel_checked_at - time
+    last successful check.
     """
     _add_column(conn, "servers", "panel_version TEXT")
     _add_column(conn, "servers", "panel_api_profile TEXT")
@@ -1342,10 +1342,10 @@ def migration_32(conn):
 
 def migration_33(conn):
     """
-    Миграция v33: перенос страницы «Мои ключи» в таблицу pages.
+    Migration v33: moving the “My Keys” page to the pages table.
 
-    Создаёт страницы my_keys/my_keys_empty и скрытую настройку формата одного
-    ключа. Кастомные поля страниц не изменяются.
+    Creates the my_keys/my_keys_empty pages and a hidden format setting for one
+    key Custom page fields do not change.
     """
     page_defaults = {
         'my_keys': (_my_keys_page_text(), _my_keys_page_buttons()),
@@ -1382,10 +1382,10 @@ def migration_33(conn):
 
 def migration_34(conn):
     """
-    Миграция v34: перенос дополнительных пользовательских экранов ключей в pages.
+    v34 migration: Migration of additional custom key screens to pages.
 
-    Обновляет только дефолтные поля. Кастомные текст, картинка и кнопки
-    администраторов остаются без изменений.
+    Updates only default fields. Custom text, image and buttons
+    administrators remain unchanged.
     """
     for page_key, (text_default, buttons_default) in _key_runtime_page_defaults().items():
         conn.execute(
@@ -1409,10 +1409,10 @@ def migration_34(conn):
 
 def migration_35(conn):
     """
-    Миграция v35: флаг недоступности пользователя для сообщений бота.
+    Migration v35: user unavailable flag for bot messages.
 
-    Поле is_bot_blocked помечает пользователей, которые заблокировали бота в Telegram.
-    Такие пользователи исключаются из массовых отправок до нового обращения в бот.
+    The is_bot_blocked field marks users who have blocked the bot in Telegram.
+    Such users are excluded from mass sendings until they contact the bot again.
     """
     _add_column(conn, "users", "is_bot_blocked INTEGER DEFAULT 0")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_is_bot_blocked ON users(is_bot_blocked)")
@@ -1421,9 +1421,9 @@ def migration_35(conn):
 
 def migration_36(conn):
     """
-    Миграция v36: скрытая настройка часового пояса отображения дат.
+    Migration v36: hidden time zone setting for date display.
 
-    SQLite продолжает хранить даты в UTC, настройка влияет только на вывод в Telegram.
+    SQLite continues to store dates in UTC, the setting only affects the output in Telegram.
     """
     conn.execute(
         """
@@ -1436,10 +1436,10 @@ def migration_36(conn):
 
 def migration_37(conn):
     """
-    Миграция v37: скрытые уведомления рефоводу и имя пользователя.
+    Migration v37: hidden notifications to referrer and username.
 
-    first_name/last_name нужны для плейсхолдера %имя% в уведомлениях.
-    Настройки уведомлений остаются скрытыми и меняются только через БД.
+    first_name/last_name are needed for the name placeholder in notifications.
+    Notification settings remain hidden and can only be changed through the database.
     """
     _add_column(conn, "users", "first_name TEXT")
     _add_column(conn, "users", "last_name TEXT")
@@ -1461,7 +1461,7 @@ def migration_37(conn):
 
 
 def migration_38(conn):
-    """Миграция v38: скрытый переключатель уведомлений о новых версиях."""
+    """Migration v38: hidden notification switch for new versions."""
     conn.execute(
         """
         INSERT OR IGNORE INTO settings (key, value)
@@ -1472,7 +1472,7 @@ def migration_38(conn):
 
 
 def migration_39(conn):
-    """Миграция v39: тип медиа для редактируемых страниц."""
+    """Migration v39: media type for editable pages."""
     _add_column(conn, "pages", "media_type_default TEXT")
     _add_column(conn, "pages", "media_type_custom TEXT")
     conn.execute(
@@ -1497,7 +1497,7 @@ def migration_39(conn):
 
 
 def migration_40(conn):
-    """Миграция v40: индексы для роста базы и частых запросов."""
+    """Migration v40: indexes for database growth and frequent queries."""
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)")
@@ -1573,7 +1573,7 @@ def _update_standard_button_label(conn, page_key: str, button_id: str, replaceme
 
 
 def migration_41(conn):
-    """Миграция v41: нейтральные labels Platega без привязки к СБП."""
+    """Migration v41: neutral Platega labels without reference to SBP."""
     changed = 0
     changed += _update_standard_button_label(
         conn,
@@ -1597,7 +1597,7 @@ def migration_41(conn):
 
 
 def _move_key_details_custom_navigation_to_bottom(conn) -> int:
-    """Переносит старые кастомные кнопки навигации key_details в нижний ряд."""
+    """Moves the old custom key_details navigation buttons to the bottom row."""
     row = conn.execute(
         "SELECT buttons_custom FROM pages WHERE page_key = 'key_details'"
     ).fetchone()
@@ -1644,7 +1644,7 @@ def _move_key_details_custom_navigation_to_bottom(conn) -> int:
 
 
 def migration_42(conn):
-    """Миграция v42: кнопки действий карточки ключа хранятся в pages."""
+    """Migration v42: key card action buttons are stored in pages."""
     buttons_default = _key_details_page_buttons()
     conn.execute(
         """
@@ -1663,10 +1663,10 @@ def migration_42(conn):
 
 def migration_43(conn):
     """
-    Миграция v43: единые публичные названия платёжных методов.
+    Migration v43: uniform public names of payment methods.
 
-    Меняет только pages.buttons_default. Кастомные labels администраторов
-    в pages.buttons_custom не трогаются и продолжают иметь приоритет.
+    Only changes pages.buttons_default. Custom labels for administrators
+    in pages.buttons_custom are not touched and continue to have priority.
     """
     changed = 0
 
@@ -1754,7 +1754,7 @@ def migration_43(conn):
 
 
 def _add_main_support_button(conn) -> bool:
-    """Добавляет скрытую кнопку поддержки в дефолт главной страницы."""
+    """Adds a hidden support button to the default home page."""
     row = conn.execute("SELECT buttons_default FROM pages WHERE page_key = 'main'").fetchone()
     if not row:
         logger.info("Миграция v44: страница main не найдена, кнопку поддержки добавить некуда")
@@ -1792,7 +1792,7 @@ def _add_main_support_button(conn) -> bool:
 
 
 def migration_44(conn):
-    """Миграция v44: встроенная система поддержки."""
+    """Migration v44: built-in support system."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS support_threads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1871,7 +1871,7 @@ def _add_system_button_to_page_start(
     page_key: str,
     button: dict,
 ) -> bool:
-    """Добавляет системную кнопку в начало дефолтной раскладки страницы."""
+    """Adds a system button to the beginning of the default page layout."""
     cursor = conn.execute("SELECT buttons_default FROM pages WHERE page_key = ?", (page_key,))
     row = cursor.fetchone()
     if not row:
@@ -1904,7 +1904,7 @@ def _add_system_button_to_page_start(
 
 
 def migration_45(conn):
-    """Миграция v45: промокоды, промо-ссылки и одноразовые купоны."""
+    """Migration v45: promotional codes, promotional links and one-time coupons."""
     _add_column(conn, "users", "active_promo_code_id INTEGER")
 
     _add_column(conn, "payments", "promo_code_id INTEGER")
@@ -2086,7 +2086,7 @@ def _replace_legacy_page_placeholders(
     *,
     url_action_value: bool = False,
 ) -> str | None:
-    """Заменяет старые плейсхолдеры конструктора на canonical-имена."""
+    """Replaces old constructor placeholders with canonical names."""
     if text is None:
         return None
 
@@ -2104,7 +2104,7 @@ def _replace_legacy_page_placeholders(
 
 
 def _replace_legacy_template_placeholders(text: str | None) -> str | None:
-    """Заменяет плейсхолдеры скрытого шаблона одной строки ключа."""
+    """Replaces the placeholders of a hidden template of one key line."""
     if text is None:
         return None
     normalized = {key.casefold(): value for key, value in MY_KEYS_ITEM_PLACEHOLDER_RENAMES.items()}
@@ -2117,7 +2117,7 @@ def _replace_legacy_template_placeholders(text: str | None) -> str | None:
 
 
 def _replace_button_placeholders(buttons_json: str | None, page_key: str) -> tuple[str | None, bool]:
-    """Переписывает плейсхолдеры в label/action_value JSON-кнопок страницы."""
+    """Rewrites placeholders in the label/action_value of JSON page buttons."""
     if not buttons_json:
         return buttons_json, False
 
@@ -2154,7 +2154,7 @@ def _replace_button_placeholders(buttons_json: str | None, page_key: str) -> tup
 
 
 def migration_46(conn):
-    """Миграция v46: canonical-плейсхолдеры конструктора страниц и кнопок."""
+    """Migration v46: canonical placeholders for page and button builder."""
     page_rows = conn.execute(
         """
         SELECT page_key, text_default, text_custom, buttons_default, buttons_custom
@@ -2211,7 +2211,7 @@ def migration_46(conn):
 
 
 def migration_47(conn):
-    """Миграция v47: таблица data-driven маршрутов конструктора страниц."""
+    """Migration v47: table of data-driven page builder routes."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS page_routes (
@@ -2233,14 +2233,14 @@ def migration_47(conn):
 
 
 def migration_48(conn):
-    """Миграция v48: page-level guards/hooks для прямых custom page переходов."""
+    """Migration v48: page-level guards/hooks for direct custom page transitions."""
     _add_column(conn, "pages", "guard_names TEXT NOT NULL DEFAULT '[]'")
     _add_column(conn, "pages", "hook_names TEXT NOT NULL DEFAULT '[]'")
     logger.info("Миграция v48 применена: pages.guard_names/hook_names готовы")
 
 
 def migration_49(conn):
-    """Миграция v49: готовая custom-страница личного кабинета и route profile."""
+    """Migration v49: ready-made custom page for your personal account and route profile."""
     text_default = _custom_profile_page_text()
     buttons_default = _custom_profile_page_buttons()
 
@@ -2278,7 +2278,7 @@ def migration_49(conn):
 
 
 def migration_50(conn):
-    """Миграция v50: флаг включения пользовательских custom extensions."""
+    """Migration v50: flag for enabling user custom extensions."""
     conn.execute(
         """
         INSERT OR IGNORE INTO settings (key, value)
@@ -2289,7 +2289,7 @@ def migration_50(conn):
 
 
 def migration_51(conn):
-    """Миграция v51: системные таблицы custom extension storage/schema."""
+    """Migration v51: custom extension storage/schema system tables."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS extension_schema_versions (
@@ -2314,7 +2314,7 @@ def migration_51(conn):
 
 
 def migration_52(conn):
-    """Миграция v52: идемпотентный лог key lifecycle events."""
+    """Migration v52: idempotent key lifecycle events log."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS key_lifecycle_event_log (
@@ -2344,7 +2344,7 @@ def migration_52(conn):
 
 
 def migration_53(conn):
-    """Миграция v53: связь core orders с кастомными payment providers."""
+    """Migration v53: connection of core orders with custom payment providers."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS payment_provider_orders (
@@ -2378,7 +2378,7 @@ def migration_53(conn):
 
 
 def migration_54(conn):
-    """Миграция v54: настройки webhook endpoint для custom payment providers."""
+    """Migration v54: webhook endpoint settings for custom payment providers."""
     defaults = [
         ('custom_payment_webhooks_enabled', '0'),
         ('custom_payment_webhooks_host', '127.0.0.1'),
@@ -2394,7 +2394,7 @@ def migration_54(conn):
 
 
 def migration_55(conn):
-    """Миграция v55: page-backed текст QR-оплаты."""
+    """Migration v55: page-backed QR payment text."""
     text_default = _qr_payment_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2417,7 +2417,7 @@ def migration_55(conn):
 
 
 def migration_56(conn):
-    """Миграция v56: page-backed текст перехода к крипто-оплате."""
+    """Migration v56: page-backed text transition to crypto-payment."""
     text_default = _crypto_payment_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2440,7 +2440,7 @@ def migration_56(conn):
 
 
 def migration_57(conn):
-    """Миграция v57: page-backed текст оплаты с баланса."""
+    """Migration v57: page-backed text of payment from balance."""
     text_default = _balance_payment_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2463,7 +2463,7 @@ def migration_57(conn):
 
 
 def migration_58(conn):
-    """Миграция v58: page-backed текст демонстрационной оплаты."""
+    """Migration v58: page-backed text of demo payment."""
     text_default = _demo_payment_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2486,7 +2486,7 @@ def migration_58(conn):
 
 
 def migration_59(conn):
-    """Миграция v59: page-backed текст выбора тарифа оплаты."""
+    """Migration v59: page-backed text for choosing a payment plan."""
     text_default = _payment_tariff_select_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2509,7 +2509,7 @@ def migration_59(conn):
 
 
 def migration_60(conn):
-    """Миграция v60: page-backed текст статуса платежа."""
+    """Migration v60: page-backed payment status text."""
     text_default = _payment_status_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2532,7 +2532,7 @@ def migration_60(conn):
 
 
 def migration_61(conn):
-    """Миграция v61: page-backed экран входа в поддержку."""
+    """Migration v61: page-backed support login screen."""
     text_default = _support_start_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2555,7 +2555,7 @@ def migration_61(conn):
 
 
 def migration_62(conn):
-    """Миграция v62: page-backed экран ввода промокода."""
+    """Migration v62: page-backed promo code entry screen."""
     text_default = _promo_enter_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2578,7 +2578,7 @@ def migration_62(conn):
 
 
 def migration_63(conn):
-    """Миграция v63: page-backed экран Telegram ID."""
+    """Migration v63: page-backed Telegram ID screen."""
     text_default = _show_id_page_text()
     buttons_default = _home_only_page_buttons()
     conn.execute(
@@ -2601,7 +2601,7 @@ def migration_63(conn):
 
 
 def migration_64(conn):
-    """Миграция v64: page-backed экран недоступной покупки."""
+    """Migration v64: page-backed purchase unavailable screen."""
     text_default = _prepayment_unavailable_page_text()
     buttons_default = _home_only_page_buttons()
     conn.execute(
@@ -2624,7 +2624,7 @@ def migration_64(conn):
 
 
 def migration_65(conn):
-    """Миграция v65: page-backed экран заблокированного доступа."""
+    """Migration v65: page-backed blocked access screen."""
     text_default = _access_blocked_page_text()
     buttons_default = _home_only_page_buttons()
     conn.execute(
@@ -2647,7 +2647,7 @@ def migration_65(conn):
 
 
 def migration_66(conn):
-    """Миграция v66: page-backed экран результата поддержки."""
+    """Migration v66: page-backed support result screen."""
     text_default = _support_status_page_text()
     buttons_default = _home_only_page_buttons()
     conn.execute(
@@ -2670,7 +2670,7 @@ def migration_66(conn):
 
 
 def migration_67(conn):
-    """Миграция v67: page-backed экран результата промокода."""
+    """Migration v67: page-backed promo code result screen."""
     text_default = _promo_status_page_text()
     buttons_default = _empty_page_buttons()
     conn.execute(
@@ -2693,7 +2693,7 @@ def migration_67(conn):
 
 
 def migration_68(conn):
-    """Миграция v68: page-backed статус операций с ключом."""
+    """Migration v68: page-backed status of key operations."""
     text_default = _key_status_page_text()
     buttons_default = _home_only_page_buttons()
     conn.execute(
@@ -2716,7 +2716,7 @@ def migration_68(conn):
 
 
 def migration_69(conn):
-    """Миграция v69: убирает выход на главную из выбора сервера после оплаты."""
+    """Migration v69: removes access to the main page from the server selection after payment."""
     buttons_default = _empty_page_buttons()
     conn.execute(
         """
@@ -2767,7 +2767,7 @@ EVENT_PLACEHOLDER_RENAMES = {
 
 
 def _replace_event_placeholder_names(text: str | None, mapping: dict[str, str]) -> str | None:
-    """Заменяет старые event-плейсхолдеры на canonical-имена."""
+    """Replaces old event placeholders with canonical names."""
     if text is None:
         return None
     result = text
@@ -2815,7 +2815,7 @@ def _rewrite_setting_json_text(conn: sqlite3.Connection, key: str, mapping: dict
 
 
 def migration_70(conn):
-    """Миграция v70: event-плейсхолдеры и log операций extension core facade."""
+    """Migration v70: event placeholders and log operations extension core facade."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS extension_core_operations (
@@ -2857,7 +2857,7 @@ def migration_70(conn):
 
 
 def migration_71(conn):
-    """Миграция v71: бизнес-история операций ключей и баланса."""
+    """Migration v71: business history of key and balance transactions."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS key_operation_log (
@@ -2995,13 +2995,13 @@ MIGRATIONS = {
 
 def run_migrations() -> None:
     """
-    Запускает все необходимые миграции.
+    Runs all necessary migrations.
     
-    Логика:
-    - version = 0 (новая установка): вызывает migration_initial → ставит INITIAL_VERSION → применяет инкрементальные миграции до LATEST_VERSION
-    - version = LATEST_VERSION: ничего не делает
-    - version < INITIAL_VERSION: ошибка (нужно обновить через промежуточную версию)
-    - version >= INITIAL_VERSION: применяет инкрементальные миграции из MIGRATIONS
+    Logic:
+    - version = 0 (new install): calls migration_initial → sets INITIAL_VERSION → applies incremental migrations up to LATEST_VERSION
+    - version = LATEST_VERSION: does nothing
+    - version < INITIAL_VERSION: error (need to update via intermediate version)
+    - version >= INITIAL_VERSION: applies incremental migrations from MIGRATIONS
     """
     try:
         current = get_current_version()
@@ -3010,7 +3010,7 @@ def run_migrations() -> None:
             logger.info(f"✅ БД соответствует версии {LATEST_VERSION}. Миграция не требуется.")
             return
         
-        # Защита: БД на промежуточной версии, которую нельзя обновить сжатыми миграциями
+        # Protection: Database on an intermediate version that cannot be updated with compressed migrations
         if 0 < current < INITIAL_VERSION:
             raise RuntimeError(
                 f"Версия БД ({current}) ниже минимально поддерживаемой ({INITIAL_VERSION}). "
@@ -3020,13 +3020,13 @@ def run_migrations() -> None:
         logger.info(f"🔄 Требуется миграция БД с версии {current} до {LATEST_VERSION}")
         
         with get_db() as conn:
-            # Новая установка — создаём БД с нуля
+            # New installation - creating a database from scratch
             if current == 0:
                 migration_initial(conn)
                 set_version(conn, INITIAL_VERSION)
                 current = INITIAL_VERSION
             
-            # Инкрементальные миграции (22, 23, ...)
+            # Incremental migrations (22, 23, ...)
             for version in range(current + 1, LATEST_VERSION + 1):
                 if version in MIGRATIONS:
                     logger.info(f"🚀 Применяю миграцию v{version}...")

@@ -128,7 +128,7 @@ def build_quote(
     order_id: Optional[str] = None,
     explicit_code: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Возвращает расчёт цены с учётом активного промокода или купона."""
+    """Returns the price calculation taking into account the active promotional code or coupon."""
     original_amount = _base_amount(tariff, payment_type)
     amount_unit = _amount_unit(payment_type)
     promo = None
@@ -205,7 +205,7 @@ def prepare_order_pricing(
     action: str,
 ) -> Dict[str, Any]:
     """
-    Рассчитывает цену, сохраняет снапшот в payments и резервирует промокод для заказа.
+    Calculates the price, saves the snapshot in payments and reserves a promotional code for the order.
     """
     quote = build_quote(
         user_id=user_id,
@@ -254,7 +254,7 @@ def prepare_order_pricing(
 
 
 def activate_promo_code_for_user(user_id: int, code: str, *, allow_coupons: bool = True) -> Dict[str, Any]:
-    """Проверяет код и сохраняет его пользователю как активный для следующей оплаты."""
+    """Checks the code and saves it to the user as active for the next payment."""
     availability = get_promo_code_availability((code or "").strip())
     if not availability.get("ok"):
         return {
@@ -274,7 +274,7 @@ def activate_promo_code_for_user(user_id: int, code: str, *, allow_coupons: bool
 
 
 def describe_quote_lines(quote: Dict[str, Any]) -> str:
-    """Формирует короткий HTML-блок о применённой скидке."""
+    """Generates a short HTML block about the applied discount."""
     promo = quote.get("promo")
     pricing_policies = quote.get("pricing_policies") or []
     if not promo and not pricing_policies:
@@ -295,7 +295,7 @@ def describe_quote_lines(quote: Dict[str, Any]) -> str:
 
 
 def apply_order_promotion_after_payment(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Фиксирует успешное применение промокода/купона после оплаты."""
+    """Records the successful use of a promotional code/coupon after payment."""
     if not order or not order.get("promo_code_id"):
         return None
 
@@ -316,12 +316,12 @@ def _order_final_amount(order: Dict[str, Any]) -> int:
 
 
 def maybe_issue_auto_coupon_after_payment(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Выдаёт одноразовый купон после платной покупки или продления."""
+    """Issues a one-time coupon after a paid purchase or renewal."""
     return _issue_auto_coupon_after_payment(order)
 
 
 async def maybe_issue_auto_coupon_after_payment_async(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Выдаёт купон и применяет promo reward policies через доменные сервисы."""
+    """Issues a coupon and applies promo reward policies through domain services."""
     coupon = _issue_auto_coupon_after_payment(order)
     policy_rewards = await _apply_promo_reward_policies_after_payment(order)
     if policy_rewards:
@@ -334,7 +334,7 @@ async def maybe_issue_auto_coupon_after_payment_async(order: Dict[str, Any]) -> 
 
 
 def _issue_auto_coupon_after_payment(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Создаёт только купон, без изменения core-состояния наградами."""
+    """Creates only a coupon, without changing the core state with rewards."""
     if not order:
         return None
     if order.get("payment_type") in {"promo_free", "trial", "demo"}:
@@ -351,7 +351,7 @@ def _issue_auto_coupon_after_payment(order: Dict[str, Any]) -> Optional[Dict[str
 
 
 async def _apply_promo_reward_policies_after_payment(order: Dict[str, Any]) -> list[Dict[str, Any]]:
-    """Применяет декларативные post-payment promo rewards через core API."""
+    """Applies declarative post-payment promo rewards via core API."""
     try:
         from bot.utils.policy_registry import apply_promo_reward_policies
 

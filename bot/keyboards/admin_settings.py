@@ -6,11 +6,11 @@ from .admin_misc import back_button, home_button, cancel_button, state_pair_butt
 
 def bot_settings_kb(current_mode: str = 'subscription') -> InlineKeyboardMarkup:
     """
-    Клавиатура раздела 'Настройки бота'.
+    Keyboard of the 'Bot Settings' section.
 
     Args:
-        current_mode: Текущий режим работы бота ('subscription' | 'key').
-                      Влияет только на лейбл кнопки переключения режима.
+        current_mode: The bot's current operating mode ('subscription' | 'key').
+                      Only affects the label of the mode switch button.
     """
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
@@ -24,7 +24,6 @@ def bot_settings_kb(current_mode: str = 'subscription') -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text='🔄 Обновления', callback_data='admin_update_bot'))
     builder.row(InlineKeyboardButton(text='✏️ Изменить тексты', callback_data='admin_edit_texts'))
     builder.row(InlineKeyboardButton(text='📥 Скачать логи', callback_data='admin_logs_menu'))
-    builder.row(InlineKeyboardButton(text='🧩 Расширения', callback_data='admin_extensions_diagnostics'))
     builder.row(InlineKeyboardButton(text='🛑 Остановить бота', callback_data='admin_stop_bot'))
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
@@ -32,10 +31,10 @@ def bot_settings_kb(current_mode: str = 'subscription') -> InlineKeyboardMarkup:
 
 def bot_mode_toggle_confirm_kb(target_mode: str) -> InlineKeyboardMarkup:
     """
-    Клавиатура подтверждения переключения режима бота.
+    Confirmation keyboard for switching bot mode.
 
     Args:
-        target_mode: Режим, на который переключаемся ('subscription' | 'key')
+        target_mode: Mode to switch to ('subscription' | 'key')
     """
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -46,20 +45,25 @@ def bot_mode_toggle_confirm_kb(target_mode: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def extensions_diagnostics_kb() -> InlineKeyboardMarkup:
-    """Клавиатура экрана диагностики пользовательских расширений."""
+def extensions_diagnostics_kb(setting_buttons: Optional[List[Dict[str, str]]] = None) -> InlineKeyboardMarkup:
+    """Custom extension diagnostic screen keyboard."""
     builder = InlineKeyboardBuilder()
+    for button in setting_buttons or []:
+        text = str(button.get('text') or '').strip()
+        callback_data = str(button.get('callback_data') or '').strip()
+        if text and callback_data:
+            builder.row(InlineKeyboardButton(text=text, callback_data=callback_data))
     builder.row(InlineKeyboardButton(text='🔄 Обновить', callback_data='admin_extensions_diagnostics'))
-    builder.row(back_button('admin_bot_settings'), home_button())
+    builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
 
 def trial_settings_kb(enabled: bool, tariff_name: Optional[str]=None) -> InlineKeyboardMarkup:
     """
-    Клавиатура управления пробной подпиской.
+    Trial subscription control keyboard.
     
     Args:
-        enabled: Включена ли пробная подписка
-        tariff_name: Название выбранного тарифа или None
+        enabled: Whether trial subscription is enabled
+        tariff_name: Name of the selected tariff or None
     """
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
@@ -77,13 +81,13 @@ def trial_settings_kb(enabled: bool, tariff_name: Optional[str]=None) -> InlineK
 
 def trial_tariff_select_kb(tariffs: List[Dict[str, Any]], selected_id: Optional[int]=None) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора тарифа для пробной подписки.
+    Keyboard for selecting a tariff for a trial subscription.
     
-    Отображает все тарифы кроме Admin Tariff.
+    Displays all tariffs except Admin Tariff.
     
     Args:
-        tariffs: Список всех тарифов (включая неактивные)
-        selected_id: ID текущего выбранного тарифа
+        tariffs: List of all tariffs (including inactive ones)
+        selected_id: ID of the currently selected tariff
     """
     builder = InlineKeyboardBuilder()
     for tariff in tariffs:
@@ -97,19 +101,19 @@ def trial_tariff_select_kb(tariffs: List[Dict[str, Any]], selected_id: Optional[
     return builder.as_markup()
 
 def trial_edit_text_cancel_kb() -> InlineKeyboardMarkup:
-    """Клавиатура отмены редактирования текста пробной подписки."""
+    """Keyboard for undoing trial subscription text editing."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_trial'))
     return builder.as_markup()
 
 def referral_main_kb(enabled: bool, reward_type: str, levels: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """
-    Главное меню реферальной системы.
+    Main menu of the referral system.
     
     Args:
-        enabled: Включена ли система
-        reward_type: Тип начисления ('days' или 'balance')
-        levels: Список уровней [{level_number, percent, enabled}, ...]
+        enabled: Whether the system is enabled
+        reward_type: Reward type ('days' or 'balance')
+        levels: List of levels [{level_number, percent, enabled}, ...]
     """
     builder = InlineKeyboardBuilder()
     toggle_text = '🟢 Выключить' if enabled else '⚪ Включить'
@@ -131,12 +135,12 @@ def referral_main_kb(enabled: bool, reward_type: str, levels: List[Dict[str, Any
 
 def referral_level_kb(level_num: int, percent: int, enabled: bool) -> InlineKeyboardMarkup:
     """
-    Клавиатура редактирования уровня.
+    Level editing keyboard.
     
     Args:
-        level_num: Номер уровня (1-3)
-        percent: Текущий процент
-        enabled: Включён ли уровень
+        level_num: Level number (1-3)
+        percent: Current percentage
+        enabled: Whether the level is enabled
     """
     builder = InlineKeyboardBuilder()
     toggle_text = '🟢 Выключить' if enabled else '⚪ Включить'
@@ -146,7 +150,7 @@ def referral_level_kb(level_num: int, percent: int, enabled: bool) -> InlineKeyb
     return builder.as_markup()
 
 def referral_back_kb() -> InlineKeyboardMarkup:
-    """Клавиатура возврата в меню реферальной системы."""
+    """Keyboard to return to the referral system menu."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_referral'))
     return builder.as_markup()

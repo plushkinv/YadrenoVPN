@@ -1,4 +1,4 @@
-"""Безопасный registry hooks/guards для маршрутов конструктора страниц."""
+"""Secure registry hooks/guards for page builder routes."""
 from __future__ import annotations
 
 import inspect
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PageGuardResult:
-    """Результат проверки доступа к route/page."""
+    """The result of checking access to route/page."""
 
     allowed: bool
     message: str = ''
@@ -23,7 +23,7 @@ class PageGuardResult:
 
 @dataclass
 class PageHookResult:
-    """Данные, которыми hook дополняет render_page()."""
+    """Data that the hook adds to render_page()."""
 
     context: dict[str, Any] = field(default_factory=dict)
     text_replacements: dict[str, Any] = field(default_factory=dict)
@@ -43,7 +43,7 @@ PAGE_HOOKS: dict[str, PageHook] = {}
 
 
 def register_page_guard(name: str, func: PageGuard, *, replace: bool = False) -> None:
-    """Регистрирует разрешённый guard по имени."""
+    """Registers an enabled guard by name."""
     normalized = _normalize_registered_name(name)
     _require_bool(replace, 'replace')
     if not callable(func):
@@ -54,7 +54,7 @@ def register_page_guard(name: str, func: PageGuard, *, replace: bool = False) ->
 
 
 def register_page_hook(name: str, func: PageHook, *, replace: bool = False) -> None:
-    """Регистрирует разрешённый before-render hook по имени."""
+    """Registers an allowed before-render hook by name."""
     normalized = _normalize_registered_name(name)
     _require_bool(replace, 'replace')
     if not callable(func):
@@ -65,7 +65,7 @@ def register_page_hook(name: str, func: PageHook, *, replace: bool = False) -> N
 
 
 def parse_registry_names(raw: Any) -> list[str]:
-    """Парсит JSON-массив имён hooks/guards из БД."""
+    """Parses a JSON array of hooks/guards names from the database."""
     if raw is None or raw == '':
         return []
     if isinstance(raw, (list, tuple)):
@@ -88,10 +88,10 @@ def parse_registry_names(raw: Any) -> list[str]:
 
 def build_page_flow_context(target: Any, **values: Any) -> dict[str, Any]:
     """
-    Собирает базовый context для guards/hooks route/page переходов.
+    Collects the base context for guards/hooks route/page transitions.
 
-    Hook-и выполняются до render_page(), поэтому им нужен тот же минимум
-    общих значений, который renderer позже добавит для плейсхолдеров.
+    Hooks are executed before render_page(), so they need the same minimum
+    common values, which the renderer will later add for placeholders.
     """
     context = dict(values)
     if 'telegram_id' not in context:
@@ -118,7 +118,7 @@ async def run_page_guards(
     target: Any,
     context: Mapping[str, Any],
 ) -> PageGuardResult:
-    """Выполняет guards. Неизвестный guard блокирует маршрут."""
+    """Performs guards. An unknown guard is blocking the route."""
     base_context = _require_context_mapping(context)
     for name in guard_names:
         guard = PAGE_GUARDS.get(name)
@@ -141,7 +141,7 @@ async def run_page_hooks(
     target: Any,
     context: Mapping[str, Any],
 ) -> PageHookResult:
-    """Выполняет hooks. Каждый следующий hook видит context предыдущих hooks."""
+    """Executes hooks. Each next hook sees the context of previous hooks."""
     merged = PageHookResult()
     current_context = _require_context_mapping(context)
     for name in hook_names:
@@ -333,7 +333,7 @@ def _referral_enabled_guard(target: Any, context: Mapping[str, Any]) -> PageGuar
 
 
 def _widget_tariffs_hook(target: Any, context: Mapping[str, Any]) -> PageHookResult:
-    """Добавляет context для `%тарифы%`, если он ещё не передан."""
+    """Adds tariff-list context if it is not already passed."""
     if 'tariffs_html' in context:
         return PageHookResult()
 
@@ -343,7 +343,7 @@ def _widget_tariffs_hook(target: Any, context: Mapping[str, Any]) -> PageHookRes
 
 
 def _widget_referral_hook(target: Any, context: Mapping[str, Any]) -> PageHookResult:
-    """Добавляет context реферальных плейсхолдеров, если он ещё не передан."""
+    """Adds the context of referral placeholders if it has not already been sent."""
     if 'referral_link' in context and 'referral_stats_html' in context:
         return PageHookResult()
 
@@ -357,7 +357,7 @@ def _widget_referral_hook(target: Any, context: Mapping[str, Any]) -> PageHookRe
 
 
 def _widget_support_hook(target: Any, context: Mapping[str, Any]) -> PageHookResult:
-    """Добавляет context входа во встроенную поддержку."""
+    """Adds login context to native support."""
     if 'support_title_html' in context and 'support_instruction_html' in context:
         return PageHookResult()
 
@@ -369,7 +369,7 @@ def _widget_support_hook(target: Any, context: Mapping[str, Any]) -> PageHookRes
 
 
 def _widget_profile_hook(target: Any, context: Mapping[str, Any]) -> PageHookResult:
-    """Добавляет context профиля, баланса и сводки ключей."""
+    """Adds profile, balance and key summary context."""
     if 'user_profile_html' in context and 'keys_summary_html' in context:
         return PageHookResult()
 
@@ -380,7 +380,7 @@ def _widget_profile_hook(target: Any, context: Mapping[str, Any]) -> PageHookRes
 
 
 async def _widget_my_keys_hook(target: Any, context: Mapping[str, Any]) -> PageHookResult:
-    """Добавляет context текстового списка ключей."""
+    """Adds context to a text list of keys."""
     if 'keys_list_html' in context:
         return PageHookResult()
 

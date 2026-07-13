@@ -21,13 +21,13 @@ __all__ = [
 
 def get_all_tariffs(include_hidden: bool = False) -> List[Dict[str, Any]]:
     """
-    Получает список всех тарифов.
+    Gets a list of all tariffs.
     
     Args:
-        include_hidden: Включать скрытые тарифы (is_active = 0)
+        include_hidden: Include hidden rates (is_active = 0)
         
     Returns:
-        Список словарей с данными тарифов
+        List of dictionaries with tariff data
     """
     with get_db() as conn:
         if include_hidden:
@@ -49,13 +49,13 @@ def get_all_tariffs(include_hidden: bool = False) -> List[Dict[str, Any]]:
 
 def get_tariff_by_id(tariff_id: int) -> Optional[Dict[str, Any]]:
     """
-    Получает тариф по ID.
+    Receives tariff by ID.
     
     Args:
-        tariff_id: ID тарифа
+        tariff_id: Tariff ID
         
     Returns:
-        Словарь с данными тарифа или None
+        Dictionary with tariff data or None
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -79,21 +79,21 @@ def add_tariff(
     max_ips: int = 1
 ) -> int:
     """
-    Добавляет новый тариф.
+    Adds a new tariff.
     
     Args:
-        name: Название тарифа
-        duration_days: Длительность в днях
-        price_cents: Цена в центах (USDT * 100)
-        price_stars: Цена в Telegram Stars
-        price_rub: Цена в рублях
-        display_order: Порядок отображения
-        traffic_limit_gb: Лимит трафика в ГБ (0 = безлимит)
-        group_id: ID группы тарифов (по умолчанию 1 — «Основная»)
-        max_ips: Лимит устройств (IP-адресов) (по умолчанию 1)
+        name: Tariff name
+        duration_days: Duration in days
+        price_cents: Price in cents (USDT * 100)
+        price_stars: Price in Telegram Stars
+        price_rub: Price in rubles
+        display_order: Display order
+        traffic_limit_gb: Traffic limit in GB (0 = unlimited)
+        group_id: tariff group ID (default 1 - “Main”)
+        max_ips: Device (IP address) limit (default 1)
         
     Returns:
-        ID созданного тарифа
+        ID of the created tariff
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -107,14 +107,14 @@ def add_tariff(
 
 def update_tariff(tariff_id: int, **fields) -> bool:
     """
-    Обновляет поля тарифа.
+    Updates rate fields.
     
     Args:
-        tariff_id: ID тарифа
-        **fields: Поля для обновления
+        tariff_id: Tariff ID
+        **fields: Fields to update
         
     Returns:
-        True если обновление успешно
+        True if update is successful
     """
     allowed_fields = {'name', 'duration_days', 'price_cents', 'price_stars', 'price_rub',
                       'display_order', 'is_active', 'group_id', 'traffic_limit_gb', 'max_ips'}
@@ -139,27 +139,27 @@ def update_tariff(tariff_id: int, **fields) -> bool:
 
 def update_tariff_field(tariff_id: int, field: str, value: Any) -> bool:
     """
-    Обновляет одно поле тарифа.
+    Updates one rate field.
     
     Args:
-        tariff_id: ID тарифа
-        field: Название поля
-        value: Новое значение
+        tariff_id: Tariff ID
+        field: Field name
+        value: New value
         
     Returns:
-        True если обновление успешно
+        True if update is successful
     """
     return update_tariff(tariff_id, **{field: value})
 
 def toggle_tariff_active(tariff_id: int) -> Optional[bool]:
     """
-    Переключает активность тарифа (скрыть/показать).
+    Switches the tariff activity (hide/show).
     
     Args:
-        tariff_id: ID тарифа
+        tariff_id: Tariff ID
         
     Returns:
-        Новый статус (True = активен) или None если тариф не найден
+        New status (True = active) or None if tariff not found
     """
     tariff = get_tariff_by_id(tariff_id)
     if not tariff:
@@ -179,10 +179,10 @@ def toggle_tariff_active(tariff_id: int) -> Optional[bool]:
 
 def get_tariffs_count() -> int:
     """
-    Возвращает количество активных тарифов.
+    Returns the number of active tariffs.
     
     Returns:
-        Количество активных тарифов
+        Number of active tariffs
     """
     with get_db() as conn:
         cursor = conn.execute("SELECT COUNT(*) as cnt FROM tariffs WHERE is_active = 1")
@@ -191,12 +191,12 @@ def get_tariffs_count() -> int:
 
 def get_admin_tariff() -> Optional[Dict[str, Any]]:
     """
-    Получает скрытый Admin Tariff для админского добавления ключей.
+    Gets the hidden Admin Tariff for the admin adding keys.
     
-    Если тариф не существует, создаёт его автоматически.
+    If the tariff does not exist, it creates it automatically.
     
     Returns:
-        Словарь с данными тарифа
+        Dictionary with tariff data
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -211,7 +211,7 @@ def get_admin_tariff() -> Optional[Dict[str, Any]]:
         if row:
             return dict(row)
         
-        # Если тариф не найден, создаём его
+        # If the tariff is not found, create it
         cursor = conn.execute("""
             INSERT INTO tariffs (name, duration_days, price_cents, price_stars, price_rub, display_order, is_active, max_ips)
             VALUES ('Admin Tariff', 30, 0, 0, 0, 999, 0, 1)

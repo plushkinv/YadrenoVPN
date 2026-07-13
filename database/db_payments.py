@@ -74,14 +74,14 @@ __all__ = [
 
 def save_yookassa_payment_id(order_id: str, yookassa_payment_id: str) -> bool:
     """
-    Сохраняет ID платежа ЮКасса в запись ордера.
+    Saves the YuKass payment ID in the order record.
 
     Args:
-        order_id: Наш внутренний order_id
-        yookassa_payment_id: ID платежа в системе ЮКассы
+        order_id: Our internal order_id
+        yookassa_payment_id: Payment ID in the Yookassa system
 
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -95,13 +95,13 @@ def save_yookassa_payment_id(order_id: str, yookassa_payment_id: str) -> bool:
 
 def find_order_by_yookassa_id(yookassa_payment_id: str) -> Optional[Dict[str, Any]]:
     """
-    Находит ордер по ID платежа ЮКасса.
+    Finds an order by YuKass payment ID.
 
     Args:
-        yookassa_payment_id: ID платежа в системе ЮКассы
+        yookassa_payment_id: Payment ID in the Yookassa system
 
     Returns:
-        Словарь с данными ордера или None
+        Dictionary with order data or None
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -113,14 +113,14 @@ def find_order_by_yookassa_id(yookassa_payment_id: str) -> Optional[Dict[str, An
 
 def save_wata_link_id(order_id: str, wata_link_id: str) -> bool:
     """
-    Сохраняет ID платёжной ссылки WATA в запись ордера.
+    Saves the WATA payment link ID to the order record.
 
     Args:
-        order_id: Наш внутренний order_id
-        wata_link_id: ID ссылки в системе WATA
+        order_id: Our internal order_id
+        wata_link_id: WATA link ID
 
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -134,13 +134,13 @@ def save_wata_link_id(order_id: str, wata_link_id: str) -> bool:
 
 def find_order_by_wata_link_id(wata_link_id: str) -> Optional[Dict[str, Any]]:
     """
-    Находит ордер по ID платёжной ссылки WATA.
+    Finds an order by WATA payment link ID.
 
     Args:
-        wata_link_id: ID ссылки в системе WATA
+        wata_link_id: WATA link ID
 
     Returns:
-        Словарь с данными ордера или None
+        Dictionary with order data or None
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -152,14 +152,14 @@ def find_order_by_wata_link_id(wata_link_id: str) -> Optional[Dict[str, Any]]:
 
 def save_platega_transaction_id(order_id: str, transaction_id: str) -> bool:
     """
-    Сохраняет ID транзакции Platega в запись ордера.
+    Saves the Platega transaction ID to the order record.
 
     Args:
-        order_id: Наш внутренний order_id
-        transaction_id: ID транзакции в системе Platega
+        order_id: Our internal order_id
+        transaction_id: Transaction ID in the Platega system
 
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -173,13 +173,13 @@ def save_platega_transaction_id(order_id: str, transaction_id: str) -> bool:
 
 def find_order_by_platega_transaction_id(transaction_id: str) -> Optional[Dict[str, Any]]:
     """
-    Находит ордер по ID транзакции Platega.
+    Finds an order by Platega transaction ID.
 
     Args:
-        transaction_id: ID транзакции в системе Platega
+        transaction_id: Transaction ID in the Platega system
 
     Returns:
-        Словарь с данными ордера или None
+        Dictionary with order data or None
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -191,14 +191,14 @@ def find_order_by_platega_transaction_id(transaction_id: str) -> Optional[Dict[s
 
 def save_cardlink_bill_id(order_id: str, bill_id: str) -> bool:
     """
-    Сохраняет bill_id Cardlink в запись ордера.
+    Saves the bill_id Cardlink to the order record.
 
     Args:
-        order_id: Наш внутренний order_id
-        bill_id: ID счёта в системе Cardlink
+        order_id: Our internal order_id
+        bill_id: Account ID in the Cardlink system
 
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -212,13 +212,13 @@ def save_cardlink_bill_id(order_id: str, bill_id: str) -> bool:
 
 def find_order_by_cardlink_bill_id(bill_id: str) -> Optional[Dict[str, Any]]:
     """
-    Находит ордер по bill_id Cardlink.
+    Finds an order by bill_id Cardlink.
 
     Args:
-        bill_id: ID счёта в системе Cardlink
+        bill_id: Account ID in the Cardlink system
 
     Returns:
-        Словарь с данными ордера или None
+        Dictionary with order data or None
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -230,16 +230,16 @@ def find_order_by_cardlink_bill_id(bill_id: str) -> Optional[Dict[str, Any]]:
 
 def find_latest_pending_cardlink_order_for_user(user_id: int) -> Optional[Dict[str, Any]]:
     """
-    Находит последний pending-ордер типа 'cardlink' для пользователя.
+    Finds the last pending order of type 'cardlink' for the user.
 
-    Используется при возврате пользователя по deep-link cl_Success/cl_Fail/cl_Result,
-    чтобы понять, какой именно платёж проверять.
+    Used when returning a user via deep-link cl_Success/cl_Fail/cl_Result,
+    to understand which payment to check.
 
     Args:
-        user_id: Внутренний ID пользователя
+        user_id: Internal user ID
 
     Returns:
-        Словарь с данными ордера или None
+        Dictionary with order data or None
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -256,21 +256,21 @@ def find_latest_pending_cardlink_order_for_user(user_id: int) -> Optional[Dict[s
 
 def get_user_payments_stats(user_id: int) -> Dict[str, Any]:
     """
-    Получает статистику оплат пользователя.
+    Gets user payment statistics.
     
     Args:
-        user_id: Внутренний ID пользователя
+        user_id: Internal user ID
     
     Returns:
-        Словарь со статистикой:
-        - total_payments: количество платежей
-        - total_amount_cents: общая сумма в центах
-        - total_amount_stars: общая сумма в звёздах
-        - last_payment_at: дата последней оплаты
-        - tariffs: список уникальных тарифов
+        Dictionary with statistics:
+        - total_payments: number of payments
+        - total_amount_cents: total amount in cents
+        - total_amount_stars: total amount in stars
+        - last_payment_at: date of last payment
+        - tariffs: list of unique tariffs
     """
     with get_db() as conn:
-        # Общая статистика
+        # General statistics
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as total_payments,
@@ -284,7 +284,7 @@ def get_user_payments_stats(user_id: int) -> Dict[str, Any]:
         """, (user_id,))
         stats = dict(cursor.fetchone())
         
-        # Уникальные тарифы
+        # Unique rates
         cursor = conn.execute("""
             SELECT DISTINCT t.name 
             FROM payments p
@@ -297,17 +297,17 @@ def get_user_payments_stats(user_id: int) -> Dict[str, Any]:
 
 def get_daily_payments_stats() -> Dict[str, Any]:
     """
-    Получает статистику платежей за последние 24 часа.
+    Receives payment statistics for the last 24 hours.
     
     Returns:
-        Словарь со статистикой:
-        - paid_count: количество успешных платежей
-        - paid_cents: сумма успешных в центах
-        - paid_stars: сумма успешных в звёздах
-        - pending_count: количество ожидающих (неоплаченных)
+        Dictionary with statistics:
+        - paid_count: number of successful payments
+        - paid_cents: amount of successful ones in cents
+        - paid_stars: sum of successful ones in stars
+        - pending_count: number of pending (unpaid)
     """
     with get_db() as conn:
-        # 1. Считаем USDT (crypto)
+        # 1. We count USDT (crypto)
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
@@ -319,7 +319,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         crypto_row = cursor.fetchone()
         
-        # 2. Считаем Stars
+        # 2. Count Stars
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
@@ -331,7 +331,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         stars_row = cursor.fetchone()
         
-        # 3. Считаем TG payments (исторический payment_type 'cards')
+        # 3. We count TG payments (historical payment_type 'cards')
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
@@ -344,7 +344,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         cards_row = cursor.fetchone()
         
-        # 4. Считаем ЮКассу (исторический payment_type 'yookassa_qr')
+        # 4. We count YuKassa (historical payment_type 'yookassa_qr')
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
@@ -357,7 +357,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         qr_row = cursor.fetchone()
 
-        # 5. Считаем WATA (Карта/СБП - Рубли)
+        # 5. We count WATA (Card/SBP - Rubles)
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
@@ -370,7 +370,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         wata_row = cursor.fetchone()
 
-        # 6. Считаем Platega (Рубли)
+        # 6. Count Platega (Rubles)
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
@@ -383,7 +383,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         """)
         platega_row = cursor.fetchone()
 
-        # 7. Считаем Cardlink (Карта/СБП - Рубли)
+        # 7. We count Cardlink (Card/SBP - Rubles)
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
@@ -421,13 +421,13 @@ def get_daily_payments_stats() -> Dict[str, Any]:
 
 def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
     """
-    Получает историю платежей по конкретному ключу.
+    Retrieves payment history for a specific key.
     
     Args:
-        key_id: ID ключа
+        key_id: Key ID
     
     Returns:
-        Список платежей, отсортированный по дате (по убыванию).
+        List of payments sorted by date (descending).
     """
     with get_db() as conn:
         from database.db_business_operations import create_business_operation_tables, get_key_operation_history
@@ -450,13 +450,13 @@ def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
 
 def _int_to_base62(num: int) -> str:
     """
-    Конвертирует число в base62 строку.
+    Converts a number to a base62 string.
     
     Args:
-        num: Положительное целое число
+        num: Positive integer
         
     Returns:
-        Base62 строка (0-9, A-Z, a-z)
+        Base62 string (0-9, A-Z, a-z)
     """
     if num == 0:
         return BASE62_ALPHABET[0]
@@ -475,25 +475,25 @@ def create_pending_order(
     vpn_key_id: Optional[int] = None
 ) -> tuple[int, str]:
     """
-    Создаёт pending order и генерирует уникальный order_id.
+    Creates a pending order and generates a unique order_id.
     
-    Order_id генерируется из внутреннего ID записи в base62 формате,
-    что гарантирует уникальность и соответствие формату криптопроцессинга
-    (макс 8 символов A-Za-z0-9).
+    Order_id is generated from the internal record ID in base62 format,
+    which guarantees uniqueness and compliance with the cryptoprocessing format
+    (max 8 characters A-Za-z0-9).
     
     Args:
-        user_id: Внутренний ID пользователя
-        tariff_id: ID тарифа (может быть None для крипты)
-        payment_type: 'crypto', 'stars' или None (если выбирается при оплате)
-        vpn_key_id: ID ключа для продления (None для нового ключа)
+        user_id: Internal user ID
+        tariff_id: Tariff ID (can be None for crypto)
+        payment_type: 'crypto', 'stars' or None (if selected during payment)
+        vpn_key_id: ID of the key to renew (None for a new key)
     
     Returns:
-        Кортеж (payment_id, order_id)
+        Tuple (payment_id, order_id)
     """
     tariff = get_tariff_by_id(tariff_id) if tariff_id else None
     
     with get_db() as conn:
-        # Шаг 1: создаём запись с временным order_id
+        # Step 1: create a record with a temporary order_id
         cursor = conn.execute("""
             INSERT INTO payments 
             (user_id, tariff_id, order_id, payment_type, vpn_key_id, 
@@ -507,11 +507,11 @@ def create_pending_order(
         ))
         payment_id = cursor.lastrowid
         
-        # Шаг 2: генерируем order_id из ID записи (base62)
-        # Добавляем префикс '00' для исключения конфликтов с внешними ID
+        # Step 2: generate order_id from post ID (base62)
+        # Add the prefix '00' to avoid conflicts with external IDs
         order_id = "00" + _int_to_base62(payment_id)
         
-        # Шаг 3: обновляем order_id
+        # Step 3: update order_id
         conn.execute("""
             UPDATE payments SET order_id = ? WHERE id = ?
         """, (order_id, payment_id))
@@ -529,21 +529,21 @@ def create_paid_order_external(
     period_days: int
 ) -> bool:
     """
-    Создаёт сразу оплаченный ордер (для внешних платежей).
+    Creates an immediately paid order (for external payments).
     
-    Используется когда оплата пришла извне (без предварительного pending order).
+    Used when payment came from outside (without a prior pending order).
     
     Args:
-        order_id: Внешний ID ордера
-        user_id: ID пользователя
-        tariff_id: ID тарифа
-        payment_type: Тип оплаты ('crypto', 'stars')
-        amount_cents: Сумма в центах
-        amount_stars: Сумма в звёздах
-        period_days: Срок действия
+        order_id: External order ID
+        user_id: User ID
+        tariff_id: Tariff ID
+        payment_type: Payment type ('crypto', 'stars')
+        amount_cents: Amount in cents
+        amount_stars: Amount in stars
+        period_days: Validity period
         
     Returns:
-        True если успешно
+        True if successful
     """
     try:
         with get_db() as conn:
@@ -564,13 +564,13 @@ def create_paid_order_external(
 
 def find_order_by_order_id(order_id: str) -> Optional[Dict[str, Any]]:
     """
-    Находит платёж по order_id.
+    Finds payment by order_id.
     
     Args:
-        order_id: Уникальный ID ордера
+        order_id: Unique order ID
     
     Returns:
-        Словарь с данными платежа или None
+        Dictionary with payment data or None
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -584,13 +584,13 @@ def find_order_by_order_id(order_id: str) -> Optional[Dict[str, Any]]:
 
 def complete_order(order_id: str) -> bool:
     """
-    Завершает платёж: меняет статус на 'paid'.
+    Completes the payment: changes the status to 'paid'.
     
     Args:
-        order_id: ID ордера
+        order_id: Order ID
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -605,15 +605,15 @@ def complete_order(order_id: str) -> bool:
 
 def update_order_tariff(order_id: str, tariff_id: int, payment_type: Optional[str] = None) -> bool:
     """
-    Обновляет тариф и суммы в ордере.
+    Updates the tariff and amounts in the order.
     
     Args:
-        order_id: ID ордера
-        tariff_id: ID нового тарифа
-        payment_type: Тип оплаты (опционально)
+        order_id: Order ID
+        tariff_id: ID of the new tariff
+        payment_type: Payment type (optional)
     
     Returns:
-        True если успешно
+        True if successful
     """
     tariff = get_tariff_by_id(tariff_id)
     if not tariff:
@@ -643,14 +643,14 @@ def update_order_tariff(order_id: str, tariff_id: int, payment_type: Optional[st
 
 def update_payment_type(order_id: str, payment_type: str) -> bool:
     """
-    Обновляет тип оплаты в ордере.
+    Updates the payment type in the order.
     
     Args:
-        order_id: ID ордера
-        payment_type: Новый тип оплаты ('crypto', 'stars')
+        order_id: Order ID
+        payment_type: New payment type ('crypto', 'stars')
         
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -665,14 +665,14 @@ def update_payment_type(order_id: str, payment_type: str) -> bool:
 
 def update_payment_key_id(order_id: str, vpn_key_id: int) -> bool:
     """
-    Привязывает созданный VPN-ключ к платежу.
+    Links the created VPN key to the payment.
     
     Args:
-        order_id: ID ордера
-        vpn_key_id: ID ключа
+        order_id: Order ID
+        vpn_key_id: Key ID
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -684,13 +684,13 @@ def update_payment_key_id(order_id: str, vpn_key_id: int) -> bool:
 
 def is_order_already_paid(order_id: str) -> bool:
     """
-    Проверяет, был ли ордер уже оплачен.
+    Checks whether the order has already been paid.
     
     Args:
-        order_id: ID ордера
+        order_id: Order ID
     
     Returns:
-        True если статус = 'paid'
+        True if status = 'paid'
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -702,13 +702,13 @@ def is_order_already_paid(order_id: str) -> bool:
 
 def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
     """
-    Получает историю платежей по ключу.
+    Retrieves payment history by key.
     
     Args:
-        key_id: ID ключа
+        key_id: Key ID
     
     Returns:
-        Список платежей с названиями тарифов
+        List of payments with tariff names
     """
     with get_db() as conn:
         from database.db_business_operations import create_business_operation_tables, get_key_operation_history
@@ -731,10 +731,10 @@ def _sort_key_history_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def get_referral_levels() -> List[Dict[str, Any]]:
     """
-    Получить все уровни реферальной системы.
+    Get all levels of the referral system.
     
     Returns:
-        Список [{level_number, percent, enabled}, ...]
+        List [{level_number, percent, enabled}, ...]
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -744,10 +744,10 @@ def get_referral_levels() -> List[Dict[str, Any]]:
 
 def get_active_referral_levels() -> List[tuple]:
     """
-    Получить только включённые уровни.
+    Get only included levels.
     
     Returns:
-        Список кортежей [(level_num, percent), ...]
+        List of tuples [(level_num, percent), ...]
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -757,15 +757,15 @@ def get_active_referral_levels() -> List[tuple]:
 
 def update_referral_level(level_number: int, percent: int, enabled: bool) -> bool:
     """
-    Обновить уровень реферальной системы.
+    Update the level of the referral system.
     
     Args:
-        level_number: Номер уровня (1, 2, 3)
-        percent: Процент (1-100)
-        enabled: Включён ли уровень
+        level_number: Level number (1, 2, 3)
+        percent: Percent (1-100)
+        enabled: Whether the level is enabled
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -779,13 +779,13 @@ def update_referral_level(level_number: int, percent: int, enabled: bool) -> boo
 
 def get_referral_stats(user_id: int) -> List[Dict[str, Any]]:
     """
-    Статистика по включённым уровням реферальной программы.
+    Statistics on included levels of the referral program.
     
     Args:
-        user_id: Внутренний ID пользователя (реферера)
+        user_id: Internal user ID (referrer)
     
     Returns:
-        Список [{level, count, total_reward_cents, total_reward_days}, ...]
+        List [{level, count, total_reward_cents, total_reward_days}, ...]
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -808,8 +808,8 @@ def get_referral_stats(user_id: int) -> List[Dict[str, Any]]:
         """, (user_id,))
         rewards = {row['level']: dict(row) for row in cursor.fetchall()}
         
-        # Общее количество приглашенных по уровням
-        # Используем рекурсивный CTE (WITH RECURSIVE) для получения дерева рефералов
+        # Total number of invitees by level
+        # We use recursive CTE (WITH RECURSIVE) to obtain a referral tree
         cursor = conn.execute("""
             WITH RECURSIVE referral_tree(id, level) AS (
                 SELECT id, 1 
@@ -836,7 +836,7 @@ def get_referral_stats(user_id: int) -> List[Dict[str, Any]]:
                 'total_reward_cents': 0,
                 'total_reward_days': 0
             })
-            # Заменяем 'count' на 'total_count', чтобы показывать всех приглашённых
+            # Replace 'count' with 'total_count' to show all invitees
             rew['count'] = counts.get(level, 0)
             result.append(rew)
             
@@ -850,17 +850,17 @@ def update_referral_stat(
     reward_days: int
 ) -> bool:
     """
-    Обновить статистику реферала (INSERT ON CONFLICT DO UPDATE).
+    Update referral statistics (INSERT ON CONFLICT DO UPDATE).
     
     Args:
-        referrer_id: ID реферера
-        referral_id: ID реферала
-        level: Уровень (1, 2, 3)
-        reward_cents: Вознаграждение в копейках
-        reward_days: Вознаграждение в днях
+        referrer_id: Referrer ID
+        referral_id: Referral ID
+        level: Level (1, 2, 3)
+        reward_cents: Reward in kopecks
+        reward_days: Reward in days
     
     Returns:
-        True если успешно
+        True if successful
     """
     with get_db() as conn:
         conn.execute("""
@@ -874,23 +874,23 @@ def update_referral_stat(
         return True
 
 def is_referral_enabled() -> bool:
-    """Включена ли реферальная система."""
+    """Is the referral system enabled?"""
     return get_setting('referral_enabled', '0') == '1'
 
 def get_referral_reward_type() -> str:
-    """Тип начисления: 'days' или 'balance'."""
+    """Accrual type: 'days' or 'balance'."""
     return get_setting('referral_reward_type', 'days')
 
 def get_referral_conditions_text() -> str:
-    """Текст условий реферальной программы."""
+    """Text of the terms and conditions of the referral program."""
     return get_setting('referral_conditions_text', '')
 
 def parse_referral_notification_levels(raw: Optional[str]) -> List[int]:
     """
-    Разбирает CSV уровней уведомлений рефовода.
+    Parses CSV of referral notification levels.
 
-    Допустимые значения: 1, 2, 3. Пустое или некорректное значение
-    трактуется как дефолтный первый уровень.
+    Valid values: 1, 2, 3. Empty or invalid value
+    is treated as the default first level.
     """
     value = (raw or '').strip()
     if not value:
@@ -910,35 +910,35 @@ def parse_referral_notification_levels(raw: Optional[str]) -> List[int]:
     return result or [1]
 
 def get_referral_notification_levels() -> List[int]:
-    """Уровни, по которым рефовод получает скрытые уведомления."""
+    """Levels at which the referral manager receives hidden notifications."""
     return parse_referral_notification_levels(
         get_setting('referral_notification_levels', '1')
     )
 
 def is_referral_new_ref_notifications_enabled() -> bool:
-    """Включены ли скрытые уведомления о новых рефералах."""
+    """Are hidden notifications about new referrals enabled?"""
     return get_setting('referral_new_ref_notifications_enabled', '0') == '1'
 
 def is_referral_purchase_notifications_enabled() -> bool:
-    """Включены ли скрытые уведомления о покупках рефералов."""
+    """Are hidden notifications enabled for referral purchases?"""
     return get_setting('referral_purchase_notifications_enabled', '0') == '1'
 
 def get_referral_new_ref_notification_text() -> str:
-    """Текст скрытого уведомления о новом реферале."""
+    """The text of the hidden notification about a new referral."""
     return get_setting(
         'referral_new_ref_notification_text',
         DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT,
     ) or DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT
 
 def get_referral_purchase_notification_text() -> str:
-    """Текст скрытого уведомления о покупке реферала."""
+    """The text of the hidden referral purchase notification."""
     return get_setting(
         'referral_purchase_notification_text',
         DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT,
     ) or DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT
 
 def get_referral_notification_settings() -> Dict[str, Any]:
-    """Текущее состояние скрытых уведомлений рефовода для read-only вывода."""
+    """Current state of hidden referral notifications for read-only output."""
     return {
         'new_ref_enabled': is_referral_new_ref_notifications_enabled(),
         'new_ref_text_set': bool(get_referral_new_ref_notification_text().strip()),
@@ -949,14 +949,14 @@ def get_referral_notification_settings() -> Dict[str, Any]:
 
 def update_referral_setting(key: str, value: str) -> bool:
     """
-    Обновить настройку реферальной системы.
+    Update the referral system settings.
     
     Args:
-        key: Ключ настройки
-        value: Значение
+        key: Setting key
+        value: Value
     
     Returns:
-        True если успешно
+        True if successful
     """
     set_setting(key, value)
     return True

@@ -76,14 +76,14 @@ _UTC_OFFSET_RE = re.compile(r'^(?:utc|gmt)?\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$'
 
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     """
-    Получает значение настройки.
+    Gets the setting value.
     
     Args:
-        key: Ключ настройки
-        default: Значение по умолчанию
+        key: Setting key
+        default: Default value
         
     Returns:
-        Значение настройки или default
+        Setting value or default
     """
     with get_db() as conn:
         cursor = conn.execute(
@@ -95,11 +95,11 @@ def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
 
 def set_setting(key: str, value: str) -> None:
     """
-    Устанавливает значение настройки.
+    Sets the setting value.
     
     Args:
-        key: Ключ настройки
-        value: Значение настройки
+        key: Setting key
+        value: Setting value
     """
     with get_db() as conn:
         conn.execute("""
@@ -111,13 +111,13 @@ def set_setting(key: str, value: str) -> None:
 
 def delete_setting(key: str) -> bool:
     """
-    Удаляет настройку.
+    Removes a setting.
     
     Args:
-        key: Ключ настройки
+        key: Setting key
         
     Returns:
-        True если настройка была удалена
+        True if the setting was removed
     """
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
@@ -125,12 +125,12 @@ def delete_setting(key: str) -> bool:
 
 
 def is_update_notifications_enabled() -> bool:
-    """Возвращает состояние скрытых уведомлений о новых версиях."""
+    """Returns the state of hidden new version notifications."""
     return get_setting(UPDATE_NOTIFICATIONS_ENABLED_SETTING, '1') == '1'
 
 
 def normalize_display_timezone(value: Optional[str]) -> str:
-    """Нормализует скрытую настройку часового пояса для отображения дат."""
+    """Normalizes the hidden time zone setting for displaying dates."""
     raw = (value or '').strip()
     if not raw:
         return DEFAULT_DISPLAY_TIMEZONE
@@ -157,14 +157,14 @@ def normalize_display_timezone(value: Optional[str]) -> str:
 
 
 def get_display_timezone() -> str:
-    """Возвращает часовой пояс, в котором бот показывает даты пользователям и админам."""
+    """Returns the time zone in which the bot displays dates to users and admins."""
     return normalize_display_timezone(
         get_setting(DISPLAY_TIMEZONE_SETTING, DEFAULT_DISPLAY_TIMEZONE)
     )
 
 
 def set_display_timezone(value: str) -> str:
-    """Сохраняет часовой пояс отображения и возвращает нормализованное значение."""
+    """Preserves the display time zone and returns a normalized value."""
     timezone_value = normalize_display_timezone(value)
     set_setting(DISPLAY_TIMEZONE_SETTING, timezone_value)
     return timezone_value
@@ -180,32 +180,32 @@ YADRENO_ADMIN_TOOL_RUNTIME_SETTING_PREFIX = 'yadreno_admin_tool_runtime'
 
 
 def get_yadreno_admin_api_key() -> Optional[str]:
-    """Возвращает общий api_key Yadreno Admin для этого Telegram-бота."""
+    """Returns the general Yadreno Admin api_key for this Telegram bot."""
     return get_setting(YADRENO_ADMIN_API_KEY_SETTING)
 
 
 def set_yadreno_admin_api_key(api_key: str) -> None:
-    """Сохраняет общий api_key Yadreno Admin в settings."""
+    """Saves the general api_key Yadreno Admin in settings."""
     set_setting(YADRENO_ADMIN_API_KEY_SETTING, api_key)
 
 
 def delete_yadreno_admin_api_key() -> bool:
-    """Удаляет общий api_key Yadreno Admin из settings."""
+    """Removes the general api_key Yadreno Admin from settings."""
     return delete_setting(YADRENO_ADMIN_API_KEY_SETTING)
 
 
 def get_yadreno_admin_server_ip() -> str:
-    """Возвращает сохранённый публичный IP сервера для Yadreno Admin."""
+    """Returns the saved public IP of the server for Yadreno Admin."""
     return get_setting(YADRENO_ADMIN_SERVER_IP_SETTING, '') or ''
 
 
 def set_yadreno_admin_server_ip(server_ip: str) -> None:
-    """Сохраняет публичный IP сервера для Yadreno Admin в settings."""
+    """Saves the public IP of the server for Yadreno Admin in settings."""
     set_setting(YADRENO_ADMIN_SERVER_IP_SETTING, server_ip.strip())
 
 
 def delete_yadreno_admin_server_ip() -> bool:
-    """Удаляет сохранённый публичный IP сервера Yadreno Admin из settings."""
+    """Removes the saved public IP of the Yadreno Admin server from settings."""
     return delete_setting(YADRENO_ADMIN_SERVER_IP_SETTING)
 
 
@@ -220,7 +220,7 @@ def is_yadreno_admin_core_changes_enabled() -> bool:
 
 
 def _yadreno_admin_request_key(kind: str, telegram_id: int, topic_id: int) -> str:
-    """Ключ settings для request_id в lane Yadreno Admin."""
+    """Settings key for request_id in lane Yadreno Admin."""
     return (
         f'{YADRENO_ADMIN_REQUEST_SETTING_PREFIX}:'
         f'{kind}:{int(telegram_id)}:{int(topic_id)}'
@@ -228,7 +228,7 @@ def _yadreno_admin_request_key(kind: str, telegram_id: int, topic_id: int) -> st
 
 
 def _get_yadreno_admin_request_id(kind: str, telegram_id: int, topic_id: int) -> Optional[int]:
-    """Читает request_id Yadreno Admin из settings."""
+    """Reads request_id Yadreno Admin from settings."""
     raw = get_setting(_yadreno_admin_request_key(kind, telegram_id, topic_id))
     if not raw:
         return None
@@ -239,12 +239,12 @@ def _get_yadreno_admin_request_id(kind: str, telegram_id: int, topic_id: int) ->
 
 
 def get_yadreno_admin_active_request_id(telegram_id: int, topic_id: int) -> Optional[int]:
-    """Возвращает active request_id Yadreno Admin из settings."""
+    """Returns active request_id Yadreno Admin from settings."""
     return _get_yadreno_admin_request_id('active', telegram_id, topic_id)
 
 
 def set_yadreno_admin_active_request_id(telegram_id: int, topic_id: int, request_id: int) -> None:
-    """Сохраняет active request_id Yadreno Admin в settings."""
+    """Saves active request_id Yadreno Admin in settings."""
     set_setting(
         _yadreno_admin_request_key('active', telegram_id, topic_id),
         str(int(request_id)),
@@ -252,12 +252,12 @@ def set_yadreno_admin_active_request_id(telegram_id: int, topic_id: int, request
 
 
 def clear_yadreno_admin_active_request_id(telegram_id: int, topic_id: int) -> bool:
-    """Удаляет active request_id Yadreno Admin из settings."""
+    """Removes active request_id Yadreno Admin from settings."""
     return delete_setting(_yadreno_admin_request_key('active', telegram_id, topic_id))
 
 
 def list_yadreno_admin_active_requests() -> List[Dict[str, int]]:
-    """Возвращает все сохранённые active request_id по lane."""
+    """Returns all saved active request_ids by lane."""
     prefix = f'{YADRENO_ADMIN_REQUEST_SETTING_PREFIX}:active:'
     with get_db() as conn:
         rows = conn.execute(
@@ -283,12 +283,12 @@ def list_yadreno_admin_active_requests() -> List[Dict[str, int]]:
 
 
 def get_yadreno_admin_last_request_id(telegram_id: int, topic_id: int) -> Optional[int]:
-    """Возвращает last request_id Yadreno Admin из settings."""
+    """Returns last request_id Yadreno Admin from settings."""
     return _get_yadreno_admin_request_id('last', telegram_id, topic_id)
 
 
 def set_yadreno_admin_last_request_id(telegram_id: int, topic_id: int, request_id: int) -> None:
-    """Сохраняет last request_id Yadreno Admin в settings."""
+    """Saves last request_id Yadreno Admin in settings."""
     set_setting(
         _yadreno_admin_request_key('last', telegram_id, topic_id),
         str(int(request_id)),
@@ -296,12 +296,12 @@ def set_yadreno_admin_last_request_id(telegram_id: int, topic_id: int, request_i
 
 
 def clear_yadreno_admin_last_request_id(telegram_id: int, topic_id: int) -> bool:
-    """Удаляет last request_id Yadreno Admin из settings."""
+    """Removes last request_id Yadreno Admin from settings."""
     return delete_setting(_yadreno_admin_request_key('last', telegram_id, topic_id))
 
 
 def _yadreno_admin_tool_call_key(request_id: int, tool_call_id: str) -> str:
-    """Ключ settings для локально начатого tool_call."""
+    """The settings key for a locally started tool_call."""
     return (
         f'{YADRENO_ADMIN_TOOL_CALL_SETTING_PREFIX}:'
         f'{int(request_id)}:{tool_call_id}'
@@ -310,10 +310,10 @@ def _yadreno_admin_tool_call_key(request_id: int, tool_call_id: str) -> str:
 
 def mark_yadreno_admin_tool_call_started(request_id: int, tool_call_id: str) -> bool:
     """
-    Помечает tool_call как начатый.
+    Marks tool_call as started.
 
-    True = запись создана сейчас, можно выполнять.
-    False = запись уже была, повторно выполнять нельзя.
+    True = record has been created now and can be executed.
+    False = the recording has already been made and cannot be repeated.
     """
     key = _yadreno_admin_tool_call_key(request_id, tool_call_id)
     if get_setting(key):
@@ -323,12 +323,12 @@ def mark_yadreno_admin_tool_call_started(request_id: int, tool_call_id: str) -> 
 
 
 def clear_yadreno_admin_tool_call_started(request_id: int, tool_call_id: str) -> bool:
-    """Снимает пометку started с tool_call после успешной отправки результата."""
+    """Removes the started flag from tool_call after the result has been successfully sent."""
     return delete_setting(_yadreno_admin_tool_call_key(request_id, tool_call_id))
 
 
 def _yadreno_admin_tool_runtime_key(request_id: int, tool_call_id: str) -> str:
-    """Ключ settings для runtime-состояния выполняющегося tool_call."""
+    """The settings key for the runtime state of the running tool_call."""
     return (
         f'{YADRENO_ADMIN_TOOL_RUNTIME_SETTING_PREFIX}:'
         f'{int(request_id)}:{tool_call_id}'
@@ -344,7 +344,7 @@ def set_yadreno_admin_tool_runtime(
     pid: Optional[int] = None,
     started_at: Optional[str] = None,
 ) -> None:
-    """Сохраняет локальный runtime-маркер tool_call для безопасной отмены."""
+    """Stores a local runtime token tool_call for safe cancellation."""
     payload = {
         'request_id': int(request_id),
         'tool_call_id': str(tool_call_id),
@@ -360,7 +360,7 @@ def set_yadreno_admin_tool_runtime(
 
 
 def clear_yadreno_admin_tool_runtime(request_id: int, tool_call_id: str) -> bool:
-    """Удаляет runtime-маркер tool_call после нормальной отправки результата."""
+    """Removes the tool_call runtime marker after the result is sent normally."""
     return delete_setting(_yadreno_admin_tool_runtime_key(request_id, tool_call_id))
 
 
@@ -368,7 +368,7 @@ def list_yadreno_admin_tool_runtime(
     request_id: Optional[int] = None,
     topic_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Возвращает runtime-маркеры локально выполняющихся tool_call."""
+    """Returns runtime markers of locally executed tool_calls."""
     prefix = f'{YADRENO_ADMIN_TOOL_RUNTIME_SETTING_PREFIX}:'
     with get_db() as conn:
         rows = conn.execute(
@@ -399,19 +399,19 @@ def list_yadreno_admin_tool_runtime(
     return result
 
 def is_crypto_enabled() -> bool:
-    """Проверяет, включены ли крипто-платежи."""
+    """Checks if crypto payments are enabled."""
     return get_setting('crypto_enabled', '0') == '1'
 
 def is_stars_enabled() -> bool:
-    """Проверяет, включены ли Telegram Stars."""
+    """Checks if Telegram Stars is enabled."""
     return get_setting('stars_enabled', '0') == '1'
 
 def is_crypto_configured() -> bool:
     """
-    Проверяет, настроены ли крипто-платежи полностью.
+    Checks whether crypto payments are fully configured.
     
     Returns:
-        True если крипто включены И есть ссылка на товар (для стандартного режима) или просто включены
+        True if crypto is included AND there is a link to the product (for standard mode) or just included
     """
     if not is_crypto_enabled():
         return False
@@ -421,15 +421,15 @@ def is_crypto_configured() -> bool:
 
 
 def is_cards_enabled() -> bool:
-    """Проверяет, включены ли TG payments."""
+    """Checks if TG payments are enabled."""
     return get_setting('cards_enabled', '0') == '1'
 
 def is_cards_configured() -> bool:
     """
-    Проверяет, настроены ли TG payments.
+    Checks if TG payments are configured.
     
     Returns:
-        True если TG payments включены И есть provider_token
+        True if TG payments are enabled AND there is a provider_token
     """
     if not is_cards_enabled():
         return False
@@ -437,15 +437,15 @@ def is_cards_configured() -> bool:
     return bool(token and token.strip())
 
 def is_yookassa_qr_enabled() -> bool:
-    """Проверяет, включена ли прямая оплата через ЮКассу."""
+    """Checks whether direct payment through YuKassa is enabled."""
     return get_setting('yookassa_qr_enabled', '0') == '1'
 
 def is_yookassa_qr_configured() -> bool:
     """
-    Проверяет, настроена ли прямая оплата через ЮКассу полностью.
+    Checks whether direct payment through YuKassa is fully configured.
 
     Returns:
-        True если ЮКасса включена И есть shop_id и secret_key
+        True if YuKassa is enabled AND there is shop_id and secret_key
     """
     if not is_yookassa_qr_enabled():
         return False
@@ -455,25 +455,25 @@ def is_yookassa_qr_configured() -> bool:
 
 def get_yookassa_credentials() -> tuple[str, str]:
     """
-    Возвращает учётные данные ЮКасса для прямого API.
+    Returns YuKass credentials for the direct API.
 
     Returns:
-        Кортеж (shop_id, secret_key)
+        Tuple (shop_id, secret_key)
     """
     shop_id = get_setting('yookassa_shop_id', '')
     secret_key = get_setting('yookassa_secret_key', '')
     return shop_id, secret_key
 
 def is_wata_enabled() -> bool:
-    """Проверяет, включена ли оплата через WATA."""
+    """Checks whether payment via WATA is enabled."""
     return get_setting('wata_enabled', '0') == '1'
 
 def is_wata_configured() -> bool:
     """
-    Проверяет, настроена ли оплата через WATA полностью.
+    Checks whether payment via WATA is fully configured.
 
     Returns:
-        True если WATA включена И задан JWT-токен
+        True if WATA is enabled AND a JWT token is specified
     """
     if not is_wata_enabled():
         return False
@@ -482,23 +482,23 @@ def is_wata_configured() -> bool:
 
 def get_wata_token() -> str:
     """
-    Возвращает JWT-токен для WATA API.
+    Returns the JWT token for the WATA API.
 
     Returns:
-        Строка с JWT-токеном (или пустая строка)
+        JWT token string (or empty string)
     """
     return get_setting('wata_jwt_token', '') or ''
 
 def is_platega_enabled() -> bool:
-    """Проверяет, включена ли оплата через Platega."""
+    """Checks if payment via Platega is enabled."""
     return get_setting('platega_enabled', '0') == '1'
 
 def is_platega_configured() -> bool:
     """
-    Проверяет, настроена ли оплата через Platega полностью.
+    Checks whether payment via Platega is fully configured.
 
     Returns:
-        True если Platega включена И заданы merchant_id и secret
+        True if Platega is enabled AND merchant_id and secret are specified
     """
     if not is_platega_enabled():
         return False
@@ -508,25 +508,25 @@ def is_platega_configured() -> bool:
 
 def get_platega_credentials() -> tuple[str, str]:
     """
-    Возвращает учётные данные Platega для прямого API.
+    Returns Platega credentials for the direct API.
 
     Returns:
-        Кортеж (merchant_id, secret)
+        Tuple (merchant_id, secret)
     """
     merchant_id = get_setting('platega_merchant_id', '')
     secret = get_setting('platega_secret', '')
     return merchant_id, secret
 
 def is_cardlink_enabled() -> bool:
-    """Проверяет, включена ли оплата через Cardlink."""
+    """Checks if payment via Cardlink is enabled."""
     return get_setting('cardlink_enabled', '0') == '1'
 
 def is_cardlink_configured() -> bool:
     """
-    Проверяет, настроена ли оплата через Cardlink полностью.
+    Checks whether payment via Cardlink is fully configured.
 
     Returns:
-        True если Cardlink включён И заданы shop_id и api_token
+        True if Cardlink is enabled AND shop_id and api_token are specified
     """
     if not is_cardlink_enabled():
         return False
@@ -536,29 +536,29 @@ def is_cardlink_configured() -> bool:
 
 def get_cardlink_credentials() -> tuple[str, str]:
     """
-    Возвращает учётные данные Cardlink для прямого API.
+    Returns Cardlink credentials for the direct API.
 
     Returns:
-        Кортеж (shop_id, api_token)
+        Tuple (shop_id, api_token)
     """
     shop_id = get_setting('cardlink_shop_id', '')
     token = get_setting('cardlink_api_token', '')
     return shop_id, token
 
 def is_trial_enabled() -> bool:
-    """Включена ли функция пробной подписки."""
+    """Is the trial subscription feature enabled?"""
     return get_setting('trial_enabled', '0') == '1'
 
 def get_trial_tariff_id() -> Optional[int]:
     """
-    Возвращает ID тарифа для пробной подписки.
+    Returns the tariff ID for a trial subscription.
     
     Returns:
-        ID тарифа или None если тариф не задан
+        Rate ID or None if no rate is specified
     """
     val = get_setting('trial_tariff_id', '')
     return int(val) if val and val.isdigit() else None
 
 def is_demo_payment_enabled() -> bool:
-    """Включена ли демонстрационная оплата РФ картой."""
+    """Is demo payment by RF card included?"""
     return get_setting('demo_payment_enabled', '0') == '1'

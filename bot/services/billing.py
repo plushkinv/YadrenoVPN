@@ -1,9 +1,9 @@
 """
-Сервис биллинга — обработка платежей.
+Billing service - payment processing.
 
-Проверка подписей, создание/продление ключей после оплаты.
-Создание QR-платежей через ЮКасса REST API.
-Реферальные начисления.
+Verification of signatures, creation/renewal of keys after payment.
+Creating QR payments via YuKassa REST API.
+Referral accruals.
 """
 import hmac
 import hashlib
@@ -40,15 +40,15 @@ PLATEGA_API_URL = "https://app.platega.io"
 CARDLINK_API_URL = "https://cardlink.link"
 _payment_order_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-# Алфавит для Base62 кодирования
+# Alphabet for Base62 encoding
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
 def build_payment_return_url(bot_name: str, provider: str, order_id: str) -> str:
     """
-    Формирует deep-link возврата из внешней платёжной формы в бота.
+    Generates a deep-link return from an external payment form to the bot.
 
-    Формат start-параметра единый для QR-провайдеров:
+    The start parameter format is the same for QR providers:
     pay_{provider}_{order_id}
     """
     if not bot_name:
@@ -66,15 +66,15 @@ def build_payment_return_url(bot_name: str, provider: str, order_id: str) -> str
 
 def encode_base62(data: bytes) -> str:
     """
-    Кодирует бинарные данные в Base62.
+    Encodes binary data in Base62.
     
-    Используется для формирования подписи callback от Ya.Seller.
+    Used to generate a callback signature from Ya.Seller.
     
     Args:
-        data: Бинарные данные
+        data: Binary data
         
     Returns:
-        Строка в формате Base62
+        Base62 string
     """
     if not data:
         return ""
@@ -93,35 +93,35 @@ def encode_base62(data: bytes) -> str:
 
 def verify_crypto_signature(data_part: str, received_signature: str, secret_key: str) -> bool:
     """
-    Проверяет подпись callback от криптопроцессинга Ya.Seller.
+    Verifies the callback signature from Ya.Seller crypto processing.
     
-    Подпись = Base62(HMAC-SHA256(data_part, secret_key)[:11]).
+    Signature = Base62(HMAC-SHA256(data_part, secret_key)[:11]).
     
-    Алгоритм согласно документации https://yadreno.ru/seller/integration.php:
-    1. Вычисляем HMAC-SHA256 от data_part с секретным ключом
-    2. Берем первые 11 байт бинарного результата
-    3. Кодируем в Base62
+    Algorithm according to documentation https://yadreno.ru/seller/integration.php:
+    1. Calculate HMAC-SHA256 from data_part with secret key
+    2. Take the first 11 bytes of the binary result
+    3. Encode in Base62
     
     Args:
-        data_part: Все сегменты кроме последнего (например bill1-aZ1-bY-1-_-1000)
-        received_signature: Полученная подпись (последний сегмент)
-        secret_key: Секретный ключ продавца
+        data_part: All segments except the last one (for example bill1-aZ1-bY-1-_-1000)
+        received_signature: Received signature (last segment)
+        secret_key: Seller's secret key
         
     Returns:
-        True если подпись валидна
+        True if the signature is valid
     """
-    # Вычисляем HMAC-SHA256
+    # Calculating HMAC-SHA256
     h = hmac.new(
         secret_key.encode('utf-8'),
         data_part.encode('utf-8'),
         hashlib.sha256
     ).digest()
     
-    # Берем первые 11 байт и кодируем в Base62
+    # Take the first 11 bytes and encode them in Base62
     truncated = h[:11]
     expected = encode_base62(truncated)
     
-    # Сравниваем подписи
+    # Comparing signatures
     is_valid = hmac.compare_digest(expected, received_signature)
     
     if not is_valid:
@@ -132,40 +132,40 @@ def verify_crypto_signature(data_part: str, received_signature: str, secret_key:
 
 def parse_crypto_callback(start_param: str) -> Optional[Dict[str, Any]]:
     """
-    Парсит параметр start из callback криптопроцессинга.
+    Parses the start parameter from the cryptoprocessing callback.
     
-    Формат: bill1-ORDER_ID-ITEM_ID-TARIFF-PROMO-PRICE-SIGNATURE
+    Format: bill1-ORDER_ID-ITEM_ID-TARIFF-PROMO-PRICE-SIGNATURE
     
     Args:
-        start_param: Значение параметра start из deep link
+        start_param: The value of the start parameter from the deep link
         
     Returns:
-        Словарь с полями: order_id, item_id, tariff, promo, price, signature, data_part
-        или None если формат неверный
+        Dictionary with fields: order_id, item_id, tariff, promo, price, signature, data_part
+        or None if the format is invalid
     """
     if not start_param or not start_param.startswith('bill'):
         return None
     
     parts = start_param.split('-')
     
-    # Минимум: bill1-ORDER_ID-ITEM_ID-TARIFF-PROMO-PRICE-SIGNATURE (7 частей)
+    # Minimum: bill1-ORDER_ID-ITEM_ID-TARIFF-PROMO-PRICE-SIGNATURE (7 parts)
     if len(parts) < 7:
         logger.warning(f"Неверный формат callback: {start_param} (частей: {len(parts)})")
         return None
     
     try:
-        # Последняя часть — подпись
+        # The last part is the signature
         signature = parts[-1]
-        # Остальное — данные для проверки подписи
+        # The rest is data for verifying the signature
         data_part = start_param.rsplit('-', 1)[0]
         
         return {
-            'prefix': parts[0],        # bill1 или bill0
-            'order_id': parts[1],      # наш invoice_id
-            'item_id': parts[2],       # ID товара в Ya.Seller
-            'tariff': parts[3],        # номер тарифа (1-9) или '_'
-            'promo': parts[4],         # промокод или '_'
-            'price': int(parts[5]) if parts[5] != '_' else 0,  # цена в центах
+            'prefix': parts[0],        # bill1 or bill0
+            'order_id': parts[1],      # our invoice_id
+            'item_id': parts[2],       # Product ID in Ya.Seller
+            'tariff': parts[3],        # tariff number (1-9) or '_'
+            'promo': parts[4],         # promotional code or '_'
+            'price': int(parts[5]) if parts[5] != '_' else 0,  # price in cents
             'signature': signature,
             'data_part': data_part
         }
@@ -175,7 +175,7 @@ def parse_crypto_callback(start_param: str) -> Optional[Dict[str, Any]]:
 
 
 def _get_order_payment_action(order: Optional[Dict[str, Any]]) -> str:
-    """Определяет тип операции по состоянию ордера до обработки оплаты."""
+    """Determines the type of transaction based on the state of the order before payment is processed."""
     if order and order.get('vpn_key_id'):
         return 'renewal'
     return 'new_key'
@@ -187,7 +187,7 @@ def _mark_order_runtime_flags(
     processed_now: bool,
     payment_action: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Добавляет служебные флаги, которые не сохраняются в БД."""
+    """Adds service flags that are not saved in the database."""
     if order is not None:
         order['_payment_processed_now'] = processed_now
         order['_payment_action'] = payment_action or _get_order_payment_action(order)
@@ -213,8 +213,8 @@ async def _process_payment_order_unlocked(
     process_referrals: bool = True,
 ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
-    Универсальная обработка успешного ордера (Crypto или Stars).
-    Закрывает ордер, продлевает ключ или создаёт черновик.
+    Universal processing of a successful order (Crypto or Stars).
+    Closes an order, extends a key, or creates a draft.
     
     Returns:
         (success, message_text, order_data)
@@ -224,25 +224,25 @@ async def _process_payment_order_unlocked(
         create_initial_vpn_key, update_payment_key_id
     )
     
-    # 1. Проверка на дубликат (на всякий случай, если вызывающий не проверил)
+    # 1. Check for duplicates (just in case the caller didn't check)
     if is_order_already_paid(order_id):
-        # Получаем ордер чтобы вернуть контекст
+        # We receive an order to return the context
         order = find_order_by_order_id(order_id)
         return True, "✅ Этот платёж уже был обработан ранее.", _mark_order_runtime_flags(
             order,
             processed_now=False,
         )
 
-    # 2. Поиск ордера
+    # 2. Order search
     order = find_order_by_order_id(order_id)
     if not order:
         logger.warning(f"Ордер не найден: {order_id}")
         return False, "⚠️ Ордер не найден. Обратитесь в поддержку.", None
     payment_action = _get_order_payment_action(order)
     
-    # 3. Закрываем ордер
+    # 3. Close the order
     if not complete_order(order_id):
-        # Если параллельный обработчик уже успел закрыть ордер, повторно побочные действия не выполняем.
+        # If the parallel processor has already closed the order, we do not perform side actions again.
         fresh_order = find_order_by_order_id(order_id)
         if fresh_order and fresh_order.get('status') == 'paid':
             return True, "✅ Этот платёж уже был обработан ранее.", _mark_order_runtime_flags(
@@ -312,7 +312,7 @@ async def _process_payment_order_unlocked(
         
         try:
             days = order.get('period_days') or order.get('duration_days') or 30
-            # Получаем лимит трафика из тарифа
+            # We get the traffic limit from the tariff
             from database.requests import get_tariff_by_id as _get_tariff
             _tariff = _get_tariff(order['tariff_id'])
             traffic_limit_bytes = (_tariff.get('traffic_limit_gb', 0) or 0) * (1024**3) if _tariff else 0
@@ -361,31 +361,31 @@ async def process_crypto_payment(
     bot: Optional[Any] = None,
 ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
-    Обрабатывает платёж от криптопроцессинга (parse + verify + confirm).
+    Processes payment from cryptoprocessing (parse + verify + confirm).
     """
-    # Парсим callback
+    # Parse callback
     parsed = parse_crypto_callback(start_param)
     if not parsed:
         return False, "❌ Неверный формат платёжных данных", None
     
-    # Получаем секретный ключ
+    # Getting the secret key
     secret_key = get_setting('crypto_secret_key')
     if not secret_key:
         logger.error("Секретный ключ криптопроцессинга не настроен!")
         return False, "❌ Ошибка конфигурации. Обратитесь в поддержку.", None
     
-    # Проверяем подпись
+    # Checking the signature
     if not verify_crypto_signature(parsed['data_part'], parsed['signature'], secret_key):
         return False, "❌ Неверная подпись платежа. Попробуйте снова.", None
     
     order_id = parsed['order_id']
     
-    # --- ЛОГИКА ОБРАБОТКИ ОРДЕРОВ (Внешние/Внутренние) ---
+    # --- ORDER PROCESSING LOGIC (External/Internal) ---
     is_internal_order = order_id.startswith("00")
     order = find_order_by_order_id(order_id)
     
     if order:
-        # Сверяем сумму платежа с тарифом
+        # We check the payment amount with the tariff
         from database.requests import get_tariff_by_id
         order_tariff = get_tariff_by_id(order['tariff_id'])
         if order_tariff:
@@ -399,13 +399,13 @@ async def process_crypto_payment(
         if is_internal_order:
              return False, "❌ Ордер не найден в системе.", None
         
-        # Внешний ордер -> Создаем PAID order в базе ПЕРЕД обработкой
+        # External order -> Create a PAID order in the database BEFORE processing
         if not user_id:
              return False, "⚠️ Ошибка обработки внешнего заказа (нет user_id).", None
         
         logger.info(f"Новый внешний ордер: {order_id}")
         
-        # Внешний ордер без тарифа — ошибка
+        # External order without tariff - error
         logger.error(f"Внешний ордер {order_id} без привязки к тарифу!")
         from bot.errors import TariffNotFoundError
         raise TariffNotFoundError()
@@ -420,23 +420,23 @@ def build_crypto_payment_url(
     price_cents: Optional[int] = None
 ) -> str:
     """
-    Формирует ссылку на криптопроцессинг с нашим invoice.
+    Generates a link to cryptoprocessing with our invoice.
     
-    Формат: https://t.me/Ya_SellerBot?start=item-{item_id}-{ref}-{promo}-{invoice}-{price}
+    Format: https://t.me/Ya_SellerBot?start=item-{item_id}-{ref}-{promo}-{invoice}-{price}
     
     Args:
-        item_id: ID товара в Ya.Seller (из настроек)
-        invoice_id: Наш уникальный invoice (макс 8 символов)
-        price_cents: Цена в центах (если нужно переопределить)
+        item_id: Product ID in Ya.Seller (from settings)
+        invoice_id: Our unique invoice (max 8 characters)
+        price_cents: Price in cents (if needed to be overridden)
         
     Returns:
-        URL для перехода в криптопроцессинг
+        URL to go to crypto processing
     """
-    # Формат: item-{item_id}-{ref_code}-{promo}-{invoice}-{price}
-    # Пустые параметры заменяем прочерками
+    # Format: item-{item_id}-{ref_code}-{promo}-{invoice}-{price}
+    # Replace empty parameters with dashes
     
-    ref_code = ""  # Реффералку не используем
-    promo = ""     # Промокод не используем
+    ref_code = ""  # We don’t use referrals
+    promo = ""     # We do not use a promotional code
     
     parts = [
         "item",
@@ -446,7 +446,7 @@ def build_crypto_payment_url(
         invoice_id
     ]
     
-    # Добавляем цену если нужно зафиксировать
+    # We add a price if you need to fix it
     if price_cents:
         parts.append(str(price_cents))
     
@@ -457,20 +457,20 @@ def build_crypto_payment_url(
 
 def extract_item_id_from_url(crypto_item_url: str) -> Optional[str]:
     """
-    Извлекает item_id из ссылки на товар в Ya.Seller.
+    Retrieves item_id from a product link in Ya.Seller.
     
-    Формат ссылки: https://t.me/Ya_SellerBot?start=item-{item_id}...
+    Link format: https://t.me/Ya_SellerBot?start=item-{item_id}...
     
     Args:
-        crypto_item_url: Полная ссылка на товар
+        crypto_item_url: Full link to the product
         
     Returns:
-        item_id или None
+        item_id or None
     """
     if not crypto_item_url:
         return None
     
-    # Ищем start= параметр
+    # We are looking for the start= parameter
     if '?start=' in crypto_item_url:
         start_param = crypto_item_url.split('?start=')[1]
         parts = start_param.split('-')
@@ -481,7 +481,7 @@ def extract_item_id_from_url(crypto_item_url: str) -> Optional[str]:
 
 
 # ============================================================================
-# ЮКАССА QR-ОПЛАТА (прямой REST API без Telegram Payments)
+# YUKASSA QR-PAYMENT (direct REST API without Telegram Payments)
 # ============================================================================
 
 async def create_yookassa_qr_payment(
@@ -492,36 +492,36 @@ async def create_yookassa_qr_payment(
     metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Создаёт платёж в ЮКасса REST API с подтверждением через QR-код.
+    Creates a payment in YuKassa REST API with confirmation via a QR code.
 
-    Возвращает изображение QR-кода (PNG) по ссылке, которую можно
-    отправить пользователю прямо в Telegram как фото.
+    Returns a QR code (PNG) image from a link that can be
+    send to the user directly in Telegram as a photo.
 
     Args:
-        amount_rub: Сумма в рублях (например, 299.00)
-        order_id: Наш внутренний ордер (для metadata)
-        description: Описание платежа (показывается в форме оплаты)
-        metadata: Дополнительные метаданные (необязательно)
+        amount_rub: Amount in rubles (for example, 299.00)
+        order_id: Our internal order (for metadata)
+        description: Description of the payment (shown in the payment form)
+        metadata: Additional metadata (optional)
 
     Returns:
-        Словарь с ключами:
-            - yookassa_payment_id: ID платежа в системе ЮКасса
-            - qr_image_url: URL изображения QR-кода (PNG)
-            - qr_url: Ссылка, зашитая в QR (для открытия в браузере)
+        Dictionary with keys:
+            - yookassa_payment_id: Payment ID in the Yookassa system
+            - qr_image_url: QR code image URL (PNG)
+            - qr_url: Link embedded in QR (to be opened in a browser)
 
     Raises:
-        ValueError: Если учётные данные не настроены
-        aiohttp.ClientError: Если API недоступен
-        RuntimeError: Если API вернул ошибку
+        ValueError: If credentials are not configured
+        aiohttp.ClientError: If the API is not available
+        RuntimeError: If the API returned an error
     """
     shop_id, secret_key = get_yookassa_credentials()
     if not shop_id or not secret_key:
         raise ValueError("ЮКасса: не настроены shop_id или secret_key")
 
-    # Заголовок Basic Auth: base64(shop_id:secret_key)
+    # Basic Auth header: base64(shop_id:secret_key)
     credentials = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
 
-    # Ключ идемпотентности — уникальный для этого ордера
+    # Idempotency key - unique for this order
     idempotence_key = f"qr-{order_id}-{uuid.uuid4().hex[:8]}"
     return_url = build_payment_return_url(bot_name, 'yookassa', order_id)
 
@@ -586,7 +586,7 @@ async def create_yookassa_qr_payment(
                 logger.error(f"ЮКасса API не вернул confirmation_url: {data}")
                 raise RuntimeError("ЮКасса API не вернул данные для QR-кода")
 
-            # Генерируем QR-код из строки оплаты через локальную библиотеку qrcode
+            # Generating a QR code from a payment line using the local qrcode library
             
             qr = qrcode.QRCode(
                 version=1,
@@ -617,18 +617,18 @@ async def create_yookassa_qr_payment(
 
 async def check_yookassa_payment_status(yookassa_payment_id: str) -> str:
     """
-    Проверяет статус платежа в ЮКасса REST API.
+    Checks the payment status in YuKassa REST API.
 
     Args:
-        yookassa_payment_id: ID платежа в системе ЮКасса
+        yookassa_payment_id: Payment ID in the Yookassa system
 
     Returns:
-        Строка статуса: 'pending', 'waiting_for_capture', 'succeeded', 'canceled'
+        Status line: 'pending', 'waiting_for_capture', 'succeeded', 'canceled'
 
     Raises:
-        ValueError: Если учётные данные не настроены
-        aiohttp.ClientError: Если API недоступен
-        RuntimeError: Если API вернул ошибку
+        ValueError: If credentials are not configured
+        aiohttp.ClientError: If the API is not available
+        RuntimeError: If the API returned an error
     """
     shop_id, secret_key = get_yookassa_credentials()
     if not shop_id or not secret_key:
@@ -657,7 +657,7 @@ async def check_yookassa_payment_status(yookassa_payment_id: str) -> str:
 
 
 # ============================================================================
-# WATA — оплата картой/СБП через REST API (https://wata.pro/api)
+# WATA - payment by card/SBP via REST API (https://wata.pro/api)
 # ============================================================================
 
 async def create_wata_payment(
@@ -667,26 +667,26 @@ async def create_wata_payment(
     bot_name: str
 ) -> Dict[str, Any]:
     """
-    Создаёт платёжную ссылку в WATA через H2H API.
+    Creates a payment link in WATA via the H2H API.
 
     POST https://api.wata.pro/api/h2h/links/
 
     Args:
-        amount_rub: Сумма в рублях
-        order_id: Наш внутренний order_id
-        description: Описание платежа
-        bot_name: Username бота (для построения successRedirectUrl)
+        amount_rub: Amount in rubles
+        order_id: Our internal order_id
+        description: Description of the payment
+        bot_name: Username of the bot (for building successRedirectUrl)
 
     Returns:
-        Словарь с ключами:
-            - wata_link_id: ID ссылки в системе WATA
-            - qr_image_data: PNG-байты QR-кода
-            - qr_url: Ссылка для оплаты (карты/СБП)
-            - status: Статус платежа
+        Dictionary with keys:
+            - wata_link_id: Link ID in the WATA system
+            - qr_image_data: PNG bytes of the QR code
+            - qr_url: Link for payment (cards/SBP)
+            - status: Payment status
 
     Raises:
-        ValueError: Если JWT-токен не настроен
-        RuntimeError: Если API вернул ошибку
+        ValueError: If the JWT token is not configured
+        RuntimeError: If the API returned an error
     """
     token = get_wata_token()
     if not token:
@@ -761,25 +761,25 @@ async def create_wata_payment(
 
 async def check_wata_payment_status(wata_link_id: str) -> str:
     """
-    Проверяет статус платёжной ссылки WATA по её ID.
+    Checks the status of the WATA payment link by its ID.
 
     GET https://api.wata.pro/api/h2h/links/{wata_link_id}
 
-    Эндпоинт /transactions/?orderId= не работает (404).
-    Вместо этого проверяем статус самой ссылки через /links/{id}.
+    Endpoint /transactions/?orderId= does not work (404).
+    Instead, we check the status of the link itself via /links/{id}.
 
-    WATA имеет лимит — не чаще одного запроса в 30 секунд.
-    Контроль частоты запросов выполняется на стороне обработчика.
+    WATA has a limit - no more than one request per 30 seconds.
+    Request rate control is performed on the handler side.
 
     Args:
-        wata_link_id: ID ссылки в системе WATA (UUID)
+        wata_link_id: WATA link ID (UUID)
 
     Returns:
-        Нормализованный статус: 'pending' | 'succeeded' | 'canceled'
+        Normalized status: 'pending' | 'succeeded' | 'cancelled'
 
     Raises:
-        ValueError: Если JWT-токен не настроен
-        RuntimeError: Если API вернул ошибку
+        ValueError: If the JWT token is not configured
+        RuntimeError: If the API returned an error
     """
     token = get_wata_token()
     if not token:
@@ -802,7 +802,7 @@ async def check_wata_payment_status(wata_link_id: str) -> str:
                 raise RuntimeError("WATA API вернул некорректный ответ")
 
             if response.status == 429:
-                # Rate-limit — не ошибка, просто слишком частые запросы
+                # Rate-limit is not an error, just too frequent requests
                 logger.warning(f"WATA rate-limit (429) при проверке {wata_link_id}")
                 return 'pending'
 
@@ -814,11 +814,11 @@ async def check_wata_payment_status(wata_link_id: str) -> str:
                 logger.error(f"WATA статус ошибка {response.status}: {error_desc}")
                 raise RuntimeError(f"WATA API ошибка: {error_desc}")
 
-            # Статус ссылки: Created, Closed, Expired и т.д.
+            # Link status: Created, Closed, Expired, etc.
             status = str(data.get('status', '')).lower()
             logger.debug(f"WATA link {wata_link_id}: status={status}")
 
-            # Closed = ссылка закрыта после успешной оплаты
+            # Closed = link is closed after successful payment
             if status in ('closed', 'paid'):
                 return 'succeeded'
             if status in ('declined', 'expired', 'canceled', 'cancelled'):
@@ -828,7 +828,7 @@ async def check_wata_payment_status(wata_link_id: str) -> str:
 
 
 # ============================================================================
-# PLATEGA — платёжная форма без заданного метода (https://app.platega.io)
+# PLATEGA - payment form without a specified method (https://app.platega.io)
 # ============================================================================
 
 async def create_platega_payment(
@@ -839,27 +839,27 @@ async def create_platega_payment(
     user_telegram_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Создаёт транзакцию в Platega API.
+    Creates a transaction in the Platega API.
 
     POST https://app.platega.io/v2/transaction/process
 
     Args:
-        amount_rub: Сумма в рублях
-        order_id: Наш внутренний order_id
-        description: Описание платежа
-        bot_name: Username бота (для построения return)
-        user_telegram_id: Telegram ID плательщика для metadata.userId
+        amount_rub: Amount in rubles
+        order_id: Our internal order_id
+        description: Description of the payment
+        bot_name: Username of the bot (for building return)
+        user_telegram_id: Telegram payer ID for metadata.userId
 
     Returns:
-        Словарь с ключами:
-            - platega_transaction_id: ID транзакции в системе Platega
-            - qr_image_data: PNG-байты QR-кода
-            - qr_url: Ссылка для оплаты
-            - status: Статус платежа
+        Dictionary with keys:
+            - platega_transaction_id: Transaction ID in the Platega system
+            - qr_image_data: PNG bytes of the QR code
+            - qr_url: Payment link
+            - status: Payment status
 
     Raises:
-        ValueError: Если учётные данные не настроены
-        RuntimeError: Если API вернул ошибку
+        ValueError: If credentials are not configured
+        RuntimeError: If the API returned an error
     """
     merchant_id, secret = get_platega_credentials()
     if not merchant_id or not secret:
@@ -948,25 +948,25 @@ async def create_platega_payment(
 
 async def check_platega_payment_status(transaction_id: str) -> str:
     """
-    Проверяет статус транзакции Platega.
+    Checks the status of a Platega transaction.
 
     GET https://app.platega.io/transaction/{transaction_id}
 
-    Статусы Platega:
-        - PENDING: в процессе оплаты
-        - CONFIRMED: успешно оплачена
-        - CANCELED: отменена
-        - CHARGEBACKED: возвратная
+    Platega statuses:
+        - PENDING: in the process of payment
+        - CONFIRMED: successfully paid
+        - CANCELED: canceled
+        - CHARGEBACKED: returnable
 
     Args:
-        transaction_id: ID транзакции в системе Platega
+        transaction_id: Transaction ID in the Platega system
 
     Returns:
-        Нормализованный статус: 'pending' | 'succeeded' | 'canceled'
+        Normalized status: 'pending' | 'succeeded' | 'cancelled'
 
     Raises:
-        ValueError: Если учётные данные не настроены
-        RuntimeError: Если API вернул ошибку
+        ValueError: If credentials are not configured
+        RuntimeError: If the API returned an error
     """
     merchant_id, secret = get_platega_credentials()
     if not merchant_id or not secret:
@@ -1008,7 +1008,7 @@ async def check_platega_payment_status(transaction_id: str) -> str:
 
 
 # ============================================================================
-# CARDLINK — оплата Картой/СБП через REST API (https://cardlink.link)
+# CARDLINK - payment by Card/SBP via REST API (https://cardlink.link)
 # ============================================================================
 
 async def create_cardlink_payment(
@@ -1018,34 +1018,34 @@ async def create_cardlink_payment(
     bot_name: str
 ) -> Dict[str, Any]:
     """
-    Создаёт счёт (bill) в Cardlink API.
+    Creates a bill in the Cardlink API.
 
     POST https://cardlink.link/api/v1/bill/create
 
-    Тело передаётся как application/x-www-form-urlencoded.
-    Авторизация через Bearer token.
+    The body is sent as application/x-www-form-urlencoded.
+    Authorization via Bearer token.
 
-    Отличительная особенность: вместо webhook-а пользователь после оплаты
-    возвращается в бота по deep-link `https://t.me/{bot}?start=cl_Success`
-    (или cl_Fail / cl_Result), что триггерит ту же проверку, что и
-    кнопка «✅ Я оплатил».
+    Distinctive feature: instead of a webhook, the user after payment
+    returns to the bot via deep-link `https://t.me/{bot}?start=cl_Success`
+    (or cl_Fail / cl_Result), which triggers the same check as
+    “✅ I paid” button.
 
     Args:
-        amount_rub: Сумма в рублях
-        order_id: Наш внутренний order_id
-        description: Описание платежа (не используется API, но логируется)
-        bot_name: Username бота (для построения success_url/fail_url)
+        amount_rub: Amount in rubles
+        order_id: Our internal order_id
+        description: Payment description (not used by API, but logged)
+        bot_name: Username of the bot (to build success_url/fail_url)
 
     Returns:
-        Словарь с ключами:
-            - cardlink_bill_id: ID счёта в системе Cardlink
-            - qr_image_data: PNG-байты QR-кода
-            - qr_url: Ссылка на страницу оплаты
-            - status: Статус платежа
+        Dictionary with keys:
+            - cardlink_bill_id: Account ID in the Cardlink system
+            - qr_image_data: PNG bytes of the QR code
+            - qr_url: Link to the payment page
+            - status: Payment status
 
     Raises:
-        ValueError: Если учётные данные не настроены
-        RuntimeError: Если API вернул ошибку
+        ValueError: If credentials are not configured
+        RuntimeError: If the API returned an error
     """
     shop_id, api_token = get_cardlink_credentials()
     if not shop_id or not api_token:
@@ -1104,8 +1104,8 @@ async def create_cardlink_payment(
                 )
                 raise RuntimeError(f"Cardlink API ошибка: {error_desc}")
 
-            # Ответ может быть вложен в поле 'success' (dict) или лежать в корне.
-            # Если 'success' — это флаг (строка/bool), используем сам data.
+            # The answer can be nested in the 'success' (dict) field or in the root.
+            # If 'success' is a flag (string/bool), we use the data itself.
             nested = data.get('success') if isinstance(data, dict) else None
             payload = nested if isinstance(nested, dict) else data
 
@@ -1151,24 +1151,24 @@ async def create_cardlink_payment(
 
 async def check_cardlink_payment_status(bill_id: str) -> str:
     """
-    Проверяет статус счёта Cardlink.
+    Checks Cardlink account status.
 
     GET https://cardlink.link/api/v1/bill/status?id={bill_id}
 
-    Статусы Cardlink:
-        - NEW / PROCESS / UNDERPAID: в процессе
-        - SUCCESS / OVERPAID: успешно оплачено
-        - FAIL: отменён / неуспешный
+    Cardlink statuses:
+        - NEW / PROCESS / UNDERPAID: in progress
+        - SUCCESS / OVERPAID: successfully paid
+        - FAIL: canceled / unsuccessful
 
     Args:
-        bill_id: ID счёта в системе Cardlink
+        bill_id: Account ID in the Cardlink system
 
     Returns:
-        Нормализованный статус: 'pending' | 'succeeded' | 'canceled'
+        Normalized status: 'pending' | 'succeeded' | 'cancelled'
 
     Raises:
-        ValueError: Если учётные данные не настроены
-        RuntimeError: Если API вернул ошибку
+        ValueError: If credentials are not configured
+        RuntimeError: If the API returned an error
     """
     shop_id, api_token = get_cardlink_credentials()
     if not shop_id or not api_token:
@@ -1200,8 +1200,8 @@ async def check_cardlink_payment_status(bill_id: str) -> str:
                 logger.error(f"Cardlink статус ошибка {response.status}: {error_desc}")
                 raise RuntimeError(f"Cardlink API ошибка: {error_desc}")
 
-            # Ответ может быть вложен в поле 'success' (dict) или лежать в корне.
-            # Если 'success' — это флаг (строка/bool), используем сам data.
+            # The answer can be nested in the 'success' (dict) field or in the root.
+            # If 'success' is a flag (string/bool), we use the data itself.
             nested = data.get('success') if isinstance(data, dict) else None
             payload = nested if isinstance(nested, dict) else data
             status = ''
@@ -1219,15 +1219,15 @@ async def check_cardlink_payment_status(bill_id: str) -> str:
 
 def convert_to_rub_cents(amount_raw: int, payment_type: str, usd_rub_rate: int) -> int:
     """
-    Конвертировать сырую сумму в копейки рублей.
+    Convert the raw amount into kopecks of rubles.
 
     Args:
-        amount_raw: сырая сумма (звёзды/центы USDT/копейки рублей)
-        payment_type: тип платежа ('stars', 'crypto', 'cards', 'yookassa_qr', 'wata', 'platega')
-        usd_rub_rate: курс USD/RUB в копейках
+        amount_raw: raw amount (stars/USDT cents/ruble pennies)
+        payment_type: payment type ('stars', 'crypto', 'cards', 'yookassa_qr', 'wata', 'platega')
+        usd_rub_rate: USD/RUB rate in kopecks
 
     Returns:
-        Сумма в копейках рублей
+        Amount in kopecks of rubles
     """
     if payment_type == 'stars':
         usd_cents = int(amount_raw * STAR_TO_USD * 100)
@@ -1248,22 +1248,22 @@ async def process_referral_reward(
     order: Optional[Dict[str, Any]] = None,
 ) -> list[Dict[str, Any]]:
     """
-    Обработка реферального вознаграждения при оплате.
-    Вызывается ПОСЛЕ успешной обработки платежа.
+    Processing referral rewards upon payment.
+    Called AFTER successful payment processing.
     
     Args:
-        payer_id: Внутренний ID пользователя, который оплатил
-        period_days: Сколько дней купил реферал
-        amount_raw: СЫРАЯ сумма:
-            - 'stars': количество звёзд (int)
-            - 'crypto': центы USDT (int)
-            - 'cards': копейки рублей (int)
-            - 'yookassa_qr': копейки рублей (int)
-        payment_type: Тип платежа ('stars', 'crypto', 'cards', 'yookassa_qr')
+        payer_id: Internal ID of the user who paid
+        period_days: How many days did the referral buy?
+        amount_raw: RAW amount:
+            - 'stars': number of stars (int)
+            - 'crypto': USDT cents (int)
+            - 'cards': kopecks of rubles (int)
+            - 'yookassa_qr': kopecks of rubles (int)
+        payment_type: Payment type ('stars', 'crypto', 'cards', 'yookassa_qr')
     
     Note:
-        При оплате балансом реферальные вознаграждения НЕ начисляются,
-        поэтому эта функция не вызывается для платежей балансом.
+        When paying with balance, referral rewards are NOT accrued,
+        therefore this function is not called for balance payments.
     """
     if payment_type in ('balance', 'trial', 'promo_free') or amount_raw <= 0:
         return []
@@ -1413,16 +1413,16 @@ async def process_referral_reward(
 
 def calculate_balance_discount(user_id: int, tariff_price_cents: int) -> tuple[int, int]:
     """
-    Рассчитать скидку с баланса. БЕЗ списания!
+    Calculate discount from balance. NO write-off!
     
     Args:
-        user_id: Внутренний ID пользователя
-        tariff_price_cents: Цена тарифа в копейках
+        user_id: Internal user ID
+        tariff_price_cents: Tariff price in kopecks
     
     Returns:
-        Кортеж (remaining_to_pay_cents, to_deduct_cents):
-        - remaining_to_pay_cents: сколько нужно оплатить внешним способом
-        - to_deduct_cents: сколько будет списано с баланса ПРИ УСПЕШНОЙ оплате
+        Tuple (remaining_to_pay_cents, to_deduct_cents):
+        - remaining_to_pay_cents: how much you need to pay externally
+        - to_deduct_cents: how much will be debited from the balance IF SUCCESSFUL payment
     """
     balance = get_user_balance(user_id)
     
@@ -1439,7 +1439,7 @@ async def _show_complete_payment_status(
     body_text: str,
     reply_markup=None,
 ) -> None:
-    """Показывает page-backed статус общего post-payment flow."""
+    """Shows the page-backed status of the overall post-payment flow."""
     from bot.handlers.user.payments.status_page import show_payment_status_message
 
     await show_payment_status_message(
@@ -1460,28 +1460,28 @@ async def complete_payment_flow(
     referral_amount: int
 ) -> None:
     """
-    Единый post-payment поток после подтверждения оплаты.
+    Single post-payment flow after payment confirmation.
     
-    Выполняет:
-    1. Обработку ордера (process_payment_order)
-    2. Списание баланса (если частичная оплата)
-    3. Начисление реферального вознаграждения
-    4. Финализацию UI (выдача ключа / показ результата)
+    Performs:
+    1. Order processing (process_payment_order)
+    2. Write off the balance (if partial payment)
+    3. Accrual of referral reward
+    4. Finalization of the UI (issuing a key / showing the result)
     
-    Вызывается из:
+    Called from:
     - successful_payment_handler (Stars/TG payments) — base.py
-    - check_yookassa_payment (ЮКасса) — yookassa.py
+    - check_yookassa_payment (Yukassa) - yookassa.py
     
     Args:
-        order_id: ID ордера
-        message: Сообщение для ответа пользователю
-        state: FSM-контекст (для баланса и очистки)
-        telegram_id: Telegram ID пользователя
-        payment_type: Тип платежа ('stars', 'cards', 'yookassa_qr')
-        referral_amount: Сырая сумма для реферального вознаграждения:
-            - 'stars': количество звёзд
-            - 'cards': копейки рублей
-            - 'yookassa_qr': копейки рублей
+        order_id: Order ID
+        message: Message to respond to the user
+        state: FSM context (for balance and cleanup)
+        telegram_id: Telegram user ID
+        payment_type: Payment type ('stars', 'cards', 'yookassa_qr')
+        referral_amount: Raw amount for referral reward:
+            - 'stars': number of stars
+            - 'cards': pennies of rubles
+            - 'yookassa_qr': pennies of rubles
     """
     from bot.handlers.user.payments.base import finalize_payment_ui
     state_data = await state.get_data()
@@ -1500,7 +1500,7 @@ async def complete_payment_flow(
             processed_now = order.get('_payment_processed_now', True)
 
             if processed_now:
-                # Списание баланса при частичной оплате
+                # Write-off of balance upon partial payment
                 if balance_to_deduct > 0:
                     current_balance = get_user_balance(user_internal_id)
                     actual_deduct = min(balance_to_deduct, current_balance)
@@ -1522,13 +1522,13 @@ async def complete_payment_flow(
                                 f'{user_internal_id} при частичной оплате ({payment_type})'
                             )
 
-                # Реферальное вознаграждение
+                # Referral reward
                 await process_referral_reward(
                     user_internal_id, days, referral_amount, payment_type,
                     bot=message.bot, order=order
                 )
 
-                # Уведомление администраторов об оплате
+                # Notifying administrators about payment
                 try:
                     from bot.services.notifications import notify_admins_payment
                     await notify_admins_payment(message.bot, order)
@@ -1537,10 +1537,10 @@ async def complete_payment_flow(
             else:
                 logger.info(f'Повторная обработка платежа {order_id}: побочные действия пропущены')
 
-            # Очистка FSM данных о балансе
+            # Clearing FSM balance data
             await state.update_data(balance_to_deduct=0, remaining_cents=0)
             
-            # Финализация UI
+            # UI finalization
             await finalize_payment_ui(message, state, text, order, user_id=telegram_id)
         else:
             from bot.keyboards.admin import home_only_kb

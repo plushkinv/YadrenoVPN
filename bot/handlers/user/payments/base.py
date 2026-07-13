@@ -6,8 +6,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from bot.utils.page_flow import build_page_flow_context
+from bot.utils.page_renderer import render_page
 from bot.utils.text import escape_html, safe_edit_or_send
-from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -19,9 +19,9 @@ QR_PAYMENT_PAGE_KEY = 'qr_payment'
 
 def parse_payment_deeplink(start_param: str) -> Optional[dict]:
     """
-    Разбирает единый deep-link возврата из платёжной формы.
+    Parses a single deep-link return from the payment form.
 
-    Формат: pay_{provider}_{order_id}
+    Format: pay_{provider}_{order_id}
     """
     if not start_param or not start_param.startswith(PAYMENT_DEEPLINK_PREFIX):
         return None
@@ -45,9 +45,9 @@ async def handle_payment_deeplink(
     telegram_id: int,
 ) -> bool:
     """
-    Обрабатывает платёжные deep-link из /start.
+    Processes payment deep-links from /start.
 
-    Возвращает True, если параметр относится к платежам и дальнейшая обработка /start не нужна.
+    Returns True if the parameter relates to payments and further processing of /start is not needed.
     """
     if not start_param:
         return False
@@ -104,7 +104,7 @@ async def handle_payment_deeplink(
             )
         return True
 
-    # Совместимость со старыми ссылками Cardlink из настроек магазина.
+    # Compatible with old Cardlink links from store settings.
     if start_param.startswith('cl_'):
         from database.requests import find_latest_pending_cardlink_order_for_user
         from bot.handlers.user.payments.cardlink import _run_cardlink_check
@@ -131,7 +131,7 @@ async def handle_payment_deeplink(
 
 
 def _format_price_compact(cents: int) -> str:
-    """Форматирование цены в компактном виде."""
+    """Formatting prices in a compact form."""
     if cents >= 10000:
         return f'{cents // 100} ₽'
     else:
@@ -139,11 +139,11 @@ def _format_price_compact(cents: int) -> str:
 
 def _is_cards_via_yookassa_direct() -> bool:
     """
-    Проверяет, используется ли прямой сценарий ЮKassa для доплаты.
+    Checks whether the YuKassa direct script is used for additional payment.
     
     Returns:
-        True если прямой сценарий ЮKassa доступен от 1 ₽,
-        False если используется Telegram Payments API с минимумом около 100 ₽
+        True if the direct script YuKassa is available from 1 ₽,
+        False if the Telegram Payments API is used with a minimum of about 100 ₽
     """
     from database.requests import get_setting
     return get_setting('cards_via_yookassa_direct', '0') == '1'
@@ -155,7 +155,7 @@ async def complete_promo_free_payment(
     order_id: str,
     telegram_id: int,
 ) -> None:
-    """Завершает заказ с 100% скидкой без создания счёта у провайдера."""
+    """Completes the order with a 100% discount without creating an account with the provider."""
     from database.requests import update_payment_type
     from bot.services.billing import complete_payment_flow
 
@@ -171,15 +171,15 @@ async def complete_promo_free_payment(
 
 @router.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout: PreCheckoutQuery):
-    """Подтверждение pre-checkout для Telegram Stars."""
+    """Pre-checkout confirmation for Telegram Stars."""
     await pre_checkout.answer(ok=True)
 
 @router.message(F.successful_payment)
 async def successful_payment_handler(message: Message, state: FSMContext):
     """
-    Обработка успешной оплаты Stars или TG payments.
+    Processing successful Stars or TG payments.
     
-    Делегирует общую post-payment логику в complete_payment_flow().
+    Delegates general post-payment logic to complete_payment_flow().
     """
     from bot.services.billing import complete_payment_flow
     payment = message.successful_payment
@@ -206,8 +206,8 @@ async def successful_payment_handler(message: Message, state: FSMContext):
 
 async def finalize_payment_ui(message: Message, state: FSMContext, text: str, order: dict, user_id: int):
     """
-    Завершает UI после успешной оплаты.
-    Показывает сообщение и либо перекидывает на настройку (draft), либо на главную.
+    Completes the UI after successful payment.
+    Shows a message and either transfers to the settings (draft) or to the main one.
     """
     from bot.keyboards.admin import home_only_kb
     from database.requests import get_key_details_for_user, get_user_by_id
@@ -264,7 +264,7 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
 
 
 def _parse_success_payment_status_text(text: str) -> tuple[str, str]:
-    """Преобразует legacy success-текст оплаты в title/body для payment_status."""
+    """Converts legacy payment success text to title/body for payment_status."""
     body_html = str(text or '').strip()
     title_html = '✅ <b>Оплата принята</b>'
 
@@ -293,8 +293,8 @@ async def send_telegram_invoice_or_status(
     **invoice_kwargs,
 ) -> bool:
     """
-    Отправляет Telegram invoice и показывает page-backed ошибку, если Telegram API
-    не принял технический запрос на создание счёта.
+    Sends Telegram invoice and shows page-backed error if Telegram API
+    did not accept the technical request to create an account.
     """
     message = getattr(callback, 'message', None)
     if message is None:
@@ -341,7 +341,7 @@ async def send_telegram_invoice_or_status(
 
 @router.callback_query(F.data.startswith('renew_invoice_cancel:'))
 async def renew_invoice_cancel_handler(callback: CallbackQuery):
-    """Отмена инвойса и возврат к выбору способа оплаты."""
+    """Cancel the invoice and return to choosing a payment method."""
     from database.requests import get_key_details_for_user
     from bot.handlers.user.keys import show_renew_payment_page
     parts = callback.data.split(':')
@@ -358,12 +358,12 @@ async def renew_invoice_cancel_handler(callback: CallbackQuery):
 
 
 # ============================================================================
-# ОБЩИЕ ФУНКЦИИ ДЛЯ QR-ПЛАТЁЖНЫХ ПРОВАЙДЕРОВ (wata, platega, cardlink, yookassa)
+# COMMON FUNCTIONS FOR QR PAYMENT PROVIDERS (wata, platega, cardlink, yookassa)
 # ============================================================================
 
 
 def default_qr_payment_page_text() -> str:
-    """Дефолтный текст технической страницы QR-оплаты."""
+    """Default text of the QR payment technical page."""
     return (
         "%платеж_провайдер%\n\n"
         "%платеж_ключ_строка%"
@@ -428,81 +428,6 @@ def build_qr_payment_page_context(
     return context
 
 
-def _render_qr_payment_page_text(context: dict) -> str:
-    try:
-        from bot.utils.page_renderer import render_page_text
-
-        text = render_page_text(QR_PAYMENT_PAGE_KEY, context=context)
-        if text is not None:
-            return text
-    except Exception as e:
-        logger.warning("Не удалось отрендерить страницу %s: %s", QR_PAYMENT_PAGE_KEY, e)
-
-    from bot.utils.placeholders import apply_page_placeholders
-
-    fallback_context = {'page_key': QR_PAYMENT_PAGE_KEY}
-    fallback_context.update(context)
-    return apply_page_placeholders(
-        default_qr_payment_page_text(),
-        context=fallback_context,
-        mode='html',
-    ) or '(пусто)'
-
-
-def build_qr_payment_reply_markup(context: dict, append_buttons=None):
-    """
-    Собирает клавиатуру QR-экрана: custom-кнопки из pages + runtime-кнопки оплаты.
-    """
-    from aiogram.types import InlineKeyboardMarkup
-
-    try:
-        from bot.utils.page_renderer import build_page_keyboard
-
-        markup = build_page_keyboard(
-            QR_PAYMENT_PAGE_KEY,
-            context=context,
-            append_buttons=append_buttons,
-        )
-        if markup is not None:
-            return markup
-        if append_buttons:
-            return InlineKeyboardMarkup(inline_keyboard=append_buttons)
-    except Exception as e:
-        logger.warning("Не удалось собрать клавиатуру %s: %s", QR_PAYMENT_PAGE_KEY, e)
-        if append_buttons:
-            return InlineKeyboardMarkup(inline_keyboard=append_buttons)
-    return None
-
-
-def remember_qr_payment_page_context(
-    telegram_id: int,
-    message,
-    context: dict,
-    reply_markup=None,
-    append_buttons=None,
-) -> None:
-    """Сохраняет техническую QR-страницу для контекстной команды /yaa."""
-    if telegram_id not in ADMIN_IDS or message is None:
-        return
-    try:
-        from bot.services.page_context import remember_page_context
-
-        render_context = {'page_key': QR_PAYMENT_PAGE_KEY}
-        render_context.update(context)
-        runtime_rows = append_buttons
-        if runtime_rows is None:
-            runtime_rows = getattr(reply_markup, 'inline_keyboard', None)
-        remember_page_context(
-            telegram_id,
-            page_key=QR_PAYMENT_PAGE_KEY,
-            message=message,
-            context=render_context,
-            append_buttons=runtime_rows,
-        )
-    except Exception as e:
-        logger.warning("Не удалось сохранить контекст QR-оплаты для /yaa: %s", e)
-
-
 def _message_photo_file_id(message) -> str | None:
     photos = getattr(message, 'photo', None) or []
     if not photos:
@@ -511,83 +436,24 @@ def _message_photo_file_id(message) -> str | None:
 
 
 async def rerender_qr_payment_page_context(page_context, viewer_id: int) -> bool:
-    """Перерисовывает сохранённый QR-экран оплаты после изменения через /yaa."""
-    from bot.utils.text import safe_edit_or_send
-
+    """Redraws the saved QR payment screen after changing via /yaa."""
     context = dict(page_context.context or {})
     if not context:
         return False
 
-    text = _render_qr_payment_page_text(context)
-    reply_markup = build_qr_payment_reply_markup(context, page_context.append_buttons)
     photo_file_id = _message_photo_file_id(page_context.message)
 
-    rendered_message = await safe_edit_or_send(
+    await render_page(
         page_context.message,
-        text,
-        media=photo_file_id,
-        media_type='photo' if photo_file_id else None,
-        reply_markup=reply_markup,
-    )
-    remember_qr_payment_page_context(
-        viewer_id,
-        rendered_message,
-        context,
-        reply_markup,
+        page_key=QR_PAYMENT_PAGE_KEY,
+        context=context,
         append_buttons=page_context.append_buttons,
+        fallback_text=default_qr_payment_page_text(),
+        media_policy='runtime',
+        runtime_media=photo_file_id,
+        runtime_media_type='photo',
     )
     return True
-
-
-def format_qr_payment_text(
-    title: str,
-    tariff_name: str,
-    price_str: str,
-    days: int,
-    qr_url: str,
-    key_name: str = None,
-    hint_text: str = None,
-    instruction_text: str = None,
-    promo_lines: str = None,
-    telegram_id: int | None = None,
-    bot_username: str | None = None,
-) -> str:
-    """
-    Формирует текст сообщения с QR-кодом оплаты.
-
-    Единая точка для всех провайдеров. Сначала пытается взять текст страницы
-    qr_payment из pages, а если страница ещё не создана миграцией — использует
-    встроенный дефолт.
-
-    Args:
-        title: Заголовок (напр. '📱 <b>ЮКасса</b>')
-        tariff_name: Название тарифа (уже экранировано через escape_html)
-        price_str: Отформатированная цена (напр. '100 ₽' или '50.00 ₽')
-        days: Количество дней
-        qr_url: Ссылка на оплату
-        key_name: Название ключа при продлении (уже экранировано); None для покупки
-        hint_text: Пользовательская подсказка внизу; если None — стандартная
-        instruction_text: Пользовательская инструкция со ссылкой; поддерживает
-            плейсхолдер {payment_link}
-        promo_lines: HTML-блок скидки/ценовой политики из describe_quote_lines()
-        telegram_id: ID пользователя для общих плейсхолдеров конструктора.
-        bot_username: username бота для общих плейсхолдеров конструктора.
-    """
-    context = build_qr_payment_page_context(
-        title=title,
-        tariff_name=tariff_name,
-        price_str=price_str,
-        days=days,
-        qr_url=qr_url,
-        key_name=key_name,
-        hint_text=hint_text,
-        instruction_text=instruction_text,
-        promo_lines=promo_lines,
-        telegram_id=telegram_id,
-        bot_username=bot_username,
-    )
-    return _render_qr_payment_page_text(context)
-
 
 async def create_qr_payment_flow(
     callback: CallbackQuery,
@@ -610,29 +476,29 @@ async def create_qr_payment_flow(
     instruction_text: str = None,
 ) -> None:
     """
-    Универсальный flow создания QR-счёта для любого провайдера.
+    A universal flow for creating a QR invoice for any provider.
 
-    Выполняет: валидацию пользователя → создание ордера → вызов API провайдера →
-    сохранение ID платежа → формирование текста → отправку QR-фото.
+    Performs: user validation → order creation → provider API call →
+    saving the payment ID → generating text → sending a QR photo.
 
     Args:
-        callback: Callback от кнопки выбора тарифа
-        tariff: Словарь тарифа (уже валидирован)
-        price_rub: Сумма к оплате в рублях
-        payment_type: Тип платежа ('wata', 'platega', 'cardlink', 'yookassa_qr')
-        create_func: Async-функция создания платежа (amount_rub, order_id, description, bot_name)
-        save_func: Функция сохранения ID платежа в ордере (order_id, payment_id)
-        result_key: Ключ в dict результата API (напр. 'wata_link_id')
-        title: Заголовок сообщения (напр. '🌊 <b>Оплата WATA</b>')
-        check_prefix: Префикс callback проверки (напр. 'check_wata')
-        error_name: Название провайдера для ошибок (напр. 'WATA')
-        qr_filename: Имя файла QR-картинки (напр. 'wata.png')
-        back_callback: Callback кнопки «Назад» на экране QR
-        loading_text: Текст загрузки
-        key: Словарь ключа при продлении (None для покупки)
-        vpn_key_id: ID ключа при продлении (None для покупки)
-        hint_text: Пользовательская подсказка (None → стандартная)
-        instruction_text: Пользовательская инструкция со ссылкой на оплату
+        callback: Callback from the tariff selection button
+        tariff: Tariff dictionary (already validated)
+        price_rub: Amount to be paid in rubles
+        payment_type: Payment type ('wata', 'platega', 'cardlink', 'yookassa_qr')
+        create_func: Async function for creating a payment (amount_rub, order_id, description, bot_name)
+        save_func: Function for saving payment ID in an order (order_id, payment_id)
+        result_key: Key in the API result dict (eg 'wata_link_id')
+        title: Message title (eg '🌊 <b>WATA Payment</b>')
+        check_prefix: Check callback prefix (e.g. 'check_wata')
+        error_name: Error provider name (eg 'WATA')
+        qr_filename: QR image file name (eg 'wata.png')
+        back_callback: Callback of the Back button on the QR screen
+        loading_text: Loading text
+        key: Key dictionary when renewing (None for purchase)
+        vpn_key_id: Key ID when renewing (None for purchase)
+        hint_text: Custom hint (None → standard)
+        instruction_text: User instructions with payment link
     """
     from database.requests import get_user_internal_id, create_pending_order
     from bot.keyboards.user import qr_payment_kb
@@ -643,13 +509,13 @@ async def create_qr_payment_flow(
         show_payment_unavailable_status,
     )
 
-    # Валидация пользователя
+    # User Validation
     user_id = get_user_internal_id(callback.from_user.id)
     if not user_id:
         await callback.answer('❌ Пользователь не найден', show_alert=True)
         return
 
-    # Создание ордера
+    # Creating an order
     (_, order_id) = create_pending_order(
         user_id=user_id, tariff_id=tariff['id'],
         payment_type=payment_type, vpn_key_id=vpn_key_id
@@ -688,7 +554,7 @@ async def create_qr_payment_flow(
         bot_info = await callback.bot.get_me()
         bot_name = bot_info.username
 
-        # Описание для провайдера
+        # Description for the provider
         if key:
             description = (
                 f"Продление Ключа «{key['display_name']}»: "
@@ -697,7 +563,7 @@ async def create_qr_payment_flow(
         else:
             description = f"Покупка «{tariff['name']}» — {tariff['duration_days']} дней"
 
-        # Вызов API провайдера
+        # Provider API call
         create_kwargs = {
             'amount_rub': price_rub,
             'order_id': order_id,
@@ -731,7 +597,7 @@ async def create_qr_payment_flow(
             )
             return
 
-        # Формирование текста
+        # Formation of text
         promo_lines = describe_quote_lines(quote)
         payment_context = build_qr_payment_page_context(
             title=title,
@@ -746,25 +612,22 @@ async def create_qr_payment_flow(
         )
         payment_context.setdefault('bot_username', bot_name)
         payment_context = build_page_flow_context(callback, **payment_context)
-        text = _render_qr_payment_page_text(payment_context)
 
-        # Отправка QR-фото
+        # Sending a QR photo
         from aiogram.types import BufferedInputFile
         photo = BufferedInputFile(qr_image_data, filename=qr_filename)
         runtime_markup = qr_payment_kb(order_id, check_prefix, back_callback, qr_url)
         runtime_rows = getattr(runtime_markup, 'inline_keyboard', None)
-        reply_markup = build_qr_payment_reply_markup(payment_context, runtime_rows) or runtime_markup
-        rendered_message = await safe_edit_or_send(
-            callback.message, text, photo=photo,
-            reply_markup=reply_markup,
-            force_new=True
-        )
-        remember_qr_payment_page_context(
-            callback.from_user.id,
-            rendered_message,
-            payment_context,
-            reply_markup,
+        await render_page(
+            callback,
+            page_key=QR_PAYMENT_PAGE_KEY,
+            context=payment_context,
             append_buttons=runtime_rows,
+            force_new=True,
+            fallback_text=default_qr_payment_page_text(),
+            media_policy='runtime',
+            runtime_media=photo,
+            runtime_media_type='photo',
         )
     except (ValueError, RuntimeError) as e:
         logger.error(f'Ошибка создания {error_name}-счёта: {e}')
@@ -798,26 +661,26 @@ async def check_qr_payment_flow(
     referral_override_func=None,
 ) -> None:
     """
-    Универсальный flow проверки статуса QR-платежа.
+    Universal flow for checking the status of a QR payment.
 
-    Выполняет: поиск ордера → проверку владельца → проверку «уже оплачено» →
-    валидацию payment_id → rate-limiting → вызов API проверки → обработку результата.
+    Performs: order search → owner check → “already paid” check →
+    payment_id validation → rate-limiting → verification API call → result processing.
 
     Args:
-        message: Объект сообщения (callback.message или Message из deep-link)
-        state: FSM-контекст
-        order_id: ID ордера
-        telegram_id: Telegram ID пользователя
-        payment_type: Тип платежа ('wata', 'platega', 'cardlink', 'yookassa_qr')
-        payment_id_field: Имя поля ID платежа в ордере ('wata_link_id', 'cardlink_bill_id', ...)
-        check_func: Async-функция проверки статуса (payment_id) -> str ('succeeded'/'canceled'/...)
-        check_arg_is_order_id: True если check_func принимает order_id вместо payment_id (WATA)
-        rate_limit_seconds: Интервал rate-limit (0 — без ограничения)
-        rate_limit_prefix: Префикс ключа rate-limit в FSM ('wata', 'platega', ...)
-        pending_hint: Дополнительная подсказка в статусе «ожидание» (None → стандарт)
-        callback: CallbackQuery (None при deep-link вызове)
-        referral_override_func: Функция(order, state) -> int для нестандартного
-                                расчёта реферального вознаграждения (yookassa с балансом)
+        message: Message object (callback.message or Message from deep-link)
+        state: FSM context
+        order_id: Order ID
+        telegram_id: Telegram user ID
+        payment_type: Payment type ('wata', 'platega', 'cardlink', 'yookassa_qr')
+        payment_id_field: Name of the payment ID field in the order ('wata_link_id', 'cardlink_bill_id', ...)
+        check_func: Async function for checking status (payment_id) -> str ('succeeded'/'canceled'/...)
+        check_arg_is_order_id: True if check_func accepts order_id instead of payment_id (WATA)
+        rate_limit_seconds: Rate-limit interval (0 - no limit)
+        rate_limit_prefix: Prefix of the rate-limit key in FSM ('wata', 'platega', ...)
+        pending_hint: Additional hint in the “pending” status (None → standard)
+        callback: CallbackQuery (None for deep-link call)
+        referral_override_func: Function(order, state) -> int for non-standard
+                                calculation of referral reward (yookassa with balance)
     """
     import time
     from database.requests import (
@@ -840,13 +703,13 @@ async def check_qr_payment_flow(
                 send_func=safe_edit_or_send,
             )
 
-    # 1. Поиск ордера
+    # 1. Order search
     order = find_order_by_order_id(order_id)
     if not order:
         await _show_order_not_found()
         return
 
-    # 2. Проверка владельца ордера
+    # 2. Verification of the order owner
     owner_user_id = get_user_internal_id(telegram_id)
     if not owner_user_id or int(order.get('user_id') or 0) != int(owner_user_id):
         logger.warning(
@@ -856,7 +719,7 @@ async def check_qr_payment_flow(
         await _show_order_not_found()
         return
 
-    # 3. Уже оплачено?
+    # 3. Already paid?
     if order.get('status') == 'paid' or is_order_already_paid(order_id):
         await finalize_payment_ui(
             message, state,
@@ -867,7 +730,7 @@ async def check_qr_payment_flow(
             await callback.answer()
         return
 
-    # 4. Валидация payment_id
+    # 4. Payment_id validation
     payment_id = order.get(payment_id_field)
     if not payment_id:
         if callback:
@@ -899,11 +762,11 @@ async def check_qr_payment_flow(
             return
         await state.update_data({last_check_key: now})
 
-    # 6. Уведомление о проверке
+    # 6. Notification of inspection
     if callback:
         await callback.answer('🔍 Проверяем платёж...')
 
-    # 7. Вызов API проверки
+    # 7. Call the verification API
     try:
         check_arg = order_id if check_arg_is_order_id else payment_id
         status = await check_func(check_arg)
@@ -919,11 +782,11 @@ async def check_qr_payment_flow(
         )
         return
 
-    # 8. Обработка результата
+    # 8. Processing the result
     if status == 'succeeded':
         update_payment_type(order_id, payment_type)
 
-        # Реферальное вознаграждение
+        # Referral reward
         if referral_override_func:
             referral_amount = await referral_override_func(order, state)
         else:
@@ -936,7 +799,7 @@ async def check_qr_payment_flow(
 
         logger.info(f"{payment_type} referral: order={order_id}, referral_amount={referral_amount}")
 
-        # Удаляем QR-фото
+        # Removing QR photos
         try:
             await message.delete()
         except Exception:

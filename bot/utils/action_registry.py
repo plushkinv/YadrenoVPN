@@ -1,13 +1,13 @@
 """
-Реестр действий кнопок страниц.
+Register of page button actions.
 
-Содержит:
-- ACTION_REGISTRY: маппинг action_value → callback_data для internal-кнопок
-- SYSTEM_BUTTONS: маппинг button_id → handler(context) для system-кнопок
+Contains:
+- ACTION_REGISTRY: mapping action_value → callback_data for internal buttons
+- SYSTEM_BUTTONS: mapping button_id → handler(context) for system buttons
 
-Правила:
-- action_value — контракт, НЕЛЬЗЯ менять после релиза
-- button_id — контракт, НЕЛЬЗЯ менять после релиза
+Rules:
+- action_value — contract, CANNOT be changed after release
+- button_id — contract, CANNOT be changed after release
 """
 import logging
 from typing import Optional, Dict, Any, Callable, Mapping
@@ -18,8 +18,8 @@ MAX_CALLBACK_DATA_BYTES = 64
 
 
 # =============================================================================
-# ACTION_REGISTRY: internal-кнопки
-# Ключ = action_value из buttons_default, Значение = callback_data для Telegram
+# ACTION_REGISTRY: internal buttons
+# Key = action_value from buttons_default, Value = callback_data for Telegram
 # =============================================================================
 
 ACTION_REGISTRY: Dict[str, str] = {
@@ -37,7 +37,7 @@ ACTION_REGISTRY: Dict[str, str] = {
 
 
 def register_action_handler(action_value: str, callback_data: str, *, replace: bool = False) -> None:
-    """Регистрирует callback для internal-кнопки расширения."""
+    """Registers a callback for the extension's internal button."""
     action_key = _require_text(action_value, 'action_value').strip()
     callback = normalize_callback_data(callback_data)
     _require_bool(replace, 'replace')
@@ -63,7 +63,7 @@ def _require_bool(value: Any, field: str) -> bool:
 
 
 def normalize_callback_data(value: Any, field: str = 'callback_data') -> str:
-    """Проверяет callback_data по контракту Telegram InlineKeyboardButton."""
+    """Checks callback_data against the Telegram InlineKeyboardButton contract."""
     callback = _require_text(value, field).strip()
     if not callback:
         raise ValueError(f"{field} не может быть пустым")
@@ -73,19 +73,19 @@ def normalize_callback_data(value: Any, field: str = 'callback_data') -> str:
 
 
 # =============================================================================
-# SYSTEM_BUTTONS: system-кнопки
+# SYSTEM_BUTTONS: system buttons
 #
-# Каждый handler получает context: dict и возвращает:
-# - dict с ключами: callback_data, url, label, hidden (все опциональные)
-# - None — кнопка полностью скрывается
+# Each handler receives a context: dict and returns:
+# - dict with keys: callback_data, url, label, hidden (all optional)
+# - None - the button is completely hidden
 #
-# context содержит данные, переданные хендлером в render_page:
-# - order_id, telegram_id, и другие параметры
+# context contains the data passed by the handler to render_page:
+# - order_id, telegram_id, and other parameters
 # =============================================================================
 
 
 def _resolve_pay_crypto(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты криптой (USDT). Определяет видимость и формирует action."""
+    """Crypto payment button (USDT). Determines visibility and generates action."""
     from database.requests import is_crypto_configured
 
     if not is_crypto_configured():
@@ -97,7 +97,7 @@ def _resolve_pay_crypto(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_stars(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты звёздами."""
+    """Star payment button."""
     from database.requests import is_stars_enabled
 
     if not is_stars_enabled():
@@ -109,7 +109,7 @@ def _resolve_pay_stars(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_cards(ctx: dict) -> Optional[dict]:
-    """Кнопка TG payments (историческое внутреннее имя cards)."""
+    """TG payments button (historical internal name cards)."""
     from database.requests import is_cards_enabled
 
     if not is_cards_enabled():
@@ -121,7 +121,7 @@ def _resolve_pay_cards(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_qr(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты через ЮКассу."""
+    """Payment button via YuKassa."""
     from database.requests import is_yookassa_qr_configured
 
     if not is_yookassa_qr_configured():
@@ -131,7 +131,7 @@ def _resolve_pay_qr(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_wata(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты через WATA."""
+    """Payment button via WATA."""
     from database.requests import is_wata_configured
 
     if not is_wata_configured():
@@ -141,7 +141,7 @@ def _resolve_pay_wata(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_platega(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты через Platega."""
+    """Payment button via Platega."""
     from database.requests import is_platega_configured
 
     if not is_platega_configured():
@@ -151,7 +151,7 @@ def _resolve_pay_platega(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_cardlink(ctx: dict) -> Optional[dict]:
-    """Кнопка оплаты через Cardlink."""
+    """Payment button via Cardlink."""
     from database.requests import is_cardlink_configured
 
     if not is_cardlink_configured():
@@ -161,7 +161,7 @@ def _resolve_pay_cardlink(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_demo(ctx: dict) -> Optional[dict]:
-    """Кнопка демо-оплаты (РФ карта)."""
+    """Demo payment button (RF card)."""
     from database.requests import is_demo_payment_enabled
 
     if not is_demo_payment_enabled():
@@ -173,7 +173,7 @@ def _resolve_pay_demo(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_pay_balance(ctx: dict) -> Optional[dict]:
-    """Кнопка «Использовать баланс». Видна только при referral + balance > 0."""
+    """“Use balance” button. Visible only when referral + balance > 0."""
     from database.requests import (
         is_referral_enabled, get_referral_reward_type,
         get_user_balance, get_user_internal_id,
@@ -198,7 +198,7 @@ def _resolve_pay_balance(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_enter_promo(ctx: dict) -> Optional[dict]:
-    """Кнопка ввода промокода на странице покупки."""
+    """Button to enter a promotional code on the purchase page."""
     from database.requests import has_available_promo_codes
 
     if not has_available_promo_codes():
@@ -208,7 +208,7 @@ def _resolve_enter_promo(ctx: dict) -> Optional[dict]:
 
 
 def _get_renew_key_id(ctx: dict) -> Optional[str]:
-    """Возвращает key_id для кнопок продления или скрывает кнопку без контекста."""
+    """Returns the key_id for renewal buttons or hides the button without context."""
     key_id = ctx.get('key_id')
     if key_id is None or key_id == '':
         return None
@@ -219,7 +219,7 @@ def _get_renew_key_id(ctx: dict) -> Optional[str]:
 
 
 def _resolve_renew_pay_crypto(ctx: dict) -> Optional[dict]:
-    """Кнопка продления через крипто-оплату (USDT)."""
+    """Renewal button via crypto payment (USDT)."""
     from database.requests import is_crypto_configured
 
     key_id = _get_renew_key_id(ctx)
@@ -230,7 +230,7 @@ def _resolve_renew_pay_crypto(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_pay_stars(ctx: dict) -> Optional[dict]:
-    """Кнопка продления через Telegram Stars."""
+    """Renewal button via Telegram Stars."""
     from database.requests import is_stars_enabled
 
     key_id = _get_renew_key_id(ctx)
@@ -241,7 +241,7 @@ def _resolve_renew_pay_stars(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_pay_cards(ctx: dict) -> Optional[dict]:
-    """Кнопка продления через Telegram Payments."""
+    """Renewal button via Telegram Payments."""
     from database.requests import is_cards_enabled
 
     key_id = _get_renew_key_id(ctx)
@@ -252,7 +252,7 @@ def _resolve_renew_pay_cards(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_pay_qr(ctx: dict) -> Optional[dict]:
-    """Кнопка продления через QR-оплату ЮКассы."""
+    """Renewal button via YuKassa QR payment."""
     from database.requests import is_yookassa_qr_configured
 
     key_id = _get_renew_key_id(ctx)
@@ -263,7 +263,7 @@ def _resolve_renew_pay_qr(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_pay_wata(ctx: dict) -> Optional[dict]:
-    """Кнопка продления через WATA."""
+    """Renewal button via WATA."""
     from database.requests import is_wata_configured
 
     key_id = _get_renew_key_id(ctx)
@@ -274,7 +274,7 @@ def _resolve_renew_pay_wata(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_pay_platega(ctx: dict) -> Optional[dict]:
-    """Кнопка продления через Platega."""
+    """Renewal button via Platega."""
     from database.requests import is_platega_configured
 
     key_id = _get_renew_key_id(ctx)
@@ -285,7 +285,7 @@ def _resolve_renew_pay_platega(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_pay_cardlink(ctx: dict) -> Optional[dict]:
-    """Кнопка продления через Cardlink."""
+    """Renewal button via Cardlink."""
     from database.requests import is_cardlink_configured
 
     key_id = _get_renew_key_id(ctx)
@@ -296,7 +296,7 @@ def _resolve_renew_pay_cardlink(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_pay_demo(ctx: dict) -> Optional[dict]:
-    """Кнопка продления через демонстрационную оплату."""
+    """Renewal button via demo payment."""
     from database.requests import is_demo_payment_enabled
 
     key_id = _get_renew_key_id(ctx)
@@ -307,7 +307,7 @@ def _resolve_renew_pay_demo(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_pay_balance(ctx: dict) -> Optional[dict]:
-    """Кнопка продления с внутреннего баланса."""
+    """Extension button from internal balance."""
     from database.requests import (
         is_referral_enabled, get_referral_reward_type,
         get_user_balance, get_user_internal_id,
@@ -367,7 +367,7 @@ def _resolve_renew_pay_ext(btn_id: str, ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_enter_promo(ctx: dict) -> Optional[dict]:
-    """Кнопка ввода промокода на странице продления."""
+    """Button to enter a promotional code on the renewal page."""
     from database.requests import has_available_promo_codes
 
     key_id = _get_renew_key_id(ctx)
@@ -378,7 +378,7 @@ def _resolve_renew_enter_promo(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_renew_back(ctx: dict) -> Optional[dict]:
-    """Кнопка возврата со страницы выбора оплаты продления к ключу."""
+    """Return button from the renewal payment selection page to the key."""
     key_id = _get_renew_key_id(ctx)
     if not key_id:
         return None
@@ -387,7 +387,7 @@ def _resolve_renew_back(ctx: dict) -> Optional[dict]:
 
 
 def _get_key_details_id(ctx: dict) -> Optional[str]:
-    """Возвращает key_id для кнопок карточки ключа."""
+    """Returns the key_id for key card buttons."""
     return _get_renew_key_id(ctx)
 
 
@@ -408,7 +408,7 @@ def _key_details_has_sub_id(ctx: dict) -> bool:
 
 
 def _resolve_key_show_key(ctx: dict) -> Optional[dict]:
-    """Кнопка показа обычного VPN-ключа."""
+    """Button to show regular VPN key."""
     key_id = _get_key_details_id(ctx)
     if not key_id:
         return None
@@ -423,7 +423,7 @@ def _resolve_key_show_key(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_key_show_subscription(ctx: dict) -> Optional[dict]:
-    """Кнопка показа subscription-ссылки."""
+    """Button to show subscription link."""
     key_id = _get_key_details_id(ctx)
     if not key_id:
         return None
@@ -438,7 +438,7 @@ def _resolve_key_show_subscription(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_key_configure(ctx: dict) -> Optional[dict]:
-    """Кнопка настройки ещё не созданного на сервере ключа."""
+    """Button for setting up a key that has not yet been created on the server."""
     key_id = _get_key_details_id(ctx)
     if not key_id:
         return None
@@ -449,7 +449,7 @@ def _resolve_key_configure(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_key_renew(ctx: dict) -> Optional[dict]:
-    """Кнопка продления ключа."""
+    """Key renewal button."""
     key_id = _get_key_details_id(ctx)
     if not key_id:
         return None
@@ -458,7 +458,7 @@ def _resolve_key_renew(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_key_replace(ctx: dict) -> Optional[dict]:
-    """Кнопка замены активного настроенного ключа."""
+    """Button to replace the active configured key."""
     key_id = _get_key_details_id(ctx)
     if not key_id:
         return None
@@ -471,7 +471,7 @@ def _resolve_key_replace(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_key_delete(ctx: dict) -> Optional[dict]:
-    """Кнопка удаления истёкшего или исчерпавшего трафик ключа."""
+    """Button for deleting an expired or traffic-depleted key."""
     key_id = _get_key_details_id(ctx)
     if not key_id:
         return None
@@ -482,7 +482,7 @@ def _resolve_key_delete(ctx: dict) -> Optional[dict]:
 
 
 def _resolve_key_rename(ctx: dict) -> Optional[dict]:
-    """Кнопка переименования ключа."""
+    """Key rename button."""
     key_id = _get_key_details_id(ctx)
     if not key_id:
         return None
@@ -491,7 +491,7 @@ def _resolve_key_rename(ctx: dict) -> Optional[dict]:
 
 
 
-# Карта: button_id → handler
+# Map: button_id → handler
 SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_pay_crypto":  _resolve_pay_crypto,
     "btn_pay_stars":   _resolve_pay_stars,
@@ -541,7 +541,7 @@ def resolve_system_button(button_id: str, context: Mapping[str, Any]) -> Optiona
 
 
 def _normalize_system_button_result(button_id: str, result: Any) -> Optional[dict]:
-    """Проверяет контракт system handler-а перед передачей в renderer."""
+    """Checks the system handler's contract before passing it to the renderer."""
     if result is None:
         return None
     if not isinstance(result, Mapping):

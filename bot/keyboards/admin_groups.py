@@ -6,10 +6,10 @@ from .admin_misc import back_button, home_button, cancel_button
 
 def groups_list_kb(groups: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """
-    Клавиатура списка групп тарифов с кнопками ⬆️ для сортировки.
+    Keyboard for list of tariff groups with ⬆️ buttons for sorting.
     
     Args:
-        groups: Список групп из get_all_groups()
+        groups: List of groups from get_all_groups()
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='➕ Добавить группу', callback_data='admin_group_add'))
@@ -23,10 +23,10 @@ def groups_list_kb(groups: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
 
 def group_view_kb(group_id: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура просмотра группы тарифов.
+    Keyboard for viewing tariff groups.
     
     Args:
-        group_id: ID группы
+        group_id: Group ID
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✏️ Переименовать', callback_data=f'admin_group_edit:{group_id}'))
@@ -37,10 +37,10 @@ def group_view_kb(group_id: int) -> InlineKeyboardMarkup:
 
 def group_delete_confirm_kb(group_id: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура подтверждения удаления группы.
+    Group deletion confirmation keypad.
     
     Args:
-        group_id: ID группы
+        group_id: Group ID
     """
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✅ Да, удалить', callback_data=f'admin_group_delete_confirm:{group_id}'))
@@ -49,12 +49,12 @@ def group_delete_confirm_kb(group_id: int) -> InlineKeyboardMarkup:
 
 def group_select_kb(groups: List[Dict[str, Any]], callback_prefix: str, back_callback: str) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора группы (используется при создании тарифа/сервера).
+    Group selection keyboard (used when creating a tariff/server).
     
     Args:
-        groups: Список групп
-        callback_prefix: Префикс для callback_data (напр. "tariff_group_select")
-        back_callback: Callback для кнопки «Назад»
+        groups: List of groups
+        callback_prefix: Prefix for callback_data (e.g. "tariff_group_select")
+        back_callback: Callback for the back button
     """
     builder = InlineKeyboardBuilder()
     for group in groups:

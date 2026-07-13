@@ -5,8 +5,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from bot.utils.page_flow import build_page_flow_context
-from bot.utils.text import escape_html, safe_edit_or_send
-from config import ADMIN_IDS
+from bot.utils.page_renderer import render_page
+from bot.utils.text import escape_html
 from bot.handlers.user.payments.base import (
     _format_price_compact,
     _is_cards_via_yookassa_direct,
@@ -24,7 +24,7 @@ BALANCE_PAYMENT_PAGE_KEY = 'balance_payment'
 
 
 def default_balance_payment_page_text() -> str:
-    """Дефолтный текст экрана оплаты с баланса."""
+    """Default text of the balance payment screen."""
     return (
         "💳 <b>Оплата тарифа «%платеж_тариф%»</b>\n\n"
         "💰 Сумма: %платеж_сумма%\n"
@@ -70,100 +70,17 @@ def build_balance_payment_page_context(
     }
 
 
-def render_balance_payment_page_text(context: dict) -> str:
-    try:
-        from bot.utils.page_renderer import render_page_text
-
-        text = render_page_text(BALANCE_PAYMENT_PAGE_KEY, context=context)
-        if text is not None:
-            return text
-    except Exception as e:
-        logger.warning("Не удалось отрендерить страницу %s: %s", BALANCE_PAYMENT_PAGE_KEY, e)
-
-    from bot.utils.placeholders import apply_page_placeholders
-
-    fallback_context = {'page_key': BALANCE_PAYMENT_PAGE_KEY}
-    fallback_context.update(context)
-    return apply_page_placeholders(
-        default_balance_payment_page_text(),
-        context=fallback_context,
-        mode='html',
-    ) or '(пусто)'
-
-
-def build_balance_payment_reply_markup(context: dict, runtime_rows):
-    from aiogram.types import InlineKeyboardMarkup
-
-    try:
-        from bot.utils.page_renderer import build_page_keyboard
-
-        markup = build_page_keyboard(
-            BALANCE_PAYMENT_PAGE_KEY,
-            context=context,
-            append_buttons=runtime_rows,
-        )
-        if markup is not None:
-            return markup
-    except Exception as e:
-        logger.warning("Не удалось собрать клавиатуру %s: %s", BALANCE_PAYMENT_PAGE_KEY, e)
-
-    return InlineKeyboardMarkup(inline_keyboard=runtime_rows)
-
-
-def remember_balance_payment_page_context(
-    telegram_id: int,
-    message,
-    context: dict,
-    runtime_rows,
-) -> None:
-    if telegram_id not in ADMIN_IDS or message is None:
-        return
-    try:
-        from bot.services.page_context import remember_page_context
-
-        render_context = {'page_key': BALANCE_PAYMENT_PAGE_KEY}
-        render_context.update(context)
-        remember_page_context(
-            telegram_id,
-            page_key=BALANCE_PAYMENT_PAGE_KEY,
-            message=message,
-            context=render_context,
-            append_buttons=runtime_rows,
-        )
-    except Exception as e:
-        logger.warning("Не удалось сохранить контекст balance_payment для /yaa: %s", e)
-
-
-async def rerender_balance_payment_page_context(page_context, viewer_id: int) -> bool:
-    """Перерисовывает сохранённый экран оплаты с баланса после изменения через /yaa."""
-    context = dict(page_context.context or {})
-    if not context or not page_context.append_buttons:
-        return False
-
-    rendered_message = await safe_edit_or_send(
-        page_context.message,
-        render_balance_payment_page_text(context),
-        reply_markup=build_balance_payment_reply_markup(context, page_context.append_buttons),
-    )
-    remember_balance_payment_page_context(
-        viewer_id,
-        rendered_message,
-        context,
-        page_context.append_buttons,
-    )
-    return True
-
 async def _show_balance_payment_screen(callback: CallbackQuery, state: FSMContext, tariff_id: int, user_internal_id: int, key_id: int=None):
     """
-    Показать экран оплаты с учётом баланса по ТЗ.
+    Show the payment screen taking into account the balance according to the technical specifications.
     
-    Вызывается по кнопке «💎 Использовать баланс».
+    Called by the “💎 Use balance” button.
     
-    Расчёт:
+    Calculation:
         balance_to_deduct = min(balance, price)
         remaining_cents = price - balance_to_deduct
     
-    Сохраняет в FSM state: balance_to_deduct, tariff_price_cents, tariff_id, key_id
+    Saves in FSM state: balance_to_deduct, tariff_price_cents, tariff_id, key_id
     """
     from database.requests import get_tariff_by_id, get_user_balance, is_cards_enabled, is_yookassa_qr_configured
     from bot.keyboards.user import balance_payment_kb
@@ -223,22 +140,18 @@ async def _show_balance_payment_screen(callback: CallbackQuery, state: FSMContex
         cards_via_yookassa_direct=cards_via_yookassa_direct,
     )
     runtime_rows = getattr(runtime_markup, 'inline_keyboard', None)
-    rendered_message = await safe_edit_or_send(
-        callback.message,
-        render_balance_payment_page_text(context),
-        reply_markup=build_balance_payment_reply_markup(context, runtime_rows),
-    )
-    remember_balance_payment_page_context(
-        callback.from_user.id,
-        rendered_message,
-        context,
-        runtime_rows,
+    await render_page(
+        callback,
+        page_key=BALANCE_PAYMENT_PAGE_KEY,
+        context=context,
+        append_buttons=runtime_rows,
+        fallback_text=default_balance_payment_page_text(),
     )
     await callback.answer()
 
 @router.callback_query(F.data == 'pay_use_balance')
 async def pay_use_balance_buy_handler(callback: CallbackQuery, state: FSMContext):
-    """Выбор тарифа для оплаты с баланса (новый ключ)."""
+    """Selecting a tariff for payment from the balance (new key)."""
     from database.requests import get_all_tariffs, get_user_internal_id, is_referral_enabled, get_referral_reward_type, get_user_balance
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -277,7 +190,7 @@ async def pay_use_balance_buy_handler(callback: CallbackQuery, state: FSMContext
 @router.callback_query(F.data.startswith('pay_use_balance:'))
 async def pay_use_balance_renew_handler(callback: CallbackQuery, state: FSMContext):
     """
-    Обработка кнопки «Использовать баланс» для продления.
+    Processing the “Use Balance” button for renewal.
     Callback: pay_use_balance:{key_id}
     """
     from database.requests import get_user_internal_id, get_key_details_for_user, is_referral_enabled, get_referral_reward_type, get_user_balance, get_all_tariffs
@@ -326,8 +239,8 @@ async def pay_use_balance_renew_handler(callback: CallbackQuery, state: FSMConte
 @router.callback_query(F.data.startswith('balance_pay:'))
 async def balance_pay_handler(callback: CallbackQuery, state: FSMContext):
     """
-    Показ экрана оплаты с балансом после выбора тарифа.
-    Callback: balance_pay:{tariff_id} или balance_pay:{tariff_id}:{key_id}
+    Show the payment screen with the balance after selecting a tariff.
+    Callback: balance_pay:{tariff_id} or balance_pay:{tariff_id}:{key_id}
     """
     from database.requests import get_user_internal_id, get_tariff_by_id
     parts = callback.data.split(':')
@@ -346,10 +259,10 @@ async def balance_pay_handler(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('pay_with_balance:'))
 async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
     """
-    Полная оплата с баланса (когда remaining_cents == 0).
-    Атомарная операция: списать + выдать ключ.
+    Full payment from the balance (when remaining_cents == 0).
+    Atomic operation: write off + issue a key.
     
-    При оплате балансом реферальные вознаграждения НЕ начисляются.
+    When paying with balance, referral rewards are NOT accrued.
     """
     from database.requests import get_user_balance, get_tariff_by_id, get_or_create_user
     data = await state.get_data()
@@ -435,10 +348,10 @@ async def pay_with_balance_handler(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('pay_card_balance:'))
 async def pay_card_balance_handler(callback: CallbackQuery, state: FSMContext):
     """
-    Частичная оплата: баланс + TG payments.
+    Partial payment: balance + TG payments.
     
-    Берёт данные из FSM state: balance_to_deduct, remaining_cents, tariff_id, key_id
-    Создаёт инвойс на remaining_cents (не на полную цену тарифа!)
+    Takes data from FSM state: balance_to_deduct, remaining_cents, tariff_id, key_id
+    Creates an invoice for remaining_cents (not for the full fare price!)
     """
     from aiogram.types import LabeledPrice
     from database.requests import get_tariff_by_id, get_user_internal_id, get_user_balance, create_pending_order, get_setting
@@ -560,10 +473,10 @@ async def pay_card_balance_handler(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('pay_qr_balance:'))
 async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
     """
-    Частичная оплата: баланс + ЮКасса.
+    Partial payment: balance + YuKassa.
     
-    Берёт данные из FSM state: balance_to_deduct, remaining_cents, tariff_id, key_id
-    Создаёт инвойс на remaining_cents / 100 рублей (ЮKassa принимает рубли)
+    Takes data from FSM state: balance_to_deduct, remaining_cents, tariff_id, key_id
+    Creates an invoice for remaining_cents / 100 rubles (UKassa accepts rubles)
     """
     from database.requests import get_tariff_by_id, get_user_internal_id, get_user_balance, create_pending_order, save_yookassa_payment_id
     from bot.services.billing import create_yookassa_qr_payment
@@ -651,10 +564,9 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
             )
             return
         from bot.handlers.user.payments.base import (
+            QR_PAYMENT_PAGE_KEY,
             build_qr_payment_page_context,
-            build_qr_payment_reply_markup,
-            format_qr_payment_text,
-            remember_qr_payment_page_context,
+            default_qr_payment_page_text,
         )
         payment_context = build_qr_payment_page_context(
             title='📱 <b>ЮКасса</b>',
@@ -669,33 +581,20 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
         )
         payment_context.setdefault('bot_username', bot_name)
         payment_context = build_page_flow_context(callback, **payment_context)
-        text = format_qr_payment_text(
-            title='📱 <b>ЮКасса</b>',
-            tariff_name=escape_html(tariff['name']),
-            price_str=f"{remaining_rub:.2f} ₽",
-            days=tariff['duration_days'],
-            qr_url=qr_url,
-            telegram_id=payment_context.get('telegram_id'),
-            bot_username=payment_context.get('bot_username'),
-        )
         photo = BufferedInputFile(qr_image_data, filename='qr.png')
         back_cb = f'key_renew:{key_id}' if key_id else 'buy_key'
         runtime_markup = yookassa_qr_kb(order_id, back_callback=back_cb, qr_url=qr_url)
         runtime_rows = getattr(runtime_markup, 'inline_keyboard', None)
-        reply_markup = build_qr_payment_reply_markup(payment_context, runtime_rows) or runtime_markup
-        rendered_message = await safe_edit_or_send(
-            callback.message,
-            text,
-            photo=photo,
-            reply_markup=reply_markup,
-            force_new=True,
-        )
-        remember_qr_payment_page_context(
-            callback.from_user.id,
-            rendered_message,
-            payment_context,
-            reply_markup,
+        await render_page(
+            callback,
+            page_key=QR_PAYMENT_PAGE_KEY,
+            context=payment_context,
             append_buttons=runtime_rows,
+            force_new=True,
+            fallback_text=default_qr_payment_page_text(),
+            media_policy='runtime',
+            runtime_media=photo,
+            runtime_media_type='photo',
         )
     except (ValueError, RuntimeError) as e:
         logger.error(f'Ошибка создания QR ЮКасса: {e}')

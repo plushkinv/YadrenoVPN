@@ -1,4 +1,4 @@
-"""Загрузчик и публичный API для пользовательских расширений."""
+"""Loader and public API for custom extensions."""
 from __future__ import annotations
 
 import ast
@@ -7,6 +7,7 @@ import inspect
 import logging
 import re
 import sys
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
@@ -51,13 +52,16 @@ _PUBLIC_CUSTOM_EXTENSIONS_API = {
     'build_callback_data',
     'get_custom_extensions_diagnostics',
     'get_core_api',
+    'get_extension_config',
     'get_extension_storage',
     'is_custom_extensions_enabled',
     'load_custom_extensions',
     'register_action_handler',
     'register_access_guard',
     'register_callback_handler',
+    'register_command_handler',
     'register_extension_schema',
+    'register_extension_settings',
     'register_guard',
     'register_key_lifecycle_hook',
     'register_page_hook',
@@ -65,6 +69,7 @@ _PUBLIC_CUSTOM_EXTENSIONS_API = {
     'register_pricing_policy',
     'register_promo_reward_policy',
     'register_referral_reward_policy',
+    'register_user_access_guard',
     'validate_custom_extension_file',
     'validate_custom_extensions_dir',
 }
@@ -72,7 +77,7 @@ _PUBLIC_CUSTOM_EXTENSIONS_API = {
 
 @dataclass
 class CustomExtensionsLoadResult:
-    """Итог загрузки файлов из custom_extensions."""
+    """Summary of downloading files from custom_extensions."""
 
     loaded: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
@@ -90,35 +95,50 @@ _REGISTRATION_KINDS = (
     'key_lifecycle_hooks',
     'payment_providers',
     'callback_handlers',
+    'command_handlers',
+    'user_access_guards',
     'schemas',
+    'settings',
 )
 
 _LAST_LOAD_RESULT = CustomExtensionsLoadResult(skipped=True, reason='not_loaded')
 _CURRENT_EXTENSION: ContextVar[str | None] = ContextVar('custom_extension_id', default=None)
+_CURRENT_EXTENSION_BOT: ContextVar[Any | None] = ContextVar('custom_extension_bot', default=None)
+_CURRENT_EXTENSION_TELEGRAM_ID: ContextVar[int | None] = ContextVar('custom_extension_telegram_id', default=None)
 _EXTENSION_REGISTRATIONS: dict[str, dict[str, set[str]]] = {}
 
 
 def register_guard(name: str, func: Callable) -> None:
-    """Регистрирует page/route guard расширения."""
+    """Registers page/route guard extensions."""
     guard_name = _require_extension_registry_name(name, 'guard')
     _register_page_guard(guard_name, _bind_extension_callable(func))
     _record_registration('guards', guard_name)
 
 
 def register_access_guard(name: str, func: Callable) -> None:
-    """Регистрирует access guard расширения для route/page переходов."""
+    """Registers access guard extensions for route/page transitions."""
     register_guard(name, func)
 
 
+def register_user_access_guard(name: str, func: Callable, *, replace: bool = False) -> None:
+    """Registers a global user-area access guard."""
+    from bot.utils.user_access import register_user_access_guard as _register_user_access_guard
+
+    guard_name = _require_extension_registry_name(name, 'user access guard')
+    _require_bool_option(replace, 'replace')
+    _register_user_access_guard(guard_name, _bind_extension_callable(func), replace=replace)
+    _record_registration('user_access_guards', guard_name)
+
+
 def register_page_hook(name: str, func: Callable) -> None:
-    """Регистрирует before-render hook расширения."""
+    """Registers the extension's before-render hook."""
     hook_name = _require_extension_registry_name(name, 'page hook')
     _register_page_hook(hook_name, _bind_extension_callable(func))
     _record_registration('page_hooks', hook_name)
 
 
 def register_action_handler(action_value: str, callback_data: str, *, replace: bool = False) -> None:
-    """Регистрирует internal action расширения как action_value -> callback_data."""
+    """Registers the extension's internal action as action_value -> callback_data."""
     action_key = _require_text(action_value, 'action_value').strip()
     callback = _require_text(callback_data, 'callback_data').strip()
     _require_bool_option(replace, 'replace')
@@ -128,31 +148,62 @@ def register_action_handler(action_value: str, callback_data: str, *, replace: b
     _record_registration('actions', action_key)
 
 
-def register_callback_handler(action_name: str, handler: Callable, *, replace: bool = False) -> str:
-    """Регистрирует декларативный callback handler расширения."""
+def register_callback_handler(
+    action_name: str,
+    handler: Callable,
+    *,
+    replace: bool = False,
+    bypass_user_access_guard: bool = False,
+) -> str:
+    """Registers the extension's declarative callback handler."""
     from bot.utils.extension_callbacks import register_extension_callback_handler
 
     extension_id = _require_current_extension()
     _require_bool_option(replace, 'replace')
+    _require_bool_option(bypass_user_access_guard, 'bypass_user_access_guard')
     action_key = register_extension_callback_handler(
         extension_id,
         action_name,
         _bind_extension_callable(handler),
         replace=replace,
+        bypass_user_access_guard=bypass_user_access_guard,
     )
     _record_registration('callback_handlers', action_key)
     return action_key
 
 
 def build_callback_data(action_name: str, payload: str | None = None) -> str:
-    """Собирает callback_data текущего расширения в namespace `ext:`."""
+    """Collects callback_data of the current extension into namespace `ext:`."""
     from bot.utils.extension_callbacks import build_extension_callback_data
 
     return build_extension_callback_data(_require_current_extension(), action_name, payload)
 
 
+def register_command_handler(
+    command: str,
+    description: str,
+    handler: Callable,
+    *,
+    replace: bool = False,
+) -> str:
+    """Registers the extension's Telegram bot command handler."""
+    from bot.utils.extension_commands import register_extension_command_handler
+
+    extension_id = _require_current_extension()
+    _require_bool_option(replace, 'replace')
+    action_key = register_extension_command_handler(
+        extension_id,
+        command,
+        description,
+        _bind_extension_callable(handler),
+        replace=replace,
+    )
+    _record_registration('command_handlers', action_key)
+    return action_key
+
+
 def register_pricing_policy(name: str, func: Callable, *, replace: bool = False) -> None:
-    """Регистрирует pricing policy расширения."""
+    """Registers the pricing policy of the extension."""
     from bot.utils.policy_registry import register_pricing_policy as _register_pricing_policy
 
     policy_name = _require_extension_owned_registry_name(name, 'pricing policy')
@@ -162,7 +213,7 @@ def register_pricing_policy(name: str, func: Callable, *, replace: bool = False)
 
 
 def register_promo_reward_policy(name: str, func: Callable, *, replace: bool = False) -> None:
-    """Регистрирует promo reward policy расширения."""
+    """Registers the promo reward policy of the extension."""
     from bot.utils.policy_registry import register_promo_reward_policy as _register_promo_reward_policy
 
     policy_name = _require_extension_owned_registry_name(name, 'promo reward policy')
@@ -172,7 +223,7 @@ def register_promo_reward_policy(name: str, func: Callable, *, replace: bool = F
 
 
 def register_referral_reward_policy(name: str, func: Callable, *, replace: bool = False) -> None:
-    """Регистрирует referral reward policy расширения."""
+    """Registers the extension's referral reward policy."""
     from bot.utils.policy_registry import register_referral_reward_policy as _register_referral_reward_policy
 
     policy_name = _require_extension_owned_registry_name(name, 'referral reward policy')
@@ -188,7 +239,7 @@ def register_key_lifecycle_hook(
     events: list[str] | tuple[str, ...] | set[str] | None = None,
     replace: bool = False,
 ) -> None:
-    """Регистрирует key lifecycle hook расширения."""
+    """Registers the extension's key lifecycle hook."""
     from bot.utils.lifecycle_registry import register_key_lifecycle_hook as _register_key_lifecycle_hook
 
     hook_name = _require_extension_owned_registry_name(name, 'key lifecycle hook')
@@ -212,7 +263,7 @@ def register_payment_provider(
     metadata: dict | None = None,
     replace: bool = False,
 ) -> None:
-    """Регистрирует кастомный payment provider расширения."""
+    """Registers a custom payment provider extension."""
     from bot.utils.payment_provider_registry import register_payment_provider as _register_payment_provider
 
     provider_key = _require_extension_payment_provider_id(provider_id)
@@ -235,7 +286,7 @@ def register_payment_provider(
 
 
 def register_extension_schema(extension_id: str, migrations: list[dict]) -> None:
-    """Регистрирует и применяет декларативную схему таблиц расширения."""
+    """Registers and applies the declarative schema of extension tables."""
     from database.requests import register_extension_schema as db_register_extension_schema
 
     ext_id = _require_current_extension_namespace(extension_id)
@@ -244,21 +295,38 @@ def register_extension_schema(extension_id: str, migrations: list[dict]) -> None
 
 
 def get_extension_storage(extension_id: str):
-    """Возвращает namespaced storage/repository API расширения."""
+    """Returns the extension's namespaced storage/repository API."""
     from database.requests import get_extension_storage as db_get_extension_storage
 
     return db_get_extension_storage(_require_current_extension_namespace(extension_id))
 
 
+def register_extension_settings(fields: list[dict]) -> list[dict]:
+    """Registers admin-editable settings for the current extension."""
+    from bot.utils.extension_settings import register_extension_settings as _register_extension_settings
+
+    extension_id = _require_current_extension()
+    normalized = _register_extension_settings(extension_id, fields)
+    _record_registration('settings', extension_id)
+    return normalized
+
+
+def get_extension_config() -> dict[str, Any]:
+    """Returns validated settings values for the current extension."""
+    from bot.utils.extension_settings import get_extension_config as _get_extension_config
+
+    return _get_extension_config(_require_current_extension())
+
+
 def get_core_api():
-    """Возвращает ограниченный core facade для текущего расширения."""
+    """Returns the limited core facade for the current extension."""
     from bot.utils.extension_core import ExtensionCoreAPI
 
     return ExtensionCoreAPI(_require_current_extension())
 
 
 def is_custom_extensions_enabled() -> bool:
-    """Возвращает, включена ли загрузка пользовательских расширений."""
+    """Returns whether loading custom extensions is enabled."""
     from database.requests import get_setting
 
     return _as_bool(get_setting(CUSTOM_EXTENSIONS_ENABLED_SETTING, '0'))
@@ -269,7 +337,7 @@ def load_custom_extensions(
     *,
     enabled: bool | None = None,
 ) -> CustomExtensionsLoadResult:
-    """Загружает расширения из gitignored-папки, если они явно включены."""
+    """Loads extensions from the gitignored folder if they are explicitly enabled."""
     global _LAST_LOAD_RESULT
 
     result = CustomExtensionsLoadResult()
@@ -335,13 +403,14 @@ def get_custom_extensions_diagnostics(
     *,
     enabled: bool | None = None,
 ) -> dict[str, Any]:
-    """Возвращает read-only snapshot для админской диагностики расширений."""
+    """Returns a read-only snapshot for admin diagnostics of extensions."""
     if enabled is None:
         enabled = is_custom_extensions_enabled()
 
     base_dir = Path(extensions_dir) if extensions_dir is not None else CUSTOM_EXTENSIONS_DIR
     directory_status = _extension_directory_status(base_dir)
     files = _scan_extension_files(base_dir) if directory_status == 'ok' else []
+    from bot.utils.extension_settings import get_all_extension_settings
 
     return {
         'enabled': bool(enabled),
@@ -351,11 +420,12 @@ def get_custom_extensions_diagnostics(
         'last_load': _load_result_to_dict(_LAST_LOAD_RESULT),
         'registrations': _registrations_snapshot(),
         'registry_totals': _registry_totals(),
+        'settings': get_all_extension_settings(),
     }
 
 
 def validate_custom_extension_file(path: str | Path) -> dict[str, Any]:
-    """Статически проверяет один extension-файл без регистрации runtime-точек."""
+    """Statically checks one extension file without registering runtime points."""
     extension_path = Path(path)
     try:
         if not extension_path.is_file():
@@ -380,7 +450,7 @@ def validate_custom_extension_file(path: str | Path) -> dict[str, Any]:
 
 
 def validate_custom_extensions_dir(extensions_dir: str | Path | None = None) -> dict[str, Any]:
-    """Статически проверяет extension-директорию без загрузки файлов."""
+    """Statically checks the extension directory without downloading files."""
     base_dir = Path(extensions_dir) if extensions_dir is not None else CUSTOM_EXTENSIONS_DIR
     directory_status = _extension_directory_status(base_dir)
     if directory_status != 'ok':
@@ -418,7 +488,7 @@ def _load_extension_module(path: Path) -> ModuleType:
 
 
 def _validate_extension_source(path: Path) -> None:
-    """Отклоняет штатные попытки обойти public extension API через прямой доступ к БД."""
+    """Rejects standard attempts to bypass the public extension API through direct access to the database."""
     source = path.read_text(encoding='utf-8')
     tree = ast.parse(source, filename=str(path))
     dynamic_import_names = {'__import__', 'import_module'}
@@ -550,9 +620,11 @@ def _validate_extension_source(path: Path) -> None:
 
 
 def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) -> None:
-    """Проверяет очевидные static-вызовы public API без исполнения extension-кода."""
+    """Checks obvious static public API calls without executing extension code."""
     from bot.utils.action_registry import normalize_callback_data
     from bot.utils.extension_callbacks import normalize_extension_action_name
+    from bot.utils.extension_commands import normalize_extension_command, normalize_extension_command_description
+    from bot.utils.extension_settings import normalize_extension_settings_fields
     from database.db_extensions import normalize_extension_id, validate_extension_schema_migrations
 
     expected_extension_id = normalize_extension_id(extension_id)
@@ -564,6 +636,21 @@ def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) ->
             action_name = _literal_string_arg(node.args[0])
             if action_name is not None:
                 normalize_extension_action_name(action_name)
+        elif func_name == 'register_command_handler':
+            command = _literal_string_arg(node.args[0]) if node.args else None
+            if command is None:
+                command = _literal_keyword_string_arg(node, 'command')
+            if command is not None:
+                normalized_command = normalize_extension_command(command)
+                if normalized_command in {'start', 'id', 'help', 'support', 'buy', 'mykeys', 'my_keys'}:
+                    raise ValueError(f"extension command '/{normalized_command}' is reserved by the core")
+            description = None
+            if len(node.args) >= 2:
+                description = _literal_string_arg(node.args[1])
+            if description is None:
+                description = _literal_keyword_string_arg(node, 'description')
+            if description is not None:
+                normalize_extension_command_description(description)
         elif func_name == 'register_action_handler' and node.args:
             action_value = _literal_string_arg(node.args[0])
             if action_value is not None and not action_value.strip().startswith('cmd_ext_'):
@@ -580,6 +667,10 @@ def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) ->
                 migrations = _literal_value_arg(node.args[1])
                 if migrations is not None:
                     validate_extension_schema_migrations(expected_extension_id, migrations)
+        elif func_name == 'register_extension_settings' and node.args:
+            fields = _literal_value_arg(node.args[0])
+            if fields is not None:
+                normalize_extension_settings_fields(fields)
 
 
 def _static_call_name(func: ast.AST) -> str:
@@ -593,6 +684,13 @@ def _static_call_name(func: ast.AST) -> str:
 def _literal_string_arg(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    return None
+
+
+def _literal_keyword_string_arg(node: ast.Call, name: str) -> str | None:
+    for keyword in node.keywords:
+        if keyword.arg == name:
+            return _literal_string_arg(keyword.value)
     return None
 
 
@@ -1153,9 +1251,17 @@ def _bind_extension_callable(func: Callable) -> Callable:
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
             token = _CURRENT_EXTENSION.set(extension_id)
+            bot = _extract_extension_bot(args, kwargs)
+            telegram_id = _extract_extension_telegram_id(args, kwargs)
+            bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
+            telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id) if telegram_id is not None else None
             try:
                 return await func(*args, **kwargs)
             finally:
+                if telegram_token is not None:
+                    _CURRENT_EXTENSION_TELEGRAM_ID.reset(telegram_token)
+                if bot_token is not None:
+                    _CURRENT_EXTENSION_BOT.reset(bot_token)
                 _CURRENT_EXTENSION.reset(token)
 
         return async_wrapper
@@ -1163,23 +1269,97 @@ def _bind_extension_callable(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(*args, **kwargs):
         token = _CURRENT_EXTENSION.set(extension_id)
+        bot = _extract_extension_bot(args, kwargs)
+        telegram_id = _extract_extension_telegram_id(args, kwargs)
+        bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
+        telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id) if telegram_id is not None else None
         try:
             result = func(*args, **kwargs)
             if inspect.isawaitable(result):
-                return _await_with_extension_context(result, extension_id)
+                return _await_with_extension_context(result, extension_id, bot=bot, telegram_id=telegram_id)
             return result
         finally:
+            if telegram_token is not None:
+                _CURRENT_EXTENSION_TELEGRAM_ID.reset(telegram_token)
+            if bot_token is not None:
+                _CURRENT_EXTENSION_BOT.reset(bot_token)
             _CURRENT_EXTENSION.reset(token)
 
     return wrapper
 
 
-async def _await_with_extension_context(awaitable: Any, extension_id: str) -> Any:
+async def _await_with_extension_context(
+    awaitable: Any,
+    extension_id: str,
+    *,
+    bot: Any = None,
+    telegram_id: int | None = None,
+) -> Any:
     token = _CURRENT_EXTENSION.set(extension_id)
+    bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
+    telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id) if telegram_id is not None else None
     try:
         return await awaitable
     finally:
+        if telegram_token is not None:
+            _CURRENT_EXTENSION_TELEGRAM_ID.reset(telegram_token)
+        if bot_token is not None:
+            _CURRENT_EXTENSION_BOT.reset(bot_token)
         _CURRENT_EXTENSION.reset(token)
+
+
+@contextmanager
+def _extension_bot_context(bot: Any):
+    """Temporarily exposes the runtime bot to the extension core facade."""
+    if bot is None:
+        yield
+        return
+    token = _CURRENT_EXTENSION_BOT.set(bot)
+    try:
+        yield
+    finally:
+        _CURRENT_EXTENSION_BOT.reset(token)
+
+
+def _get_current_extension_bot() -> Any:
+    return _CURRENT_EXTENSION_BOT.get()
+
+
+def _get_current_extension_telegram_id() -> int | None:
+    return _CURRENT_EXTENSION_TELEGRAM_ID.get()
+
+
+def _extract_extension_bot(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    for item in list(args) + list(kwargs.values()):
+        bot = getattr(item, 'bot', None)
+        if bot is not None:
+            return bot
+        message = getattr(item, 'message', None)
+        bot = getattr(message, 'bot', None)
+        if bot is not None:
+            return bot
+    return None
+
+
+def _extract_extension_telegram_id(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int | None:
+    for item in list(args) + list(kwargs.values()):
+        if isinstance(item, dict) and isinstance(item.get('telegram_id'), int):
+            return item['telegram_id']
+        if hasattr(item, 'get'):
+            try:
+                value = item.get('telegram_id')
+            except Exception:
+                value = None
+            if isinstance(value, int):
+                return value
+        user = getattr(item, 'from_user', None)
+        if user is not None and isinstance(getattr(user, 'id', None), int):
+            return user.id
+        message = getattr(item, 'message', None)
+        user = getattr(message, 'from_user', None)
+        if user is not None and isinstance(getattr(user, 'id', None), int):
+            return user.id
+    return None
 
 
 def _extension_directory_status(base_dir: Path) -> str:
@@ -1245,6 +1425,8 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
     from bot.utils import page_flow
     from bot.utils.action_registry import ACTION_REGISTRY
     from bot.utils.extension_callbacks import remove_extension_callback_handlers
+    from bot.utils.extension_commands import remove_extension_command_handlers
+    from bot.utils.extension_settings import remove_extension_settings
     from bot.utils.lifecycle_registry import KEY_LIFECYCLE_HOOKS
     from bot.utils.payment_provider_registry import PAYMENT_PROVIDERS
     from bot.utils.policy_registry import (
@@ -1252,6 +1434,7 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
         PROMO_REWARD_POLICIES,
         REFERRAL_REWARD_POLICIES,
     )
+    from bot.utils.user_access import remove_user_access_guards
 
     for name in registrations.get('actions', set()):
         ACTION_REGISTRY.pop(name, None)
@@ -1270,12 +1453,18 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
     for name in registrations.get('payment_providers', set()):
         PAYMENT_PROVIDERS.pop(name, None)
     remove_extension_callback_handlers(extension_id, registrations.get('callback_handlers', set()))
+    remove_extension_command_handlers(extension_id, registrations.get('command_handlers', set()))
+    remove_user_access_guards(registrations.get('user_access_guards', set()))
+    if registrations.get('settings'):
+        remove_extension_settings(extension_id)
 
 
 def _snapshot_runtime_registries() -> dict[str, Any]:
     from bot.utils import page_flow
     from bot.utils.action_registry import ACTION_REGISTRY
-    from bot.utils.extension_callbacks import EXTENSION_CALLBACK_HANDLERS
+    from bot.utils.extension_callbacks import EXTENSION_ACCESS_CHECK_CALLBACKS, EXTENSION_CALLBACK_HANDLERS
+    from bot.utils.extension_commands import EXTENSION_COMMAND_DEFINITIONS, EXTENSION_COMMAND_HANDLERS
+    from bot.utils.extension_settings import EXTENSION_SETTINGS
     from bot.utils.lifecycle_registry import KEY_LIFECYCLE_HOOKS
     from bot.utils.payment_provider_registry import PAYMENT_PROVIDERS
     from bot.utils.policy_registry import (
@@ -1283,6 +1472,7 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
         PROMO_REWARD_POLICIES,
         REFERRAL_REWARD_POLICIES,
     )
+    from bot.utils.user_access import USER_ACCESS_GUARDS
 
     return {
         'actions': dict(ACTION_REGISTRY),
@@ -1294,13 +1484,23 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
         'key_lifecycle_hooks': dict(KEY_LIFECYCLE_HOOKS),
         'payment_providers': dict(PAYMENT_PROVIDERS),
         'callback_handlers': dict(EXTENSION_CALLBACK_HANDLERS),
+        'access_check_callbacks': set(EXTENSION_ACCESS_CHECK_CALLBACKS),
+        'command_handlers': dict(EXTENSION_COMMAND_HANDLERS),
+        'command_definitions': dict(EXTENSION_COMMAND_DEFINITIONS),
+        'user_access_guards': dict(USER_ACCESS_GUARDS),
+        'settings': {
+            extension_id: [dict(field) for field in fields]
+            for extension_id, fields in EXTENSION_SETTINGS.items()
+        },
     }
 
 
 def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
     from bot.utils import page_flow
     from bot.utils.action_registry import ACTION_REGISTRY
-    from bot.utils.extension_callbacks import EXTENSION_CALLBACK_HANDLERS
+    from bot.utils.extension_callbacks import EXTENSION_ACCESS_CHECK_CALLBACKS, EXTENSION_CALLBACK_HANDLERS
+    from bot.utils.extension_commands import EXTENSION_COMMAND_DEFINITIONS, EXTENSION_COMMAND_HANDLERS
+    from bot.utils.extension_settings import EXTENSION_SETTINGS
     from bot.utils.lifecycle_registry import KEY_LIFECYCLE_HOOKS
     from bot.utils.payment_provider_registry import PAYMENT_PROVIDERS
     from bot.utils.policy_registry import (
@@ -1308,6 +1508,7 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
         PROMO_REWARD_POLICIES,
         REFERRAL_REWARD_POLICIES,
     )
+    from bot.utils.user_access import USER_ACCESS_GUARDS
 
     ACTION_REGISTRY.clear()
     ACTION_REGISTRY.update(snapshot['actions'])
@@ -1327,12 +1528,24 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
     PAYMENT_PROVIDERS.update(snapshot['payment_providers'])
     EXTENSION_CALLBACK_HANDLERS.clear()
     EXTENSION_CALLBACK_HANDLERS.update(snapshot['callback_handlers'])
+    EXTENSION_ACCESS_CHECK_CALLBACKS.clear()
+    EXTENSION_ACCESS_CHECK_CALLBACKS.update(snapshot.get('access_check_callbacks', set()))
+    EXTENSION_COMMAND_HANDLERS.clear()
+    EXTENSION_COMMAND_HANDLERS.update(snapshot.get('command_handlers', {}))
+    EXTENSION_COMMAND_DEFINITIONS.clear()
+    EXTENSION_COMMAND_DEFINITIONS.update(snapshot.get('command_definitions', {}))
+    USER_ACCESS_GUARDS.clear()
+    USER_ACCESS_GUARDS.update(snapshot.get('user_access_guards', {}))
+    EXTENSION_SETTINGS.clear()
+    EXTENSION_SETTINGS.update(snapshot.get('settings', {}))
 
 
 def _registry_totals() -> dict[str, int]:
     from bot.utils import page_flow
     from bot.utils.action_registry import ACTION_REGISTRY
     from bot.utils.extension_callbacks import EXTENSION_CALLBACK_HANDLERS
+    from bot.utils.extension_commands import EXTENSION_COMMAND_DEFINITIONS
+    from bot.utils.extension_settings import EXTENSION_SETTINGS
     from bot.utils.lifecycle_registry import KEY_LIFECYCLE_HOOKS
     from bot.utils.payment_provider_registry import PAYMENT_PROVIDERS
     from bot.utils.policy_registry import (
@@ -1340,6 +1553,7 @@ def _registry_totals() -> dict[str, int]:
         PROMO_REWARD_POLICIES,
         REFERRAL_REWARD_POLICIES,
     )
+    from bot.utils.user_access import USER_ACCESS_GUARDS
 
     return {
         'actions': len(ACTION_REGISTRY),
@@ -1351,6 +1565,9 @@ def _registry_totals() -> dict[str, int]:
         'key_lifecycle_hooks': len(KEY_LIFECYCLE_HOOKS),
         'payment_providers': len(PAYMENT_PROVIDERS),
         'callback_handlers': len(EXTENSION_CALLBACK_HANDLERS),
+        'command_handlers': len(EXTENSION_COMMAND_DEFINITIONS),
+        'user_access_guards': len(USER_ACCESS_GUARDS),
+        'settings': sum(len(fields) for fields in EXTENSION_SETTINGS.values()),
     }
 
 
@@ -1365,13 +1582,16 @@ __all__ = [
     'build_callback_data',
     'get_custom_extensions_diagnostics',
     'get_core_api',
+    'get_extension_config',
     'get_extension_storage',
     'is_custom_extensions_enabled',
     'load_custom_extensions',
     'register_action_handler',
     'register_access_guard',
     'register_callback_handler',
+    'register_command_handler',
     'register_extension_schema',
+    'register_extension_settings',
     'register_guard',
     'register_key_lifecycle_hook',
     'register_page_hook',
@@ -1379,6 +1599,7 @@ __all__ = [
     'register_pricing_policy',
     'register_promo_reward_policy',
     'register_referral_reward_policy',
+    'register_user_access_guard',
     'validate_custom_extension_file',
     'validate_custom_extensions_dir',
 ]

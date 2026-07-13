@@ -5,8 +5,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from bot.utils.page_flow import build_page_flow_context
-from bot.utils.text import escape_html, safe_edit_or_send
-from config import ADMIN_IDS
+from bot.utils.page_renderer import render_page
+from bot.utils.text import escape_html
 from bot.handlers.user.payments.tariff_select_page import (
     build_payment_tariff_select_page_context,
     show_payment_no_tariffs_page,
@@ -20,7 +20,7 @@ CRYPTO_PAYMENT_PAGE_KEY = 'crypto_payment'
 
 
 def default_crypto_payment_page_text() -> str:
-    """Дефолтный текст экрана перехода к крипто-оплате."""
+    """Default text of the transition screen to crypto-payment."""
     return (
         "%платеж_провайдер%\n\n"
         "%платеж_ключ_строка%"
@@ -62,51 +62,11 @@ def build_crypto_payment_page_context(
     }
 
 
-def render_crypto_payment_page_text(context: dict) -> str:
-    try:
-        from bot.utils.page_renderer import render_page_text
-
-        text = render_page_text(CRYPTO_PAYMENT_PAGE_KEY, context=context)
-        if text is not None:
-            return text
-    except Exception as e:
-        logger.warning("Не удалось отрендерить страницу %s: %s", CRYPTO_PAYMENT_PAGE_KEY, e)
-
-    from bot.utils.placeholders import apply_page_placeholders
-
-    fallback_context = {'page_key': CRYPTO_PAYMENT_PAGE_KEY}
-    fallback_context.update(context)
-    return apply_page_placeholders(
-        default_crypto_payment_page_text(),
-        context=fallback_context,
-        mode='html',
-    ) or '(пусто)'
-
-
 def _crypto_payment_runtime_rows(crypto_url: str, back_callback: str) -> list[list[InlineKeyboardButton]]:
     return [
         [InlineKeyboardButton(text='💰 Перейти к оплате', url=crypto_url)],
         [InlineKeyboardButton(text='⬅️ Назад', callback_data=back_callback)],
     ]
-
-
-def build_crypto_payment_reply_markup(context: dict, runtime_rows: list[list[InlineKeyboardButton]]):
-    from aiogram.types import InlineKeyboardMarkup
-
-    try:
-        from bot.utils.page_renderer import build_page_keyboard
-
-        markup = build_page_keyboard(
-            CRYPTO_PAYMENT_PAGE_KEY,
-            context=context,
-            append_buttons=runtime_rows,
-        )
-        if markup is not None:
-            return markup
-    except Exception as e:
-        logger.warning("Не удалось собрать клавиатуру %s: %s", CRYPTO_PAYMENT_PAGE_KEY, e)
-
-    return InlineKeyboardMarkup(inline_keyboard=runtime_rows)
 
 
 async def _show_crypto_payment_status(
@@ -116,7 +76,7 @@ async def _show_crypto_payment_status(
     body_html: str | None = None,
     body_text: str | None = None,
 ) -> None:
-    """Показывает page-backed статус crypto-flow."""
+    """Shows the page-backed status of crypto-flow."""
     from bot.handlers.user.payments.status_page import show_payment_status_message
     from bot.keyboards.admin import home_only_kb
 
@@ -130,54 +90,9 @@ async def _show_crypto_payment_status(
     )
 
 
-def remember_crypto_payment_page_context(
-    telegram_id: int,
-    message,
-    context: dict,
-    runtime_rows: list[list[InlineKeyboardButton]],
-) -> None:
-    if telegram_id not in ADMIN_IDS or message is None:
-        return
-    try:
-        from bot.services.page_context import remember_page_context
-
-        render_context = {'page_key': CRYPTO_PAYMENT_PAGE_KEY}
-        render_context.update(context)
-        remember_page_context(
-            telegram_id,
-            page_key=CRYPTO_PAYMENT_PAGE_KEY,
-            message=message,
-            context=render_context,
-            append_buttons=runtime_rows,
-        )
-    except Exception as e:
-        logger.warning("Не удалось сохранить контекст crypto_payment для /yaa: %s", e)
-
-
-async def rerender_crypto_payment_page_context(page_context, viewer_id: int) -> bool:
-    """Перерисовывает сохранённый экран крипто-оплаты после изменения через /yaa."""
-    context = dict(page_context.context or {})
-    if not context or not page_context.append_buttons:
-        return False
-
-    text = render_crypto_payment_page_text(context)
-    reply_markup = build_crypto_payment_reply_markup(context, page_context.append_buttons)
-    rendered_message = await safe_edit_or_send(
-        page_context.message,
-        text,
-        reply_markup=reply_markup,
-    )
-    remember_crypto_payment_page_context(
-        viewer_id,
-        rendered_message,
-        context,
-        page_context.append_buttons,
-    )
-    return True
-
 @router.callback_query(F.data.startswith('renew_crypto_tariff:'))
 async def renew_crypto_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для продления (Crypto)."""
+    """Selecting a tariff for renewal (Crypto)."""
     from database.requests import get_key_details_for_user, get_all_tariffs
     from bot.keyboards.user import renew_tariff_select_kb
     parts = callback.data.split(':')
@@ -213,7 +128,7 @@ async def renew_crypto_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('renew_pay_crypto:'))
 async def renew_crypto_invoice(callback: CallbackQuery, state: FSMContext):
-    """Инвойс для оплаты Crypto (за продление ключа)."""
+    """Invoice for payment for Crypto (for key renewal)."""
     from database.requests import get_tariff_by_id, get_user_internal_id, create_pending_order, get_key_details_for_user, update_order_tariff, update_payment_type, get_setting
     from bot.services.billing import build_crypto_payment_url, extract_item_id_from_url
     parts = callback.data.split(':')
@@ -281,22 +196,18 @@ async def renew_crypto_invoice(callback: CallbackQuery, state: FSMContext):
     )
     context = build_page_flow_context(callback, **context)
     runtime_rows = _crypto_payment_runtime_rows(crypto_url, cb_data)
-    rendered_message = await safe_edit_or_send(
-        callback.message,
-        render_crypto_payment_page_text(context),
-        reply_markup=build_crypto_payment_reply_markup(context, runtime_rows),
-    )
-    remember_crypto_payment_page_context(
-        callback.from_user.id,
-        rendered_message,
-        context,
-        runtime_rows,
+    await render_page(
+        callback,
+        page_key=CRYPTO_PAYMENT_PAGE_KEY,
+        context=context,
+        append_buttons=runtime_rows,
+        fallback_text=default_crypto_payment_page_text(),
     )
     await callback.answer()
 
 @router.callback_query(F.data.startswith('pay_crypto'))
 async def pay_crypto_select_tariff(callback: CallbackQuery):
-    """Выбор тарифа для оплаты Crypto."""
+    """Selecting a tariff for Crypto payment."""
     from database.requests import get_all_tariffs
     from bot.keyboards.user import tariff_select_kb
     from bot.keyboards.admin import home_only_kb
@@ -326,7 +237,7 @@ async def pay_crypto_select_tariff(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith('crypto_pay:'))
 async def pay_crypto_invoice(callback: CallbackQuery, state: FSMContext):
-    """Создание ссылки на оплату Crypto (Простой режим)."""
+    """Create a link to pay for Crypto (Simple mode)."""
     from database.requests import get_tariff_by_id, update_order_tariff, get_setting, get_user_internal_id, create_pending_order
     from bot.services.billing import build_crypto_payment_url, extract_item_id_from_url
     parts = callback.data.split(':')
@@ -395,15 +306,11 @@ async def pay_crypto_invoice(callback: CallbackQuery, state: FSMContext):
     )
     context = build_page_flow_context(callback, **context)
     runtime_rows = _crypto_payment_runtime_rows(crypto_url, f'pay_crypto:{order_id}')
-    rendered_message = await safe_edit_or_send(
-        callback.message,
-        render_crypto_payment_page_text(context),
-        reply_markup=build_crypto_payment_reply_markup(context, runtime_rows),
-    )
-    remember_crypto_payment_page_context(
-        callback.from_user.id,
-        rendered_message,
-        context,
-        runtime_rows,
+    await render_page(
+        callback,
+        page_key=CRYPTO_PAYMENT_PAGE_KEY,
+        context=context,
+        append_buttons=runtime_rows,
+        fallback_text=default_crypto_payment_page_text(),
     )
     await callback.answer()

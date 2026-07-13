@@ -1,7 +1,7 @@
 """
-Модуль подключения к базе данных SQLite.
+SQLite database connection module.
 
-Предоставляет контекстный менеджер для безопасной работы с БД.
+Provides a context manager for secure work with the database.
 """
 import sqlite3
 from contextlib import contextmanager
@@ -15,7 +15,7 @@ except ModuleNotFoundError as e:
         raise
     config = None
 
-# Путь к файлу базы данных
+# Path to database file
 DB_PATH = Path(__file__).parent / "vpn_bot.db"
 
 DEFAULT_SQLITE_JOURNAL_MODE = "WAL"
@@ -55,7 +55,7 @@ def _string_config(name: str, default: str, allowed: set[str]) -> str:
 
 
 def get_sqlite_busy_timeout_ms() -> int:
-    """Возвращает настроенный таймаут ожидания освобождения SQLite."""
+    """Returns the configured SQLite release timeout."""
     return _int_config(
         "SQLITE_BUSY_TIMEOUT_MS",
         DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
@@ -63,7 +63,7 @@ def get_sqlite_busy_timeout_ms() -> int:
 
 
 def _apply_connection_pragmas(conn: sqlite3.Connection) -> None:
-    """Применяет безопасные PRAGMA-настройки к новому подключению."""
+    """Applies secure PRAGMA settings to the new connection."""
     journal_mode = _string_config(
         "SQLITE_JOURNAL_MODE",
         DEFAULT_SQLITE_JOURNAL_MODE,
@@ -101,14 +101,14 @@ def _apply_connection_pragmas(conn: sqlite3.Connection) -> None:
 
 def get_connection() -> sqlite3.Connection:
     """
-    Создаёт новое соединение с БД.
+    Creates a new connection to the database.
     
     Returns:
-        sqlite3.Connection: Соединение с БД
+        sqlite3.Connection: Connection to the database
     """
     timeout_seconds = get_sqlite_busy_timeout_ms() / 1000
     conn = sqlite3.connect(DB_PATH, timeout=timeout_seconds)
-    conn.row_factory = sqlite3.Row  # Доступ к полям по имени
+    conn.row_factory = sqlite3.Row  # Access fields by name
     _apply_connection_pragmas(conn)
     return conn
 
@@ -116,17 +116,17 @@ def get_connection() -> sqlite3.Connection:
 @contextmanager
 def get_db():
     """
-    Контекстный менеджер для работы с БД.
+    Context manager for working with the database.
     
-    Автоматически делает commit при успехе и rollback при ошибке.
+    Automatically commits on success and rollback on error.
     
-    Пример:
+    Example:
         with get_db() as conn:
             cursor = conn.execute("SELECT * FROM users")
             users = cursor.fetchall()
     
     Yields:
-        sqlite3.Connection: Соединение с БД
+        sqlite3.Connection: Connection to the database
     """
     conn = get_connection()
     try:

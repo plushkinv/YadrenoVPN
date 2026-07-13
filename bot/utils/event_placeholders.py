@@ -1,4 +1,4 @@
-"""Canonical-плейсхолдеры для уведомлений, рассылок и event-шаблонов."""
+"""Canonical placeholders for notifications, mailings and event templates."""
 from __future__ import annotations
 
 import re
@@ -30,37 +30,42 @@ EVENT_TYPES = frozenset({
 
 _PLACEHOLDER_RE = re.compile(r'%[^%\s]+%')
 
-CANONICAL_EVENT_PLACEHOLDERS = frozenset({
-    '%event_type%',
-    '%telegram_id%',
-    '%пользователь_имя%',
-    '%пользователь_username%',
-    '%пользователь_дата_регистрации%',
-    '%баланс%',
-    '%ключ_имя%',
-    '%ключ_дней_до_окончания%',
-    '%ключ_трафик_процент_остатка%',
-    '%ключ_трафик_использовано%',
-    '%ключ_трафик_лимит%',
-    '%реферал_имя%',
-    '%реферал_логин%',
-    '%реферал_telegram_id%',
-    '%реферальный_уровень%',
-    '%покупатель_имя%',
-    '%покупатель_логин%',
-    '%покупатель_telegram_id%',
-    '%платеж_тариф%',
-    '%платеж_сумма%',
-    '%платеж_срок%',
-    '%реферальное_вознаграждение%',
-})
-_CANONICAL_EVENT_PLACEHOLDER_KEYS = {
-    placeholder.casefold() for placeholder in CANONICAL_EVENT_PLACEHOLDERS
+_EVENT_PLACEHOLDER_ALIASES_BY_NAME = {
+    'event_type': (),
+    'telegram_id': (),
+    'user_name': ('%пользователь_имя%', '%user_display_name%'),
+    'user_username': ('%пользователь_username%',),
+    'user_registered_at': ('%пользователь_дата_регистрации%',),
+    'user_balance': ('%баланс%',),
+    'key_name': ('%ключ_имя%',),
+    'key_days_left': ('%ключ_дней_до_окончания%',),
+    'key_traffic_remaining_percent': ('%ключ_трафик_процент_остатка%',),
+    'key_traffic_used': ('%ключ_трафик_использовано%',),
+    'key_traffic_limit': ('%ключ_трафик_лимит%',),
+    'referral_name': ('%реферал_имя%',),
+    'referral_login': ('%реферал_логин%',),
+    'referral_telegram_id': ('%реферал_telegram_id%',),
+    'referral_level': ('%реферальный_уровень%',),
+    'buyer_name': ('%покупатель_имя%',),
+    'buyer_login': ('%покупатель_логин%',),
+    'buyer_telegram_id': ('%покупатель_telegram_id%',),
+    'payment_tariff': ('%платеж_тариф%',),
+    'payment_amount': ('%платеж_сумма%',),
+    'payment_term': ('%платеж_срок%',),
+    'referral_reward': ('%реферальное_вознаграждение%',),
 }
+CANONICAL_EVENT_PLACEHOLDERS = frozenset(
+    f'%{name}%' for name in _EVENT_PLACEHOLDER_ALIASES_BY_NAME
+)
+_EVENT_PLACEHOLDER_ALIASES: dict[str, str] = {}
+for _name, _aliases in _EVENT_PLACEHOLDER_ALIASES_BY_NAME.items():
+    _EVENT_PLACEHOLDER_ALIASES[f'%{_name}%'.casefold()] = _name
+    for _alias in _aliases:
+        _EVENT_PLACEHOLDER_ALIASES[_alias.casefold()] = _name
 
 
 class _HtmlToTextParser(HTMLParser):
-    """Извлекает видимый текст из HTML для plain/url режимов."""
+    """Extracts visible text from HTML for plain/url modes."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -75,7 +80,7 @@ class _HtmlToTextParser(HTMLParser):
 
 
 def build_user_event_context(telegram_id: int | None) -> dict[str, Any]:
-    """Возвращает общие значения пользователя для broadcast/event-шаблонов."""
+    """Returns the user's general values for broadcast/event templates."""
     if isinstance(telegram_id, bool) or not isinstance(telegram_id, int):
         return {}
 
@@ -109,10 +114,10 @@ def render_event_placeholders(
     mode: EventPlaceholderMode = 'html',
 ) -> str:
     """
-    Подставляет canonical event-плейсхолдеры.
+    Substitutes canonical event placeholders.
 
-    Неизвестные плейсхолдеры остаются видимыми. Известные, но отсутствующие в
-    контексте события, заменяются пустой строкой.
+    Unknown placeholders remain visible. Known but missing from
+    event context are replaced with an empty string.
     """
     if text is None:
         return ''
@@ -129,10 +134,10 @@ def render_event_placeholders(
 
     def replace_match(match: re.Match[str]) -> str:
         placeholder = match.group(0)
-        normalized = placeholder.casefold()
-        if normalized not in _CANONICAL_EVENT_PLACEHOLDER_KEYS:
+        name = _EVENT_PLACEHOLDER_ALIASES.get(placeholder.casefold())
+        if name is None:
             return placeholder
-        return _format_value(_resolve_event_value(normalized, runtime_context), mode)
+        return _format_value(_resolve_event_value(name, runtime_context), mode)
 
     return _PLACEHOLDER_RE.sub(replace_match, str(text))
 
@@ -187,50 +192,50 @@ def _context_value(context: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
-def _resolve_event_value(normalized: str, context: Mapping[str, Any]) -> Any:
-    if normalized == '%event_type%':
+def _resolve_event_value(name: str, context: Mapping[str, Any]) -> Any:
+    if name == 'event_type':
         return _context_value(context, 'event_type')
-    if normalized == '%telegram_id%':
+    if name == 'telegram_id':
         return _context_value(context, 'telegram_id')
-    if normalized == '%пользователь_имя%':
+    if name == 'user_name':
         return _context_value(context, 'user_display_name', 'user_name')
-    if normalized == '%пользователь_username%':
+    if name == 'user_username':
         return _context_value(context, 'user_username', 'username')
-    if normalized == '%пользователь_дата_регистрации%':
+    if name == 'user_registered_at':
         return _context_value(context, 'user_registered_at')
-    if normalized == '%баланс%':
+    if name == 'user_balance':
         return _context_value(context, 'user_balance_text', 'balance_text')
-    if normalized == '%ключ_имя%':
+    if name == 'key_name':
         return _context_value(context, 'key_name', 'key_display_name', 'custom_name')
-    if normalized == '%ключ_дней_до_окончания%':
+    if name == 'key_days_left':
         return _context_value(context, 'key_days_left', 'days_left')
-    if normalized == '%ключ_трафик_процент_остатка%':
+    if name == 'key_traffic_remaining_percent':
         return _context_value(context, 'key_traffic_remaining_percent', 'traffic_remaining_percent')
-    if normalized == '%ключ_трафик_использовано%':
+    if name == 'key_traffic_used':
         return _context_value(context, 'key_traffic_used_text', 'traffic_used_text')
-    if normalized == '%ключ_трафик_лимит%':
+    if name == 'key_traffic_limit':
         return _context_value(context, 'key_traffic_limit_text', 'traffic_limit_text')
-    if normalized == '%реферал_имя%':
+    if name == 'referral_name':
         return _context_value(context, 'referral_name')
-    if normalized == '%реферал_логин%':
+    if name == 'referral_login':
         return _context_value(context, 'referral_login')
-    if normalized == '%реферал_telegram_id%':
+    if name == 'referral_telegram_id':
         return _context_value(context, 'referral_telegram_id')
-    if normalized == '%реферальный_уровень%':
+    if name == 'referral_level':
         return _context_value(context, 'referral_level', 'level')
-    if normalized == '%покупатель_имя%':
+    if name == 'buyer_name':
         return _context_value(context, 'buyer_name')
-    if normalized == '%покупатель_логин%':
+    if name == 'buyer_login':
         return _context_value(context, 'buyer_login')
-    if normalized == '%покупатель_telegram_id%':
+    if name == 'buyer_telegram_id':
         return _context_value(context, 'buyer_telegram_id')
-    if normalized == '%платеж_тариф%':
+    if name == 'payment_tariff':
         return _context_value(context, 'payment_tariff_name', 'tariff_name')
-    if normalized == '%платеж_сумма%':
+    if name == 'payment_amount':
         return _context_value(context, 'payment_amount_text')
-    if normalized == '%платеж_срок%':
+    if name == 'payment_term':
         return _context_value(context, 'payment_period_text', 'period_text')
-    if normalized == '%реферальное_вознаграждение%':
+    if name == 'referral_reward':
         return _context_value(context, 'referral_reward_text')
     return None
 

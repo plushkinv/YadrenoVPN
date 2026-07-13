@@ -1,11 +1,11 @@
 """
-Модуль для автоматических задач.
+Module for automatic tasks.
 
-Включает:
-- Отправку суточной статистики администраторам
-- Создание и отправку архива с бэкапами (БД бота + VPN панелей)
-- Синхронизацию трафика с VPN-серверами (каждые 5 минут)
-- Уведомления о заканчивающемся трафике
+Includes:
+- Sending daily statistics to administrators
+- Creating and sending an archive with backups (bot database + VPN panels)
+- Synchronization of traffic with VPN servers (every 5 minutes)
+- Notifications about ending traffic
 """
 
 import asyncio
@@ -47,20 +47,20 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 logger = logging.getLogger(__name__)
 
-# Путь к базе данных бота
+# Path to the bot database
 BOT_DB_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'database', 'vpn_bot.db')
 
-# Корневая папка проекта и папка для локальных бэкапов
+# Project root folder and local backup folder
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 BACKUP_DIR = os.path.join(PROJECT_ROOT, 'backup')
 
-# Сколько дней хранить локальные бэкапы
+# How many days to store local backups
 BACKUP_RETENTION_DAYS = 7
 
 
 @dataclass(frozen=True)
 class CollectedPanelBackup:
-    """Backup одной VPN-панели, скачанный один раз за суточный цикл."""
+    """Backup of one VPN panel, downloaded once per daily cycle."""
 
     server_name: str
     filename: str
@@ -69,7 +69,7 @@ class CollectedPanelBackup:
 
 @dataclass(frozen=True)
 class PanelBackupWarning:
-    """Ошибка скачивания backup конкретной VPN-панели."""
+    """Error downloading backup of a specific VPN panel."""
 
     server_name: str
     message: str
@@ -77,14 +77,14 @@ class PanelBackupWarning:
 
 @dataclass(frozen=True)
 class PanelBackupCollection:
-    """Результат сбора backup-ов активных VPN-панелей."""
+    """The result of collecting backups of active VPN panels."""
 
     backups: tuple[CollectedPanelBackup, ...]
     warnings: tuple[PanelBackupWarning, ...]
 
 
 def _safe_panel_backup_filename(server_name: str, extension: str) -> str:
-    """Формирует имя файла panel backup по фактическому формату БД."""
+    """Forms the name of the panel backup file according to the actual database format."""
     safe_name = str(server_name or "server").replace(" ", "_")
     safe_name = "".join("_" if ch in '<>:"/\\|?*' else ch for ch in safe_name).strip(" .")
     if not safe_name:
@@ -94,7 +94,7 @@ def _safe_panel_backup_filename(server_name: str, extension: str) -> str:
 
 
 def _short_panel_warning(message: str, limit: int = 140) -> str:
-    """Ограничивает текст ошибки для caption Telegram."""
+    """Limits the error text for Telegram caption."""
     text = " ".join(str(message or "").split())
     if len(text) <= limit:
         return text
@@ -102,7 +102,7 @@ def _short_panel_warning(message: str, limit: int = 140) -> str:
 
 
 async def collect_panel_database_backups() -> PanelBackupCollection:
-    """Скачивает backup активных VPN-панелей один раз за daily backup cycle."""
+    """Downloads a backup of active VPN panels once per daily backup cycle."""
     backups: list[CollectedPanelBackup] = []
     warnings: list[PanelBackupWarning] = []
 
@@ -142,7 +142,7 @@ async def collect_panel_database_backups() -> PanelBackupCollection:
 
 
 def build_backup_caption(today: str, panel_warnings: Sequence[PanelBackupWarning]) -> str:
-    """Собирает HTML-safe caption для Telegram-документа с backup-архивом."""
+    """Collects an HTML-safe caption for a Telegram document with a backup archive."""
     lines = [
         f"📦 <b>Ежедневный бэкап за {escape_html(today)}</b>",
         "",
@@ -166,22 +166,22 @@ def build_backup_caption(today: str, panel_warnings: Sequence[PanelBackupWarning
 
 async def collect_daily_stats() -> str:
     """
-    Собирает суточную статистику для отчёта.
+    Collects daily statistics for the report.
     
     Returns:
-        Форматированный текст статистики
+        Rich text statistics
     """
-    # Статистика пользователей
+    # User statistics
     users = get_users_stats()
     new_users = get_new_users_count_today()
     
-    # Статистика ключей
+    # Key statistics
     keys = get_keys_stats()
     
-    # Статистика платежей
+    # Payment statistics
     payments = get_daily_payments_stats()
     
-    # Статистика серверов
+    # Server statistics
     servers = get_all_servers()
     servers_info = []
     
@@ -211,10 +211,10 @@ async def collect_daily_stats() -> str:
     
     servers_text = "\n".join(servers_info) if servers_info else "  Нет серверов"
     
-    # Формируем текст отчёта
+    # Generating the report text
     today = datetime.now().strftime("%d.%m.%Y")
     
-    # Платежи
+    # Payments
     payments_total = payments.get('paid_count', 0)
     payments_cents = payments.get('paid_cents', 0)
     payments_stars = payments.get('paid_stars', 0)
@@ -259,10 +259,10 @@ async def collect_daily_stats() -> str:
 
 async def send_daily_stats(bot: Bot) -> None:
     """
-    Отправляет суточную статистику всем администраторам.
+    Sends daily statistics to all administrators.
     
     Args:
-        bot: Экземпляр бота
+        bot: Bot instance
     """
     try:
         report = await collect_daily_stats()
@@ -289,14 +289,14 @@ async def create_backup_archive(
     panel_backups: Optional[PanelBackupCollection] = None,
 ) -> Optional[bytes]:
     """
-    Создаёт ZIP-архив с бэкапами.
+    Creates a ZIP archive with backups.
     
-    Включает:
-    - vpn_bot.db — база данных бота
-    - server_NAME_x-ui.db/.dump — backup-файл каждой доступной VPN-панели
+    Includes:
+    - vpn_bot.db — bot database
+    - server_NAME_x-ui.db/.dump — backup file of each available VPN panel
     
     Returns:
-        Байты ZIP-архива или None при ошибке
+        ZIP archive bytes or None on error
     """
     temp_bot_db_backup = None
     try:
@@ -306,7 +306,7 @@ async def create_backup_archive(
         archive_buffer = BytesIO()
         
         with zipfile.ZipFile(archive_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # Добавляем базу данных бота
+            # Adding a bot database
             bot_db_path = os.path.abspath(BOT_DB_PATH)
             if os.path.exists(bot_db_path):
                 os.makedirs(BACKUP_DIR, exist_ok=True)
@@ -322,7 +322,7 @@ async def create_backup_archive(
             else:
                 logger.warning(f"База данных бота не найдена: {bot_db_path}")
             
-            # Добавляем уже скачанные backup-файлы VPN-панелей
+            # Add already downloaded backup files of VPN panels
             for item in panel_backups.backups:
                 try:
                     zf.writestr(item.filename, item.backup.data)
@@ -354,10 +354,10 @@ async def save_local_backup(
     panel_backups: Optional[PanelBackupCollection] = None,
 ) -> None:
     """
-    Сохраняет локальные копии всех баз данных в папку backup/YYYY-MM-DD/.
+    Saves local copies of all databases to the backup/YYYY-MM-DD/ folder.
     
-    Файлы панелей сохраняются по фактическому формату: SQLite .db
-    или PostgreSQL .dump.
+    Panel files are saved in the actual format: SQLite .db
+    or PostgreSQL .dump.
     """
     today = datetime.now().strftime("%Y-%m-%d")
     day_dir = os.path.join(BACKUP_DIR, today)
@@ -368,7 +368,7 @@ async def save_local_backup(
 
         os.makedirs(day_dir, exist_ok=True)
         
-        # Сохраняем базу данных бота
+        # Saving the bot database
         bot_db_path = os.path.abspath(BOT_DB_PATH)
         if os.path.exists(bot_db_path):
             dest = os.path.join(day_dir, 'vpn_bot.db')
@@ -377,7 +377,7 @@ async def save_local_backup(
         else:
             logger.warning(f"База данных бота не найдена: {bot_db_path}")
         
-        # Сохраняем уже скачанные backup-файлы VPN-панелей
+        # We save already downloaded backup files of VPN panels
         for item in panel_backups.backups:
             try:
                 dest = os.path.join(day_dir, item.filename)
@@ -399,11 +399,11 @@ async def save_local_backup(
 
 def cleanup_old_backups() -> None:
     """
-    Рекурсивно удаляет любые файлы и ссылки старше срока хранения.
+    Recursively deletes any files and links older than the retention period.
 
-    Имена и расширения не учитываются: каталог backup предназначен только
-    для временных резервных копий. Символические ссылки не обходятся.
-    После удаления файлов очищаются опустевшие подпапки.
+    Names and extensions are not taken into account: the backup directory is only for
+    for temporary backups. Symbolic links are not bypassed.
+    After deleting files, empty subfolders are cleared.
     """
     if not os.path.exists(BACKUP_DIR):
         return
@@ -465,34 +465,34 @@ def cleanup_old_backups() -> None:
 
 async def send_backup_archive(bot: Bot) -> None:
     """
-    Создаёт и отправляет архив бэкапов всем администраторам.
-    Также сохраняет локальные копии и чистит старые бэкапы.
+    Creates and sends a backup archive to all administrators.
+    It also saves local copies and cleans up old backups.
     
     Args:
-        bot: Экземпляр бота
+        bot: Bot instance
     """
     try:
         panel_backups = await collect_panel_database_backups()
 
-        # Сохраняем локальные бэкапы из уже собранных данных
+        # We save local backups from already collected data
         await save_local_backup(panel_backups)
         
-        # Удаляем бэкапы старше 7 дней
+        # Deleting backups older than 7 days
         cleanup_old_backups()
         
-        # Создаём ZIP-архив для отправки в Telegram
+        # Create a ZIP archive for sending to Telegram
         archive_data = await create_backup_archive(panel_backups)
         
         if not archive_data:
             logger.error("Не удалось создать архив бэкапов")
             return
         
-        # Имя файла с датой
+        # File name with date
         today = datetime.now().strftime("%Y-%m-%d")
         filename = f"backup_{today}.zip"
         caption = build_backup_caption(today, panel_backups.warnings)
         
-        # Отправляем админам
+        # Sent to admins
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_document(
@@ -514,10 +514,10 @@ async def send_backup_archive(bot: Bot) -> None:
 
 async def check_and_send_expiry_notifications(bot: Bot) -> None:
     """
-    Проверяет и отправляет уведомления об истекающих ключах.
+    Checks and sends notifications about expiring keys.
     
-    Использует единый HTML-контракт. Динамические подстановки 
-    экранируются через escape_html().
+    Uses a single HTML contract. Dynamic substitutions 
+    are escaped via escape_html().
     """
     logger.info("⏳ Запуск проверки истекающих ключей...")
     try:
@@ -526,7 +526,7 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
         days = int(get_setting('notification_days', '3'))
         from bot.utils.message_editor import get_message_data
         
-        # Дефолтный текст в HTML
+        # Default text in HTML
         default_notification = (
             '⚠️ <b>Ваш VPN-ключ %ключ_имя% скоро истекает!</b>\n\n'
             'Через %ключ_дней_до_окончания% дней закончится срок действия вашего ключа.\n\n'
@@ -546,7 +546,7 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
             days_left = key_info['days_left']
             keyname = key_info.get('custom_name', f"Key #{vpn_key_id}")
             
-            # Проверяем, отправляли ли мы сегодня
+            # Checking if we sent today
             if is_notification_sent_today(vpn_key_id):
                 continue
             
@@ -562,7 +562,7 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
                 mode='html',
             )
             
-            # Клавиатура с кнопками "Мои ключи" и "На главную"
+            # Keyboard with "My keys" and "Home" buttons
             builder = InlineKeyboardBuilder()
             builder.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"))
             builder.row(InlineKeyboardButton(text="🈴 На главную", callback_data="start"))
@@ -586,7 +586,7 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
                 else:
                     logger.warning(f"Не удалось отправить уведомление пользователю {user_telegram_id}: {e}")
             
-            # Небольшая задержка между сообщениями
+            # Slight delay between messages
             await asyncio.sleep(0.3)
         
         if sent_count > 0:
@@ -600,19 +600,19 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
 
 def get_seconds_until(target_hour: int, target_minute: int = 0) -> int:
     """
-    Вычисляет количество секунд до указанного времени суток.
+    Calculates the number of seconds until the specified time of day.
     
     Args:
-        target_hour: Целевой час (0-23)
-        target_minute: Целевая минута (0-59)
+        target_hour: Target hour (0-23)
+        target_minute: Target minute (0-59)
     
     Returns:
-        Количество секунд до целевого времени
+        Number of seconds until target time
     """
     now = datetime.now()
     target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
     
-    # Если время уже прошло сегодня, планируем на завтра
+    # If time has already passed today, we plan for tomorrow
     if target <= now:
         target += timedelta(days=1)
     
@@ -621,20 +621,20 @@ def get_seconds_until(target_hour: int, target_minute: int = 0) -> int:
 
 async def run_daily_tasks(bot: Bot) -> None:
     """
-    Фоновая задача для запуска ежедневных заданий.
+    Background task for running daily tasks.
     
-    Расписание:
-    - 03:00 — Суточная статистика
-    - 03:05 — Архив с бэкапами
+    Schedule:
+    - 03:00 — Daily statistics
+    - 03:05 — Archive with backups
     
     Args:
-        bot: Экземпляр бота
+        bot: Bot instance
     """
     logger.info("🕐 Планировщик ежедневных задач запущен")
     
     while True:
         try:
-            # Читаем время из настроек или используем по умолчанию 03:00
+            # Read the time from the settings or use the default 03:00
             time_str = get_setting('daily_tasks_time', '03:00')
             try:
                 target_hour, target_minute = map(int, time_str.split(':'))
@@ -642,34 +642,34 @@ async def run_daily_tasks(bot: Bot) -> None:
                 logger.error(f"Некорректный формат настройки daily_tasks_time '{time_str}': {e}. Используем 03:00")
                 target_hour, target_minute = 3, 0
 
-            # Ждём до заданного времени
+            # We wait until the specified time
             seconds_to_wait = get_seconds_until(target_hour, target_minute)
             logger.info(f"Следующий запуск задач ({time_str}) через {seconds_to_wait // 3600}ч {(seconds_to_wait % 3600) // 60}м")
             
             await asyncio.sleep(seconds_to_wait)
             
-            # Отправляем статистику
+            # Sending statistics
             logger.info("📊 Запуск отправки суточной статистики...")
             await send_daily_stats(bot)
             
-            # Ждём 5 минут
+            # Wait 5 minutes
             await asyncio.sleep(300)
             
-            # Отправляем бэкап
+            # Sending a backup
             logger.info("📦 Запуск создания и отправки бэкапа...")
             await send_backup_archive(bot)
             
-            # Ждём 5 минут
+            # Wait 5 minutes
             await asyncio.sleep(300)
             
-            # Отправляем уведомления пользователям
+            # Sending notifications to users
             await check_and_send_expiry_notifications(bot)
             
-            # Ежемесячный сброс трафика (1-е число каждого месяца)
+            # Monthly traffic reset (1st day of every month)
             if datetime.now().day == 1:
                 await monthly_traffic_reset(bot)
             
-            # Ждём немного чтобы не запуститься повторно в ту же минуту
+            # We wait a little so as not to start again at the same minute
             await asyncio.sleep(60)
             
         except asyncio.CancelledError:
@@ -677,16 +677,16 @@ async def run_daily_tasks(bot: Bot) -> None:
             break
         except Exception as e:
             logger.error(f"Ошибка в планировщике ежедневных задач: {e}")
-            # Ждём час и пробуем снова
+            # We wait an hour and try again
             await asyncio.sleep(3600)
 
 
 async def check_and_notify_updates(bot: Bot) -> None:
     """
-    Проверяет обновления и уведомляет администраторов, если они есть.
+    Checks for updates and notifies administrators if there are any.
     
     Args:
-        bot: Экземпляр бота
+        bot: Bot instance
     """
     if not is_update_notifications_enabled():
         logger.info("🔕 Уведомления о новых версиях отключены, фоновая проверка пропущена")
@@ -694,18 +694,18 @@ async def check_and_notify_updates(bot: Bot) -> None:
 
     logger.info("🔍 Ежедневная проверка обновлений...")
     
-    # Проверяем настроен ли GitHub URL
+    # Checking if GitHub URL is configured
     if not GITHUB_REPO_URL:
         logger.warning("GitHub URL не настроен, пропускаем проверку обновлений")
         return
 
-    # Проверяем условия разблокировки
+    # Checking the unlock conditions
     try_unblock()
 
     if is_update_blocked():
         logger.info("🔒 Обновления заблокированы, отправляем уведомление")
         msg = get_blocked_message()
-        # Кнопка OK для закрытия уведомления
+        # OK button to close the notification
         builder = InlineKeyboardBuilder()
         builder.row(InlineKeyboardButton(text="✅ OK", callback_data="dismiss_msg"))
         kb = builder.as_markup()
@@ -722,7 +722,7 @@ async def check_and_notify_updates(bot: Bot) -> None:
         return
         
     try:
-        # Проверяем обновления
+        # Checking for updates
         success, commits_behind, log_text, has_blocking, blocking_commit, is_beta_only = check_for_updates()
         
         if success and commits_behind > 0:
@@ -732,7 +732,7 @@ async def check_and_notify_updates(bot: Bot) -> None:
                 
             logger.info(f"📦 Найдено {commits_behind} новых коммитов")
             
-            # Кнопка обновления (та же callback_data, что в админке)
+            # Update button (same callback_data as in the admin panel)
             builder = InlineKeyboardBuilder()
             builder.row(
                 InlineKeyboardButton(
@@ -743,15 +743,15 @@ async def check_and_notify_updates(bot: Bot) -> None:
             
             kb = builder.as_markup()
             
-            # Формируем текст уведомления
+            # Generating the notification text
             notify_text = f"📦 <b>Доступно обновление!</b>\n\n{log_text}"
             
-            # Если есть блокирующий коммит — добавляем предупреждение
+            # If there is a blocking commit, add a warning
             if has_blocking and blocking_commit:
                 blocking_msg = blocking_commit['message'].lstrip('!')
                 notify_text += f"\n\n⚠️ Среди обновлений есть <b>блокирующий коммит</b>.\n<code>{blocking_msg}</code>"
             
-            # Отправляем уведомления админам
+            # Sending notifications to admins
             for admin_id in ADMIN_IDS:
                 try:
                     await bot.send_message(
@@ -771,19 +771,19 @@ async def check_and_notify_updates(bot: Bot) -> None:
 
 async def run_update_check_scheduler(bot: Bot) -> None:
     """
-    Фоновая задача для ежедневной проверки обновлений.
+    Background task for checking updates daily.
     
-    Расписание:
-    - 12:00 — Проверка обновлений
+    Schedule:
+    - 12:00 — Checking for updates
     
     Args:
-        bot: Экземпляр бота
+        bot: Bot instance
     """
     logger.info("🕐 Планировщик обновлений запущен")
     
     while True:
         try:
-            # Читаем время из настроек или используем по умолчанию 12:00
+            # Read the time from the settings or use the default 12:00
             time_str = get_setting('update_check_time', '12:00')
             try:
                 target_hour, target_minute = map(int, time_str.split(':'))
@@ -791,16 +791,16 @@ async def run_update_check_scheduler(bot: Bot) -> None:
                 logger.error(f"Некорректный формат настройки update_check_time '{time_str}': {e}. Используем 12:00")
                 target_hour, target_minute = 12, 0
 
-            # Ждём до заданного времени
+            # We wait until the specified time
             seconds_to_wait = get_seconds_until(target_hour, target_minute)
             logger.info(f"Следующая проверка обновлений ({time_str}) через {seconds_to_wait // 3600}ч {(seconds_to_wait % 3600) // 60}м")
             
             await asyncio.sleep(seconds_to_wait)
             
-            # Проверяем обновления
+            # Checking for updates
             await check_and_notify_updates(bot)
             
-            # Ждём 5 минут чтобы не запуститься повторно
+            # We wait 5 minutes so as not to start again
             await asyncio.sleep(300)
             
         except asyncio.CancelledError:
@@ -808,27 +808,27 @@ async def run_update_check_scheduler(bot: Bot) -> None:
             break
         except Exception as e:
             logger.error(f"Ошибка в планировщике обновлений: {e}")
-            # Ждём час и пробуем снова
+            # We wait an hour and try again
             await asyncio.sleep(3600)
 
 
 # ============================================================================
-# СИНХРОНИЗАЦИЯ ТРАФИКА (каждые 5 минут)
+# TRAFFIC SYNCHRONIZATION (every 5 minutes)
 # ============================================================================
 
-# Пороги уведомлений о трафике (% оставшегося трафика)
+# Traffic notification thresholds (% of remaining traffic)
 TRAFFIC_THRESHOLDS = [10, 5, 3, 2, 1, 0]
 
 
 async def monthly_traffic_reset(bot: Bot) -> None:
     """
-    Ежемесячные задачи (1-е число каждого месяца):
+    Monthly tasks (1st day of each month):
     
-    1. Сброс трафика (если monthly_traffic_reset_enabled = 1)
-    2. Сверка БД и панели (ВСЕГДА) — исправление расхождений expiryTime и totalGB
+    1. Reset traffic (if monthly_traffic_reset_enabled = 1)
+    2. Reconciliation of the database and the panel (ALWAYS) - correction of discrepancies between expiryTime and totalGB
     
     Args:
-        bot: Экземпляр бота
+        bot: Bot instance
     """
     from database.requests import (
         get_all_active_keys_with_server,
@@ -840,7 +840,7 @@ async def monthly_traffic_reset(bot: Bot) -> None:
     
     reset_enabled = get_setting('monthly_traffic_reset_enabled', '0') == '1'
     
-    # === ЧАСТЬ 1: Сброс трафика (если включён) ===
+    # === PART 1: Traffic reset (if enabled) ===
     reset_success = 0
     reset_errors = 0
     
@@ -858,11 +858,11 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                     if tariff and (tariff.get('traffic_limit_gb', 0) or 0) > 0:
                         tariff_limit = tariff['traffic_limit_gb'] * (1024**3)
                 
-                # Обновляем БД
+                # Updating the database
                 update_key_traffic_limit(key['id'], tariff_limit)
                 reset_key_traffic_notification(key['id'])
                 
-                # Пушим на панель (сброс up/down + правильные данные из БД)
+                # Push to the panel (up/down reset + correct data from the database)
                 await sync_key_to_panel_state(key['id'], reset_traffic=True)
                 reset_success += 1
             except Exception as e:
@@ -871,7 +871,7 @@ async def monthly_traffic_reset(bot: Bot) -> None:
     else:
         logger.info("🔄 Ежемесячный сброс трафика отключён")
     
-    # === ЧАСТЬ 2: Сверка БД↔панель (ВСЕГДА) ===
+    # === PART 2: Database reconciliation↔panel (ALWAYS) ===
     logger.info("🔍 Запуск ежемесячной сверки БД↔панель...")
     sync_fixed = 0
     sync_errors = 0
@@ -896,7 +896,7 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                 client = get_client_from_server_data(server)
                 inbounds = await client.get_inbounds()
                 
-                # Карта email → данные на панели
+                # Email card → data on the panel
                 panel_map = {}
                 for inbound in inbounds:
                     settings = json.loads(inbound.get('settings', '{}'))
@@ -914,14 +914,14 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                     panel = panel_map[email]
                     needs_fix = False
                     
-                    # Проверяем expiryTime
+                    # Check expiryTime
                     expires_at = key.get('expires_at')
                     panel_ms = panel['expiryTime']
                     if expires_at:
                         dt = datetime.fromisoformat(str(expires_at))
                         expected_ms = int(dt.timestamp() * 1000)
                         
-                        # Расхождение > 1 день
+                        # Discrepancy > 1 day
                         if panel_ms > 0 and abs(expected_ms - panel_ms) > 86400 * 1000:
                             needs_fix = True
                         elif panel_ms == 0 and expected_ms > 0:
@@ -931,7 +931,7 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                         if panel_ms > 0:
                             needs_fix = True
                     
-                    # Проверяем totalGB
+                    # Checking totalGB
                     traffic_limit = key.get('traffic_limit', 0) or 0
                     panel_total = panel['totalGB']
                     if traffic_limit > 0:
@@ -945,7 +945,7 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                         needs_fix = True
                     
                     if needs_fix:
-                        # Пропускаем те, что уже обновились при сбросе трафика
+                        # We skip those that have already been updated when the traffic is reset
                         already_pushed = reset_enabled and (traffic_limit > 0)
                         if not already_pushed:
                             try:
@@ -955,11 +955,11 @@ async def monthly_traffic_reset(bot: Bot) -> None:
                                 sync_errors += 1
                                 logger.error(f"Ошибка сверки ключа {key['id']} ({email}): {e}")
                         else:
-                            sync_fixed += 1  # Уже исправлен при сбросе
+                            sync_fixed += 1  # Already fixed on reset
             except Exception as e:
                 logger.error(f"Ошибка сверки сервера {server.get('name', server_id)}: {e}")
     
-    # === Отчёт админам ===
+    # ===Report to admins ===
     report_parts = ["🔄 <b>Ежемесячное обслуживание</b>\n"]
     if reset_enabled:
         report_parts.append(f"📊 <b>Сброс трафика:</b> ✅ {reset_success}")
@@ -983,11 +983,11 @@ async def monthly_traffic_reset(bot: Bot) -> None:
 
 async def sync_traffic_stats(bot: Bot) -> None:
     """
-    Опрашивает все серверы и обновляет кеш трафика для каждого ключа.
-    Проверяет пороги уведомлений и отправляет уведомления пользователям.
+    Queries all servers and updates the traffic cache for each key.
+    Checks notification thresholds and sends notifications to users.
     
-    Graceful degradation: при недоступности сервера — логируем WARNING,
-    не обнуляем трафик, продолжаем обработку остальных серверов.
+    Graceful degradation: if the server is unavailable, log WARNING,
+    We do not reset the traffic, we continue processing the remaining servers.
     """
     from database.requests import (
         get_all_active_keys_with_server, bulk_update_traffic,
@@ -998,7 +998,7 @@ async def sync_traffic_stats(bot: Bot) -> None:
     if not keys:
         return
     
-    # Группируем ключи по серверам
+    # Grouping keys by server
     keys_by_server: dict = {}
     for key in keys:
         sid = key['server_id']
@@ -1006,11 +1006,11 @@ async def sync_traffic_stats(bot: Bot) -> None:
             keys_by_server[sid] = []
         keys_by_server[sid].append(key)
     
-    # Получаем серверы
+    # Getting servers
     servers = get_all_servers()
     server_map = {s['id']: s for s in servers}
     
-    # Собираем обновления трафика
+    # Collecting traffic updates
     traffic_updates = []  # (traffic_used, key_id)
     
     for server_id, server_keys in keys_by_server.items():
@@ -1031,15 +1031,15 @@ async def sync_traffic_stats(bot: Bot) -> None:
                     key['_new_traffic_used'] = traffic_used
 
         except Exception as e:
-            # Graceful degradation: не трогаем данные, продолжаем
+            # Graceful degradation: don’t touch the data, continue
             logger.warning(f"⚠️ Синхронизация трафика: сервер {server.get('name', server_id)} недоступен: {e}")
             continue
     
-    # Массовое обновление трафика в БД
+    # Mass update of traffic in the database
     if traffic_updates:
         bulk_update_traffic(traffic_updates)
     
-    # Проверяем пороги уведомлений
+    # Checking notification thresholds
     notification_text_template = get_setting(
         'traffic_notification_text',
         '⚠️ По ключу <b>%ключ_имя%</b> осталось %ключ_трафик_процент_остатка%% трафика (%ключ_трафик_использовано% из %ключ_трафик_лимит%)'
@@ -1048,22 +1048,22 @@ async def sync_traffic_stats(bot: Bot) -> None:
     for key in keys:
         traffic_limit = key.get('traffic_limit', 0) or 0
         if traffic_limit == 0:
-            continue  # Безлимит — пропускаем
+            continue  # Unlimited - skip it
         
-        # Используем обновлённое значение или из БД
+        # We use the updated value or from the database
         traffic_used = key.get('_new_traffic_used', key.get('traffic_used', 0) or 0)
         notified_pct = key.get('traffic_notified_pct', 100)
         
-        # Вычисляем оставшийся процент
+        # Calculate the remaining percentage
         remaining_pct = max(0, (1 - traffic_used / traffic_limit) * 100)
         
-        # Проверяем пороги
+        # Checking the thresholds
         for threshold in TRAFFIC_THRESHOLDS:
             if remaining_pct <= threshold and notified_pct > threshold:
-                # Отправляем уведомление
+                # Sending a notification
                 telegram_id = key.get('telegram_id')
                 if telegram_id:
-                    # Формируем имя ключа
+                    # Forming the key name
                     if key.get('custom_name'):
                         keyname = key['custom_name']
                     elif key.get('client_uuid'):
@@ -1099,15 +1099,15 @@ async def sync_traffic_stats(bot: Bot) -> None:
                     except Exception as e:
                         logger.warning(f"Не удалось отправить уведомление о трафике пользователю {telegram_id}: {e}")
                 
-                # Обновляем порог в БД
+                # Update the threshold in the database
                 update_key_notified_pct(key['id'], threshold)
                 key['traffic_notified_pct'] = threshold
-                break  # Только одно уведомление за раз
+                break  # Only one notification at a time
     
-    # Для subscription-ключей: если по нашему счётчику трафик исчерпан или
-    # ключ истёк — отключаем ВСЕХ клиентов с этим email на сервере немедленно.
-    # totalGB на отдельных inbound одинаковый, но клиенты сами не отключатся
-    # пока их собственный счётчик не достигнет лимита, поэтому делаем это руками.
+    # For subscription keys: if according to our traffic counter the traffic is exhausted or
+    # the key has expired - we disconnect ALL clients with this email on the server immediately.
+    # totalGB on individual inbounds is the same, but clients will not disconnect themselves
+    # until their own counter reaches the limit, so we do it manually.
     from database.db_keys import is_key_active, is_traffic_exhausted
     from bot.services.vpn_api import ensure_subscription_keys_on_server, is_subscription_mode
 
@@ -1115,7 +1115,7 @@ async def sync_traffic_stats(bot: Bot) -> None:
     for key in keys:
         if not key.get('sub_id'):
             continue
-        # Подменяем traffic_used на свежее значение для проверки
+        # Replace traffic_used with a fresh value for verification
         merged = dict(key)
         if '_new_traffic_used' in key:
             merged['traffic_used'] = key['_new_traffic_used']
@@ -1133,11 +1133,11 @@ async def sync_traffic_stats(bot: Bot) -> None:
 
 async def materialize_subscription_state() -> None:
     """
-    Полный проход по всем активным ключам с вызовом
-    ensure_subscription_keys_on_server() — добивает отсутствующих клиентов
-    в режиме subscription и удаляет лишние в режиме keys.
+    Full pass through all active keys with challenge
+    ensure_subscription_keys_on_server() - finishes missing clients
+    in subscription mode and deletes unnecessary ones in keys mode.
 
-    Запускается раз в ~30 минут (каждые 6 циклов traffic-sync).
+    Runs once every ~30 minutes (every 6 traffic-sync cycles).
     """
     from database.requests import get_all_active_keys_with_server
     from bot.services.vpn_api import ensure_subscription_keys_on_server
@@ -1163,17 +1163,17 @@ async def materialize_subscription_state() -> None:
 
 async def run_traffic_sync_scheduler(bot: Bot) -> None:
     """
-    Фоновая задача для синхронизации трафика каждые 5 минут.
-    Каждые 6 циклов (≈30 мин) дополнительно вызывает
-    materialize_subscription_state() для подгонки клиентов на панелях
-    под текущий bot_mode.
+    Background task to synchronize traffic every 5 minutes.
+    Every 6 cycles (≈30 min) additionally causes
+    materialize_subscription_state() to fit clients on panels
+    under the current bot_mode.
 
     Args:
-        bot: Экземпляр бота
+        bot: Bot instance
     """
     logger.info("📊 Планировщик синхронизации трафика запущен (каждые 5 мин, materialize каждые 30 мин)")
 
-    # Первый запуск через 30 секунд после старта бота
+    # First launch 30 seconds after the bot starts
     await asyncio.sleep(30)
 
     cycle = 0
@@ -1200,14 +1200,14 @@ async def run_traffic_sync_scheduler(bot: Bot) -> None:
             except Exception as e:
                 logger.error(f"Ошибка автопроверки custom payment providers: {e}")
             cycle += 1
-            # Раз в 6 циклов (≈30 мин) — материализация subscription-состояния
+            # Once every 6 cycles (≈30 min) - materialization of the subscription state
             if cycle % 6 == 0:
                 try:
                     await materialize_subscription_state()
                 except Exception as e:
                     logger.error(f"Ошибка в materialize_subscription_state: {e}")
 
-            # Ждём 5 минут
+            # Wait 5 minutes
             await asyncio.sleep(300)
 
         except asyncio.CancelledError:
@@ -1215,5 +1215,5 @@ async def run_traffic_sync_scheduler(bot: Bot) -> None:
             break
         except Exception as e:
             logger.error(f"Ошибка в планировщике синхронизации трафика: {e}")
-            # Ждём 2 минуты и пробуем снова
+            # Wait 2 minutes and try again
             await asyncio.sleep(120)

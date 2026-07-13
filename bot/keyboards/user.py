@@ -1,7 +1,7 @@
 """
-Клавиатуры для пользовательской части бота.
+Keyboards for the user part of the bot.
 
-Inline-клавиатуры для обычных пользователей.
+Inline keyboards for ordinary users.
 """
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -19,28 +19,28 @@ def balance_payment_kb(
     cards_via_yookassa_direct: bool = False
 ) -> InlineKeyboardMarkup:
     """
-    Клавиатура оплаты с учётом баланса.
+    Payment keyboard taking into account balance.
     
-    Показывается когда referral_reward_type='balance' и personal_balance > 0.
+    Shown when referral_reward_type='balance' and personal_balance > 0.
     
-    ВАЖНО: Только рублёвые методы доплаты (TG payments/ЮКасса), без Stars/Crypto!
+    IMPORTANT: Only ruble payment methods (TG payments/YuKassa), without Stars/Crypto!
     
-    Логика минимальных сумм:
-    - ЮКасса напрямую: минимум 1 ₽ — всегда доступна при включённом методе
-    - TG payments через Telegram Payments: минимум ~100 ₽ (10000 копеек)
-    - Прямой сценарий ЮKassa для доплаты: минимум 1 ₽
+    Minimum amount logic:
+    - YuKassa directly: minimum 1 ₽ - always available when the method is enabled
+    - TG payments via Telegram Payments: minimum ~100 ₽ (10,000 kopecks)
+    - Direct YuKassa script for additional payment: minimum 1 ₽
     
     Args:
-        tariff_id: ID выбранного тарифа
-        key_id: ID ключа при продлении (None для нового ключа)
-        balance_cents: Баланс пользователя в копейках
-        tariff_price_cents: Цена тарифа в копейках
-        balance_to_deduct: Сколько будет списано с баланса
-        remaining_cents: Сколько нужно доплатить
-        cards_enabled: Доступна ли оплата TG payments
-        yookassa_qr_enabled: Доступна ли ЮКасса
-        cards_via_yookassa_direct: True если прямой сценарий ЮKassa доступен от 1 ₽,
-                                   False если через Telegram Payments (минимум ~100₽)
+        tariff_id: ID of the selected tariff
+        key_id: Key ID when renewing (None for new key)
+        balance_cents: User balance in kopecks
+        tariff_price_cents: Tariff price in kopecks
+        balance_to_deduct: How much will be deducted from the balance
+        remaining_cents: How much you need to pay
+        cards_enabled: Is TG payments available?
+        yookassa_qr_enabled: Is Yookassa available?
+        cards_via_yookassa_direct: True if the direct YuKassa script is available from 1 ₽,
+                                   False if via Telegram Payments (minimum ~100₽)
     """
     builder = InlineKeyboardBuilder()
     
@@ -92,25 +92,25 @@ def balance_payment_kb(
 
 def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: str = None, is_cards: bool = False, is_crypto: bool = False, is_balance: bool = False, is_qr: bool = False, groups_data: list = None, is_demo: bool = False, is_wata: bool = False, is_platega: bool = False, is_cardlink: bool = False) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора тарифа для оплаты Stars, Картами, Криптой или Балансом.
+    Keyboard for choosing a tariff for paying with Stars, Cards, Crypto or Balance.
 
     Args:
-        tariffs: Список тарифов из БД (используется только если groups_data=None)
-        back_callback: Callback для кнопки «Назад»
-        order_id: ID существующего ордера (для оптимизации)
-        is_cards: True если выбор тарифа для оплаты картой
-        is_crypto: True если выбор тарифа для оплаты криптой (простой режим)
-        is_balance: True если выбор тарифа для оплаты с баланса
-        is_qr: True если выбор тарифа для QR-оплаты (ЮКасса)
-        is_demo: True если выбор тарифа для демонстрационной РФ оплаты
-        is_wata: True если выбор тарифа для оплаты через WATA
-        groups_data: Список dict с ключами 'group' и 'tariffs' для группировки.
-                     Если None — tariffs отображаются без группировки.
+        tariffs: List of tariffs from the database (only used if groups_data=None)
+        back_callback: Callback for the back button
+        order_id: ID of the existing order (for optimization)
+        is_cards: True if choosing a tariff for payment by card
+        is_crypto: True if choosing a tariff for payment with crypto (simple mode)
+        is_balance: True if choosing a tariff for payment from the balance
+        is_qr: True if choosing a tariff for QR payment (YuKassa)
+        is_demo: True if choosing a tariff for demo RF payment
+        is_wata: True if choosing a tariff for payment via WATA
+        groups_data: List of dict with keys 'group' and 'tariffs' for grouping.
+                     If None, tariffs are displayed without grouping.
     """
     builder = InlineKeyboardBuilder()
     
     def _add_tariff_buttons(tariff_list):
-        """Добавляет кнопки тарифов в builder."""
+        """Adds rate buttons to builder."""
         for tariff in tariff_list:
             if is_crypto:
                 price_usd = tariff['price_cents'] / 100
@@ -141,7 +141,7 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
                 emoji = '📱'
             elif is_wata:
                 price_rub = tariff.get('price_rub')
-                # WATA минимум 10 ₽
+                # WATA minimum 10 ₽
                 if price_rub is None or price_rub < 10:
                     continue
                 price_display = f"{price_rub} ₽"
@@ -149,7 +149,7 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
                 emoji = '🌊'
             elif is_platega:
                 price_rub = tariff.get('price_rub')
-                # Platega минимум 10 ₽
+                # Platega minimum 10 ₽
                 if price_rub is None or price_rub < 10:
                     continue
                 price_display = f"{price_rub} ₽"
@@ -157,7 +157,7 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
                 emoji = '💸'
             elif is_cardlink:
                 price_rub = tariff.get('price_rub')
-                # Cardlink минимум 10 ₽
+                # Cardlink minimum 10 ₽
                 if price_rub is None or price_rub < 10:
                     continue
                 price_display = f"{price_rub} ₽"
@@ -185,7 +185,7 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
             )
     
     if groups_data:
-        # Группированный режим: заголовки + тарифы
+        # Grouped mode: titles + tariffs
         for group_item in groups_data:
             group = group_item['group']
             group_tariffs = group_item['tariffs']
@@ -193,7 +193,7 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
             if not group_tariffs:
                 continue
             
-            # Заголовок группы (кнопка-noop)
+            # Group header (button-noop)
             builder.row(
                 InlineKeyboardButton(
                     text=f"📂⬇ {group['name']}",
@@ -202,7 +202,7 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
             )
             _add_tariff_buttons(group_tariffs)
     else:
-        # Обычный режим без группировки
+        # Normal mode without grouping
         _add_tariff_buttons(tariffs)
     
     builder.row(
@@ -215,10 +215,10 @@ def tariff_select_kb(tariffs: list, back_callback: str = "buy_key", order_id: st
 
 def cancel_kb(cancel_callback: str) -> InlineKeyboardMarkup:
     """
-    Клавиатура с кнопкой 'Отмена'.
+    Keyboard with 'Cancel' button.
     
     Args:
-        cancel_callback: Callback для кнопки 'Отмена'
+        cancel_callback: Callback for the 'Cancel' button
     """
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -229,18 +229,18 @@ def cancel_kb(cancel_callback: str) -> InlineKeyboardMarkup:
 
 def renew_tariff_select_kb(tariffs: list, key_id: int, order_id: str = None, is_cards: bool = False, is_crypto: bool = False, is_balance: bool = False, is_qr: bool = False, is_demo: bool = False, is_wata: bool = False, is_platega: bool = False, is_cardlink: bool = False) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора тарифа для продления ключа (для Stars, Карт или Баланса).
+    Keyboard for selecting a tariff for renewing a key (for Stars, Cards or Balance).
 
     Args:
-        tariffs: Список активных тарифов
-        key_id: ID ключа для продления
-        order_id: ID ордера (для оптимизации)
-        is_cards: True если выбор тарифа для оплаты картой
-        is_crypto: True если выбор тарифа для оплаты криптой (простой режим)
-        is_balance: True если выбор тарифа для оплаты с баланса
-        is_qr: True если выбор тарифа для QR-оплаты (ЮКасса)
-        is_demo: True если выбор тарифа для демонстрационной РФ оплаты
-        is_wata: True если выбор тарифа для оплаты WATA
+        tariffs: List of active tariffs
+        key_id: ID of the key to renew
+        order_id: Order ID (for optimization)
+        is_cards: True if choosing a tariff for payment by card
+        is_crypto: True if choosing a tariff for payment with crypto (simple mode)
+        is_balance: True if choosing a tariff for payment from the balance
+        is_qr: True if choosing a tariff for QR payment (YuKassa)
+        is_demo: True if choosing a tariff for demo RF payment
+        is_wata: True if choosing a tariff for WATA payment
     """
     builder = InlineKeyboardBuilder()
     
@@ -328,7 +328,7 @@ def renew_tariff_select_kb(tariffs: list, key_id: int, order_id: str = None, is_
 
 
 # ============================================================================
-# ЗАМЕНА КЛЮЧА
+# KEY REPLACEMENT
 # ============================================================================
 
 def custom_payment_tariff_select_kb(
@@ -338,7 +338,7 @@ def custom_payment_tariff_select_kb(
     minimum_amount_cents: int = 0,
     back_callback: str = "buy_key",
 ) -> InlineKeyboardMarkup:
-    """Клавиатура выбора тарифа для кастомного платёжного провайдера."""
+    """Tariff selection keyboard for a custom payment provider."""
     builder = InlineKeyboardBuilder()
     min_rub = minimum_amount_cents / 100
 
@@ -367,7 +367,7 @@ def custom_payment_renew_tariff_select_kb(
     *,
     minimum_amount_cents: int = 0,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура выбора тарифа продления для кастомного платёжного провайдера."""
+    """Keyboard for selecting a renewal tariff for a custom payment provider."""
     builder = InlineKeyboardBuilder()
     min_rub = minimum_amount_cents / 100
 
@@ -397,16 +397,16 @@ def _format_rub_button_price(price_rub: float) -> str:
 
 def replace_server_list_kb(servers: list, key_id: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора сервера для замены ключа.
+    Server selection keyboard for key replacement.
     
     Args:
-        servers: Список серверов
-        key_id: ID ключа
+        servers: List of servers
+        key_id: Key ID
     """
     builder = InlineKeyboardBuilder()
     
     for server in servers:
-        # Для пользователя не показываем сложные детали, только имя и статус
+        # We do not show complex details for the user, only the name and status
         status_emoji = "🟢" if server.get('is_active') else "🔴"
         text = f"{status_emoji} {server['name']}"
         
@@ -426,11 +426,11 @@ def replace_server_list_kb(servers: list, key_id: int) -> InlineKeyboardMarkup:
 
 def replace_inbound_list_kb(inbounds: list, key_id: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора протокола для замены ключа.
+    Protocol selection keyboard for key replacement.
     
     Args:
-        inbounds: Список inbound
-        key_id: ID ключа
+        inbounds: List of inbounds
+        key_id: Key ID
     """
     builder = InlineKeyboardBuilder()
     
@@ -455,10 +455,10 @@ def replace_inbound_list_kb(inbounds: list, key_id: int) -> InlineKeyboardMarkup
 
 def replace_confirm_kb(key_id: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура подтверждения замены.
+    Replacement confirmation keypad.
     
     Args:
-        key_id: ID ключа
+        key_id: Key ID
     """
     builder = InlineKeyboardBuilder()
     
@@ -478,15 +478,15 @@ def replace_confirm_kb(key_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 # ============================================================================
-# НОВЫЙ КЛЮЧ (ПОСЛЕ ОПЛАТЫ)
+# NEW KEY (AFTER PAYMENT)
 # ============================================================================
 
 def new_key_server_list_kb(servers: list) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора сервера для создания нового ключа.
+    Server selection keyboard to create a new key.
     
     Args:
-        servers: Список серверов
+        servers: List of servers
     """
     builder = InlineKeyboardBuilder()
     
@@ -506,10 +506,10 @@ def new_key_server_list_kb(servers: list) -> InlineKeyboardMarkup:
 
 def new_key_inbound_list_kb(inbounds: list) -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора протокола для создания нового ключа.
+    Protocol selection keyboard for creating a new key.
     
     Args:
-        inbounds: Список inbound
+        inbounds: List of inbounds
     """
     builder = InlineKeyboardBuilder()
     
@@ -526,14 +526,14 @@ def new_key_inbound_list_kb(inbounds: list) -> InlineKeyboardMarkup:
         )
     
     builder.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_server_select") # спец. callback для возврата
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_server_select") # specialist. callback to return
     )
     
     return builder.as_markup()
 
 
 # ============================================================================
-# ЕДИНАЯ QR-КЛАВИАТУРА ДЛЯ ВСЕХ ПЛАТЁЖНЫХ ПРОВАЙДЕРОВ
+# SINGLE QR KEYBOARD FOR ALL PAYMENT PROVIDERS
 # ============================================================================
 
 def qr_payment_kb(
@@ -543,14 +543,14 @@ def qr_payment_kb(
     qr_url: str = None,
 ) -> InlineKeyboardMarkup:
     """
-    Универсальная клавиатура QR-оплаты для любого провайдера.
+    Universal QR payment keyboard for any provider.
 
     Args:
-        order_id: Наш внутренний order_id
-        check_prefix: Префикс callback для кнопки «✅ Я оплатил»
-                       (напр. 'check_yookassa_qr', 'check_wata', 'check_platega', 'check_cardlink')
-        back_callback: Каллбэк для кнопки «Назад»
-        qr_url: Ссылка на оплату (URL)
+        order_id: Our internal order_id
+        check_prefix: Callback prefix for the “✅ I paid” button
+                       (e.g. 'check_yookassa_qr', 'check_wata', 'check_platega', 'check_cardlink')
+        back_callback: Callback for the back button
+        qr_url: Payment link (URL)
     """
     builder = InlineKeyboardBuilder()
 
@@ -569,20 +569,20 @@ def qr_payment_kb(
     return builder.as_markup()
 
 
-# Алиасы для обратной совместимости (делегируют в qr_payment_kb)
+# Aliases for backward compatibility (delegated to qr_payment_kb)
 def yookassa_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
-    """Алиас → qr_payment_kb(check_prefix='check_yookassa_qr')."""
+    """Alias ​​→ qr_payment_kb(check_prefix='check_yookassa_qr')."""
     return qr_payment_kb(order_id, 'check_yookassa_qr', back_callback, qr_url)
 
 def wata_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
-    """Алиас → qr_payment_kb(check_prefix='check_wata')."""
+    """Alias ​​→ qr_payment_kb(check_prefix='check_wata')."""
     return qr_payment_kb(order_id, 'check_wata', back_callback, qr_url)
 
 def platega_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
-    """Алиас → qr_payment_kb(check_prefix='check_platega')."""
+    """Alias ​​→ qr_payment_kb(check_prefix='check_platega')."""
     return qr_payment_kb(order_id, 'check_platega', back_callback, qr_url)
 
 def cardlink_qr_kb(order_id: str, back_callback: str = "buy_key", qr_url: str = None) -> InlineKeyboardMarkup:
-    """Алиас → qr_payment_kb(check_prefix='check_cardlink')."""
+    """Alias ​​→ qr_payment_kb(check_prefix='check_cardlink')."""
     return qr_payment_kb(order_id, 'check_cardlink', back_callback, qr_url)
 

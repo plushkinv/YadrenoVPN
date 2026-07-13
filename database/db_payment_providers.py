@@ -1,4 +1,4 @@
-"""Хранилище связей core orders с кастомными payment providers."""
+"""Storage of connections between core orders and custom payment providers."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,7 @@ _ALLOWED_PROVIDER_ORDER_STATUSES = {'pending', 'succeeded', 'canceled'}
 
 
 def create_payment_provider_support_tables(conn: sqlite3.Connection) -> None:
-    """Создаёт системную таблицу кастомных платёжных провайдеров."""
+    """Creates a system table of custom payment providers."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS payment_provider_orders (
@@ -54,7 +54,7 @@ def save_payment_provider_order(
     status: str = 'pending',
     metadata: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Сохраняет или обновляет внешний платёж кастомного провайдера."""
+    """Saves or updates the external payment of a custom provider."""
     normalized_status = _normalize_status(status)
     metadata_json = json.dumps(dict(metadata or {}), ensure_ascii=False)
     with get_db() as conn:
@@ -89,7 +89,7 @@ def save_payment_provider_order(
 
 
 def get_payment_provider_order(order_id: str) -> Optional[dict[str, Any]]:
-    """Возвращает запись кастомного провайдера по core order_id."""
+    """Returns a custom provider record by core order_id."""
     with get_db() as conn:
         create_payment_provider_support_tables(conn)
         row = conn.execute(
@@ -106,7 +106,7 @@ def find_payment_provider_order_by_external_id(
     provider_id: str,
     provider_payment_id: str,
 ) -> Optional[dict[str, Any]]:
-    """Ищет связь по id платежа на стороне провайдера."""
+    """Searches for a connection by payment id on the provider side."""
     with get_db() as conn:
         create_payment_provider_support_tables(conn)
         row = conn.execute(
@@ -122,7 +122,7 @@ def find_payment_provider_order_by_external_id(
 
 
 def get_open_payment_provider_orders(limit: int = 50) -> list[dict[str, Any]]:
-    """Возвращает provider-orders, которые ещё могут закрыть pending core order."""
+    """Returns provider-orders that can still close the pending core order."""
     try:
         normalized_limit = int(limit)
     except (TypeError, ValueError):
@@ -157,7 +157,7 @@ def update_payment_provider_order_status(
     payment_url: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> bool:
-    """Обновляет статус кастомного платежа."""
+    """Updates the status of a custom payment."""
     normalized_status = _normalize_status(status)
     metadata_json = json.dumps(dict(metadata or {}), ensure_ascii=False) if metadata is not None else None
     with get_db() as conn:

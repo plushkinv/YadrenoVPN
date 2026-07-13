@@ -1,4 +1,4 @@
-"""Service layer для mutating-команд extension core facade."""
+"""Service layer for mutating commands extension core facade."""
 from __future__ import annotations
 
 import logging
@@ -16,7 +16,7 @@ async def apply_extension_core_operation(
     amount: int,
     reason: str,
 ) -> dict[str, Any]:
-    """Применяет разрешённую core-команду расширения через доменные сервисы."""
+    """Applies the allowed core extension command through domain services."""
     from database.requests import (
         claim_extension_core_operation,
         finalize_extension_core_operation,

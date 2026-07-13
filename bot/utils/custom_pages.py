@@ -1,4 +1,4 @@
-"""Правила пользовательских страниц конструктора."""
+"""Rules for custom builder pages."""
 from __future__ import annotations
 
 import re
@@ -14,12 +14,12 @@ _CUSTOM_PAGE_KEY_RE = re.compile(r"^custom_[a-z0-9_]+$")
 
 
 def is_custom_page_key(page_key: object) -> bool:
-    """Проверяет формат ключа пользовательской страницы."""
+    """Checks the format of the user page key."""
     return isinstance(page_key, str) and bool(_CUSTOM_PAGE_KEY_RE.fullmatch(page_key))
 
 
 def build_custom_page_callback(page_key: object) -> Optional[str]:
-    """Возвращает callback для custom-страницы, если он помещается в лимит Telegram."""
+    """Returns a callback for a custom page if it fits within the Telegram limit."""
     if not is_custom_page_key(page_key):
         return None
 
@@ -31,7 +31,7 @@ def build_custom_page_callback(page_key: object) -> Optional[str]:
 
 
 def extract_custom_page_key(callback_data: object) -> Optional[str]:
-    """Извлекает и валидирует page_key из callback_data вида page:custom_x."""
+    """Retrieves and validates page_key from callback_data of the form page:custom_x."""
     if not isinstance(callback_data, str):
         return None
     if not callback_data.startswith(CUSTOM_PAGE_CALLBACK_PREFIX):
@@ -45,7 +45,7 @@ def extract_custom_page_key(callback_data: object) -> Optional[str]:
 
 
 def custom_page_exists(page_key: object) -> bool:
-    """Проверяет, что custom-страница валидна и есть в таблице pages."""
+    """Checks that the custom page is valid and is in the pages table."""
     if not is_custom_page_key(page_key):
         return False
 

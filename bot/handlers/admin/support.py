@@ -33,7 +33,7 @@ router = Router()
 
 @router.callback_query(F.data.startswith("admin_support_start:"))
 async def admin_support_start(callback: CallbackQuery, state: FSMContext):
-    """Админ начинает новую цепочку поддержки из карточки пользователя."""
+    """The admin starts a new support chain from the user's card."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -73,7 +73,7 @@ async def admin_support_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_support_reply:"))
 async def admin_support_reply(callback: CallbackQuery, state: FSMContext):
-    """Админ отвечает в существующую цепочку поддержки."""
+    """The admin responds to the existing support chain."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -130,7 +130,7 @@ async def admin_support_reply(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.support_waiting_message, ~F.text.startswith("/"))
 async def process_admin_support_message(message: Message, state: FSMContext):
-    """Отправляет сообщение админа пользователю."""
+    """Sends an admin message to the user."""
     admin_id = message.from_user.id
     if not is_admin(admin_id):
         return

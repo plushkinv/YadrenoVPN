@@ -1,66 +1,66 @@
 """
-FSM состояния для админ-панели.
+FSM status for the admin panel.
 
-Управление многошаговыми диалогами администратора.
+Managing multi-step administrator dialogs.
 """
 from aiogram.fsm.state import State, StatesGroup
 
 
 class AdminStates(StatesGroup):
-    """Состояния админ-панели."""
+    """Admin panel states."""
     
-    # ========== Главное меню ==========
-    admin_menu = State()  # Главный экран админки
-    yadreno_waiting_api_key = State()  # Ввод персонального api_key Yadreno Admin
-    yadreno_chat = State()  # Диалог с агентом Yadreno Admin
+    # ========== Main menu ==========
+    admin_menu = State()  # Admin main screen
+    yadreno_waiting_api_key = State()  # Entering personal api_key Yadreno Admin
+    yadreno_chat = State()  # Dialogue with agent Yadreno Admin
     
-    # ========== Управление серверами ==========
-    servers_list = State()           # Список серверов
-    server_view = State()            # Просмотр конкретного сервера
+    # ========== Server management ==========
+    servers_list = State()           # Server list
+    server_view = State()            # View a specific server
     
-    # ========== Добавление сервера (пошаговый диалог) ==========
-    add_server_name = State()        # Шаг 1: Название
-    add_server_url = State()         # Шаг 2: URL панели
-    add_server_login = State()       # Шаг 3: Логин
-    add_server_password = State()    # Шаг 4: Пароль
-    add_server_confirm = State()     # Подтверждение после проверки
+    # ========== Adding a server (step-by-step dialogue) ==========
+    add_server_name = State()        # Step 1: Title
+    add_server_url = State()         # Step 2: Panel URL
+    add_server_login = State()       # Step 3: Login
+    add_server_password = State()    # Step 4: Password
+    add_server_confirm = State()     # Confirmation after verification
     
-    # ========== Редактирование сервера ==========
-    edit_server = State()            # Редактирование с навигацией по параметрам
+    # ========== Editing the server ==========
+    edit_server = State()            # Editing with navigation through parameters
     
-    # ========== Удаление сервера ==========
-    delete_server_confirm = State()  # Подтверждение удаления
+    # ========== Deleting a server ==========
+    delete_server_confirm = State()  # Deletion confirmation
     
-    # ========== Раздел «Оплаты» ==========
-    payments_menu = State()          # Главный экран оплат
-    cards_setup_token = State()      # Ввод токена ЮКасса
+    # ========== Section “Payments” ==========
+    payments_menu = State()          # Main payment screen
+    cards_setup_token = State()      # Entering the YuKassa token
     
-    # ========== Настройка крипто-платежей ==========
-    crypto_setup_url = State()       # Ввод ссылки на товар
-    crypto_setup_secret = State()    # Ввод секретного ключа
-    edit_crypto = State()            # Редактирование крипто-настроек
+    # ========== Setting up crypto payments ==========
+    crypto_setup_url = State()       # Entering a link to a product
+    crypto_setup_secret = State()    # Entering the secret key
+    edit_crypto = State()            # Editing crypto settings
 
-    # ========== Настройка QR-оплаты ЮКасса ==========
-    qr_setup_shop_id = State()       # Ввод Shop ID
-    qr_setup_secret_key = State()    # Ввод Secret Key
+    # ========== Setting up QR payment YuKassa ==========
+    qr_setup_shop_id = State()       # Entering Shop ID
+    qr_setup_secret_key = State()    # Enter Secret Key
 
-    # ========== Настройка WATA ==========
-    wata_setup_token = State()       # Ввод JWT-токена WATA
+    # ========== WATA setup ==========
+    wata_setup_token = State()       # Entering the WATA JWT token
 
-    # ========== Настройка Platega ==========
-    platega_setup_merchant = State()  # Ввод Merchant ID Platega
-    platega_setup_secret = State()    # Ввод Secret Platega
+    # ========== Setting up Platega ==========
+    platega_setup_merchant = State()  # Enter Merchant ID Platega
+    platega_setup_secret = State()    # Enter Secret Platega
 
-    # ========== Настройка Cardlink ==========
-    cardlink_setup_shop_id = State()    # Ввод Shop ID Cardlink
-    cardlink_setup_api_token = State()  # Ввод API-токена Cardlink
+    # ========== Cardlink setup ==========
+    cardlink_setup_shop_id = State()    # Enter Shop ID Cardlink
+    cardlink_setup_api_token = State()  # Entering Cardlink API token
 
-    # ========== Реферальная система ==========
-    referral_menu = State()          # Главное меню реферальной системы
-    referral_level_edit = State()    # Редактирование уровня
-    waiting_balance_amount = State()    # Ввод суммы баланса
-    waiting_coefficient = State()        # Ввод коэффициента
-    support_waiting_message = State()    # Ввод сообщения пользователю/ответа в поддержку
+    # ========== Referral system ==========
+    referral_menu = State()          # Main menu of the referral system
+    referral_level_edit = State()    # Editing a Level
+    waiting_balance_amount = State()    # Entering the balance amount
+    waiting_coefficient = State()        # Entering the coefficient
+    support_waiting_message = State()    # Entering a message to the user/response in support
     promocode_add_code = State()
     promocode_add_discount = State()
     promocode_add_expires = State()
@@ -71,60 +71,61 @@ class AdminStates(StatesGroup):
     coupon_generate_lifetime = State()
     coupon_generate_count = State()
     
-    # ========== Редактирование сообщений (универсальный редактор) ==========
-    waiting_for_message = State()    # Ожидание нового сообщения (единое для всех редакторов)
-    waiting_for_link_url = State()   # Ожидание ввода URL ссылки
-    waiting_for_link_button_name = State()  # Ожидание ввода названия кнопки-ссылки
+    # ========== Editing messages (universal editor) ==========
+    waiting_for_message = State()    # Waiting for a new message (same for all editors)
+    waiting_for_link_url = State()   # Waiting for link URL to be entered
+    waiting_for_link_button_name = State()  # Waiting for the link button name to be entered
+    extension_setting_value = State()  # Entering a custom extension setting value
     
-    # ========== Управление тарифами ==========
-    tariffs_list = State()           # Список тарифов
-    tariff_view = State()            # Просмотр конкретного тарифа
+    # ========== Tariff management ==========
+    tariffs_list = State()           # List of tariffs
+    tariff_view = State()            # View a specific tariff
     
-    # ========== Добавление тарифа (пошаговый диалог) ==========
-    add_tariff_name = State()        # Шаг 1: Название
-    add_tariff_price_cents = State() # Шаг 2: Цена в центах
-    add_tariff_price_stars = State() # Шаг 3: Цена в звёздах
-    add_tariff_price_rub = State()   # Шаг 4: Цена в рублях (карты)
-    add_tariff_duration = State()    # Шаг 5: Длительность
-    add_tariff_traffic_limit = State() # Шаг 6: Лимит трафика (ГБ)
-    add_tariff_max_ips = State()     # Шаг 7: Лимит устройств (IP)
-    add_tariff_confirm = State()     # Подтверждение
+    # ========== Adding a tariff (step-by-step dialogue) ==========
+    add_tariff_name = State()        # Step 1: Title
+    add_tariff_price_cents = State() # Step 2: Price in cents
+    add_tariff_price_stars = State() # Step 3: Price in stars
+    add_tariff_price_rub = State()   # Step 4: Price in rubles (cards)
+    add_tariff_duration = State()    # Step 5: Duration
+    add_tariff_traffic_limit = State() # Step 6: Data Limit (GB)
+    add_tariff_max_ips = State()     # Step 7: Device Limit (IP)
+    add_tariff_confirm = State()     # Confirmation
 
-    # ========== Редактирование тарифа ==========
-    edit_tariff = State()            # Редактирование с навигацией по параметрам
+    # ========== Edit tariff ==========
+    edit_tariff = State()            # Editing with navigation through parameters
     
-    # ========== Рассылка ==========
-    broadcast_menu = State()         # Главный экран рассылки
-    broadcast_waiting_message = State()      # Ожидание сообщения для рассылки
-    broadcast_waiting_notify_days = State()  # Ожидание числа дней для уведомления
+    # ========== Newsletter ==========
+    broadcast_menu = State()         # Mailing main screen
+    broadcast_waiting_message = State()      # Waiting for a message to be sent
+    broadcast_waiting_notify_days = State()  # Waiting for number of days to notify
     
-    # ========== Раздел «Пользователи» ==========
-    users_menu = State()             # Главный экран раздела
-    users_list = State()             # Список пользователей с пагинацией
-    user_view = State()              # Просмотр конкретного пользователя
-    waiting_user_id = State()        # Ожидание ввода telegram_id
+    # ========== Section “Users” ==========
+    users_menu = State()             # Section main screen
+    users_list = State()             # List of users with pagination
+    user_view = State()              # View a specific user
+    waiting_user_id = State()        # Waiting for telegram_id input
     
-    # ========== Управление VPN-ключом ==========
-    key_view = State()               # Просмотр конкретного ключа
-    key_extend_days = State()        # Ввод количества дней для продления
-    key_change_traffic = State()     # Ввод нового лимита трафика
+    # ========== VPN Key Management ==========
+    key_view = State()               # View a specific key
+    key_extend_days = State()        # Entering the number of days to extend
+    key_change_traffic = State()     # Entering a new traffic limit
     
-    # ========== Добавление ключа администратором ==========
-    add_key_server = State()         # Выбор сервера
-    add_key_inbound = State()        # Выбор inbound (протокола)
-    add_key_traffic = State()        # Ввод лимита трафика (ГБ)
-    add_key_days = State()           # Ввод срока действия (дней)
-    add_key_confirm = State()        # Подтверждение создания
+    # ========== Adding a key by administrator ==========
+    add_key_server = State()         # Server selection
+    add_key_inbound = State()        # Selecting inbound (protocol)
+    add_key_traffic = State()        # Entering traffic limit (GB)
+    add_key_days = State()           # Enter validity period (days)
+    add_key_confirm = State()        # Creation Confirmation
     
-    # ========== Управление группами тарифов ==========
-    group_add_name = State()         # Ввод названия новой группы
-    group_edit_name = State()        # Ввод нового названия группы
-    tariff_select_group = State()    # Выбор группы при добавлении тарифа
-    server_select_group = State()    # Выбор группы при добавлении сервера
+    # ========== Management of tariff groups ==========
+    group_add_name = State()         # Entering a new group name
+    group_edit_name = State()        # Entering a new group name
+    tariff_select_group = State()    # Selecting a group when adding a tariff
+    server_select_group = State()    # Selecting a group when adding a server
 
 
 # ============================================================================
-# ПАРАМЕТРЫ СЕРВЕРОВ
+# SERVER SETTINGS
 # ============================================================================
 
 SERVER_PARAMS = [
@@ -160,19 +161,19 @@ SERVER_PARAMS = [
 
 
 def get_param_by_index(index: int) -> dict:
-    """Получает параметр сервера по индексу."""
+    """Gets the server parameter by index."""
     if 0 <= index < len(SERVER_PARAMS):
         return SERVER_PARAMS[index]
     return SERVER_PARAMS[0]
 
 
 def get_total_params() -> int:
-    """Возвращает общее количество параметров сервера."""
+    """Returns the total number of server parameters."""
     return len(SERVER_PARAMS)
 
 
 # ============================================================================
-# ПАРАМЕТРЫ ТАРИФОВ
+# TARIFF PARAMETERS
 # ============================================================================
 
 TARIFF_PARAMS = [
@@ -254,10 +255,10 @@ TARIFF_PARAMS = [
 
 def get_tariff_param_by_index(index: int) -> dict:
     """
-    Получает параметр тарифа по индексу.
+    Gets the tariff parameter by index.
     
     Args:
-        index: Индекс параметра
+        index: Parameter index
     """
     if 0 <= index < len(TARIFF_PARAMS):
         return TARIFF_PARAMS[index]
@@ -265,17 +266,17 @@ def get_tariff_param_by_index(index: int) -> dict:
 
 
 def get_tariff_params_list() -> list:
-    """Возвращает список параметров тарифа."""
+    """Returns a list of tariff parameters."""
     return TARIFF_PARAMS
 
 
 def get_total_tariff_params() -> int:
-    """Возвращает общее количество параметров тарифа."""
+    """Returns the total number of tariff parameters."""
     return len(TARIFF_PARAMS)
 
 
 # ============================================================================
-# ПАРАМЕТРЫ КРИПТО-НАСТРОЕК
+# CRYPTO SETTINGS PARAMETERS
 # ============================================================================
 
 CRYPTO_PARAMS = [
@@ -297,13 +298,13 @@ CRYPTO_PARAMS = [
 
 
 def get_crypto_param_by_index(index: int) -> dict:
-    """Получает параметр крипто-настроек по индексу."""
+    """Gets the crypto settings parameter by index."""
     if 0 <= index < len(CRYPTO_PARAMS):
         return CRYPTO_PARAMS[index]
     return CRYPTO_PARAMS[0]
 
 
 def get_total_crypto_params() -> int:
-    """Возвращает общее количество параметров крипто-настроек."""
+    """Returns the total number of crypto settings parameters."""
     return len(CRYPTO_PARAMS)
 

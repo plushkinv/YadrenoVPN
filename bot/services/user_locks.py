@@ -1,7 +1,7 @@
 """
-Блокировки для синхронизации операций с балансом пользователей.
+Locks to synchronize transactions with user balances.
 
-Используется для предотвращения race conditions при операциях с балансом.
+Used to prevent race conditions during balance operations.
 """
 import asyncio
 from collections import defaultdict

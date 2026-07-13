@@ -1,12 +1,13 @@
 """
-Клиент сателлит-протокола Yadreno Admin.
+Yadreno Admin satellite protocol client.
 
-Сервис берёт на себя полный цикл запроса:
-process → poll → tool_result → final, а также локальное исполнение tool_call.
+The service takes care of the full request cycle:
+process → poll → tool_result → final, as well as local execution of tool_call.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -126,17 +127,72 @@ def _core_policy_for_skill(skill_id: str) -> Optional[bool]:
     return is_yadreno_admin_core_changes_enabled()
 
 
+def build_agent_env_context(core_changes_allowed: bool | None) -> dict[str, Any]:
+    """Return compact environment context for the remote agent prompt."""
+    try:
+        from database.migrations import LATEST_VERSION, get_current_version
+
+        db_version: int | None = get_current_version()
+        latest_db_version = LATEST_VERSION
+    except Exception as e:
+        logger.warning("Не удалось собрать версию БД для Yadreno Admin context: %s", e)
+        from database.migrations import LATEST_VERSION
+
+        db_version = None
+        latest_db_version = LATEST_VERSION
+
+    try:
+        from bot.utils.custom_extensions import is_custom_extensions_enabled
+
+        custom_extensions_loader_enabled = is_custom_extensions_enabled()
+    except Exception as e:
+        logger.warning("Не удалось собрать статус custom extensions для Yadreno Admin context: %s", e)
+        custom_extensions_loader_enabled = False
+
+    return {
+        "db_version": db_version,
+        "latest_db_version": latest_db_version,
+        "core_changes_allowed": True if core_changes_allowed is None else bool(core_changes_allowed),
+        "custom_extensions_loader_enabled": bool(custom_extensions_loader_enabled),
+    }
+
+
+def build_agent_env_context_for_topic(
+    topic_id: int,
+    skill_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Return compact environment context for the resolved Yadreno Admin lane."""
+    effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
+    return build_agent_env_context(_core_policy_for_skill(effective_skill_id))
+
+
+def _message_has_agent_env_context(message: str) -> bool:
+    return '"env":{' in message or '"env": {' in message
+
+
+def _with_agent_env_context(message: str, env_context: dict[str, Any]) -> str:
+    """Prefix a user request with compact service context unless it already has it."""
+    if _message_has_agent_env_context(message):
+        return message
+    payload = {"env": env_context}
+    return (
+        "Служебный контекст:\n"
+        f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        f"{message}"
+    )
+
+
 class YadrenoAdminError(RuntimeError):
-    """Ошибка общения с хабом Yadreno Admin."""
+    """Error communicating with the Yadreno Admin hub."""
 
 
 class DangerousShellCommandError(ValueError):
-    """Команда отклонена локальным deny-list."""
+    """The command was rejected by the local deny-list."""
 
 
 @dataclass
 class YadrenoAdminFinal:
-    """Финальный ответ агента."""
+    """Agent's final response."""
 
     content: str
     viewer_url: Optional[str] = None
@@ -145,7 +201,7 @@ class YadrenoAdminFinal:
 
 @dataclass
 class YadrenoAdminProgressEvent:
-    """Промежуточное пользовательское событие от хаба."""
+    """Intermediate user event from the hub."""
 
     event: str
     content: str
@@ -154,7 +210,7 @@ class YadrenoAdminProgressEvent:
 
 @dataclass
 class YadrenoAdminUpload:
-    """Файл для отправки в Yadreno Admin upload API."""
+    """File to be sent to Yadreno Admin upload API."""
 
     path: Path
     filename: str
@@ -163,7 +219,7 @@ class YadrenoAdminUpload:
 
 @dataclass
 class YadrenoAdminLatest:
-    """Последний non-destructive snapshot запроса."""
+    """Latest non-destructive snapshot of the request."""
 
     request_id: int
     event: str = ""
@@ -174,7 +230,7 @@ class YadrenoAdminLatest:
 
 @dataclass
 class YadrenoAdminNewChatResult:
-    """Результат запроса нового чата на хабе."""
+    """Result of a new chat request on the hub."""
 
     status: str
     response_text: str = ""
@@ -183,7 +239,7 @@ class YadrenoAdminNewChatResult:
 
 @dataclass
 class YadrenoAdminHubStatus:
-    """Состояние request/lane по данным hub /status."""
+    """Request/lane status according to hub /status."""
 
     status: str
     response_text: str = ""
@@ -196,7 +252,7 @@ class YadrenoAdminHubStatus:
 
 @dataclass
 class YadrenoAdminCancelResult:
-    """Результат умной отмены request/lane."""
+    """Result of smart cancellation request/lane."""
 
     status: str
     response_text: str = ""
@@ -224,7 +280,7 @@ def get_active_request_id(
     telegram_id: int,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> Optional[int]:
-    """Возвращает активный request_id администратора, если он есть."""
+    """Returns the active request_id of the administrator, if any."""
     key = _lane_key(telegram_id, topic_id)
     return _active_requests.get(key) or get_yadreno_admin_active_request_id(
         telegram_id,
@@ -236,7 +292,7 @@ def get_last_request_id(
     telegram_id: int,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> Optional[int]:
-    """Возвращает последний request_id для ручного восстановления."""
+    """Returns the last request_id for manual recovery."""
     key = _lane_key(telegram_id, topic_id)
     return _last_requests.get(key) or get_yadreno_admin_last_request_id(
         telegram_id,
@@ -248,7 +304,7 @@ def is_local_request_active(
     telegram_id: int,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> bool:
-    """Проверяет, ведёт ли текущий процесс polling для lane."""
+    """Checks whether the current process is polling for lane."""
     return _lane_key(telegram_id, topic_id) in _active_requests
 
 
@@ -259,7 +315,7 @@ def _remember_request(
     *,
     active: bool,
 ) -> None:
-    """Сохраняет request_id в памяти и settings для восстановления после рестарта."""
+    """Saves request_id in memory and settings for restoration after restart."""
     key = _lane_key(telegram_id, topic_id)
     _last_requests[key] = request_id
     set_yadreno_admin_last_request_id(telegram_id, topic_id, request_id)
@@ -269,13 +325,13 @@ def _remember_request(
 
 
 def _clear_active_request(telegram_id: int, topic_id: int) -> None:
-    """Очищает active request_id в памяти и settings."""
+    """Clears active request_id in memory and settings."""
     _active_requests.pop(_lane_key(telegram_id, topic_id), None)
     clear_yadreno_admin_active_request_id(telegram_id, topic_id)
 
 
 def _clear_last_request(telegram_id: int, topic_id: int) -> None:
-    """Очищает last request_id в памяти и settings."""
+    """Clears last request_id in memory and settings."""
     _last_requests.pop(_lane_key(telegram_id, topic_id), None)
     clear_yadreno_admin_last_request_id(telegram_id, topic_id)
 
@@ -315,7 +371,7 @@ def _remember_tool_runtime(
     *,
     pid: Optional[int] = None,
 ) -> None:
-    """Сохраняет runtime-состояние локально выполняющегося tool_call."""
+    """Saves the runtime state of a locally running tool_call."""
     if runtime is None:
         return
     payload = {
@@ -336,13 +392,13 @@ def _remember_tool_runtime(
 
 
 def _clear_tool_runtime(request_id: int, tool_call_id: str) -> None:
-    """Удаляет runtime-состояние завершённого локального tool_call."""
+    """Removes the runtime state of a completed local tool_call."""
     _running_tool_calls.pop((int(request_id), str(tool_call_id)), None)
     clear_yadreno_admin_tool_runtime(request_id, tool_call_id)
 
 
 def _pid_is_running(pid: Any) -> bool:
-    """Best-effort проверка живости локального subprocess по pid."""
+    """Best-effort check for liveness of local subprocess by pid."""
     try:
         value = int(pid)
     except (TypeError, ValueError):
@@ -361,7 +417,7 @@ def _pid_is_running(pid: Any) -> bool:
 
 
 def _windows_pid_is_running(pid: int) -> bool:
-    """Dev-only предохранитель: на Windows os.kill(pid, 0) шлёт CTRL+C."""
+    """Dev-only fuse: on Windows os.kill(pid, 0) sends CTRL+C."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -392,7 +448,7 @@ def get_local_tool_diagnostics(
     request_id: Optional[int],
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> dict[str, Any]:
-    """Возвращает локальную диагностику running tool_call для hub /cancel."""
+    """Returns local diagnostics running tool_call for hub /cancel."""
     if request_id is None:
         return {
             "local_checked": True,
@@ -430,7 +486,7 @@ def get_local_tool_diagnostics(
 
 
 def _reject_dangerous_shell(command: str) -> None:
-    """Отклоняет катастрофически опасные shell-команды перед subprocess."""
+    """Rejects catastrophically dangerous shell commands before subprocess."""
     for pattern, reason in _dangerous_shell_patterns:
         if re.search(pattern, command, flags=re.IGNORECASE | re.MULTILINE):
             raise DangerousShellCommandError(
@@ -439,7 +495,7 @@ def _reject_dangerous_shell(command: str) -> None:
 
 
 def _resolve_tool_path(raw_path: str) -> Path:
-    """Преобразует путь tool_call в абсолютный путь локального сервера."""
+    """Converts the tool_call path to an absolute path on the local server."""
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
         path = PROJECT_ROOT / path
@@ -524,7 +580,7 @@ def _core_guard_reject_sql(query: str) -> Optional[str]:
 
 
 def _get_timeout(args: dict[str, Any], default: int = 60) -> int:
-    """Читает timeout из аргументов tool_call с безопасным дефолтом."""
+    """Reads timeout from tool_call arguments with safe default."""
     try:
         timeout = int(args.get("timeout", default) or default)
     except (TypeError, ValueError):
@@ -537,7 +593,7 @@ async def _detect_public_server_ip_with_session(
     *,
     use_cache: bool = True,
 ) -> str:
-    """Best-effort определяет публичный IP сервера через внешние сервисы."""
+    """Best-effort determines the public IP of the server through external services."""
     global _server_ip_cache
     if use_cache and _server_ip_cache is not None:
         return _server_ip_cache
@@ -558,7 +614,7 @@ async def _detect_public_server_ip_with_session(
 
 
 async def detect_public_server_ip(*, use_cache: bool = True) -> str:
-    """Определяет публичный IP сервера без обращения к config.py."""
+    """Determines the public IP of the server without accessing config.py."""
     timeout = aiohttp.ClientTimeout(total=12)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         return await _detect_public_server_ip_with_session(
@@ -568,7 +624,7 @@ async def detect_public_server_ip(*, use_cache: bool = True) -> str:
 
 
 async def _get_server_ip(session: aiohttp.ClientSession) -> str:
-    """Возвращает публичный IP сателлита: settings → autodetect → ''."""
+    """Returns the public IP of the satellite: settings → autodetect → ''."""
     saved_ip = get_yadreno_admin_server_ip().strip()
     if saved_ip:
         return saved_ip
@@ -592,9 +648,9 @@ async def _request_json(
     allow_no_content: bool = False,
 ) -> tuple[int, Optional[dict]]:
     """
-    Делает HTTP-запрос к хабу с retry и возвращает статус + JSON.
+    Makes an HTTP request to the hub with retry and returns status + JSON.
 
-    204 обрабатывается отдельно, потому что у long-polling это штатный ответ.
+    204 is processed separately, because long-polling is a standard response.
     """
     headers = {"Authorization": f"Bearer {api_key}"}
     delays = RETRY_CONFIG.get("delays", [1, 3, 9])
@@ -645,7 +701,7 @@ async def _request_multipart(
     uploads: list[YadrenoAdminUpload],
     file_field: str,
 ) -> tuple[int, Optional[dict]]:
-    """Делает multipart-запрос к upload API хаба с retry."""
+    """Makes a multipart request to the upload API of the hub with retry."""
     headers = {"Authorization": f"Bearer {api_key}"}
     delays = RETRY_CONFIG.get("delays", [1, 3, 9])
     max_attempts = RETRY_CONFIG.get("max_attempts", 3)
@@ -705,7 +761,7 @@ async def _execute_shell(
     args: dict[str, Any],
     runtime: Optional[_ToolRuntimeContext] = None,
 ) -> dict[str, Optional[str]]:
-    """Исполняет satellite_execute на сервере, где запущен бот."""
+    """Executes satellite_execute on the server where the bot is running."""
     command = str(args.get("command", "")).strip()
     if not command:
         return {"result": "", "error": "empty command"}
@@ -750,7 +806,7 @@ async def _execute_shell(
 
 
 async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
-    """Исполняет satellite_write_file: пишет content в явно переданный path."""
+    """Executes satellite_write_file: writes content to the explicitly passed path."""
     raw_path = str(args.get("path", "")).strip()
     if not raw_path:
         return {"result": "", "error": "empty path"}
@@ -772,7 +828,7 @@ async def _run_script(
     args: dict[str, Any],
     runtime: Optional[_ToolRuntimeContext] = None,
 ) -> dict[str, Optional[str]]:
-    """Исполняет satellite_run_script через временный .sh в tmp/."""
+    """Executes satellite_run_script via a temporary .sh in tmp/."""
     script_body = str(args.get("script_body", "")).strip()
     if not script_body:
         return {"result": "", "error": "empty script_body"}
@@ -829,7 +885,7 @@ async def _run_script(
 
 
 def _format_sql_rows(rows: list[sqlite3.Row] | list[tuple[Any, ...]], columns: list[str]) -> str:
-    """Форматирует табличный SQL-ответ в компактный текст."""
+    """Formats a tabular SQL response into compact text."""
     if not rows:
         return "(0 rows)"
     lines = [" | ".join(columns)]
@@ -843,7 +899,7 @@ async def _execute_sqlite(
     args: dict[str, Any],
     runtime: Optional[_ToolRuntimeContext] = None,
 ) -> dict[str, Optional[str]]:
-    """Исполняет sqlite-запрос по db_path/db_name."""
+    """Executes an sqlite query using db_path/db_name."""
     db_path = str(args.get("db_path") or args.get("db_name") or "").strip()
     if not db_path:
         return {"result": "", "error": "sqlite requires db_path or db_name"}
@@ -880,10 +936,10 @@ async def _execute_sql_cli(
     runtime: Optional[_ToolRuntimeContext] = None,
 ) -> dict[str, Optional[str]]:
     """
-    Исполняет SQL через локальный CLI.
+    Executes SQL via local CLI.
 
-    Учётные данные намеренно не хранятся в коде: mysql/psql сами используют
-    окружение и локальные конфиги пользователя процесса.
+    Credentials are deliberately not stored in the code: mysql/psql use it themselves
+    environment and local process user configs.
     """
     binary = shutil.which(binary_name)
     if not binary:
@@ -928,7 +984,7 @@ async def _execute_sql(
     args: dict[str, Any],
     runtime: Optional[_ToolRuntimeContext] = None,
 ) -> dict[str, Optional[str]]:
-    """Исполняет satellite_sql для sqlite/mysql/postgres."""
+    """Executes satellite_sql for sqlite/mysql/postgres."""
     db_type = str(args.get("db_type", "")).strip().lower()
     db_name = str(args.get("db_name", "")).strip()
 
@@ -948,7 +1004,7 @@ async def _execute_sql(
 
 
 def _log_tool_audit(event: dict[str, Any], tool_result: dict[str, Optional[str]]) -> None:
-    """Пишет audit log по локально исполненному tool_call."""
+    """Writes an audit log for a locally executed tool_call."""
     args = event.get("args") or {}
     tool = str(event.get("tool") or "")
     result = tool_result.get("result") or ""
@@ -1015,7 +1071,7 @@ async def _run_tool_call(
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> dict[str, Optional[str]]:
-    """Исполняет один tool_call хаба."""
+    """Executes one tool_call of the hub."""
     tool = event.get("tool")
     args = event.get("args") or {}
     runtime = _runtime_context_from_event(event, topic_id=topic_id)
@@ -1042,7 +1098,7 @@ async def _notify_progress(
     event: dict[str, Any],
     progress_callback: Optional[ProgressCallback],
 ) -> None:
-    """Передаёт status/task_update в UI-слой и не роняет агентский цикл."""
+    """Passes status/task_update to the UI layer and does not drop the agent loop."""
     if progress_callback is None:
         return
 
@@ -1073,7 +1129,7 @@ async def _poll_until_final(
     server_ip: str = "",
     progress_callback: Optional[ProgressCallback] = None,
 ) -> YadrenoAdminFinal:
-    """Единый poll/tool/final цикл для text и upload запросов."""
+    """Single poll/tool/final loop for text and upload requests."""
     _remember_request(telegram_id, topic_id, request_id, active=True)
     logger.info(
         "Yadreno Admin request accepted: admin=%s topic=%s request_id=%s satellite_type=%s server_ip=%s",
@@ -1176,10 +1232,10 @@ async def run_dialog(
     progress_callback: Optional[ProgressCallback] = None,
 ) -> YadrenoAdminFinal:
     """
-    Выполняет полный цикл диалога с агентом Yadreno Admin.
+    Performs a full cycle of dialogue with the Yadreno Admin agent.
 
-    Один администратор одновременно ведёт только один запрос в одном lane
-    Yadreno Admin. Обычный чат и /yaa используют разные topic_id.
+    One administrator simultaneously handles only one request in one lane
+    Yadreno Admin. Regular chat and /yaa use different topic_ids.
     """
     key = _lane_key(telegram_id, topic_id)
     async with _request_locks[key]:
@@ -1188,8 +1244,12 @@ async def run_dialog(
             server_ip = await _get_server_ip(session)
             effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
             core_changes_allowed = _core_policy_for_skill(effective_skill_id)
+            agent_message = _with_agent_env_context(
+                message,
+                build_agent_env_context(core_changes_allowed),
+            )
             payload: dict[str, Any] = {
-                "message": message,
+                "message": agent_message,
                 "server_ip": server_ip,
                 "topic_id": topic_id,
                 "skill_id": effective_skill_id,
@@ -1236,7 +1296,7 @@ async def run_dialog_with_uploads(
     progress_callback: Optional[ProgressCallback] = None,
     overflow_count: int = 0,
 ) -> YadrenoAdminFinal:
-    """Отправляет файлы в Yadreno Admin и ждёт финальный ответ агента."""
+    """Sends files to Yadreno Admin and waits for the final response from the agent."""
     if not uploads:
         return await run_dialog(
             telegram_id,
@@ -1254,6 +1314,10 @@ async def run_dialog_with_uploads(
             server_ip = await _get_server_ip(session)
             effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
             core_changes_allowed = _core_policy_for_skill(effective_skill_id)
+            agent_message = _with_agent_env_context(
+                message,
+                build_agent_env_context(core_changes_allowed),
+            )
             is_batch = len(uploads) > 1
             path = (
                 "/api/v1/satellite/upload_batch"
@@ -1261,7 +1325,7 @@ async def run_dialog_with_uploads(
                 else "/api/v1/satellite/upload"
             )
             fields: dict[str, str | int] = {
-                "message": message,
+                "message": agent_message,
                 "topic_id": topic_id,
                 "server_ip": server_ip,
                 "skill_id": effective_skill_id,
@@ -1307,7 +1371,7 @@ async def resume_active_dialog(
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> Optional[YadrenoAdminFinal]:
-    """Восстанавливает polling активного запроса после рестарта локального бота."""
+    """Restores polling of an active request after a local bot restart."""
     request_id = get_active_request_id(telegram_id, topic_id)
     if request_id is None:
         return None
@@ -1345,7 +1409,7 @@ async def resume_active_dialog(
 
 
 def _latest_from_event(request_id: int, event: Optional[dict[str, Any]]) -> YadrenoAdminLatest:
-    """Преобразует snapshot хаба в локальную структуру без tool_call."""
+    """Converts a hub snapshot into a local structure without tool_call."""
     if not event:
         return YadrenoAdminLatest(request_id=request_id)
 
@@ -1383,7 +1447,7 @@ def _status_from_data(
     request_id: Optional[int],
     data: Optional[dict[str, Any]],
 ) -> YadrenoAdminHubStatus:
-    """Преобразует ответ hub /status в локальную структуру."""
+    """Converts the hub /status response to a local structure."""
     if not data:
         return YadrenoAdminHubStatus(status="unsafe_unknown", request_id=request_id)
     status = str(data.get("status") or "unsafe_unknown")
@@ -1406,7 +1470,7 @@ def _latest_from_hub_status(
     request_id: int,
     hub_status: YadrenoAdminHubStatus,
 ) -> YadrenoAdminLatest:
-    """Показывает read-only /status как progress-событие без запуска /poll."""
+    """Shows read-only /status as a progress event without running /poll."""
     text = hub_status.response_text or "Состояние задачи пока не определено."
     if hub_status.status in {"orphan_suspected", "orphan_confirmed"}:
         text += "\n\nНажмите «Отмена», чтобы выполнить безопасную двухфазную проверку."
@@ -1431,7 +1495,7 @@ async def fetch_dialog_status(
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
     request_id: Optional[int] = None,
 ) -> Optional[YadrenoAdminHubStatus]:
-    """Читает hub /status и применяет безопасные локальные cleanup-решения."""
+    """Reads hub /status and applies secure local cleanup solutions."""
     request_id = request_id or get_active_request_id(telegram_id, topic_id) or get_last_request_id(
         telegram_id,
         topic_id,
@@ -1459,7 +1523,7 @@ async def fetch_latest_dialog_event(
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> Optional[YadrenoAdminLatest]:
-    """Читает последний snapshot через /latest, не consume-ит /poll."""
+    """Reads the latest snapshot via /latest, without consuming /poll."""
     request_id = get_active_request_id(telegram_id, topic_id) or get_last_request_id(
         telegram_id,
         topic_id,
@@ -1511,7 +1575,7 @@ async def start_new_chat(
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
     skill_id: Optional[str] = None,
 ) -> YadrenoAdminNewChatResult:
-    """Просит хаб закрыть активную satellite-сессию, если lane свободна."""
+    """Asks the hub to close the active satellite session if the lane is free."""
     timeout = aiohttp.ClientTimeout(total=20)
     effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1542,7 +1606,7 @@ async def cancel_active_dialog(
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> YadrenoAdminCancelResult:
-    """Отменяет активный запрос администратора, если он есть."""
+    """Cancels an active admin request, if any."""
     request_id = get_active_request_id(telegram_id, topic_id)
     if request_id is None:
         return YadrenoAdminCancelResult(
@@ -1584,7 +1648,7 @@ async def cancel_active_dialog(
 
 
 def _format_recovered_final(content: str, viewer_url: Optional[str]) -> str:
-    """Форматирует финал, доставленный фоновым startup recovery."""
+    """Formats the final delivered by background startup recovery."""
     response = content or "Готово."
     if viewer_url:
         from bot.utils.text import escape_html
@@ -1601,7 +1665,7 @@ async def _recover_one_active_dialog_on_startup(
     topic_id: int,
     request_id: int,
 ) -> None:
-    """Проверяет один active request после рестарта и продолжает только live-задачи."""
+    """Checks one active request after restart and continues only live tasks."""
     try:
         hub_status = await fetch_dialog_status(
             telegram_id,
@@ -1658,7 +1722,7 @@ async def _recover_one_active_dialog_on_startup(
 
 
 async def recover_active_dialogs_on_startup(bot: Any) -> None:
-    """Запускает best-effort восстановление live Yadreno Admin задач после рестарта."""
+    """Runs best-effort recovery of live Yadreno Admin tasks after a restart."""
     api_key = get_yadreno_admin_api_key()
     if not api_key:
         return

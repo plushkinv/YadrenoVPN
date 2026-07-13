@@ -1,4 +1,4 @@
-"""Сборка HTML-блоков для редактируемых страниц ключей."""
+"""Assembling HTML blocks for editable key pages."""
 from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
@@ -15,14 +15,14 @@ KEY_DATA_PLACEHOLDER = '%ключ_переименование_данные%'
 
 
 def _safe(value: Any, fallback: str = '—') -> str:
-    """Экранирует динамическое значение для HTML."""
+    """Escapes a dynamic value for HTML."""
     if value is None or value == '':
         return escape_html(fallback)
     return escape_html(str(value))
 
 
 def keyboard_rows(markup) -> list:
-    """Возвращает ряды кнопок из готовой InlineKeyboardMarkup."""
+    """Returns rows of buttons from a finished InlineKeyboardMarkup."""
     if not markup:
         return []
     return list(getattr(markup, 'inline_keyboard', []) or [])
@@ -38,7 +38,7 @@ def build_key_details_replacements(
     protocol: str,
     prepend_html: str = '',
 ) -> dict[str, str]:
-    """Готовит плейсхолдеры карточки ключа."""
+    """Prepares key card placeholders."""
     info_lines: list[str] = []
     if prepend_html:
         info_lines.extend([prepend_html, ''])
@@ -55,14 +55,18 @@ def build_key_details_replacements(
         f"<b>Действует до:</b> {_safe(expires)}",
     ])
 
+    key_info = '\n'.join(info_lines)
+    key_history = build_key_history_block(payments)
     return {
-        KEY_INFO_PLACEHOLDER: '\n'.join(info_lines),
-        KEY_HISTORY_PLACEHOLDER: build_key_history_block(payments),
+        '%key_info%': key_info,
+        '%key_history%': key_history,
+        KEY_INFO_PLACEHOLDER: key_info,
+        KEY_HISTORY_PLACEHOLDER: key_history,
     }
 
 
 def build_key_history_block(payments: Iterable[Mapping[str, Any]]) -> str:
-    """Собирает блок истории операций ключа."""
+    """Collects a block of the key's operation history."""
     payment_rows = list(payments or [])
     if not payment_rows:
         return ''
@@ -100,7 +104,7 @@ def build_key_history_block(payments: Iterable[Mapping[str, Any]]) -> str:
 
 
 def build_replace_server_select_data() -> str:
-    """Описание стартового экрана замены ключа."""
+    """Description of the key replacement start screen."""
     return (
         "Вы можете пересоздать ключ на другом или том же сервере.\n"
         "Старый ключ будет удалён, но срок действия сохранится."
@@ -108,7 +112,7 @@ def build_replace_server_select_data() -> str:
 
 
 def build_server_screen_data(server: Mapping[str, Any]) -> str:
-    """Готовит блок с выбранным сервером."""
+    """Prepares a block with the selected server."""
     return f"<b>Сервер:</b> {_safe(server.get('name'), 'Не выбран')}"
 
 
@@ -118,7 +122,7 @@ def build_replace_confirm_data(
     *,
     subscription_mode: bool,
 ) -> str:
-    """Готовит блок подтверждения замены ключа."""
+    """Prepares a key replacement confirmation block."""
     lines = [
         f"Ключ: <b>{_safe(key.get('display_name'), 'VPN-ключ')}</b>",
         f"Новый сервер: <b>{_safe(server.get('name'), 'Не выбран')}</b>",
@@ -138,15 +142,15 @@ def build_replace_confirm_data(
 
 
 def build_key_rename_data(key: Mapping[str, Any]) -> str:
-    """Готовит блок текущего имени ключа для переименования."""
+    """Prepares the current key name block for renaming."""
     return f"Текущее имя: <b>{_safe(key.get('display_name'), 'VPN-ключ')}</b>"
 
 
 def build_new_key_server_select_data() -> str:
-    """Описание выбора сервера после оплаты."""
+    """Description of server selection after payment."""
     return "🔑 Теперь выберите сервер для вашего нового ключа."
 
 
 def build_new_key_server_back_data() -> str:
-    """Описание выбора сервера при возврате со следующего шага."""
+    """Description of server selection when returning from the next step."""
     return "🔑 Выберите сервер для вашего нового ключа."

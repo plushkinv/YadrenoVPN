@@ -1,5 +1,5 @@
 """
-Текстовые сообщения бота.
+Bot text messages.
 """
 
 MISSING_TARIFF_MESSAGE = (

@@ -11,7 +11,7 @@ router = Router()
 
 @router.callback_query(F.data == 'trial_subscription')
 async def show_trial_subscription(callback: CallbackQuery):
-    """Показывает страницу пробной подписки."""
+    """Shows the trial subscription page."""
     from database.requests import is_trial_enabled, get_trial_tariff_id, has_used_trial
     from bot.utils.page_renderer import render_page
 
@@ -33,7 +33,7 @@ async def show_trial_subscription(callback: CallbackQuery):
 
 @router.callback_query(F.data == 'trial_activate')
 async def activate_trial_subscription(callback: CallbackQuery, state: FSMContext):
-    """Активирует пробную подписку: создаёт ключ через стандартный механизм."""
+    """Activates a trial subscription: creates a key through a standard mechanism."""
     from database.requests import is_trial_enabled, get_trial_tariff_id, has_used_trial, get_tariff_by_id, get_or_create_user, mark_trial_used, create_initial_vpn_key, create_pending_order, complete_order
     from bot.handlers.user.payments.keys_config import start_new_key_config
 
@@ -89,7 +89,7 @@ async def activate_trial_subscription(callback: CallbackQuery, state: FSMContext
     except Exception as hook_err:
         logger.warning(f"Не удалось вызвать lifecycle hooks trial-ключа {key_id}: {hook_err}")
 
-    # Уведомление администраторов об активации пробной подписки
+    # Notifying administrators about trial subscription activation
     try:
         from bot.services.notifications import notify_admins_payment
         from database.requests import find_order_by_order_id

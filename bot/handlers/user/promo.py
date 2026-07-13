@@ -18,7 +18,7 @@ PROMO_STATUS_PAGE_KEY = "promo_status"
 
 
 def default_promo_enter_page_text() -> str:
-    """Дефолтный текст ввода промокода или купона."""
+    """Default text for entering a promotional code or coupon."""
     return (
         "🎟 <b>Промокод</b>\n\n"
         "Отправьте промокод или одноразовый купон одним сообщением.\n\n"
@@ -27,12 +27,12 @@ def default_promo_enter_page_text() -> str:
 
 
 def render_promo_enter_page_text() -> str:
-    """Рендерит текст promo_enter из pages с fallback на дефолт."""
+    """Renders the promo_enter text from pages with fallback set to default."""
     return render_page_text(PROMO_ENTER_PAGE_KEY) or default_promo_enter_page_text()
 
 
 def build_promo_status_page_context(title_html: str, body_html: str) -> dict:
-    """Формирует runtime-контекст результата промокода."""
+    """Generates the runtime context of the promo code result."""
     return {
         'promo_status_title_html': title_html,
         'promo_status_body_html': body_html,
@@ -68,7 +68,7 @@ async def render_promo_status_page(
     append_buttons: list[list[InlineKeyboardButton]] | None = None,
     force_new: bool = False,
 ) -> None:
-    """Рендерит page-backed результат обработки промокода или купона."""
+    """Renders the page-backed result of processing a promotional code or coupon."""
     if body_html is None:
         body_html = escape_html('' if body_text is None else str(body_text))
 
@@ -84,7 +84,7 @@ async def render_promo_status_page(
 @router.callback_query(F.data == "promo_enter")
 @router.callback_query(F.data.startswith("promo_enter:"))
 async def promo_enter_handler(callback: CallbackQuery, state: FSMContext):
-    """Запрашивает промокод или купон у пользователя."""
+    """Requests a promotional code or coupon from the user."""
     key_id = None
     if ":" in callback.data:
         try:
@@ -114,13 +114,14 @@ async def promo_enter_handler(callback: CallbackQuery, state: FSMContext):
         page_key=PROMO_ENTER_PAGE_KEY,
         context={"promo_key_id": key_id},
         append_buttons=_promo_cancel_kb(key_id).inline_keyboard,
+        fallback_text=default_promo_enter_page_text(),
     )
     await callback.answer()
 
 
 @router.message(PromoInput.waiting_for_code, F.text, ~F.text.startswith("/"))
 async def promo_code_input_handler(message: Message, state: FSMContext):
-    """Сохраняет активный промокод пользователя."""
+    """Saves the user's active promo code."""
     from bot.services.promotions import activate_promo_code_for_user
 
     data = await state.get_data()

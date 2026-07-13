@@ -1,5 +1,5 @@
 """
-Подключение роутеров админ-панели.
+Connecting admin panel routers.
 """
 from aiogram import Router
 

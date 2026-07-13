@@ -4,19 +4,19 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 
 class VPNAPIError(Exception):
-    """Ошибка при работе с VPN API."""
+    """Error when working with VPN API."""
     pass
 
 @dataclass(frozen=True)
 class PanelDatabaseBackup:
-    """Скачанный backup-файл панели и его фактический формат."""
+    """The downloaded backup file of the panel and its actual format."""
 
     data: bytes
     extension: str
     db_kind: str
 
 class BaseVPNClient(abc.ABC):
-    """Базовый клиент для работы с VPN-панелями."""
+    """Basic client for working with VPN panels."""
     
     def __init__(self, server: dict):
         pass

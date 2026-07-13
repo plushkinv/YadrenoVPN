@@ -1,7 +1,7 @@
 """
-Роутер раздела «Реферальная система» для пользователей.
+Router of the “Referral system” section for users.
 
-Отображение реферальной ссылки и статистики по уровням.
+Displaying referral links and statistics by level.
 """
 import logging
 from aiogram import Router, F
@@ -19,29 +19,29 @@ router = Router()
 
 
 def format_price_compact(cents: int) -> str:
-    """Форматирует копейки в компактную строку рублей."""
+    """Formats kopecks into a compact ruble string."""
     from bot.utils.page_dynamic_data import format_price_compact as _format_price_compact
 
     return _format_price_compact(cents)
 
 
 def _build_stats_text(user_internal_id: int) -> str:
-    """Формирует блок статистики для плейсхолдера %реферальная_статистика%.
+    """Generates a statistics block for the referral statistics placeholder.
     
-    Показывает только включённые уровни и (при reward_type='balance') баланс.
+    Shows only enabled levels and (if reward_type='balance') balance.
     
     Args:
-        user_internal_id: Внутренний ID пользователя
+        user_internal_id: Internal user ID
     
     Returns:
-        HTML-текст блока статистики
+        HTML text of the statistics block
     """
     return build_referral_stats_text(user_internal_id)
 
 
 @router.callback_query(F.data == "referral_system")
 async def show_referral_system(callback: CallbackQuery):
-    """Показывает раздел реферальной системы."""
+    """Shows the referral system section."""
     from bot.utils.page_renderer import render_page
 
     telegram_id = callback.from_user.id

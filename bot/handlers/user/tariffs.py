@@ -12,7 +12,7 @@ router = Router()
 
 @router.message(Command('buy'))
 async def cmd_buy(message: Message):
-    """Обработчик команды /buy — открывает страницу покупки ключа."""
+    """Command handler /buy - opens the key purchase page."""
     if is_user_banned(message.from_user.id):
         await render_access_blocked_page(message, force_new=True)
         return
@@ -20,10 +20,10 @@ async def cmd_buy(message: Message):
 
 
 async def _render_buy_page(target):
-    """Рендерит страницу покупки ключа.
+    """Renders the key purchase page.
 
     Args:
-        target: Message или CallbackQuery
+        target: Message or CallbackQuery
     """
     from database.requests import (
         is_crypto_configured, is_stars_enabled, is_cards_enabled,
@@ -48,7 +48,7 @@ async def _render_buy_page(target):
     cardlink_enabled = is_cardlink_configured()
     demo_enabled = is_demo_payment_enabled()
 
-    # Проверка: хотя бы один способ оплаты настроен
+    # Verification: at least one payment method is configured
     if not crypto_configured and not stars_enabled and not cards_enabled and not yookassa_qr and not wata_enabled and not platega_enabled and not cardlink_enabled and not demo_enabled:
         await render_page(
             target,
@@ -57,13 +57,13 @@ async def _render_buy_page(target):
         )
         return
 
-    # Создаём pending order для контекста system-кнопок
+    # Create a pending order for the context of system buttons
     user_id = get_user_internal_id(telegram_id)
     order_id = None
     if user_id:
         (_, order_id) = create_pending_order(user_id=user_id, tariff_id=None, payment_type=None, vpn_key_id=None)
 
-    # Контекст для system-кнопок оплаты
+    # Context for system payment buttons
     context = {
         'order_id': order_id,
         'telegram_id': telegram_id,
@@ -79,6 +79,6 @@ async def _render_buy_page(target):
 
 @router.callback_query(F.data == 'buy_key')
 async def buy_key_handler(callback: CallbackQuery):
-    """Страница «Купить ключ» с условиями и способами оплаты."""
+    """“Buy a key” page with terms and payment methods."""
     await _render_buy_page(callback)
     await callback.answer()

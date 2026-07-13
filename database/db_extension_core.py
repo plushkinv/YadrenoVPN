@@ -1,4 +1,4 @@
-"""Idempotency log core-команд, доступных custom extensions через facade."""
+"""Idempotency log core commands available with custom extensions via facade."""
 from __future__ import annotations
 
 import json
@@ -18,7 +18,7 @@ _PUBLIC_STATUSES = {'pending', 'applied', 'already_applied', 'no_op', 'rejected'
 
 
 def create_extension_core_operation_table(conn: sqlite3.Connection) -> None:
-    """Создаёт журнал идемпотентности extension facade-команд."""
+    """Creates a log of idempotency extension facade commands."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS extension_core_operations (
@@ -48,10 +48,10 @@ def claim_extension_core_operation(
     reason: str,
 ) -> dict[str, Any]:
     """
-    Регистрирует facade-команду как pending или возвращает существующий результат.
+    Registers a facade command as pending or returns an existing result.
 
-    DB-слой здесь не меняет доменные таблицы: он отвечает только за
-    идемпотентность и диагностику facade-команд.
+    The DB layer here does not change domain tables: it is only responsible for
+    idempotency and diagnostics of facade commands.
     """
     ext_id = normalize_extension_id(extension_id)
     key = _normalize_idempotency_key(idempotency_key)
@@ -99,7 +99,7 @@ def finalize_extension_core_operation(
     status: str,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Фиксирует итог уже заявленной facade-команды."""
+    """Fixes the result of an already declared facade command."""
     ext_id = normalize_extension_id(extension_id)
     key = _normalize_idempotency_key(idempotency_key)
     status_value = _normalize_status(status)
@@ -138,7 +138,7 @@ def get_extension_core_operation(
     extension_id: str,
     idempotency_key: str,
 ) -> dict[str, Any] | None:
-    """Возвращает запись журнала facade-команды."""
+    """Returns the log entry of the facade command."""
     ext_id = normalize_extension_id(extension_id)
     key = _normalize_idempotency_key(idempotency_key)
     with get_db() as conn:

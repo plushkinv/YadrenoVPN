@@ -1,4 +1,4 @@
-"""Registry декларативных callback-actions для custom extensions."""
+"""Registry of declarative callback-actions for custom extensions."""
 from __future__ import annotations
 
 import inspect
@@ -22,6 +22,7 @@ ExtensionCallbackHandler = Callable[
 ]
 
 EXTENSION_CALLBACK_HANDLERS: dict[str, ExtensionCallbackHandler] = {}
+EXTENSION_ACCESS_CHECK_CALLBACKS: set[str] = set()
 
 
 def register_extension_callback_handler(
@@ -30,10 +31,13 @@ def register_extension_callback_handler(
     handler: ExtensionCallbackHandler,
     *,
     replace: bool = False,
+    bypass_user_access_guard: bool = False,
 ) -> str:
-    """Регистрирует callback handler расширения и возвращает action key."""
+    """Registers the extension's callback handler and returns the action key."""
     ext_id = normalize_extension_id(extension_id)
     action = normalize_extension_action_name(action_name)
+    if not isinstance(bypass_user_access_guard, bool):
+        raise ValueError('bypass_user_access_guard must be bool')
     if not isinstance(replace, bool):
         raise ValueError('replace должен быть bool')
     if not callable(handler):
@@ -42,15 +46,28 @@ def register_extension_callback_handler(
     if key in EXTENSION_CALLBACK_HANDLERS and not replace:
         raise ValueError(f"extension callback '{key}' уже зарегистрирован")
     EXTENSION_CALLBACK_HANDLERS[key] = handler
+    if bypass_user_access_guard:
+        EXTENSION_ACCESS_CHECK_CALLBACKS.add(key)
+    else:
+        EXTENSION_ACCESS_CHECK_CALLBACKS.discard(key)
     return key
 
 
 def remove_extension_callback_handlers(extension_id: str, action_keys: set[str]) -> None:
-    """Удаляет runtime callback handlers конкретного расширения."""
+    """Removes runtime callback handlers for a specific extension."""
     ext_id = normalize_extension_id(extension_id)
     for key in set(action_keys):
         if key.startswith(f'{ext_id}.'):
             EXTENSION_CALLBACK_HANDLERS.pop(key, None)
+            EXTENSION_ACCESS_CHECK_CALLBACKS.discard(key)
+
+
+def is_extension_access_check_callback(callback_data: Any) -> bool:
+    """Returns whether callback_data belongs to an access-check extension callback."""
+    parsed = parse_extension_callback_data(callback_data)
+    if not parsed:
+        return False
+    return parsed.get('action_key') in EXTENSION_ACCESS_CHECK_CALLBACKS
 
 
 def build_extension_callback_data(
@@ -58,7 +75,7 @@ def build_extension_callback_data(
     action_name: str,
     payload: str | None = None,
 ) -> str:
-    """Собирает callback_data вида `ext:<extension>.<action>[:payload]`."""
+    """Collects callback_data of the form `ext:<extension>.<action>[:payload]`."""
     ext_id = normalize_extension_id(extension_id)
     action = normalize_extension_action_name(action_name)
     if payload is None:
@@ -70,7 +87,7 @@ def build_extension_callback_data(
 
 
 def parse_extension_callback_data(callback_data: Any) -> dict[str, str] | None:
-    """Разбирает callback_data расширения."""
+    """Parses callback_data extensions."""
     if not isinstance(callback_data, str) or not callback_data.startswith(EXT_CALLBACK_PREFIX):
         return None
     body = callback_data[len(EXT_CALLBACK_PREFIX):]
@@ -99,8 +116,8 @@ def parse_extension_callback_data(callback_data: Any) -> dict[str, str] | None:
     }
 
 
-async def dispatch_extension_callback(context: Mapping[str, Any]) -> dict[str, Any]:
-    """Вызывает зарегистрированный extension callback и нормализует результат."""
+async def dispatch_extension_callback(context: Mapping[str, Any], *, bot: Any = None) -> dict[str, Any]:
+    """Calls the registered extension callback and normalizes the result."""
     if not isinstance(context, Mapping):
         raise ValueError('context должен быть mapping')
     action_key = str(context.get('action_key') or '')
@@ -116,9 +133,12 @@ async def dispatch_extension_callback(context: Mapping[str, Any]) -> dict[str, A
             for key in ('extension_id', 'telegram_id', 'action_name', 'payload', 'callback_data')
             if key in context
         }
-        raw_result = handler(handler_context)
-        if inspect.isawaitable(raw_result):
-            raw_result = await raw_result
+        from bot.utils.custom_extensions import _extension_bot_context
+
+        with _extension_bot_context(bot):
+            raw_result = handler(handler_context)
+            if inspect.isawaitable(raw_result):
+                raw_result = await raw_result
         return normalize_extension_callback_result(raw_result)
     except Exception as exc:
         logger.exception("Ошибка extension callback '%s': %s", action_key, exc)
@@ -129,7 +149,7 @@ async def dispatch_extension_callback(context: Mapping[str, Any]) -> dict[str, A
 
 
 def normalize_extension_callback_result(raw_result: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Проверяет декларативный результат callback handler-а."""
+    """Checks the declarative result of a callback handler."""
     if raw_result is None:
         return {}
     if not isinstance(raw_result, Mapping):
@@ -177,9 +197,11 @@ def normalize_extension_callback_payload(payload: Any) -> str:
 
 __all__ = [
     'EXT_CALLBACK_PREFIX',
+    'EXTENSION_ACCESS_CHECK_CALLBACKS',
     'EXTENSION_CALLBACK_HANDLERS',
     'build_extension_callback_data',
     'dispatch_extension_callback',
+    'is_extension_access_check_callback',
     'normalize_extension_action_name',
     'normalize_extension_callback_payload',
     'normalize_extension_callback_result',

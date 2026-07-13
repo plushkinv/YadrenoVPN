@@ -19,28 +19,28 @@ __all__ = [
 
 def get_users_for_broadcast(filter_type: str) -> List[int]:
     """
-    Получает список telegram_id пользователей для рассылки.
+    Gets a list of telegram_id users for mailing.
     
     Args:
-        filter_type: Тип фильтра:
-            - 'all': все не забаненные пользователи
-            - 'active': с активными (непросроченными) ключами
-            - 'inactive': без активных ключей
-            - 'never_paid': никогда не покупали VPN
-            - 'expired': был ключ, но он истёк
+        filter_type: Filter type:
+            - 'all': all non-banned users
+            - 'active': with active (not expired) keys
+            - 'inactive': no active keys
+            - 'never_paid': never purchased a VPN
+            - 'expired': there was a key, but it expired
     
     Returns:
-        Список telegram_id пользователей
+        List of telegram_id users
     """
     with get_db() as conn:
         if filter_type == 'all':
-            # Все не забаненные
+            # All not banned
             cursor = conn.execute("""
                 SELECT telegram_id FROM users
                 WHERE is_banned = 0 AND is_bot_blocked = 0
             """)
         elif filter_type == 'active':
-            # Есть хотя бы один непросроченный ключ
+            # There is at least one unexpired key
             cursor = conn.execute("""
                 SELECT DISTINCT u.telegram_id 
                 FROM users u
@@ -50,7 +50,7 @@ def get_users_for_broadcast(filter_type: str) -> List[int]:
                 AND vk.expires_at > datetime('now')
             """)
         elif filter_type == 'inactive':
-            # Нет активных ключей (либо все истекли, либо никогда не было)
+            # No active keys (either all expired or never existed)
             cursor = conn.execute("""
                 SELECT u.telegram_id 
                 FROM users u
@@ -62,7 +62,7 @@ def get_users_for_broadcast(filter_type: str) -> List[int]:
                 )
             """)
         elif filter_type == 'never_paid':
-            # Никогда не покупали VPN (нет ключей вообще)
+            # Never bought a VPN (no keys at all)
             cursor = conn.execute("""
                 SELECT u.telegram_id 
                 FROM users u
@@ -71,7 +71,7 @@ def get_users_for_broadcast(filter_type: str) -> List[int]:
                 AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
             """)
         elif filter_type == 'expired':
-            # Был ключ, но он уже истёк (и нет активных)
+            # There was a key, but it has already expired (and there are no active ones)
             cursor = conn.execute("""
                 SELECT DISTINCT u.telegram_id 
                 FROM users u
@@ -91,25 +91,25 @@ def get_users_for_broadcast(filter_type: str) -> List[int]:
 
 def count_users_for_broadcast(filter_type: str) -> int:
     """
-    Считает количество пользователей для рассылки.
+    Counts the number of users for the newsletter.
     
     Args:
-        filter_type: Тип фильтра (см. get_users_for_broadcast)
+        filter_type: Filter type (see get_users_for_broadcast)
     
     Returns:
-        Количество пользователей
+        Number of users
     """
     return len(get_users_for_broadcast(filter_type))
 
 def get_expiring_keys(days: int) -> List[Dict[str, Any]]:
     """
-    Получает ключи, истекающие в ближайшие N дней (но ещё не истёкшие).
+    Retrieves keys that will expire in the next N days (but have not yet expired).
     
     Args:
-        days: Количество дней до истечения
+        days: Number of days until expiration
     
     Returns:
-        Список словарей: vpn_key_id, user_telegram_id, expires_at, custom_name, days_left
+        List of dictionaries: vpn_key_id, user_telegram_id, expires_at, custom_name, days_left
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -130,13 +130,13 @@ def get_expiring_keys(days: int) -> List[Dict[str, Any]]:
 
 def is_notification_sent_today(vpn_key_id: int) -> bool:
     """
-    Проверяет, было ли сегодня отправлено уведомление для этого ключа.
+    Checks whether a notification was sent for this key today.
     
     Args:
-        vpn_key_id: ID VPN-ключа
+        vpn_key_id: VPN key ID
     
     Returns:
-        True если уведомление уже отправлено сегодня
+        True if the notification has already been sent today
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -147,10 +147,10 @@ def is_notification_sent_today(vpn_key_id: int) -> bool:
 
 def log_notification_sent(vpn_key_id: int) -> None:
     """
-    Записывает факт отправки уведомления.
+    Records the fact that a notification was sent.
     
     Args:
-        vpn_key_id: ID VPN-ключа
+        vpn_key_id: VPN key ID
     """
     with get_db() as conn:
         conn.execute("""
@@ -161,28 +161,28 @@ def log_notification_sent(vpn_key_id: int) -> None:
 
 def get_keys_stats() -> Dict[str, int]:
     """
-    Получает статистику VPN-ключей.
+    Gets VPN key statistics.
     
     Returns:
-        Словарь со статистикой:
-        - total: всего ключей
-        - active: активных (не истёкших)
-        - expired: истёкших
-        - created_today: созданных за последние 24 часа
+        Dictionary with statistics:
+        - total: total keys
+        - active: active (not expired)
+        - expired: expired
+        - created_today: created in the last 24 hours
     """
     with get_db() as conn:
-        # Всего ключей
+        # Total keys
         cursor = conn.execute("SELECT COUNT(*) as cnt FROM vpn_keys")
         total = cursor.fetchone()['cnt']
         
-        # Активных (не истёкших)
+        # Active (not expired)
         cursor = conn.execute("""
             SELECT COUNT(*) as cnt FROM vpn_keys 
             WHERE expires_at > datetime('now')
         """)
         active = cursor.fetchone()['cnt']
         
-        # Созданных за сутки
+        # Created per day
         cursor = conn.execute("""
             SELECT COUNT(*) as cnt FROM vpn_keys 
             WHERE created_at >= datetime('now', '-1 day')

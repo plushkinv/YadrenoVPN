@@ -1,14 +1,14 @@
 """
-Управление блокировкой обновлений.
+Update blocking management.
 
-Когда блокирующее обновление установлено — обычные обновления
-и автопроверка отключаются, пока не будут выполнены условия разблокировки.
+When a blocking update is installed - regular updates
+and auto-check are disabled until the unlock conditions are met.
 
-Настройка в settings:
-- update_blocked: '1' или '0' — флаг блокировки
+Settings in settings:
+- update_blocked: '1' or '0' - blocking flag
 
-Текст сообщения берётся из bot.blocking_update.BLOCKING_MESSAGE,
-если не задан — используется DEFAULT_BLOCKED_MESSAGE.
+The message text is taken from bot.blocking_update.BLOCKING_MESSAGE,
+if not specified, DEFAULT_BLOCKED_MESSAGE is used.
 """
 import logging
 import importlib
@@ -55,13 +55,13 @@ def clear_update_blocked() -> None:
 
 def try_unblock() -> bool:
     """
-    Проверяет условия разблокировки через bot.blocking_update.
+    Checks unblocking conditions via bot.blocking_update.
 
-    Импортирует модуль, проверяет наличие check_unblock_conditions().
-    Если функция есть и вернула True — снимает блокировку.
+    Imports a module, checks for the presence of check_unblock_conditions().
+    If the function exists and returns True, it releases the lock.
 
     Returns:
-        True если блокировка была снята
+        True if the lock has been removed
     """
     if not is_update_blocked():
         return False

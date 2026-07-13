@@ -36,7 +36,7 @@ def _target_with_message(target, message: Message, from_user=None):
 
 
 def _owner_from_order(order: dict | None) -> tuple[int | None, str | None]:
-    """Определяет владельца нового ключа по внутреннему пользователю заказа."""
+    """Determines the owner of the new key based on the internal user of the order."""
     if not order or not order.get('user_id'):
         return None, None
 
@@ -66,7 +66,7 @@ def _resolve_new_key_owner(
     owner_username: str | None = None,
     state_data: dict | None = None,
 ) -> tuple[int | None, str | None]:
-    """Выбирает владельца ключа: явный параметр/FSM, затем заказ."""
+    """Selects the key owner: explicit parameter/FSM, then order."""
     state_data = state_data or {}
     telegram_id = owner_telegram_id or state_data.get('new_key_owner_telegram_id')
     username = owner_username if owner_username is not None else state_data.get('new_key_owner_username')
@@ -82,7 +82,7 @@ def _resolve_new_key_owner(
 
 
 def _owner_user_stub(telegram_id: int | None, username: str | None):
-    """Минимальный объект пользователя для рендера выдачи ключа."""
+    """Minimum user object for rendering key issuance."""
     if not telegram_id:
         return None
     return SimpleNamespace(id=telegram_id, username=username)
@@ -106,7 +106,7 @@ async def _safe_edit_target(target, text: str, **kwargs):
 
 
 def _build_key_status_parts(text: str) -> tuple[str, str]:
-    """Разделяет короткий plain-text статус на HTML-заголовок и plain-тело."""
+    """Divides a short plain-text status into an HTML header and a plain body."""
     plain = str(text or '').strip()
     first_line, separator, rest = plain.partition('\n')
     indicator = ''
@@ -136,7 +136,7 @@ async def _answer_callback_if_needed(target, *args, **kwargs) -> None:
 
 
 async def _continue_new_key_config(target, state: FSMContext, server: dict, *, force_new: bool = False):
-    """Продолжает настройку ключа после ручного или автоматического выбора сервера."""
+    """Continues key configuration after manual or automatic server selection."""
     from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
     from bot.keyboards.user import new_key_inbound_list_kb
     from bot.states.user_states import NewKeyConfig
@@ -146,7 +146,7 @@ async def _continue_new_key_config(target, state: FSMContext, server: dict, *, f
     server_id = server['id']
     await state.update_data(new_key_server_id=server_id)
 
-    # Subscription mode: выбор inbound не нужен — создаём ключ во всех inbound сразу.
+    # Subscription mode: selecting inbound is not needed - we create a key in all inbounds at once.
     if is_subscription_mode():
         await process_new_key_subscription_final(target, state, server_id)
         return
@@ -161,10 +161,14 @@ async def _continue_new_key_config(target, state: FSMContext, server: dict, *, f
             await process_new_key_final(target, state, server_id, inbounds[0]['id'])
             return
         await state.set_state(NewKeyConfig.waiting_for_inbound)
+        screen_data = build_server_screen_data(server)
         await render_page(
             target,
             page_key='new_key_inbound_select',
-            text_replacements={'%экран_данные%': build_server_screen_data(server)},
+            text_replacements={
+                '%screen_data%': screen_data,
+                '%экран_данные%': screen_data,
+            },
             prepend_buttons=keyboard_rows(new_key_inbound_list_kb(inbounds)),
             force_new=force_new,
         )
@@ -182,8 +186,8 @@ async def start_new_key_config(
     owner_username: str | None = None,
 ):
     """
-    Запускает процесс настройки нового ключа (выбор сервера).
-    Используется как для Stars, так и для Crypto.
+    Starts the process of setting up a new key (server selection).
+    Used for both Stars and Crypto.
     """
     from database.requests import get_active_servers, find_order_by_order_id
     from bot.keyboards.user import new_key_server_list_kb
@@ -221,17 +225,21 @@ async def start_new_key_config(
         )
         await _continue_new_key_config(message, state, servers[0], force_new=True)
         return
+    screen_data = build_new_key_server_select_data()
     await render_page(
         message,
         page_key='new_key_server_select',
-        text_replacements={'%экран_данные%': build_new_key_server_select_data()},
+        text_replacements={
+            '%screen_data%': screen_data,
+            '%экран_данные%': screen_data,
+        },
         prepend_buttons=keyboard_rows(new_key_server_list_kb(servers)),
         force_new=True,
     )
 
 @router.callback_query(F.data.startswith('new_key_server:'))
 async def process_new_key_server_selection(callback: CallbackQuery, state: FSMContext):
-    """Выбор сервера для нового ключа."""
+    """Selecting a server for a new key."""
     from database.requests import get_server_by_id
     server_id = int(callback.data.split(':')[1])
     server = get_server_by_id(server_id)
@@ -243,11 +251,11 @@ async def process_new_key_server_selection(callback: CallbackQuery, state: FSMCo
 
 async def process_new_key_subscription_final(target, state: FSMContext, server_id: int):
     """
-    Финальный этап создания ключа в режиме Subscription.
+    The final stage of creating a key in Subscription mode.
 
-    Создаёт клиента во ВСЕХ inbound сервера с одним subId и одним email.
-    В БД сохраняется только одна запись vpn_keys с panel_inbound_id=min_id
-    и sub_id, который объединяет всех клиентов на панели в одну подписку.
+    Creates a client in ALL inbound servers with one subId and one email.
+    Only one entry vpn_keys with panel_inbound_id=min_id is saved in the database
+    and sub_id, which combines all clients on the panel into one subscription.
     """
     import uuid as _uuid
     from database.requests import (
@@ -410,14 +418,14 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
 
 @router.callback_query(F.data.startswith('new_key_inbound:'))
 async def process_new_key_inbound_selection(callback: CallbackQuery, state: FSMContext):
-    """Выбор протокола (inbound) для нового ключа."""
+    """Selecting a protocol (inbound) for the new key."""
     inbound_id = int(callback.data.split(':')[1])
     data = await state.get_data()
     server_id = data.get('new_key_server_id')
     await process_new_key_final(callback, state, server_id, inbound_id)
 
 async def process_new_key_final(target, state: FSMContext, server_id: int, inbound_id: int):
-    """Финальный этап создания ключа."""
+    """The final stage of key creation."""
     from database.requests import get_server_by_id, update_vpn_key_config, update_payment_key_id, find_order_by_order_id, get_user_internal_id, get_key_details_for_user, create_initial_vpn_key
     from bot.services.vpn_api import get_client
     from bot.handlers.admin.users_keys import generate_unique_email
@@ -482,7 +490,7 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
         panel_email = generate_unique_email(user_fake_dict)
         client = await get_client(server_id)
         days = order.get('period_days') or order.get('duration_days') or 30
-        # Лимит трафика из тарифа (0 = безлимит на панели)
+        # Traffic limit from the tariff (0 = unlimited on the panel)
         from database.requests import get_tariff_by_id as _get_tariff_for_limit
         _tariff_data = _get_tariff_for_limit(order['tariff_id'])
         limit_gb = (_tariff_data.get('traffic_limit_gb', 0) or 0) if _tariff_data else 0
@@ -525,7 +533,7 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
 
 @router.callback_query(F.data == 'back_to_server_select')
 async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
-    """Возврат к выбору сервера."""
+    """Return to server selection."""
     from database.requests import get_active_servers, find_order_by_order_id
     from bot.keyboards.user import new_key_server_list_kb
     from bot.states.user_states import NewKeyConfig
@@ -540,9 +548,13 @@ async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
         tariff_id = order.get('tariff_id') if order else None
     servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
     await state.set_state(NewKeyConfig.waiting_for_server)
+    screen_data = build_new_key_server_back_data()
     await render_page(
         callback,
         page_key='new_key_server_select',
-        text_replacements={'%экран_данные%': build_new_key_server_back_data()},
+        text_replacements={
+            '%screen_data%': screen_data,
+            '%экран_данные%': screen_data,
+        },
         prepend_buttons=keyboard_rows(new_key_server_list_kb(servers)),
     )

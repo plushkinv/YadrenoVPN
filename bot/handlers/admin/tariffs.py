@@ -1,12 +1,12 @@
 """
-Роутер управления тарифами.
+Tariff management router.
 
-Обрабатывает:
-- Список тарифов
-- Добавление тарифа (пошаговый диалог)
-- Просмотр тарифа
-- Редактирование (листание параметров)
-- Скрытие/показ (soft delete)
+Processes:
+- List of tariffs
+- Adding a tariff (step-by-step dialogue)
+- View tariff
+- Editing (scrolling through parameters)
+- Hide/show (soft delete)
 """
 import logging
 from aiogram import Router, F
@@ -51,14 +51,14 @@ router = Router()
 
 
 # ============================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# AUXILIARY FUNCTIONS
 # ============================================================================
 
 
 
 
 def format_tariff_value(param: dict, value) -> str:
-    """Форматирует значение параметра для отображения."""
+    """Formats the parameter value for display."""
     if value is None:
         return "—"
     if 'format' in param:
@@ -67,18 +67,18 @@ def format_tariff_value(param: dict, value) -> str:
 
 
 # ============================================================================
-# СПИСОК ТАРИФОВ
+# LIST OF RATES
 # ============================================================================
 
 @router.callback_query(F.data == "admin_tariffs")
 async def show_tariffs_list(callback: CallbackQuery, state: FSMContext):
-    """Показывает список тарифов."""
+    """Shows a list of tariffs."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
     await state.set_state(AdminStates.tariffs_list)
-    await state.update_data(tariff_data={})  # Очищаем временные данные
+    await state.update_data(tariff_data={})  # Clearing temporary data
     
     tariffs = get_all_tariffs(include_hidden=True)
     
@@ -117,7 +117,7 @@ async def show_tariffs_list(callback: CallbackQuery, state: FSMContext):
 
 
 async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext):
-    """Отрисовывает экран просмотра тарифа."""
+    """Draws the tariff viewing screen."""
     tariff = get_tariff_by_id(tariff_id)
     
     if not tariff:
@@ -138,17 +138,17 @@ async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext
         f"📅 Длительность: <code>{tariff['duration_days']} дней</code>",
     ]
     
-    # Лимит трафика
+    # Traffic limit
     traffic_gb = tariff.get('traffic_limit_gb', 0)
     traffic_text = f"{traffic_gb} ГБ" if traffic_gb > 0 else "Безлимит"
     lines.append(f"📦 Лимит трафика: <code>{traffic_text}</code>")
     
-    # Лимит устройств
+    # Device limit
     max_ips = tariff.get('max_ips', 1)
     ips_text = f"{max_ips} устр."
     lines.append(f"💻 Лимит устройств: <code>{ips_text}</code>")
     
-    # Группа (показываем только если > 1 группы)
+    # Group (only shown if > 1 group)
     groups_count = get_groups_count()
     if groups_count > 1:
         group = get_group_by_id(tariff.get('group_id', 1))
@@ -167,12 +167,12 @@ async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext
 
 
 # ============================================================================
-# ПРОСМОТР ТАРИФА
+# VIEW TARIFF
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_tariff_view:"))
 async def show_tariff_view(callback: CallbackQuery, state: FSMContext):
-    """Показывает детали тарифа."""
+    """Shows tariff details."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -184,18 +184,18 @@ async def show_tariff_view(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Тариф не найден", show_alert=True)
         return
     
-    # Используем helper для отрисовки
+    # Using helper for rendering
     await render_tariff_view(callback.message, tariff_id, state)
     await callback.answer()
 
 
 # ============================================================================
-# СКРЫТИЕ/ПОКАЗ ТАРИФА
+# HIDING/SHOWING RATE
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_tariff_toggle:"))
 async def toggle_tariff(callback: CallbackQuery, state: FSMContext):
-    """Переключает видимость тарифа."""
+    """Toggles the visibility of the tariff."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -210,16 +210,16 @@ async def toggle_tariff(callback: CallbackQuery, state: FSMContext):
     status_text = "показан 👁️" if new_status else "скрыт 👁️‍🗨️"
     await callback.answer(f"Тариф {status_text}")
     
-    # Обновляем экран просмотра
-    # Обновляем экран просмотра
+    # Refresh the viewing screen
+    # Refresh the viewing screen
     await render_tariff_view(callback.message, tariff_id, state)
 
 
 # ============================================================================
-# ДОБАВЛЕНИЕ ТАРИФА
+# ADDING A RATE
 # ============================================================================
 
-# Состояния добавления в порядке
+# Add states are ok
 ADD_TARIFF_STATES = [
     AdminStates.add_tariff_name,
     AdminStates.add_tariff_price_cents,
@@ -232,7 +232,7 @@ ADD_TARIFF_STATES = [
 
 
 def get_add_step_state(step: int) -> AdminStates:
-    """Возвращает состояние для шага добавления."""
+    """Returns the status for the add step."""
     params = get_tariff_params_list()
     params = [p for p in params if p['key'] != 'display_order']
     if step <= 0:
@@ -240,7 +240,7 @@ def get_add_step_state(step: int) -> AdminStates:
     if step > len(params):
         return AdminStates.add_tariff_confirm
     
-    # Находим соответствующее состояние по key
+    # Find the corresponding state by key
     param = params[step - 1]
     key = param['key']
     
@@ -252,16 +252,16 @@ def get_add_step_state(step: int) -> AdminStates:
         'duration_days': AdminStates.add_tariff_duration,
         'traffic_limit_gb': AdminStates.add_tariff_traffic_limit,
         'max_ips': AdminStates.add_tariff_max_ips,
-        'display_order': AdminStates.add_tariff_confirm,  # display_order пропускаем при добавлении
+        'display_order': AdminStates.add_tariff_confirm,  # display_order is skipped when adding
     }
     
     return state_map.get(key, AdminStates.add_tariff_confirm)
 
 
 def get_add_step_text(step: int, data: dict) -> str:
-    """Формирует текст для шага добавления тарифа."""
+    """Generates text for the step of adding a tariff."""
     params = get_tariff_params_list()
-    # Убираем display_order из добавления (он будет 0 по умолчанию)
+    # Remove display_order from adding (it will be 0 by default)
     params = [p for p in params if p['key'] != 'display_order']
     total = len(params)
     
@@ -272,7 +272,7 @@ def get_add_step_text(step: int, data: dict) -> str:
     
     lines = [f"📝 <b>Добавление тарифа ({step}/{total})</b>\n"]
     
-    # Показываем уже введённые данные
+    # Showing already entered data
     for i in range(step - 1):
         p = params[i]
         value = data.get(p['key'], '—')
@@ -285,7 +285,7 @@ def get_add_step_text(step: int, data: dict) -> str:
     lines.append(f"Введите <b>{param['label'].lower()}</b>:")
     lines.append(f"_({param['hint']})_")
     
-    # Если есть дополнительная справка
+    # If there is additional help
     if param.get('help'):
         lines.append(f"\n{param['help']}")
     
@@ -294,13 +294,13 @@ def get_add_step_text(step: int, data: dict) -> str:
 
 @router.callback_query(F.data == "admin_tariff_add")
 async def start_add_tariff(callback: CallbackQuery, state: FSMContext):
-    """Начинает диалог добавления тарифа."""
+    """Starts the dialog for adding a tariff."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
     
-    # Если > 1 группы — сначала выбираем группу
+    # If > 1 group, first select the group
     groups_count = get_groups_count()
     if groups_count > 1:
         groups = get_all_groups()
@@ -315,7 +315,7 @@ async def start_add_tariff(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Одна группа — сразу к вводу данных
+    # One group - straight to data entry
     await state.set_state(AdminStates.add_tariff_name)
     await state.update_data(tariff_data={}, add_step=1, selected_group_id=1)
     
@@ -334,7 +334,7 @@ async def start_add_tariff(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminStates.tariff_select_group, F.data.startswith("tariff_group_select:"))
 async def tariff_group_selected(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора группы для нового тарифа."""
+    """Processing group selection for a new tariff."""
     group_id = int(callback.data.split(":")[1])
     
     data = await state.get_data()
@@ -360,7 +360,7 @@ async def tariff_group_selected(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_tariff_add_back")
 async def add_tariff_back(callback: CallbackQuery, state: FSMContext):
-    """Возврат на предыдущий шаг добавления."""
+    """Return to the previous adding step."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -369,11 +369,11 @@ async def add_tariff_back(callback: CallbackQuery, state: FSMContext):
     current_step = data.get('add_step', 1)
     
     if current_step <= 1:
-        # Возврат к списку тарифов
+        # Return to tariff list
         await show_tariffs_list(callback, state)
         return
     
-    # На шаг назад
+    # One step back
     new_step = current_step - 1
     new_state = get_add_step_state(new_step)
     await state.set_state(new_state)
@@ -393,7 +393,7 @@ async def add_tariff_back(callback: CallbackQuery, state: FSMContext):
 
 
 async def process_add_tariff_step(message: Message, state: FSMContext):
-    """Обрабатывает ввод на шаге добавления тарифа."""
+    """Processes input at the rate adding step."""
     data = await state.get_data()
     current_step = data.get('add_step', 1)
     tariff_data = data.get('tariff_data', {})
@@ -410,28 +410,28 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
     param = params[current_step - 1]
     value = get_message_text_for_storage(message, 'plain')
     
-    # Валидация
+    # Validation
     if not param['validate'](value):
         await safe_edit_or_send(message,
             f"❌ {param['error']}\n\nПопробуйте ещё раз:"
         )
         return
     
-    # Конвертация
+    # Conversion
     if 'convert' in param:
         value = param['convert'](value)
     
-    # Сохраняем значение
+    # Saving the value
     tariff_data[param['key']] = value
     await state.update_data(tariff_data=tariff_data)
     
-    # Удаляем сообщение
+    # Delete the message
     try:
         await message.delete()
     except:
         pass
     
-    # Переход к следующему шагу или подтверждению
+    # Move to next step or confirmation
     if current_step < total:
         new_step = current_step + 1
         new_state = get_add_step_state(new_step)
@@ -446,7 +446,7 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
             force_new=True
         )
     else:
-        # Все данные введены — показываем подтверждение
+        # All data has been entered - we show confirmation
         await state.set_state(AdminStates.add_tariff_confirm)
         
         price_usd = tariff_data['price_cents'] / 100
@@ -461,12 +461,12 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
             f"📅 Длительность: <code>{tariff_data['duration_days']} дней</code>",
         ]
         
-        # Лимит трафика
+        # Traffic limit
         traffic_gb = tariff_data.get('traffic_limit_gb', 0)
         traffic_text = f"{traffic_gb} ГБ" if traffic_gb > 0 else "Безлимит"
         lines.append(f"📦 Лимит трафика: <code>{traffic_text}</code>")
         
-        # Лимит устройств
+        # Device limit
         max_ips = tariff_data.get('max_ips', 1)
         ips_text = f"{max_ips} устр."
         lines.append(f"💻 Лимит устройств: <code>{ips_text}</code>")
@@ -480,7 +480,7 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
         )
 
 
-# Хендлеры для каждого состояния добавления
+# Handlers for each add state
 @router.message(AdminStates.add_tariff_name)
 async def add_tariff_name_handler(message: Message, state: FSMContext):
     await process_add_tariff_step(message, state)
@@ -521,7 +521,7 @@ async def add_tariff_max_ips_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_tariff_add_save")
 async def add_tariff_save(callback: CallbackQuery, state: FSMContext):
-    """Сохраняет новый тариф."""
+    """Saves the new tariff."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -550,8 +550,8 @@ async def add_tariff_save(callback: CallbackQuery, state: FSMContext):
         
         await callback.answer("✅ Тариф добавлен!")
         
-        # Показываем тариф
-        # Показываем тариф
+        # Showing the tariff
+        # Showing the tariff
         await render_tariff_view(callback.message, tariff_id, state)
         
     except Exception as e:
@@ -564,11 +564,11 @@ async def add_tariff_save(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# РЕДАКТИРОВАНИЕ ТАРИФА
+# EDITING THE TARIFF
 # ============================================================================
 
 def get_edit_tariff_text(tariff: dict, current_param: int) -> str:
-    """Формирует текст для экрана редактирования тарифа."""
+    """Generates text for the tariff editing screen."""
     params = get_tariff_params_list()
     total = len(params)
     
@@ -592,7 +592,7 @@ def get_edit_tariff_text(tariff: dict, current_param: int) -> str:
 
 @router.callback_query(F.data.startswith("admin_tariff_edit:"))
 async def start_edit_tariff(callback: CallbackQuery, state: FSMContext):
-    """Начинает редактирование тарифа."""
+    """Starts editing the tariff."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -619,7 +619,7 @@ async def start_edit_tariff(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_tariff_edit_prev")
 async def edit_tariff_prev(callback: CallbackQuery, state: FSMContext):
-    """Предыдущий параметр при редактировании."""
+    """Previous parameter when editing."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -648,7 +648,7 @@ async def edit_tariff_prev(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_tariff_edit_next")
 async def edit_tariff_next(callback: CallbackQuery, state: FSMContext):
-    """Следующий параметр при редактировании."""
+    """Next parameter when editing."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -677,7 +677,7 @@ async def edit_tariff_next(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.edit_tariff)
 async def edit_tariff_value(message: Message, state: FSMContext):
-    """Обрабатывает ввод нового значения при редактировании."""
+    """Handles the entry of a new value when editing."""
     data = await state.get_data()
     tariff_id = data.get('tariff_id')
     current_param = data.get('edit_param', 0)
@@ -687,31 +687,31 @@ async def edit_tariff_value(message: Message, state: FSMContext):
     param = get_tariff_param_by_index(current_param)
     value = get_message_text_for_storage(message, 'plain')
     
-    # Валидация
+    # Validation
     if not param['validate'](value):
         await safe_edit_or_send(message,
             f"❌ {param['error']}"
         )
         return
     
-    # Конвертация
+    # Conversion
     if 'convert' in param:
         value = param['convert'](value)
     
-    # Сохраняем в БД
+    # Saving in the database
     success = update_tariff_field(tariff_id, param['key'], value)
     
     if not success:
         await safe_edit_or_send(message, "❌ Ошибка сохранения")
         return
     
-    # Удаляем сообщение
+    # Delete the message
     try:
         await message.delete()
     except:
         pass
     
-    # Обновляем экран с новым значением
+    # Refresh the screen with the new value
     tariff = get_tariff_by_id(tariff_id)
     text = get_edit_tariff_text(tariff, current_param)
     total = get_total_tariff_params()
@@ -725,7 +725,7 @@ async def edit_tariff_value(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_tariff_edit_done")
 async def edit_tariff_done(callback: CallbackQuery, state: FSMContext):
-    """Завершение редактирования — возврат к просмотру."""
+    """Finish editing - return to viewing."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -733,24 +733,24 @@ async def edit_tariff_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     tariff_id = data.get('tariff_id')
     
-    # Перенаправляем на просмотр тарифа
-    # Перенаправляем на просмотр тарифа
+    # Redirect to view tariff
+    # Redirect to view tariff
     await render_tariff_view(callback.message, tariff_id, state)
 
 
 @router.callback_query(F.data == "admin_tariff_edit_cancel")
 async def edit_tariff_cancel(callback: CallbackQuery, state: FSMContext):
-    """Отмена редактирования — возврат к просмотру."""
+    """Cancel editing - return to viewing."""
     await edit_tariff_done(callback, state)
 
 
 # ============================================================================
-# ИЗМЕНЕНИЕ ГРУППЫ ТАРИФА
+# CHANGE OF TARIFF GROUP
 # ============================================================================
 
 @router.callback_query(F.data.startswith("admin_tariff_change_group:"))
 async def tariff_change_group_start(callback: CallbackQuery, state: FSMContext):
-    """Показывает список групп для смены группы тарифа."""
+    """Shows a list of groups for changing the tariff group."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -774,7 +774,7 @@ async def tariff_change_group_start(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("tariff_group_change:"))
 async def tariff_change_group_execute(callback: CallbackQuery, state: FSMContext):
-    """Меняет группу тарифа."""
+    """Changes the tariff group."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -794,5 +794,5 @@ async def tariff_change_group_execute(callback: CallbackQuery, state: FSMContext
     
     await callback.answer(f"✅ Группа изменена на «{group_name}»")
     
-    # Обновляем экран просмотра тарифа
+    # Updating the tariff viewing screen
     await render_tariff_view(callback.message, tariff_id, state)

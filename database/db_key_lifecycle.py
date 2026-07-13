@@ -1,4 +1,4 @@
-"""Идемпотентный лог событий жизненного цикла ключей."""
+"""Idempotent key life cycle event log."""
 from __future__ import annotations
 
 import json
@@ -16,7 +16,7 @@ __all__ = [
 
 
 def get_pending_expired_key_events(limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Возвращает истёкшие ключи, для которых key_expired ещё не записан."""
+    """Returns expired keys for which key_expired has not yet been written."""
     sql = """
         SELECT
             vk.*,
@@ -54,7 +54,7 @@ def record_key_lifecycle_event_once(
     event_token: str,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Записывает lifecycle-событие один раз и возвращает True только при первой записи."""
+    """Writes a lifecycle event once and returns True only the first time it is written."""
     metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
     with get_db() as conn:
         cursor = conn.execute(

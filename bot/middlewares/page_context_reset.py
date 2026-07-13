@@ -1,4 +1,4 @@
-"""Сброс контекста /yaa при переходе по пользовательской части бота."""
+"""Resetting the /yaa context when navigating through the user part of the bot."""
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
@@ -10,11 +10,11 @@ from config import ADMIN_IDS
 
 class ResetAdminPageContextMiddleware(BaseMiddleware):
     """
-    Перед любым новым действием в пользовательской части очищает старый контекст.
+    Before any new action in the user part, the old context is cleared.
 
-    Если обработчик снова рендерит поддерживаемую страницу через render_page(),
-    новый контекст будет записан уже после фактического рендера. Поэтому /yaa
-    не сможет случайно отработать по странице, с которой администратор уже ушёл.
+    If the handler renders the supported page again via render_page(),
+    the new context will be written after the actual rendering. Therefore /yaa
+    will not be able to accidentally work on a page from which the administrator has already left.
     """
 
     async def __call__(

@@ -1,11 +1,11 @@
 """
-Роутер раздела «Реферальная система».
+Router of the “Referral system” section.
 
-Настройка реферальной программы:
-- Включение/выключение
-- Режим начисления (дни/баланс)
-- Настройка уровней (1-3)
-- Текст условий
+Setting up a referral program:
+- On/off
+- Accrual mode (days/balance)
+- Setting levels (1-3)
+- Text of conditions
 """
 import logging
 from aiogram import Router, F
@@ -39,7 +39,7 @@ router = Router()
 
 
 async def show_referral_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает главное меню реферальной системы."""
+    """Shows the main menu of the referral system."""
     await state.set_state(AdminStates.referral_menu)
     
     enabled = is_referral_enabled()
@@ -107,7 +107,7 @@ async def show_referral_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_referral")
 async def admin_referral(callback: CallbackQuery, state: FSMContext):
-    """Вход в раздел реферальной системы."""
+    """Login to the referral system section."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -117,7 +117,7 @@ async def admin_referral(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_referral_toggle")
 async def referral_toggle(callback: CallbackQuery, state: FSMContext):
-    """Переключение реферальной системы."""
+    """Switching the referral system."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -134,7 +134,7 @@ async def referral_toggle(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_referral_toggle_type")
 async def referral_toggle_type(callback: CallbackQuery, state: FSMContext):
-    """Переключение режима начисления."""
+    """Switching the accrual mode."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -153,7 +153,7 @@ async def referral_toggle_type(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.regexp(r"^admin_referral_level:(\d+)$"))
 async def referral_level_view(callback: CallbackQuery, state: FSMContext):
-    """Просмотр уровня."""
+    """View the level."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -192,7 +192,7 @@ async def referral_level_view(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.regexp(r"^admin_referral_level_toggle:(\d+)$"))
 async def referral_level_toggle(callback: CallbackQuery, state: FSMContext):
-    """Переключение уровня."""
+    """Level switching."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -221,7 +221,7 @@ async def referral_level_toggle(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.regexp(r"^admin_referral_level_percent:(\d+)$"))
 async def referral_level_percent_start(callback: CallbackQuery, state: FSMContext):
-    """Запрос нового процента для уровня."""
+    """Request a new percentage for a level."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -260,7 +260,7 @@ async def referral_level_percent_start(callback: CallbackQuery, state: FSMContex
 
 @router.message(AdminStates.referral_level_edit)
 async def referral_level_percent_input(message: Message, state: FSMContext):
-    """Обработка ввода нового процента."""
+    """Processing the entry of a new percentage."""
     if not is_admin(message.from_user.id):
         return
     
@@ -313,7 +313,7 @@ async def referral_level_percent_input(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_referral_conditions")
 async def referral_conditions_start(callback: CallbackQuery, state: FSMContext):
-    """Редактирование текста условий через универсальный редактор."""
+    """Editing the text of conditions using a universal editor."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return

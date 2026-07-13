@@ -1,7 +1,7 @@
 """
-Точка входа VPN Telegram бота.
+VPN Telegram bot entry point.
 
-Инициализирует бота, диспетчер, применяет миграции и запускает polling.
+Initializes the bot, dispatcher, applies migrations and starts polling.
 """
 import asyncio
 import logging
@@ -18,16 +18,16 @@ from database.migrations import run_migrations
 from bot.services.vpn_api import close_all_clients
 from bot.services.scheduler import run_daily_tasks, run_update_check_scheduler, run_traffic_sync_scheduler
 
-# Импорт роутеров
+# Importing routers
 from bot.handlers.user import router as user_router
 from bot.handlers.admin import admin_router
 
 
-# Создаём папку для логов если её нет (важно сделать до basicConfig)
+# Create a folder for logs if it doesn’t exist (it’s important to do this before basicConfig)
 os.makedirs("logs", exist_ok=True)
 
 
-# Настройка логирования
+# Setting up logging
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] [%(levelname)s] [%(name)s] - %(message)s",
@@ -35,14 +35,14 @@ logging.basicConfig(
         logging.StreamHandler(),
         RotatingFileHandler(
             "logs/bot.log", 
-            maxBytes=1024 * 1024,  # 1 мегабайт
+            maxBytes=1024 * 1024,  # 1 megabyte
             backupCount=3, 
             encoding="utf-8"
         )
     ]
 )
 
-# Уменьшаем шум от aiohttp
+# Reducing noise from aiohttp
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
@@ -52,10 +52,10 @@ logger = logging.getLogger(__name__)
 
 
 async def on_startup(bot: Bot):
-    """Действия при запуске бота."""
+    """Actions when starting a bot."""
     logger.info("🚀 Бот запускается...")
     
-    # Применяем миграции БД
+    # Applying database migrations
     run_migrations()
 
     from bot.utils.custom_extensions import load_custom_extensions
@@ -76,12 +76,18 @@ async def on_startup(bot: Bot):
     except Exception as e:
         logger.warning(f"Не удалось запустить custom payment webhook server: {e}")
     
-    # Информация о боте
+    # Bot information
     bot_info = await bot.get_me()
     bot.my_username = bot_info.username
+    try:
+        from bot.services.bot_commands import sync_bot_commands
+
+        await sync_bot_commands(bot)
+    except Exception as e:
+        logger.warning(f"Failed to sync Telegram bot command menu: {e}")
     logger.info(f"✅ Бот запущен: @{bot_info.username}")
     
-    # Если обновления заблокированы — сразу уведомляем админов
+    # If updates are blocked, we immediately notify the admins
     from bot.utils.update_block import is_update_blocked, get_blocked_message
     if is_update_blocked():
         from config import ADMIN_IDS
@@ -113,7 +119,7 @@ async def on_startup(bot: Bot):
 
 
 async def on_shutdown(bot: Bot):
-    """Действия при остановке бота."""
+    """Actions to take when stopping the bot."""
     logger.info("🛑 Бот останавливается...")
 
     webhook_server = getattr(bot, 'custom_payment_webhook_server', None)
@@ -123,18 +129,18 @@ async def on_shutdown(bot: Bot):
         except Exception as e:
             logger.warning(f"Не удалось остановить custom payment webhook server: {e}")
     
-    # Закрываем все VPN API сессии
+    # Close all VPN API sessions
     await close_all_clients()
     
     logger.info("✅ Бот остановлен")
 
 
 async def main():
-    """Главная функция запуска бота."""
-    # Импортируем кастомную сессию с fallback для ошибок Markdown
+    """The main function of launching the bot."""
+    # Importing a custom session with fallback for Markdown errors
     from bot.middlewares.parse_mode_fallback import SafeParseSession
     
-    # Создаём бота с кастомной сессией и диспетчер
+    # Creating a bot with a custom session and a dispatcher
     session = SafeParseSession()
     bot = Bot(token=BOT_TOKEN, session=session)
     storage = MemoryStorage()
@@ -145,40 +151,40 @@ async def main():
     dp.message.outer_middleware(bot_blocked_reset)
     dp.callback_query.outer_middleware(bot_blocked_reset)
     
-    # Регистрируем роутеры
-    # Порядок важен: сначала более специфичные, потом общие
-    dp.include_router(admin_router)           # Админ-панель (общая)
-    dp.include_router(user_router)            # Пользователь (имеет строгий внутренний порядок)
+    # Registering routers
+    # The order is important: first the more specific, then the general
+    dp.include_router(admin_router)           # Admin panel (general)
+    dp.include_router(user_router)            # User (has a strict internal order)
     
-    # Глобальный обработчик ошибок сети
+    # Global Network Error Handler
     from aiogram.exceptions import TelegramNetworkError
     from aiogram.types import ErrorEvent
     
     @dp.errors()
     async def global_error_handler(event: ErrorEvent):
-        """Перехватывает сетевые ошибки Telegram API и пишет короткий warning."""
+        """Intercepts Telegram API network errors and writes a short warning."""
         exception = event.exception
         if isinstance(exception, TelegramNetworkError):
             logger.warning(f"⚠️ Нет связи с Telegram API: {exception}")
-            return True  # Ошибка обработана, не пробрасываем дальше
-        # Остальные ошибки логируем как обычно
+            return True  # The error has been processed, do not forward it further
+        # We log the rest of the errors as usual
         logger.error(f"Необработанная ошибка: {exception}", exc_info=True)
         return True
     
-    # Регистрируем startup/shutdown
+    # Registering startup/shutdown
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
     
-    # Удаляем старые обновления и запускаем polling
+    # Remove old updates and run polling
     await bot.delete_webhook(drop_pending_updates=True)
     
 
     
-    # Запускаем планировщик ежедневных задач (статистика + бэкапы)
+    # Launch the daily task scheduler (statistics + backups)
     daily_tasks = asyncio.create_task(run_daily_tasks(bot))
-    # Запускаем планировщик проверки обновлений
+    # Launch the update check scheduler
     update_tasks = asyncio.create_task(run_update_check_scheduler(bot))
-    # Запускаем планировщик синхронизации трафика (каждые 5 мин)
+    # Launch the traffic synchronization scheduler (every 5 minutes)
     traffic_tasks = asyncio.create_task(run_traffic_sync_scheduler(bot))
     background_tasks = [daily_tasks, update_tasks, traffic_tasks]
     
@@ -193,7 +199,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Запускаем бота
+    # Let's launch the bot
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):

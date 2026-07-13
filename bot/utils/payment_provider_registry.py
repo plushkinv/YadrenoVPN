@@ -1,4 +1,4 @@
-"""Registry кастомных payment providers для custom extensions."""
+"""Registry of custom payment providers for custom extensions."""
 from __future__ import annotations
 
 import inspect
@@ -53,7 +53,7 @@ ProviderEnabled = bool | Callable[[Mapping[str, Any]], bool]
 
 @dataclass
 class PaymentProvider:
-    """Описание кастомного провайдера, зарегистрированного расширением."""
+    """Description of the custom provider registered by the extension."""
 
     provider_id: str
     payment_type: str
@@ -87,7 +87,7 @@ def register_payment_provider(
     metadata: Mapping[str, Any] | None = None,
     replace: bool = False,
 ) -> PaymentProvider:
-    """Регистрирует кастомный платёжный провайдер расширения."""
+    """Registers a custom payment provider extension."""
     pid = normalize_payment_provider_id(provider_id)
     _require_bool_option(replace, 'replace')
     if not callable(create_payment):
@@ -125,7 +125,7 @@ def register_payment_provider(
 
 
 def normalize_payment_provider_id(provider_id: str) -> str:
-    """Нормализует и валидирует provider_id для payment provider API."""
+    """Normalizes and validates provider_id for the payment provider API."""
     if not isinstance(provider_id, str):
         raise ValueError("provider_id должен быть строкой")
     value = provider_id.strip().casefold()
@@ -137,12 +137,12 @@ def normalize_payment_provider_id(provider_id: str) -> str:
 
 
 def provider_payment_type(provider_id: str) -> str:
-    """Возвращает внутренний payment_type для кастомного провайдера."""
+    """Returns the internal payment_type for a custom provider."""
     return f"ext_{normalize_payment_provider_id(provider_id)}"
 
 
 def is_custom_payment_type(payment_type: str | None) -> bool:
-    """Проверяет, относится ли payment_type к зарегистрированному кастомному провайдеру."""
+    """Checks whether the payment_type refers to a registered custom provider."""
     if not isinstance(payment_type, str):
         return False
     value = payment_type.strip().casefold()
@@ -150,12 +150,12 @@ def is_custom_payment_type(payment_type: str | None) -> bool:
 
 
 def get_payment_provider(provider_id: str) -> PaymentProvider | None:
-    """Возвращает зарегистрированного провайдера по provider_id."""
+    """Returns the registered provider by provider_id."""
     return PAYMENT_PROVIDERS.get(normalize_payment_provider_id(provider_id))
 
 
 def get_payment_provider_by_type(payment_type: str) -> PaymentProvider | None:
-    """Возвращает провайдера по внутреннему payment_type вида ext_<id>."""
+    """Returns the provider by internal payment_type of the form ext_<id>."""
     if not isinstance(payment_type, str):
         return None
     value = payment_type.strip().casefold()
@@ -165,7 +165,7 @@ def get_payment_provider_by_type(payment_type: str) -> PaymentProvider | None:
 
 
 def list_payment_providers(*, enabled_only: bool = False, context: Mapping[str, Any] | None = None) -> list[PaymentProvider]:
-    """Возвращает зарегистрированные payment providers."""
+    """Returns registered payment providers."""
     providers = list(PAYMENT_PROVIDERS.values())
     if enabled_only:
         enabled_context = _normalize_optional_context(context)
@@ -178,7 +178,7 @@ def list_payment_providers(*, enabled_only: bool = False, context: Mapping[str, 
 
 
 def is_payment_provider_enabled(provider_id: str, context: Mapping[str, Any] | None = None) -> bool:
-    """Проверяет, доступен ли провайдер в текущем контексте."""
+    """Checks whether the provider is available in the current context."""
     provider = get_payment_provider(provider_id)
     if provider is None:
         return False
@@ -199,7 +199,7 @@ def is_payment_provider_enabled(provider_id: str, context: Mapping[str, Any] | N
 
 
 async def create_payment(provider_id: str, context: Mapping[str, Any]) -> dict[str, Any]:
-    """Вызывает create_payment зарегистрированного провайдера и нормализует результат."""
+    """Calls create_payment on the registered provider and normalizes the result."""
     provider = get_payment_provider(provider_id)
     if provider is None:
         raise ValueError('payment provider не зарегистрирован')
@@ -210,7 +210,7 @@ async def create_payment(provider_id: str, context: Mapping[str, Any]) -> dict[s
 
 
 async def check_payment(provider_id: str, context: Mapping[str, Any]) -> dict[str, Any]:
-    """Вызывает check_payment зарегистрированного провайдера и нормализует статус."""
+    """Calls check_payment of the registered provider and normalizes the status."""
     provider = get_payment_provider(provider_id)
     if provider is None:
         raise ValueError('payment provider не зарегистрирован')
@@ -221,7 +221,7 @@ async def check_payment(provider_id: str, context: Mapping[str, Any]) -> dict[st
 
 
 async def handle_payment_webhook(provider_id: str, context: Mapping[str, Any]) -> dict[str, Any]:
-    """Вызывает webhook_handler провайдера и нормализует декларативный результат."""
+    """Calls the provider's webhook_handler and normalizes the declarative result."""
     provider = get_payment_provider(provider_id)
     if provider is None:
         raise ValueError('payment provider не зарегистрирован')
@@ -234,7 +234,7 @@ async def handle_payment_webhook(provider_id: str, context: Mapping[str, Any]) -
 
 
 def validate_payment_webhook_secret(provider_id: str, provided_secret: str | None) -> bool:
-    """Проверяет простой shared secret webhook-а, если provider его задал."""
+    """Checks a simple shared secret webhook if the provider has set it."""
     provider = get_payment_provider(provider_id)
     if provider is None:
         return False

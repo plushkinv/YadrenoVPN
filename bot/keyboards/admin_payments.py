@@ -6,24 +6,24 @@ from .admin_misc import back_button, home_button, cancel_button, state_pair_butt
 
 
 def _status_dot(enabled: bool) -> str:
-    """Индикатор состояния для кнопок-строк."""
+    """Status indicator for row buttons."""
     return '🟢' if enabled else '⚪'
 
 def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: bool, qr_enabled: bool=False, monthly_reset_enabled: bool=False, demo_enabled: bool=False, wata_enabled: bool=False, platega_enabled: bool=False, cardlink_enabled: bool=False, notify_enabled: bool=False) -> InlineKeyboardMarkup:
     """
-    Главное меню раздела оплат.
+    Main menu of the payments section.
 
     Args:
-        stars_enabled: Включены ли Telegram Stars
-        crypto_enabled: Включены ли крипто-платежи
-        cards_enabled: Включены ли TG payments (историческое внутреннее имя cards)
-        qr_enabled: Включена ли прямая оплата ЮКасса
-        monthly_reset_enabled: Включён ли ежемесячный автосброс трафика
-        demo_enabled: Включена ли демо-оплата
-        wata_enabled: Включена ли оплата через WATA
-        platega_enabled: Включена ли оплата через Platega
-        cardlink_enabled: Включена ли оплата через Cardlink
-        notify_enabled: Включены ли уведомления об оплатах
+        stars_enabled: Is Telegram Stars enabled?
+        crypto_enabled: Whether crypto payments are enabled
+        cards_enabled: Whether TG payments are enabled (historical internal name cards)
+        qr_enabled: Is YuKass direct payment enabled?
+        monthly_reset_enabled: Is monthly traffic auto-reset enabled?
+        demo_enabled: Is demo payment enabled?
+        wata_enabled: Is payment via WATA enabled?
+        platega_enabled: Is payment via Platega enabled?
+        cardlink_enabled: Whether payment via Cardlink is enabled
+        notify_enabled: Whether payment notifications are enabled
     """
     builder = InlineKeyboardBuilder()
     stars_status = _status_dot(stars_enabled)
@@ -63,10 +63,10 @@ def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: b
 
 def wata_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
     """
-    Меню управления оплатой через WATA.
+    Payment management menu via WATA.
 
     Args:
-        is_enabled: Включена ли WATA-оплата сейчас
+        is_enabled: Is WATA payment enabled now?
     """
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
@@ -83,10 +83,10 @@ def wata_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
 
 def platega_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
     """
-    Меню управления оплатой через Platega.
+    Payment management menu via Platega.
 
     Args:
-        is_enabled: Включена ли Platega-оплата сейчас
+        is_enabled: Is Platega payment enabled now?
     """
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
@@ -104,10 +104,10 @@ def platega_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
 
 def cardlink_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
     """
-    Меню управления оплатой через Cardlink.
+    Payment management menu via Cardlink.
 
     Args:
-        is_enabled: Включена ли Cardlink-оплата сейчас
+        is_enabled: Is Cardlink payment enabled now?
     """
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
@@ -124,10 +124,10 @@ def cardlink_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
 
 def crypto_setup_kb(step: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура для шага настройки крипто-платежей.
+    Keyboard for crypto payment setup step.
     
     Args:
-        step: Текущий шаг (1 = ссылка, 2 = ключ)
+        step: Current step (1 = link, 2 = key)
     """
     builder = InlineKeyboardBuilder()
     buttons = []
@@ -138,14 +138,14 @@ def crypto_setup_kb(step: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def crypto_setup_confirm_kb() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения настроек крипто."""
+    """Keyboard for confirming crypto settings."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='✅ Сохранить и включить', callback_data='admin_crypto_setup_save'))
     builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_crypto_setup_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_payments'))
     return builder.as_markup()
 
 def cards_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
-    """Клавиатура управления TG payments."""
+    """TG payments control keyboard."""
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
         is_enabled,
@@ -160,7 +160,7 @@ def cards_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
 
 
 def qr_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
-    """Клавиатура управления QR-оплатой ЮКасса."""
+    """YuKassa QR payment control keyboard."""
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
         is_enabled,
@@ -177,11 +177,11 @@ def qr_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
 
 def edit_crypto_kb(current_param: int, total_params: int) -> InlineKeyboardMarkup:
     """
-    Клавиатура редактирования крипто-настроек с навигацией.
+    Keyboard for editing crypto settings with navigation.
     
     Args:
-        current_param: Индекс текущего параметра
-        total_params: Общее количество параметров
+        current_param: Index of the current parameter
+        total_params: Total number of parameters
     """
     builder = InlineKeyboardBuilder()
     nav_buttons = []
@@ -199,10 +199,10 @@ def edit_crypto_kb(current_param: int, total_params: int) -> InlineKeyboardMarku
 
 def crypto_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
     """
-    Меню управления крипто-платежами.
+    Menu for managing crypto payments.
     
     Args:
-        is_enabled: Включены ли крипто-платежи сейчас
+        is_enabled: Whether crypto payments are currently enabled
     """
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(

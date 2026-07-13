@@ -1,4 +1,4 @@
-"""Контролируемое хранилище и schema registry для custom extensions."""
+"""Controlled storage and schema registry for custom extensions."""
 from __future__ import annotations
 
 import json
@@ -22,7 +22,7 @@ _ALLOWED_DEFAULT_SQL = {'CURRENT_TIMESTAMP', 'CURRENT_DATE', 'CURRENT_TIME'}
 
 
 def create_extension_support_tables(conn: sqlite3.Connection) -> None:
-    """Создаёт системные таблицы extension storage/schema."""
+    """Creates extension storage/schema system tables."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS extension_schema_versions (
@@ -46,13 +46,13 @@ def create_extension_support_tables(conn: sqlite3.Connection) -> None:
 
 
 def register_extension_schema(extension_id: str, migrations: Sequence[Mapping[str, Any]]) -> None:
-    """Применяет декларативные миграции расширения к рабочей БД."""
+    """Applies declarative extension migrations to the production database."""
     with get_db() as conn:
         apply_extension_schema(conn, extension_id, migrations)
 
 
 def validate_extension_schema_migrations(extension_id: str, migrations: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Проверяет декларативную схему расширения без записи в рабочую БД."""
+    """Checks the declarative extension scheme without writing to the production database."""
     ext_id = normalize_extension_id(extension_id)
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
@@ -68,7 +68,7 @@ def apply_extension_schema(
     extension_id: str,
     migrations: Sequence[Mapping[str, Any]],
 ) -> None:
-    """Применяет декларативную схему расширения к переданному соединению."""
+    """Applies a declarative extension scheme to the passed connection."""
     ext_id = normalize_extension_id(extension_id)
     create_extension_support_tables(conn)
 
@@ -90,12 +90,12 @@ def apply_extension_schema(
 
 
 def get_extension_storage(extension_id: str) -> 'ExtensionStorage':
-    """Возвращает namespaced storage/repository API расширения."""
+    """Returns the extension's namespaced storage/repository API."""
     return ExtensionStorage(extension_id)
 
 
 def normalize_extension_id(extension_id: str) -> str:
-    """Нормализует и валидирует extension_id."""
+    """Normalizes and validates extension_id."""
     if not isinstance(extension_id, str):
         raise ValueError("extension_id должен быть строкой")
     value = extension_id.strip().casefold()
@@ -105,12 +105,12 @@ def normalize_extension_id(extension_id: str) -> str:
 
 
 def extension_table_name(extension_id: str, table_name: str) -> str:
-    """Возвращает физическое имя таблицы расширения."""
+    """Returns the physical name of the extension table."""
     return f"ext_{normalize_extension_id(extension_id)}_{_normalize_local_table_name(table_name)}"
 
 
 class ExtensionStorage:
-    """Namespaced storage расширения без произвольного SQL."""
+    """Namespaced storage extensions without arbitrary SQL."""
 
     def __init__(self, extension_id: str, conn: sqlite3.Connection | None = None):
         self.extension_id = normalize_extension_id(extension_id)
@@ -201,7 +201,7 @@ class ExtensionStorage:
 
 
 class ExtensionTable:
-    """Repository API для одной таблицы расширения."""
+    """Repository API for one extension table."""
 
     def __init__(self, storage: ExtensionStorage, table_name: str):
         self._storage = storage

@@ -1,4 +1,4 @@
-"""Правила data-driven маршрутов конструктора страниц."""
+"""Rules for data-driven page builder routes."""
 from __future__ import annotations
 
 import re
@@ -13,12 +13,12 @@ _ROUTE_KEY_RE = re.compile(r'^[a-z][a-z0-9_]{0,48}$')
 
 
 def is_page_route_key(route_key: object) -> bool:
-    """Проверяет формат ключа маршрута."""
+    """Checks the route key format."""
     return isinstance(route_key, str) and bool(_ROUTE_KEY_RE.fullmatch(route_key))
 
 
 def build_page_route_callback(route_key: object) -> Optional[str]:
-    """Возвращает callback для route, если он валиден и помещается в лимит Telegram."""
+    """Returns a callback for route if it is valid and fits into the Telegram limit."""
     if not is_page_route_key(route_key):
         return None
 
@@ -30,7 +30,7 @@ def build_page_route_callback(route_key: object) -> Optional[str]:
 
 
 def extract_page_route_key(callback_data: object) -> Optional[str]:
-    """Извлекает route_key из callback_data вида `route:<route_key>`."""
+    """Retrieves route_key from callback_data of the form `route:<route_key>`."""
     if not isinstance(callback_data, str):
         return None
     if not callback_data.startswith(PAGE_ROUTE_CALLBACK_PREFIX):
@@ -43,7 +43,7 @@ def extract_page_route_key(callback_data: object) -> Optional[str]:
 
 
 def page_route_exists(route_key: object) -> bool:
-    """Проверяет, что route валиден, есть в БД и включён."""
+    """Checks that the route is valid, is in the database and is enabled."""
     if not is_page_route_key(route_key):
         return False
 

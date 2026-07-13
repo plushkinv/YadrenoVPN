@@ -1,4 +1,4 @@
-"""HTTP endpoint для webhook-ов кастомных payment providers."""
+"""HTTP endpoint for webhooks of custom payment providers."""
 from __future__ import annotations
 
 import json
@@ -27,7 +27,7 @@ BOT_APP_KEY = web.AppKey('custom_payment_webhook_bot', Any)
 
 @dataclass
 class CustomPaymentWebhookServer:
-    """Запущенный aiohttp runner для кастомных payment webhook-ов."""
+    """Launched aiohttp runner for custom payment webhooks."""
 
     runner: web.AppRunner
     host: str
@@ -39,7 +39,7 @@ class CustomPaymentWebhookServer:
 
 
 async def start_custom_payment_webhook_server(bot: Any) -> CustomPaymentWebhookServer | None:
-    """Стартует webhook HTTP-server, если он включён в settings."""
+    """The HTTP-server webhook starts if it is enabled in settings."""
     if not is_custom_payment_webhook_server_enabled():
         logger.info("Custom payment webhook server выключен")
         return None
@@ -63,7 +63,7 @@ async def start_custom_payment_webhook_server(bot: Any) -> CustomPaymentWebhookS
 
 
 def create_custom_payment_webhook_app(bot: Any, *, path_prefix: str | None = None) -> web.Application:
-    """Создаёт aiohttp app для тестов и runtime."""
+    """Creates an aiohttp app for tests and runtime."""
     normalized_prefix = _normalize_path_prefix(path_prefix or DEFAULT_WEBHOOKS_PATH_PREFIX)
     app = web.Application(client_max_size=1024 * 1024)
     app[BOT_APP_KEY] = bot

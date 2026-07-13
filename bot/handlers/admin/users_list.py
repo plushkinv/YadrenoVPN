@@ -22,7 +22,7 @@ USERS_PER_PAGE = 20
 
 @router.callback_query(F.data == 'admin_users')
 async def show_users_menu(callback: CallbackQuery, state: FSMContext):
-    """Показывает главный экран раздела пользователей."""
+    """Shows the main screen of the users section."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -35,7 +35,7 @@ async def show_users_menu(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == 'admin_users_list')
 async def show_users_list(callback: CallbackQuery, state: FSMContext):
-    """Показывает список пользователей."""
+    """Shows a list of users."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -47,7 +47,7 @@ async def show_users_list(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_users_filter:'))
 async def set_users_filter(callback: CallbackQuery, state: FSMContext):
-    """Устанавливает фильтр пользователей."""
+    """Sets a user filter."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -57,7 +57,7 @@ async def set_users_filter(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith('admin_users_page:'))
 async def change_users_page(callback: CallbackQuery, state: FSMContext):
-    """Переход на другую страницу списка."""
+    """Go to another list page."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -68,7 +68,7 @@ async def change_users_page(callback: CallbackQuery, state: FSMContext):
     await _show_users_page(callback, state, page, current_filter)
 
 async def _show_users_page(callback: CallbackQuery, state: FSMContext, page: int, filter_type: str):
-    """Отображает страницу списка пользователей."""
+    """Displays the user list page."""
     offset = page * USERS_PER_PAGE
     (users, total) = get_all_users_paginated(offset, USERS_PER_PAGE, filter_type)
     total_pages = max(1, (total + USERS_PER_PAGE - 1) // USERS_PER_PAGE)
@@ -83,7 +83,7 @@ async def _show_users_page(callback: CallbackQuery, state: FSMContext, page: int
 
 @router.callback_query(F.data == 'admin_users_select')
 async def request_user_selection(callback: CallbackQuery, state: FSMContext):
-    """Запрос поиска пользователя (по ID, @username или через контакты)."""
+    """Request to search for a user (by ID, @username or via contacts)."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
@@ -109,7 +109,7 @@ async def request_user_selection(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.waiting_user_id, F.users_shared)
 async def handle_users_shared(message: Message, state: FSMContext):
-    """Обработка выбранного пользователя через KeyboardButtonRequestUsers."""
+    """Handling the selected user via KeyboardButtonRequestUsers."""
     if not is_admin(message.from_user.id):
         return
     data = await state.get_data()
@@ -137,7 +137,7 @@ async def handle_users_shared(message: Message, state: FSMContext):
 
 @router.message(AdminStates.waiting_user_id, F.text, ~F.text.startswith('/'))
 async def process_user_search_input(message: Message, state: FSMContext):
-    """Обработка ввода telegram_id, @username или panel_email."""
+    """Processing telegram_id, @username or panel_email input."""
     if not is_admin(message.from_user.id):
         return
         
@@ -164,7 +164,7 @@ async def process_user_search_input(message: Message, state: FSMContext):
     text = get_message_text_for_storage(message, 'plain')
     user = None
     
-    # Кнопка отмены для выдачи ошибки (используем ReplyKeyboardMarkup, т.к. мы уже в режиме ReplyKeyboard)
+    # Cancel button to display an error (we use ReplyKeyboardMarkup, since we are already in ReplyKeyboard mode)
     cancel_reply_kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text='👤 Выбрать пользователя', request_users=KeyboardButtonRequestUsers(request_id=1, user_is_bot=False, max_quantity=1))],
@@ -183,13 +183,13 @@ async def process_user_search_input(message: Message, state: FSMContext):
         username = text.lstrip('@')
         user = get_user_by_username(username)
         if not user:
-            # Пробуем найти по panel_email (email в панели 3X-UI)
+            # Trying to find by panel_email (email in the 3X-UI panel)
             user = get_user_by_panel_email(text)
             if not user:
                 await safe_edit_or_send(message, f'❌ Пользователь @{username} не найден в базе', reply_markup=cancel_reply_kb, force_new=True)
                 return
     else:
-        # Произвольный текст — пробуем как panel_email
+        # Free text - try as panel_email
         user = get_user_by_panel_email(text)
         if not user:
             await safe_edit_or_send(message, '❌ Введите telegram_id (число), @username или panel_email из панели', reply_markup=cancel_reply_kb, force_new=True)

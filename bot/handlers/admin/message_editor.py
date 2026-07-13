@@ -1,10 +1,10 @@
 """
-Роутер универсального редактора сообщений.
+Universal message editor router.
 
-Обрабатывает:
-- Входящие сообщения в состоянии waiting_for_message
-- Callback кнопки справки (msg_editor_show_help)
-- Callback кнопки возврата к превью (msg_editor_back_to_preview)
+Processes:
+- Incoming messages in the waiting_for_message state
+- Callback help buttons (msg_editor_show_help)
+- Callback buttons to return to preview (msg_editor_back_to_preview)
 """
 import logging
 from aiogram import Router, F
@@ -32,24 +32,24 @@ async def show_message_editor(
     help_text: str = None,
     allowed_types: list = None,
 ) -> Message:
-    """Показывает превью сообщения с кнопками редактора.
+    """Shows a preview of the message with editor buttons.
     
-    Превью = сообщение ровно так, как оно будет выглядеть для пользователя.
-    Без заголовков, рамок и инструкций.
+    Preview = message exactly as it will look to the user.
+    No headings, borders or instructions.
     
-    Использует send_editor_message() для рендера — единый контракт HTML.
-    Сохраняет контекст в FSM data.
+    Uses send_editor_message() for rendering - a single HTML contract.
+    Saves the context to FSM data.
     
     Args:
-        message: Сообщение для редактирования (callback.message или результат answer)
-        state: FSM контекст
-        key: Ключ настройки в settings
-        back_callback: callback_data для кнопки «Назад»
-        help_text: Текст справки (опционально)
-        allowed_types: Допустимые типы медиа (по умолчанию все)
+        message: Message to edit (callback.message or answer result)
+        state: FSM context
+        key: Settings key in settings
+        back_callback: callback_data for the back button
+        help_text: Help text (optional)
+        allowed_types: Allowed media types (default all)
     
     Returns:
-        Объект Message после рендера (для сохранения в FSM)
+        Message object after rendering (to be saved in FSM)
     """
     if allowed_types is None:
         allowed_types = ['text', 'photo', 'video', 'animation']
@@ -58,25 +58,25 @@ async def show_message_editor(
     media_type = message_data.get('media_type')
     can_delete_media = bool(message_data.get('media_file_id')) and media_type in allowed_types
 
-    # Формируем клавиатуру редактора
+    # Forming the editor keyboard
     kb = editor_kb(
         back_callback,
         has_help=bool(help_text),
         can_delete_media=can_delete_media,
     )
     
-    # Показываем превью через send_editor_message (единый HTML helper)
+    # Show preview via send_editor_message (single HTML helper)
     result = await send_editor_message(
         message,
         data=message_data,
         reply_markup=kb,
     )
     
-    # Сохраняем контекст в FSM
+    # Saving context in FSM
     await state.set_state(AdminStates.waiting_for_message)
     await state.update_data(
         editing_key=key,
-        editor_message=result,  # Message объект для перерисовки
+        editor_message=result,  # Message object to redraw
         back_callback=back_callback,
         allowed_types=allowed_types,
         help_text=help_text,
@@ -86,12 +86,12 @@ async def show_message_editor(
 
 
 # ============================================================================
-# CALLBACK: СПРАВКА РЕДАКТОРА
+# CALLBACK: EDITOR HELP
 # ============================================================================
 
 @router.callback_query(F.data == "msg_editor_show_help")
 async def show_editor_help(callback: CallbackQuery, state: FSMContext):
-    """Показывает справку редактора (если help_text передан)."""
+    """Shows editor help (if help_text is passed)."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -103,20 +103,20 @@ async def show_editor_help(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    # Справка — это служебный текст (не из редактора), отправляем через safe_edit_or_send
+    # Help is a service text (not from the editor), sent via safe_edit_or_send
     result = await safe_edit_or_send(
         callback.message,
         help_text,
         reply_markup=editor_help_kb()
     )
     
-    # Обновляем сохранённое сообщение
+    # Updating a saved message
     await state.update_data(editor_message=result)
     await callback.answer()
 
 @router.callback_query(F.data == "msg_editor_noop_alert")
 async def show_editor_noop_alert(callback: CallbackQuery):
-    """Показывает всплывающее пояснение, если нет отдельной справки."""
+    """Shows a pop-up explanation if there is no separate help."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -130,7 +130,7 @@ async def show_editor_noop_alert(callback: CallbackQuery):
 
 @router.callback_query((F.data == "msg_editor_delete_media") | (F.data == "msg_editor_delete_photo"))
 async def delete_editor_media(callback: CallbackQuery, state: FSMContext):
-    """Удаляет медиа из текущего редактируемого сообщения."""
+    """Removes media from the currently edited message."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -162,7 +162,7 @@ async def delete_editor_media(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "msg_editor_back_to_preview")
 async def back_to_preview(callback: CallbackQuery, state: FSMContext):
-    """Возврат к превью из справки."""
+    """Return to preview from help."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -177,7 +177,7 @@ async def back_to_preview(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Ошибка состояния", show_alert=True)
         return
     
-    # Перерисовываем превью
+    # Redrawing the preview
     await show_message_editor(
         callback.message, state,
         key=key,
@@ -189,18 +189,18 @@ async def back_to_preview(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================================
-# MESSAGE HANDLER: ПРИЁМ НОВОГО СООБЩЕНИЯ
+# MESSAGE HANDLER: RECEIVING A NEW MESSAGE
 # ============================================================================
 
 @router.message(AdminStates.waiting_for_message, ~F.text.startswith('/'))
 async def handle_editor_input(message: Message, state: FSMContext):
     """
-    Обрабатывает входящее сообщение при редактировании.
+    Processes an incoming message when editing.
     
-    1. Проверяет тип сообщения vs allowed_types
-    2. Сохраняет в БД через save_message_data()
-    3. Удаляет сообщение пользователя
-    4. Перерисовывает превью (без уведомления «Сохранено»)
+    1. Checks message type vs allowed_types
+    2. Saves to the database via save_message_data()
+    3. Deletes a user's message
+    4. Redraws the preview (without the “Saved” notification)
     """
     if not is_admin(message.from_user.id):
         return
@@ -217,26 +217,26 @@ async def handle_editor_input(message: Message, state: FSMContext):
         await safe_edit_or_send(message, "❌ Ошибка состояния.")
         return
     
-    # Проверяем тип сообщения
+    # Checking the message type
     msg_type = detect_message_type(message)
     if msg_type not in allowed_types:
-        # Молча удаляем неподходящее сообщение 
+        # Silently delete an inappropriate message
         try:
             await message.delete()
         except Exception:
             pass
         return
     
-    # Сохраняем в БД
+    # Saving in the database
     save_message_data(key, message, allowed_types)
     
-    # Удаляем сообщение пользователя (паттерн из AGENTS.md)
+    # Delete the user's message (pattern from AGENTS.md)
     try:
         await message.delete()
     except Exception:
         pass
     
-    # Перерисовываем превью на месте старого сообщения
+    # Redrawing the preview in place of the old message
     if editor_message:
         try:
             result = await show_message_editor(
@@ -250,7 +250,7 @@ async def handle_editor_input(message: Message, state: FSMContext):
         except Exception as e:
             logger.warning(f"Ошибка перерисовки превью: {e}")
     
-    # Фоллбэк: отправляем новое сообщение
+    # Fallback: send a new message
     result = await show_message_editor(
         message, state,
         key=key,
