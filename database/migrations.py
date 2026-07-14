@@ -35,7 +35,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 21
 
 # Current version of the database schema (incremented when new migrations are added)
-LATEST_VERSION = 72
+LATEST_VERSION = 73
 
 
 def _my_keys_item_template() -> str:
@@ -550,6 +550,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('update_check_time', '12:00'),
         ('update_notifications_enabled', '1'),
         ('display_timezone', 'Europe/Moscow'),
+        ('telegram_link_domain', 'telegram.me'),
         ('my_keys_item_template', _my_keys_item_template()),
         # The bot operating mode for new installations is Subscription
         # (the bot issues a subscription URL, keys in all inbound with a single subId).
@@ -800,8 +801,8 @@ def migration_initial(conn: sqlite3.Connection) -> None:
                 "---"
             ),
             'buttons': json.dumps([
-                {"id": "btn_news",      "label": "📢 Новости",    "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "url", "action_value": "https://t.me/plushkin_blog"},
-                {"id": "btn_support",   "label": "💬 Поддержка",  "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "url", "action_value": "https://t.me/plushkin_chat"},
+                {"id": "btn_news",      "label": "📢 Новости",    "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "url", "action_value": "https://%telegram_link_domain%/plushkin_blog"},
+                {"id": "btn_support",   "label": "💬 Поддержка",  "color": "secondary", "row": 0, "col": 1, "is_hidden": False, "action_type": "url", "action_value": "https://%telegram_link_domain%/plushkin_chat"},
                 {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
             ], ensure_ascii=False),
         },
@@ -2937,6 +2938,55 @@ def migration_72(conn):
     logger.info("Migration v72 applied: Yadreno Admin customization hidden settings ready")
 
 
+def migration_73(conn):
+    """Migration v73: cached Telegram link domain setting and default URL buttons."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('telegram_link_domain', 'telegram.me')
+        """
+    )
+
+    rows = conn.execute("SELECT page_key, buttons_default FROM pages").fetchall()
+    changed = 0
+    for row in rows:
+        try:
+            buttons = json.loads(row["buttons_default"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(buttons, list):
+            continue
+
+        updated = False
+        for button in buttons:
+            if not isinstance(button, dict):
+                continue
+            if button.get("action_type") != "url":
+                continue
+            action_value = button.get("action_value")
+            if not isinstance(action_value, str):
+                continue
+            new_value = action_value.replace(
+                "https://t.me/",
+                "https://%telegram_link_domain%/",
+            )
+            if new_value != action_value:
+                button["action_value"] = new_value
+                updated = True
+
+        if updated:
+            conn.execute(
+                "UPDATE pages SET buttons_default = ? WHERE page_key = ?",
+                (json.dumps(buttons, ensure_ascii=False), row["page_key"]),
+            )
+            changed += 1
+
+    logger.info(
+        "Migration v73 applied: telegram_link_domain ready, default button pages updated=%s",
+        changed,
+    )
+
+
 MIGRATIONS = {
     22: migration_22,
     23: migration_23,
@@ -2989,6 +3039,7 @@ MIGRATIONS = {
     70: migration_70,
     71: migration_71,
     72: migration_72,
+    73: migration_73,
 }
 
 

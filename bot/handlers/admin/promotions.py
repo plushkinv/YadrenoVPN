@@ -14,6 +14,7 @@ from bot.keyboards.admin import (
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
+from bot.utils.telegram_links import build_telegram_link, get_telegram_link_domain
 from bot.utils.text import escape_html, get_message_text_for_storage, safe_edit_or_send
 from database.requests import (
     create_coupon_batch,
@@ -62,7 +63,8 @@ def _promocode_text(promo: dict, bot_username: str | None = None) -> str:
     status = "включён" if promo.get("is_active") else "выключен"
     link_line = ""
     if bot_username:
-        link_line = f"\n🔗 Промо-ссылка: <code>https://t.me/{escape_html(bot_username)}?start=pr_{escape_html(promo['code'])}</code>"
+        promo_link = build_telegram_link(bot_username, f"pr_{promo['code']}")
+        link_line = f"\n🔗 Промо-ссылка: <code>{escape_html(promo_link)}</code>"
     return (
         "🎟 <b>Промокод</b>\n\n"
         f"Код: <b>{escape_html(promo['code'])}</b>\n"
@@ -86,7 +88,7 @@ async def admin_promocodes(callback: CallbackQuery, state: FSMContext):
     text = (
         "🎟 <b>Промокоды</b>\n\n"
         "Промокоды многоразовые. Их можно вводить вручную при оплате, а ещё каждый промокод работает как промо-ссылка формата "
-        "<code>https://t.me/&lt;bot&gt;?start=pr_CODE</code>.\n\n"
+        f"<code>https://{escape_html(get_telegram_link_domain())}/&lt;bot&gt;?start=pr_CODE</code>.\n\n"
         "Промо-ссылки удобно использовать в рекламе и партнёрских размещениях: бот сохранит код пользователю, а успешная покупка попадёт в аналитику."
     )
     await safe_edit_or_send(callback.message, text, reply_markup=promocodes_list_kb(promocodes))

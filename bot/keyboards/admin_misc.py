@@ -3,6 +3,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
 
 from database.requests import is_yadreno_admin_customization_enabled
+from bot.utils.telegram_links import build_telegram_link
 
 def state_pair_buttons(
     is_left_active: bool,
@@ -155,7 +156,7 @@ def author_support_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text='💳 Карты РФ', url='https://yoomoney.ru/fundraise/1GJ73GGRJBC.260318'),
-        InlineKeyboardButton(text='💰 USDT', url='https://t.me/Ya_SellerBot?start=item-40')
+        InlineKeyboardButton(text='💰 USDT', url=build_telegram_link('Ya_SellerBot', 'item-40'))
     )
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()

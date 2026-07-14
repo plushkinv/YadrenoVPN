@@ -15,6 +15,7 @@ from bot.services.admin_monitoring import (
 from bot.states.admin_states import AdminStates
 from bot.keyboards.admin import admin_main_menu_kb, author_support_kb, marketing_menu_kb
 from bot.utils.admin import is_admin
+from bot.utils.telegram_links import build_telegram_link
 from bot.utils.text import safe_edit_or_send
 
 logger = logging.getLogger(__name__)
@@ -133,14 +134,17 @@ async def show_author_support(callback: CallbackQuery):
         return
         
     await callback.answer()
+
+    developer_link = build_telegram_link('plushkin_blog')
+    seller_link = build_telegram_link('Ya_SellerBot', 'item-40')
     
     text = (
         "👤 <b>Автор и поддержка</b>\n\n"
-        "<b>Разработчик</b>: <a href=\"https://t.me/plushkin_blog\">Plushkin Blog</a>\n\n"
+        f"<b>Разработчик</b>: <a href=\"{developer_link}\">Plushkin Blog</a>\n\n"
         "Я собираю деньги на разработку игры в жанре MMORTS с честной экономикой и никакого pay2win. Т.е. нельзя будет ничего купить у автора игры, никаких эксклюзивных вещей или бесконечных ресурсов для богатых.\n\n"
         "Очень нужна ваша поддержка, даже 100р уже вперед. как говорится с мира по нитке ;)\n"
         "💳 <b>Карты РФ</b>: https://yoomoney.ru/fundraise/1GJ73GGRJBC.260318\n"
-        "💰 <b>USDT (TON/BSC/ARBITRUM)</b>: https://t.me/Ya_SellerBot?start=item-40\n\n"
+        f"💰 <b>USDT (TON/BSC/ARBITRUM)</b>: {seller_link}\n\n"
         "‼️Другие полезные для тебя боты\n\n"
         "@Ya_FooterBot - <i>сделай автоматическую подпись ко всем постам в своем канале, добавь туда ссылку на свой VPN</i>"
     )

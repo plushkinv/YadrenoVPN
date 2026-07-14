@@ -22,6 +22,7 @@ PagePlaceholderMode = Literal['html', 'button_label', 'url']
 _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
     'telegram_id': (),
     'bot_username': (),
+    'telegram_link_domain': (),
     'page_key': (),
     'tariffs': ('%тарифы%',),
     'no_tariffs': ('%без_тарифов%',),
@@ -282,6 +283,10 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'telegram_id'), mode)
     if name == 'bot_username':
         return _format_value(_context_value(context, 'bot_username'), mode)
+    if name == 'telegram_link_domain':
+        from bot.utils.telegram_links import get_telegram_link_domain
+
+        return _format_value(get_telegram_link_domain(), mode)
     if name == 'page_key':
         return _format_value(_context_value(context, 'page_key'), mode)
     if name == 'tariffs':

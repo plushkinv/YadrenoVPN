@@ -32,6 +32,7 @@ from bot.states.admin_states import (
     get_total_crypto_params
 )
 from bot.utils.admin import is_admin
+from bot.utils.telegram_links import build_telegram_link
 from bot.keyboards.admin import (
     payments_menu_kb,
     crypto_setup_kb,
@@ -69,7 +70,7 @@ def parse_item_id_from_url(url: str) -> str:
     """
     Retrieves the item_id from the Ya.Seller product link.
     
-    Format: https://t.me/Ya_SellerBot?start=item-{item_id}...
+    Format: https://<telegram_link_domain>/Ya_SellerBot?start=item-{item_id}...
     """
     try:
         if '?start=item-' in url:
@@ -281,7 +282,7 @@ async def start_crypto_setup(callback: CallbackQuery, state: FSMContext):
     
     # Getting the username of the bot for instructions
     bot_username = callback.bot.my_username if hasattr(callback.bot, 'my_username') else "YOUR_BOT"
-    callback_url = f"https://t.me/{bot_username}"
+    callback_url = build_telegram_link(bot_username)
     
     instructions = (
         "1️⃣ В @Ya_SellerBot выберите «Управление» → «Товары» → «Добавить»\n"
@@ -362,7 +363,7 @@ async def process_crypto_url(message: Message, state: FSMContext):
         await state.set_state(AdminStates.crypto_setup_secret)
         
         bot_username = message.bot.my_username if hasattr(message.bot, 'my_username') else "YOUR_BOT"
-        callback_url = f"https://t.me/{bot_username}"
+        callback_url = build_telegram_link(bot_username)
 
         await safe_edit_or_send(message,
             f"✅ Ссылка принята!\n<a href=\"{url}\">{escape_html(url)}</a>\n\n"
@@ -588,7 +589,7 @@ async def crypto_mgmt_edit_url(callback: CallbackQuery, state: FSMContext):
     current_url = get_setting('crypto_item_url', '')
     
     bot_username = callback.bot.my_username if hasattr(callback.bot, 'my_username') else "YOUR_BOT"
-    callback_url = f"https://t.me/{bot_username}"
+    callback_url = build_telegram_link(bot_username)
     
     instructions = (
         "1️⃣ В @Ya_SellerBot выберите «Управление» → «Товары» → «Добавить»\n"
@@ -634,7 +635,7 @@ async def crypto_mgmt_edit_secret(callback: CallbackQuery, state: FSMContext):
     await state.update_data(edit_mode=True)
     
     bot_username = callback.bot.my_username if hasattr(callback.bot, 'my_username') else "YOUR_BOT"
-    callback_url = f"https://t.me/{bot_username}"
+    callback_url = build_telegram_link(bot_username)
 
     text = (
         "🔐 <b>Изменение секретного ключа</b>\n\n"
@@ -1636,12 +1637,12 @@ async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMConte
         "3. Укажите их в кнопках ниже.\n\n"
         "🔁 <b>Возврат в бота</b>\n"
         f"• В каждый счёт бот передаёт точную ссылку вида "
-        f"<code>https://t.me/{bot_username}?start=pay_cardlink_ORDER_ID</code>\n"
+        f"<code>{build_telegram_link(bot_username, 'pay_cardlink_ORDER_ID')}</code>\n"
         "• Если в магазине уже указаны старые статические ссылки, их можно оставить "
         "как fallback:\n"
-        f"<code>https://t.me/{bot_username}?start=cl_Success</code>\n"
-        f"<code>https://t.me/{bot_username}?start=cl_Fail</code>\n"
-        f"<code>https://t.me/{bot_username}?start=cl_Result</code>\n\n"
+        f"<code>{build_telegram_link(bot_username, 'cl_Success')}</code>\n"
+        f"<code>{build_telegram_link(bot_username, 'cl_Fail')}</code>\n"
+        f"<code>{build_telegram_link(bot_username, 'cl_Result')}</code>\n\n"
         f"{status_emoji} Статус: <b>{status_text}</b>\n"
         f"🆔 Shop ID: {shop_display}\n"
         f"🔐 API-токен: {token_display}\n\n"

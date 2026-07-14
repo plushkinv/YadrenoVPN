@@ -67,6 +67,7 @@ from database.requests import (
     set_yadreno_admin_api_key,
     get_page,
 )
+from bot.utils.telegram_links import build_telegram_link
 from bot.utils.page_flow import parse_registry_names
 
 router = Router()
@@ -117,15 +118,16 @@ _yadreno_album_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
 
 def _missing_key_text() -> str:
     """The text of the api_key setup screen."""
+    yadreno_admin_link = build_telegram_link('YadrenoAdmin_Bot')
     return (
         "🤖 <b>Yadreno Admin</b>\n\n"
         "Чтобы начать диалог с агентом, сначала укажите свой <code>api_key</code>.\n\n"
         "🔑 <b>Как получить ключ:</b>\n"
-        "Получите его в <a href=\"https://t.me/YadrenoAdmin_Bot\">@YadrenoAdmin_Bot</a> в разделе «Профиль».\n\n"
+        f"Получите его в <a href=\"{yadreno_admin_link}\">@YadrenoAdmin_Bot</a> в разделе «Профиль».\n\n"
         "🎬 <b>Что умеет агент:</b>\n"
         "Посмотрите <a href=\"https://www.youtube.com/watch?v=ACPu03aAJns\">видео с примерами возможностей</a>.\n\n"
         "💬 <b>Остались вопросы?</b>\n"
-        "Задайте их в <a href=\"https://t.me/YadrenoAdmin_Bot\">@YadrenoAdmin_Bot</a> — он бесплатно проконсультирует вас по любым вопросам YadrenoVPN."
+        f"Задайте их в <a href=\"{yadreno_admin_link}\">@YadrenoAdmin_Bot</a> — он бесплатно проконсультирует вас по любым вопросам YadrenoVPN."
     )
 
 
@@ -642,11 +644,12 @@ async def start_yadreno_key_input(callback: CallbackQuery, state: FSMContext):
         yadreno_editing_message=callback.message,
         yadreno_editing_message_id=callback.message.message_id,
     )
+    yadreno_admin_link = build_telegram_link('YadrenoAdmin_Bot')
     await safe_edit_or_send(
         callback.message,
         "🔑 <b>Ключ Yadreno Admin</b>\n\n"
         "Отправьте свой <code>api_key</code> из раздела «Профиль» в "
-        "<a href=\"https://t.me/YadrenoAdmin_Bot\">@YadrenoAdmin_Bot</a>.",
+        f"<a href=\"{yadreno_admin_link}\">@YadrenoAdmin_Bot</a>.",
         reply_markup=yadreno_admin_cancel_key_kb(),
     )
     await callback.answer()

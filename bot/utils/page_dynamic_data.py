@@ -165,8 +165,10 @@ def build_referral_context_values(
         return {}
 
     referral_code = ensure_user_referral_code(user_internal_id)
+    from bot.utils.telegram_links import build_telegram_link
+
     return {
-        'referral_link': f"https://t.me/{bot_username}?start=ref_{referral_code}",
+        'referral_link': build_telegram_link(bot_username, f"ref_{referral_code}"),
         'referral_stats_html': build_referral_stats_text(user_internal_id),
     }
 

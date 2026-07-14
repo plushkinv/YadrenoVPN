@@ -38,5 +38,18 @@ def check_unblock_conditions():
     return get_setting('referral_enabled', '0') == '1'
 """
 
-# No active blocking
-BLOCKING_MESSAGE = None
+BLOCKING_MESSAGE = (
+    "🔒 <b>Обновление 9.7 применяет обязательную миграцию</b>\n\n"
+    "Бот уже обновил код и при запуске применяет миграции базы данных. "
+    "После успешного обновления БД до v73 блокировка следующих обновлений "
+    "снимется автоматически.\n\n"
+    "Если это сообщение повторяется после перезапуска, откройте настройки бота "
+    "и проверьте обновления ещё раз."
+)
+
+
+def check_unblock_conditions():
+    """Allow further updates after the blocking migration has been applied."""
+    from database.migrations import get_current_version
+
+    return get_current_version() >= 73

@@ -233,7 +233,9 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
             from bot.errors import TariffNotFoundError
             if isinstance(e, TariffNotFoundError):
                 from bot.keyboards.support import support_contact_kb
-                support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
+                from bot.utils.telegram_links import build_telegram_link
+
+                support_link = get_setting('support_channel_link', build_telegram_link('YadrenoChat'))
                 await _show_start_payment_status(
                     message,
                     title_html='⚠️ <b>Тариф не найден</b>',

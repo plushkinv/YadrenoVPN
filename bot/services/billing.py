@@ -28,6 +28,7 @@ from database.requests import (
     update_referral_stat
 )
 from bot.services.exchange_rate import get_usd_rub_rate
+from bot.utils.telegram_links import build_telegram_link
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +53,14 @@ def build_payment_return_url(bot_name: str, provider: str, order_id: str) -> str
     pay_{provider}_{order_id}
     """
     if not bot_name:
-        return "https://t.me"
+        return build_telegram_link()
 
     provider_code = str(provider or '').strip().lower()
     order_code = str(order_id or '').strip()
     if not provider_code or not order_code:
-        return f"https://t.me/{bot_name}"
+        return build_telegram_link(bot_name)
 
-    return f"https://t.me/{bot_name}?start=pay_{provider_code}_{order_code}"
+    return build_telegram_link(bot_name, f"pay_{provider_code}_{order_code}")
 
 
 
@@ -422,7 +423,7 @@ def build_crypto_payment_url(
     """
     Generates a link to cryptoprocessing with our invoice.
     
-    Format: https://t.me/Ya_SellerBot?start=item-{item_id}-{ref}-{promo}-{invoice}-{price}
+    Format: https://<telegram_link_domain>/Ya_SellerBot?start=item-{item_id}-{ref}-{promo}-{invoice}-{price}
     
     Args:
         item_id: Product ID in Ya.Seller (from settings)
@@ -452,14 +453,14 @@ def build_crypto_payment_url(
     
     start_param = "-".join(parts)
     
-    return f"https://t.me/Ya_SellerBot?start={start_param}"
+    return build_telegram_link("Ya_SellerBot", start_param)
 
 
 def extract_item_id_from_url(crypto_item_url: str) -> Optional[str]:
     """
     Retrieves item_id from a product link in Ya.Seller.
     
-    Link format: https://t.me/Ya_SellerBot?start=item-{item_id}...
+    Link format: https://<telegram_link_domain>/Ya_SellerBot?start=item-{item_id}...
     
     Args:
         crypto_item_url: Full link to the product
@@ -1026,7 +1027,7 @@ async def create_cardlink_payment(
     Authorization via Bearer token.
 
     Distinctive feature: instead of a webhook, the user after payment
-    returns to the bot via deep-link `https://t.me/{bot}?start=cl_Success`
+    returns to the bot via deep-link `https://<telegram_link_domain>/{bot}?start=cl_Success`
     (or cl_Fail / cl_Result), which triggers the same check as
     “✅ I paid” button.
 
@@ -1556,7 +1557,7 @@ async def complete_payment_flow(
         from bot.errors import TariffNotFoundError
         if isinstance(e, TariffNotFoundError):
             from bot.keyboards.support import support_contact_kb
-            support_link = get_setting('support_channel_link', 'https://t.me/YadrenoChat')
+            support_link = get_setting('support_channel_link', build_telegram_link('YadrenoChat'))
             await _show_complete_payment_status(
                 message,
                 title_html='⚠️ <b>Тариф не найден</b>',

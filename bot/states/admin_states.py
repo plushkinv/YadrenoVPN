@@ -5,6 +5,8 @@ Managing multi-step administrator dialogs.
 """
 from aiogram.fsm.state import State, StatesGroup
 
+from bot.utils.telegram_links import is_telegram_bot_start_link
+
 
 class AdminStates(StatesGroup):
     """Admin panel states."""
@@ -285,8 +287,12 @@ CRYPTO_PARAMS = [
         "key": "crypto_item_url",
         "label": "Ссылка на товар",
         "hint": "скопируйте из @Ya\\_SellerBot",
-        "validate": lambda x: x.startswith("https://t.me/Ya_SellerBot?start=item"),
-        "error": "Ссылка должна начинаться с https://t.me/Ya\\_SellerBot?start=item"
+        "validate": lambda x: is_telegram_bot_start_link(
+            x,
+            bot_username="Ya_SellerBot",
+            start_prefix="item",
+        ),
+        "error": "Ссылка должна вести на @Ya\\_SellerBot и содержать start=item"
     },
     {
         "key": "crypto_secret_key",

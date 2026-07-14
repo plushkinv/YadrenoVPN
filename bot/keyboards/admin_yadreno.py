@@ -2,6 +2,8 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.utils.telegram_links import build_telegram_link
+
 from .admin_misc import back_button, home_button
 
 
@@ -18,7 +20,7 @@ def yadreno_admin_no_key_kb() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(
             text='🤖 Открыть @YadrenoAdmin_Bot',
-            url='https://t.me/YadrenoAdmin_Bot',
+            url=build_telegram_link('YadrenoAdmin_Bot'),
         )
     )
     builder.row(back_button('admin_panel'), home_button())

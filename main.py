@@ -58,6 +58,14 @@ async def on_startup(bot: Bot):
     # Applying database migrations
     run_migrations()
 
+    from bot.utils.telegram_links import load_telegram_link_domain
+
+    load_telegram_link_domain()
+
+    from bot.utils.update_block import try_unblock
+
+    try_unblock()
+
     from bot.services.yadreno_admin_core_guard import recover_core_guards_on_startup
 
     await recover_core_guards_on_startup()
