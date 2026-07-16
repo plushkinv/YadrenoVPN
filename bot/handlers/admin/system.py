@@ -19,7 +19,6 @@ from config import GITHUB_REPO_URL
 from bot.utils.admin import is_admin
 from bot.utils.git_utils import (
     check_git_available,
-    get_current_commit,
     get_current_branch,
     get_remote_url,
     set_remote_url,
@@ -32,6 +31,7 @@ from bot.utils.git_utils import (
     install_requirements,
     restart_bot,
 )
+from bot.version import BOT_COMMIT, BOT_RELEASE
 from bot.keyboards.admin import (
     bot_settings_kb,
     bot_mode_toggle_confirm_kb,
@@ -61,6 +61,14 @@ from bot.utils.update_block import is_update_blocked, get_blocked_message, try_u
 from bot.utils.yadreno_admin_errors import format_yadreno_admin_error
 
 router = Router()
+
+
+def _installed_bot_version_text() -> str:
+    """Return the installed release and commit block for update screens."""
+    return (
+        f"Текущий релиз: <code>{escape_html(BOT_RELEASE)}</code>\n"
+        f"Текущий коммит: <code>{escape_html(BOT_COMMIT)}</code>"
+    )
 
 
 _EXTENSION_STATUS_LABELS = {
@@ -767,7 +775,7 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
     
-    commit_hash = get_current_commit() or "неизвестно"
+    installed_version_text = _installed_bot_version_text()
     
     if commits_behind > 0:
         branch = get_current_branch() or "main"
@@ -793,7 +801,7 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
     if commits_behind == 0:
         await safe_edit_or_send(callback.message, 
             "✅ <b>Обновление не требуется, у вас последняя версия</b>\n\n"
-            f"Текущая версия: <code>{commit_hash}</code>\n\n"
+            f"{installed_version_text}\n\n"
             f"{commits_text}",
             reply_markup=update_confirm_kb(has_updates=False)
         )
@@ -805,7 +813,7 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
         await safe_edit_or_send(callback.message, 
             f"📦 <b>Доступно обновление</b>\n\n"
             f"<b>Доступно обновлений:</b> {commits_behind}\n"
-            f"Текущая версия: <code>{commit_hash}</code>\n\n"
+            f"{installed_version_text}\n\n"
             f"Сначала будет установлена версия <code>{blocking_hash}</code>:\n"
             f"<pre>{escape_html(blocking_msg)}</pre>\n\n"
             "Обновление пройдёт отдельным этапом, после чего бот автоматически "
@@ -818,7 +826,7 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
         await safe_edit_or_send(callback.message, 
             f"🧪 <b>Доступна бета-версия!</b>\n\n"
             f"📦 <b>Доступно бета-коммитов:</b> {commits_behind}\n"
-            f"Текущая версия: <code>{commit_hash}</code>\n\n"
+            f"{installed_version_text}\n\n"
             f"{commits_text}\n\n"
             "⚠️ Это тестовая версия. Устанавливайте на свой страх и риск.",
             reply_markup=update_confirm_kb(has_updates=True, has_blocking=False, is_beta_only=True)
@@ -827,7 +835,7 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
         # There are regular updates
         await safe_edit_or_send(callback.message, 
             f"📦 <b>Доступно обновлений:</b> {commits_behind}\n\n"
-            f"Текущая версия: <code>{commit_hash}</code>\n\n"
+            f"{installed_version_text}\n\n"
             f"{commits_text}\n\n"
             "⚠️ После обновления бот автоматически перезапустится.\n"
             "Это займёт несколько секунд.",

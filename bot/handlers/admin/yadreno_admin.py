@@ -1437,14 +1437,13 @@ def _build_yaa_page_flow_context(page_key: str) -> dict[str, list[str]]:
     }
 
 
-def _build_yaa_prompt(
+def _build_yaa_invocation_context(
     page_key: str,
-    task_html: str,
     backup_path: str,
     attachment: dict[str, str] | None = None,
     page_context: Any | None = None,
-) -> str:
-    """Generates a compact JSON context for the /yaa command."""
+) -> dict[str, Any]:
+    """Build request metadata for the /yaa runtime-context invocation."""
     stored_page = get_page_stored_data(page_key) or {
         "text": {"source": "default", "value": "", "custom": None},
         "image": {"source": "default", "value": "", "custom": None},
@@ -1471,7 +1470,7 @@ def _build_yaa_prompt(
     visible_keyboard = _redact_yaa_visible_keyboard_urls(page_key, visible_keyboard)
 
     context: dict[str, Any] = {
-        "source": "/yaa",
+        "source": "yaa",
         "page_key": page_key,
         "page_flow": _build_yaa_page_flow_context(page_key),
         "database_path": "database/vpn_bot.db",
@@ -1483,16 +1482,17 @@ def _build_yaa_prompt(
         "visible_keyboard": visible_keyboard,
         "runtime": _build_yaa_runtime_context(page_key, page_context),
         "task_format": "telegram_html",
-        "task_html": task_html,
     }
     if attachment:
         context["attachment"] = attachment
 
-    return (
-        "Команда /yaa вызвана администратором прямо на пользовательской странице VPN-бота. "
-        "Служебный контекст:\n"
-        f"Задача администратора: {task_html}\n"
-        f"{json.dumps(context, ensure_ascii=False, separators=(',', ':'), default=str)}"
+    return json.loads(
+        json.dumps(
+            context,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
     )
 
 
@@ -1697,9 +1697,8 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
 
     before = _serialize_for_compare(_get_yaa_editable_state(page_context.page_key))
     attachment = _extract_yaa_attachment_data(message)
-    prompt = _build_yaa_prompt(
+    invocation_context = _build_yaa_invocation_context(
         page_context.page_key,
-        task_html,
         backup_path,
         attachment,
         page_context=page_context,
@@ -1727,17 +1726,19 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
             final = await run_dialog_with_uploads(
                 message.from_user.id,
                 api_key,
-                prompt,
+                task_html,
                 uploads,
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
+                runtime_context={"invocation": invocation_context},
                 progress_callback=progress.handle,
             )
         else:
             final = await run_dialog(
                 message.from_user.id,
                 api_key,
-                prompt,
+                task_html,
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
+                runtime_context={"invocation": invocation_context},
                 progress_callback=progress.handle,
             )
     except YadrenoAdminError as e:

@@ -21,13 +21,13 @@ from typing import Any, Awaitable, Callable, Optional
 
 import aiohttp
 
-from bot.utils.git_utils import get_current_commit
 from bot.services.yadreno_admin_core_guard import (
     finalize_core_guard,
     finalize_core_guards_for_request,
     interrupted_tool_result,
     run_with_core_guard,
 )
+from bot.version import BOT_COMMIT, BOT_RELEASE
 from config import RETRY_CONFIG
 from database.requests import (
     clear_yadreno_admin_active_request_id,
@@ -77,8 +77,6 @@ PUBLIC_IP_URLS = (
 )
 
 _server_ip_cache: Optional[str] = None
-_satellite_version_unset = object()
-_satellite_version_cache: object | Optional[str] = _satellite_version_unset
 _dangerous_shell_patterns: tuple[tuple[str, str], ...] = (
     (
         r"(^|[;&|]\s*)(sudo\s+)?rm\s+([^\n;&|]*\s)?-(?=[^\s\n;&|]*r)(?=[^\s\n;&|]*f)[^\s\n;&|]*\s+(?:-[^\s\n;&|]+\s+)*(--\s+)?(/|\*/|/\*|~|\$HOME)(\s|$)",
@@ -187,7 +185,7 @@ def _core_policy_for_skill(skill_id: str) -> Optional[bool]:
     return is_yadreno_admin_core_changes_enabled()
 
 
-def build_agent_env_context(core_changes_allowed: bool | None) -> dict[str, Any]:
+def build_agent_env_context() -> dict[str, Any]:
     """Return compact environment context for the remote agent prompt."""
     try:
         from database.migrations import LATEST_VERSION, get_current_version
@@ -212,59 +210,44 @@ def build_agent_env_context(core_changes_allowed: bool | None) -> dict[str, Any]
     return {
         "db_version": db_version,
         "latest_db_version": latest_db_version,
-        "core_changes_allowed": True if core_changes_allowed is None else bool(core_changes_allowed),
         "custom_extensions_loader_enabled": bool(custom_extensions_loader_enabled),
     }
 
 
-def build_agent_env_context_for_topic(
-    topic_id: int,
-    skill_id: Optional[str] = None,
-) -> dict[str, Any]:
-    """Return compact environment context for the resolved Yadreno Admin lane."""
-    effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
-    return build_agent_env_context(_core_policy_for_skill(effective_skill_id))
-
-
 def build_agent_runtime_context(
-    core_changes_allowed: bool | None,
+    extra_context: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Build the negotiated v1 runtime payload for the hub."""
-    return {
-        "schema_version": 1,
-        "env": build_agent_env_context(core_changes_allowed),
+    """Build request-scoped runtime data for structured and legacy hubs."""
+    context: dict[str, Any] = {
+        "bot_release": BOT_RELEASE,
+        "bot_commit": BOT_COMMIT,
+        "environment": build_agent_env_context(),
     }
+    if extra_context:
+        for key, value in extra_context.items():
+            if key not in context:
+                context[key] = value
+    return context
 
 
-def _with_agent_env_context(message: str, env_context: dict[str, Any]) -> str:
+def _with_agent_runtime_context(
+    message: str,
+    runtime_context: dict[str, Any],
+) -> str:
     """Prefix a request for a legacy hub without structured context support."""
-    payload = {"env": env_context}
     return (
         "Служебный контекст:\n"
-        f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        f"{json.dumps(runtime_context, ensure_ascii=False, separators=(',', ':'))}\n\n"
         f"{message}"
     )
 
 
-def _satellite_version() -> Optional[str]:
-    """Return the current Git commit once per process, when Git is available."""
-    global _satellite_version_cache
-    if _satellite_version_cache is _satellite_version_unset:
-        _satellite_version_cache = get_current_commit()
-    value = _satellite_version_cache
-    return value if isinstance(value, str) and value else None
-
-
 def _hub_headers(api_key: str) -> dict[str, str]:
     """Build authentication and version headers for every hub request."""
-    headers = {
+    return {
         "Authorization": f"Bearer {api_key}",
         "X-Yadreno-Satellite-Protocol-Version": SATELLITE_PROTOCOL_VERSION,
     }
-    version = _satellite_version()
-    if version:
-        headers["X-Yadreno-Satellite-Version"] = version
-    return headers
 
 
 class YadrenoAdminError(RuntimeError):
@@ -1484,6 +1467,7 @@ async def run_dialog(
     *,
     topic_id: int = 0,
     skill_id: Optional[str] = None,
+    runtime_context: Optional[dict[str, Any]] = None,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> YadrenoAdminFinal:
     """
@@ -1504,10 +1488,10 @@ async def run_dialog(
             )
             server_ip = await _get_server_ip(session)
             core_changes_allowed = _core_policy_for_skill(effective_skill_id)
-            runtime_context = (
+            agent_runtime_context = (
                 None
                 if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-                else build_agent_runtime_context(core_changes_allowed)
+                else build_agent_runtime_context(runtime_context)
             )
             agent_message = (
                 message
@@ -1515,9 +1499,9 @@ async def run_dialog(
                     effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
                     or runtime_context_supported
                 )
-                else _with_agent_env_context(
+                else _with_agent_runtime_context(
                     message,
-                    runtime_context["env"] if runtime_context else {},
+                    agent_runtime_context or {},
                 )
             )
             payload: dict[str, Any] = {
@@ -1531,11 +1515,11 @@ async def run_dialog(
                 ),
             }
             if runtime_context_supported:
-                if runtime_context is None:
+                if agent_runtime_context is None:
                     raise YadrenoAdminError(
                         "Hub runtime-context negotiation invariant failed"
                     )
-                payload["runtime_context"] = runtime_context
+                payload["runtime_context"] = agent_runtime_context
             if core_changes_allowed is not None:
                 payload["core_changes_allowed"] = core_changes_allowed
             _, process_data = await _request_json(
@@ -1575,6 +1559,7 @@ async def run_dialog_with_uploads(
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
     skill_id: Optional[str] = None,
+    runtime_context: Optional[dict[str, Any]] = None,
     progress_callback: Optional[ProgressCallback] = None,
     overflow_count: int = 0,
 ) -> YadrenoAdminFinal:
@@ -1586,6 +1571,7 @@ async def run_dialog_with_uploads(
             message,
             topic_id=topic_id,
             skill_id=skill_id,
+            runtime_context=runtime_context,
             progress_callback=progress_callback,
         )
 
@@ -1601,10 +1587,10 @@ async def run_dialog_with_uploads(
             )
             server_ip = await _get_server_ip(session)
             core_changes_allowed = _core_policy_for_skill(effective_skill_id)
-            runtime_context = (
+            agent_runtime_context = (
                 None
                 if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-                else build_agent_runtime_context(core_changes_allowed)
+                else build_agent_runtime_context(runtime_context)
             )
             agent_message = (
                 message
@@ -1612,9 +1598,9 @@ async def run_dialog_with_uploads(
                     effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
                     or runtime_context_supported
                 )
-                else _with_agent_env_context(
+                else _with_agent_runtime_context(
                     message,
-                    runtime_context["env"] if runtime_context else {},
+                    agent_runtime_context or {},
                 )
             )
             is_batch = len(uploads) > 1
@@ -1634,12 +1620,12 @@ async def run_dialog_with_uploads(
                 )),
             }
             if runtime_context_supported:
-                if runtime_context is None:
+                if agent_runtime_context is None:
                     raise YadrenoAdminError(
                         "Hub runtime-context negotiation invariant failed"
                     )
                 fields["runtime_context"] = json.dumps(
-                    runtime_context,
+                    agent_runtime_context,
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
