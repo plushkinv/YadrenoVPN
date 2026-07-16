@@ -1,4 +1,4 @@
-aiogram>=3.27.0
+aiogram>=3.29.1,<4
 aiohttp
 qrcode
 pillow

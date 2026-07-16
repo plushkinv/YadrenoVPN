@@ -1583,8 +1583,7 @@ async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
     from bot.handlers.admin.yadreno_admin import (
         _YadrenoProgressRenderer,
         _activate_yadreno_chat_lane,
-        _format_final_response,
-        _final_response_keyboard,
+        _deliver_final_response,
     )
 
     await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CHAT_TOPIC_ID)
@@ -1610,13 +1609,10 @@ async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
             topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
             progress_callback=progress.handle,
         )
-        await safe_edit_or_send(
+        await _deliver_final_response(
             progress.final_target,
-            _format_final_response(final.content),
-            reply_markup=_final_response_keyboard(
-                YADRENO_ADMIN_CHAT_TOPIC_ID,
-                final.viewer_url,
-            ),
+            final,
+            YADRENO_ADMIN_CHAT_TOPIC_ID,
         )
     except YadrenoAdminError as e:
         await safe_edit_or_send(

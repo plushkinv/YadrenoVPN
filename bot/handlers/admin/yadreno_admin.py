@@ -32,10 +32,10 @@ from bot.services.yadreno_admin import (
     YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID,
     YADRENO_ADMIN_YAA_TOPIC_ID,
     YadrenoAdminError,
+    YadrenoAdminFinal,
     YadrenoAdminLatest,
     YadrenoAdminProgressEvent,
     YadrenoAdminUpload,
-    build_agent_env_context_for_topic,
     cancel_active_dialog,
     detect_public_server_ip,
     fetch_latest_dialog_event,
@@ -64,6 +64,7 @@ from bot.utils.yadreno_admin_errors import (
     format_yadreno_admin_error,
     yadreno_admin_error_alert,
 )
+from bot.utils.yadreno_admin_delivery import edit_or_send_yadreno_admin_final
 from database.requests import (
     create_bot_database_backup,
     get_display_timezone,
@@ -191,6 +192,29 @@ def _final_response_keyboard(
         topic_id,
         active_request=False,
         viewer_url=viewer_url,
+    )
+
+
+async def _deliver_final_response(
+    message: Message,
+    final: YadrenoAdminFinal,
+    topic_id: int,
+    *,
+    suffix: str = "",
+    rich_suffix: str | None = None,
+) -> Message:
+    """Deliver one hub final through the negotiated Rich/HTML adapter."""
+    fallback_html = _format_final_response(final.content) + suffix
+    rich_markdown = (
+        final.rich_markdown + (suffix if rich_suffix is None else rich_suffix)
+        if final.rich_markdown
+        else None
+    )
+    return await edit_or_send_yadreno_admin_final(
+        message,
+        fallback_html=fallback_html,
+        rich_markdown=rich_markdown,
+        reply_markup=_final_response_keyboard(topic_id, final.viewer_url),
     )
 
 
@@ -585,6 +609,11 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
         await callback.answer("Активного запроса нет", show_alert=False)
         return
 
+    if latest.final is not None:
+        await _deliver_final_response(callback.message, latest.final, topic_id)
+        await callback.answer("Обновил")
+        return
+
     text = _format_latest_event(latest)
     if text is None:
         active_request_id = get_active_request_id(
@@ -615,13 +644,8 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
                 )
                 return
             if final is not None:
-                await safe_edit_or_send(
-                    progress.final_target,
-                    _format_final_response(final.content),
-                    reply_markup=_final_response_keyboard(
-                        topic_id,
-                        final.viewer_url,
-                    ),
+                await _deliver_final_response(
+                    progress.final_target, final, topic_id,
                 )
                 return
         await callback.answer("Пока свежих данных нет", show_alert=False)
@@ -662,13 +686,8 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
             )
             return
         if final is not None:
-            await safe_edit_or_send(
-                progress.final_target,
-                _format_final_response(final.content),
-                reply_markup=_final_response_keyboard(
-                    topic_id,
-                    final.viewer_url,
-                ),
+            await _deliver_final_response(
+                progress.final_target, final, topic_id,
             )
             return
 
@@ -843,11 +862,7 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
             topic_id=topic_id,
             progress_callback=progress.handle,
         )
-        await safe_edit_or_send(
-            progress.final_target,
-            _format_final_response(final.content),
-            reply_markup=_final_response_keyboard(topic_id, final.viewer_url),
-        )
+        await _deliver_final_response(progress.final_target, final, topic_id)
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
@@ -1313,13 +1328,8 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
                 user_message="В альбоме нет файлов, которые можно обработать.",
             )
 
-        await safe_edit_or_send(
-            progress.final_target,
-            _format_final_response(final.content),
-            reply_markup=_final_response_keyboard(
-                buffer.topic_id,
-                final.viewer_url,
-            ),
+        await _deliver_final_response(
+            progress.final_target, final, buffer.topic_id,
         )
     except YadrenoAdminError as e:
         await safe_edit_or_send(
@@ -1462,7 +1472,6 @@ def _build_yaa_prompt(
 
     context: dict[str, Any] = {
         "source": "/yaa",
-        "env": build_agent_env_context_for_topic(YADRENO_ADMIN_YAA_TOPIC_ID),
         "page_key": page_key,
         "page_flow": _build_yaa_page_flow_context(page_key),
         "database_path": "database/vpn_bot.db",
@@ -1599,11 +1608,18 @@ async def _handle_broadcast_yaa(
         return
     finally:
         _cleanup_yadreno_uploads(uploads)
-    await safe_edit_or_send(
+    await _deliver_final_response(
         progress.final_target,
-        _format_final_response(final.content)
-        + "\n\nМожно ответить обычным сообщением — повторять <code>/yaa</code> не нужно.",
-        reply_markup=broadcast_editor_kb(),
+        final,
+        YADRENO_ADMIN_BROADCAST_TOPIC_ID,
+        suffix=(
+            "\n\nМожно ответить обычным сообщением — повторять "
+            "<code>/yaa</code> не нужно."
+        ),
+        rich_suffix=(
+            "\n\nМожно ответить обычным сообщением — повторять "
+            "`/yaa` не нужно."
+        ),
     )
 
 
@@ -1769,13 +1785,17 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
         return
 
     await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_YAA_TOPIC_ID)
-    await safe_edit_or_send(
+    await _deliver_final_response(
         progress.final_target,
-        _format_final_response(final.content)
-        + "\n\nМожно ответить обычным сообщением, без <code>/yaa</code>.",
-        reply_markup=_final_response_keyboard(
-            YADRENO_ADMIN_YAA_TOPIC_ID,
-            final.viewer_url,
+        final,
+        YADRENO_ADMIN_YAA_TOPIC_ID,
+        suffix=(
+            "\n\nМожно ответить обычным сообщением, без "
+            "<code>/yaa</code>."
+        ),
+        rich_suffix=(
+            "\n\nМожно ответить обычным сообщением, без "
+            "`/yaa`."
         ),
     )
 
@@ -1888,11 +1908,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
                 "В сообщении нет поддерживаемого файла",
                 user_message="В сообщении нет файла, который можно обработать.",
             )
-        await safe_edit_or_send(
-            progress.final_target,
-            _format_final_response(final.content),
-            reply_markup=_final_response_keyboard(topic_id, final.viewer_url),
-        )
+        await _deliver_final_response(progress.final_target, final, topic_id)
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,

@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 import aiohttp
 
+from bot.utils.git_utils import get_current_commit
 from bot.services.yadreno_admin_core_guard import (
     finalize_core_guard,
     finalize_core_guards_for_request,
@@ -63,13 +64,21 @@ YADRENO_ADMIN_BROADCAST_SKILL_ID = "yadreno_vpn_broadcast"
 YADRENO_ADMIN_SATELLITE_TYPE = "yadreno_vpn"
 PROGRESS_EVENTS_CAPABILITY = "progress_events"
 BROADCAST_EDITOR_CAPABILITY = "broadcast_editor_v1"
-SATELLITE_CAPABILITIES: tuple[str, ...] = (PROGRESS_EVENTS_CAPABILITY,)
+RICH_MESSAGES_CAPABILITY = "rich_messages_v1"
+RUNTIME_CONTEXT_CAPABILITY = "runtime_context_v1"
+SATELLITE_PROTOCOL_VERSION = "v1"
+SATELLITE_CAPABILITIES: tuple[str, ...] = (
+    PROGRESS_EVENTS_CAPABILITY,
+    RICH_MESSAGES_CAPABILITY,
+)
 PUBLIC_IP_URLS = (
     "https://api.ipify.org",
     "https://ifconfig.me/ip",
 )
 
 _server_ip_cache: Optional[str] = None
+_satellite_version_unset = object()
+_satellite_version_cache: object | Optional[str] = _satellite_version_unset
 _dangerous_shell_patterns: tuple[tuple[str, str], ...] = (
     (
         r"(^|[;&|]\s*)(sudo\s+)?rm\s+([^\n;&|]*\s)?-(?=[^\s\n;&|]*r)(?=[^\s\n;&|]*f)[^\s\n;&|]*\s+(?:-[^\s\n;&|]+\s+)*(--\s+)?(/|\*/|/\*|~|\$HOME)(\s|$)",
@@ -139,11 +148,17 @@ def is_yadreno_admin_broadcast_topic(topic_id: int) -> bool:
     return int(topic_id) == YADRENO_ADMIN_BROADCAST_TOPIC_ID
 
 
-def _capabilities_for_skill(skill_id: str) -> list[str]:
+def _capabilities_for_skill(
+    skill_id: str,
+    *,
+    runtime_context_supported: bool = False,
+) -> list[str]:
     """Advertise the editor capability only inside its isolated skill."""
     capabilities = list(SATELLITE_CAPABILITIES)
     if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
         capabilities.append(BROADCAST_EDITOR_CAPABILITY)
+    elif runtime_context_supported:
+        capabilities.append(RUNTIME_CONTEXT_CAPABILITY)
     return capabilities
 
 
@@ -211,20 +226,45 @@ def build_agent_env_context_for_topic(
     return build_agent_env_context(_core_policy_for_skill(effective_skill_id))
 
 
-def _message_has_agent_env_context(message: str) -> bool:
-    return '"env":{' in message or '"env": {' in message
+def build_agent_runtime_context(
+    core_changes_allowed: bool | None,
+) -> dict[str, Any]:
+    """Build the negotiated v1 runtime payload for the hub."""
+    return {
+        "schema_version": 1,
+        "env": build_agent_env_context(core_changes_allowed),
+    }
 
 
 def _with_agent_env_context(message: str, env_context: dict[str, Any]) -> str:
-    """Prefix a user request with compact service context unless it already has it."""
-    if _message_has_agent_env_context(message):
-        return message
+    """Prefix a request for a legacy hub without structured context support."""
     payload = {"env": env_context}
     return (
         "Служебный контекст:\n"
         f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
         f"{message}"
     )
+
+
+def _satellite_version() -> Optional[str]:
+    """Return the current Git commit once per process, when Git is available."""
+    global _satellite_version_cache
+    if _satellite_version_cache is _satellite_version_unset:
+        _satellite_version_cache = get_current_commit()
+    value = _satellite_version_cache
+    return value if isinstance(value, str) and value else None
+
+
+def _hub_headers(api_key: str) -> dict[str, str]:
+    """Build authentication and version headers for every hub request."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "X-Yadreno-Satellite-Protocol-Version": SATELLITE_PROTOCOL_VERSION,
+    }
+    version = _satellite_version()
+    if version:
+        headers["X-Yadreno-Satellite-Version"] = version
+    return headers
 
 
 class YadrenoAdminError(RuntimeError):
@@ -253,6 +293,7 @@ class YadrenoAdminFinal:
     content: str
     viewer_url: Optional[str] = None
     request_id: Optional[int] = None
+    rich_markdown: Optional[str] = None
 
 
 @dataclass
@@ -665,7 +706,7 @@ async def _request_json(
 
     204 is processed separately, because long-polling is a standard response.
     """
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = _hub_headers(api_key)
     delays = RETRY_CONFIG.get("delays", [1, 3, 9])
     max_attempts = RETRY_CONFIG.get("max_attempts", 3)
     last_error: Optional[Exception] = None
@@ -756,6 +797,48 @@ async def _ensure_broadcast_hub_support(
         raise _incompatible_broadcast_hub("broadcast skill is not allowed")
 
 
+async def _negotiate_runtime_context_support(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    skill_id: str,
+) -> bool:
+    """Discover structured context support for one new task.
+
+    Broadcast keeps its existing fail-closed contract. Ordinary and
+    customization lanes degrade to the legacy text prefix when discovery is
+    unavailable or the capability is absent.
+    """
+    if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
+        await _ensure_broadcast_hub_support(session, api_key, skill_id)
+        return False
+    try:
+        _, data = await _request_json(
+            session,
+            api_key,
+            "GET",
+            "/api/v1/satellite/capabilities",
+        )
+    except YadrenoAdminError as error:
+        logger.warning(
+            "runtime_context capability discovery unavailable; using legacy "
+            "prefix (status=%s)",
+            error.status_code or "network",
+        )
+        return False
+    if not isinstance(data, dict):
+        return False
+    capabilities = data.get("capabilities")
+    allowed_skills = data.get("allowed_skill_ids")
+    return bool(
+        data.get("protocol_version") == SATELLITE_PROTOCOL_VERSION
+        and data.get("satellite_type") == YADRENO_ADMIN_SATELLITE_TYPE
+        and isinstance(capabilities, list)
+        and RUNTIME_CONTEXT_CAPABILITY in capabilities
+        and isinstance(allowed_skills, list)
+        and skill_id in allowed_skills
+    )
+
+
 def _validate_broadcast_hub_response(data: dict[str, Any], skill_id: str) -> None:
     """Reject fallback to a general skill after broadcast negotiation."""
     if skill_id != YADRENO_ADMIN_BROADCAST_SKILL_ID:
@@ -776,7 +859,7 @@ async def _request_multipart(
     file_field: str,
 ) -> tuple[int, Optional[dict]]:
     """Makes a multipart request to the upload API of the hub with retry."""
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = _hub_headers(api_key)
     delays = RETRY_CONFIG.get("delays", [1, 3, 9])
     max_attempts = RETRY_CONFIG.get("max_attempts", 3)
     last_error: Optional[Exception] = None
@@ -1383,6 +1466,7 @@ async def _poll_until_final(
                 final_received = True
                 return YadrenoAdminFinal(
                     content=event.get("content") or "",
+                    rich_markdown=event.get("rich_markdown"),
                     viewer_url=event.get("viewer_url"),
                     request_id=request_id,
                 )
@@ -1413,15 +1497,27 @@ async def run_dialog(
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
-            await _ensure_broadcast_hub_support(session, api_key, effective_skill_id)
+            runtime_context_supported = await _negotiate_runtime_context_support(
+                session,
+                api_key,
+                effective_skill_id,
+            )
             server_ip = await _get_server_ip(session)
             core_changes_allowed = _core_policy_for_skill(effective_skill_id)
+            runtime_context = (
+                None
+                if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                else build_agent_runtime_context(core_changes_allowed)
+            )
             agent_message = (
                 message
-                if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                if (
+                    effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                    or runtime_context_supported
+                )
                 else _with_agent_env_context(
                     message,
-                    build_agent_env_context(core_changes_allowed),
+                    runtime_context["env"] if runtime_context else {},
                 )
             )
             payload: dict[str, Any] = {
@@ -1429,8 +1525,17 @@ async def run_dialog(
                 "server_ip": server_ip,
                 "topic_id": topic_id,
                 "skill_id": effective_skill_id,
-                "capabilities": _capabilities_for_skill(effective_skill_id),
+                "capabilities": _capabilities_for_skill(
+                    effective_skill_id,
+                    runtime_context_supported=runtime_context_supported,
+                ),
             }
+            if runtime_context_supported:
+                if runtime_context is None:
+                    raise YadrenoAdminError(
+                        "Hub runtime-context negotiation invariant failed"
+                    )
+                payload["runtime_context"] = runtime_context
             if core_changes_allowed is not None:
                 payload["core_changes_allowed"] = core_changes_allowed
             _, process_data = await _request_json(
@@ -1489,15 +1594,27 @@ async def run_dialog_with_uploads(
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
-            await _ensure_broadcast_hub_support(session, api_key, effective_skill_id)
+            runtime_context_supported = await _negotiate_runtime_context_support(
+                session,
+                api_key,
+                effective_skill_id,
+            )
             server_ip = await _get_server_ip(session)
             core_changes_allowed = _core_policy_for_skill(effective_skill_id)
+            runtime_context = (
+                None
+                if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                else build_agent_runtime_context(core_changes_allowed)
+            )
             agent_message = (
                 message
-                if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                if (
+                    effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                    or runtime_context_supported
+                )
                 else _with_agent_env_context(
                     message,
-                    build_agent_env_context(core_changes_allowed),
+                    runtime_context["env"] if runtime_context else {},
                 )
             )
             is_batch = len(uploads) > 1
@@ -1511,8 +1628,21 @@ async def run_dialog_with_uploads(
                 "topic_id": topic_id,
                 "server_ip": server_ip,
                 "skill_id": effective_skill_id,
-                "capabilities": ",".join(_capabilities_for_skill(effective_skill_id)),
+                "capabilities": ",".join(_capabilities_for_skill(
+                    effective_skill_id,
+                    runtime_context_supported=runtime_context_supported,
+                )),
             }
+            if runtime_context_supported:
+                if runtime_context is None:
+                    raise YadrenoAdminError(
+                        "Hub runtime-context negotiation invariant failed"
+                    )
+                fields["runtime_context"] = json.dumps(
+                    runtime_context,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
             if core_changes_allowed is not None:
                 fields["core_changes_allowed"] = "true" if core_changes_allowed else "false"
             if is_batch:
@@ -1603,6 +1733,7 @@ def _latest_from_event(request_id: int, event: Optional[dict[str, Any]]) -> Yadr
             event=event_type,
             final=YadrenoAdminFinal(
                 content=str(event.get("content") or ""),
+                rich_markdown=event.get("rich_markdown"),
                 viewer_url=event.get("viewer_url"),
                 request_id=request_id,
             ),
@@ -1867,6 +1998,8 @@ async def _recover_one_active_dialog_on_startup(
     request_id: int,
 ) -> None:
     """Checks one active request after restart and continues only live tasks."""
+    from bot.utils.yadreno_admin_delivery import send_yadreno_admin_final
+
     try:
         hub_status = await fetch_dialog_status(
             telegram_id,
@@ -1882,10 +2015,11 @@ async def _recover_one_active_dialog_on_startup(
                     topic_id=topic_id,
                 )
                 if latest is not None and latest.final is not None:
-                    await bot.send_message(
+                    await send_yadreno_admin_final(
+                        bot,
                         chat_id=telegram_id,
-                        text=_format_recovered_final(latest.final.content),
-                        parse_mode="HTML",
+                        fallback_html=_format_recovered_final(latest.final.content),
+                        rich_markdown=latest.final.rich_markdown,
                         reply_markup=_recovered_final_keyboard(
                             topic_id,
                             latest.final.viewer_url,
@@ -1908,10 +2042,11 @@ async def _recover_one_active_dialog_on_startup(
         )
         if final is None:
             return
-        await bot.send_message(
+        await send_yadreno_admin_final(
+            bot,
             chat_id=telegram_id,
-            text=_format_recovered_final(final.content),
-            parse_mode="HTML",
+            fallback_html=_format_recovered_final(final.content),
+            rich_markdown=final.rich_markdown,
             reply_markup=_recovered_final_keyboard(topic_id, final.viewer_url),
         )
     except Exception as e:
