@@ -14,11 +14,45 @@ __all__ = [
     'apply_balance_operation',
     'create_business_operation_tables',
     'get_first_active_key_for_user',
+    'has_balance_operation_reference',
     'get_key_operation_history',
     'record_key_operation',
 ]
 
 _BALANCE_OPERATION_TYPES = {'credit', 'debit'}
+
+
+def has_balance_operation_reference(
+    *,
+    user_id: int,
+    operation_type: str,
+    source: str,
+    reference_type: str,
+    reference_id: str,
+) -> bool:
+    """Checks whether an idempotent balance side effect was already recorded."""
+    with get_db() as conn:
+        create_business_operation_tables(conn)
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM balance_operations
+            WHERE user_id = ?
+              AND operation_type = ?
+              AND source = ?
+              AND reference_type = ?
+              AND reference_id = ?
+            LIMIT 1
+            """,
+            (
+                int(user_id),
+                str(operation_type),
+                str(source),
+                str(reference_type),
+                str(reference_id),
+            ),
+        ).fetchone()
+        return row is not None
 
 
 def create_business_operation_tables(conn: sqlite3.Connection) -> None:

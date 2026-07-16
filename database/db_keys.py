@@ -20,7 +20,9 @@ __all__ = [
     'is_key_active',
     'is_traffic_exhausted',
     'get_all_active_keys_with_server',
+    'get_all_panel_sync_keys',
     'bulk_update_traffic',
+    'apply_panel_import_batch',
     'update_key_traffic',
     'update_key_notified_pct',
     'reset_key_traffic_notification',
@@ -329,6 +331,25 @@ def get_all_active_keys_with_server() -> List[Dict[str, Any]]:
         """)
         return [dict(row) for row in cursor.fetchall()]
 
+
+def get_all_panel_sync_keys() -> List[Dict[str, Any]]:
+    """Return all managed keys on active servers, including expired keys."""
+    with get_db() as conn:
+        cursor = conn.execute("""
+            SELECT
+                vk.id, vk.panel_email, vk.traffic_used, vk.traffic_limit,
+                vk.traffic_notified_pct, vk.custom_name, vk.client_uuid,
+                vk.panel_inbound_id, vk.tariff_id, vk.expires_at, vk.sub_id,
+                s.id AS server_id, s.name AS server_name,
+                u.telegram_id, u.is_banned
+            FROM vpn_keys vk
+            JOIN servers s ON vk.server_id = s.id
+            JOIN users u ON vk.user_id = u.id
+            WHERE vk.panel_email IS NOT NULL
+              AND s.is_active = 1
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
 def get_all_keys_with_server() -> List[Dict[str, Any]]:
     """
     Receives ALL keys associated with the server (including expired ones).
@@ -369,6 +390,35 @@ def bulk_update_traffic(updates: List[tuple]) -> None:
             WHERE id = ?
         """, updates)
         logger.info(f"Обновлён трафик для {len(updates)} ключей")
+
+def apply_panel_import_batch(updates: List[Dict[str, Any]]) -> int:
+    """Atomically apply a normalized Panel -> DB import for one server."""
+    if not updates:
+        return 0
+
+    rows = [
+        (
+            update.get('expires_at'),
+            max(0, int(update.get('traffic_used', 0) or 0)),
+            max(0, int(update.get('traffic_limit', 0) or 0)),
+            int(update.get('traffic_notified_pct', 100) or 0),
+            int(update['key_id']),
+        )
+        for update in updates
+    ]
+    with get_db() as conn:
+        conn.executemany("""
+            UPDATE vpn_keys
+            SET expires_at = ?,
+                traffic_used = ?,
+                traffic_limit = ?,
+                traffic_notified_pct = ?,
+                traffic_updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, rows)
+    logger.info("Applied Panel -> DB state for %s keys", len(rows))
+    return len(rows)
+
 
 def update_key_traffic(key_id: int, traffic_used: int) -> None:
     """

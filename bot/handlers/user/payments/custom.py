@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery
 from bot.utils.page_flow import build_page_flow_context
 from bot.utils.page_renderer import render_page
 from bot.utils.text import escape_html
+from bot.utils.callbacks import safe_answer_callback
 from bot.handlers.user.payments.tariff_select_page import (
     build_payment_tariff_select_page_context,
     show_payment_no_tariffs_page,
@@ -164,10 +165,12 @@ async def custom_payment_check(callback: CallbackQuery, state: FSMContext):
     order_id = callback.data.split(':', 1)[1]
 
     from database.requests import (
+        cancel_pending_order,
         find_order_by_order_id,
         get_payment_provider_order,
         get_user_internal_id,
         is_order_already_paid,
+        update_payment_auto_check,
     )
     from bot.handlers.user.payments.base import finalize_payment_ui
     from bot.keyboards.admin import home_only_kb
@@ -175,12 +178,12 @@ async def custom_payment_check(callback: CallbackQuery, state: FSMContext):
 
     order = find_order_by_order_id(order_id)
     if not order:
-        await callback.answer('❌ Ордер не найден', show_alert=True)
+        await safe_answer_callback(callback, '❌ Ордер не найден', show_alert=True)
         return
 
     owner_user_id = get_user_internal_id(callback.from_user.id)
     if not owner_user_id or int(order.get('user_id') or 0) != int(owner_user_id):
-        await callback.answer('❌ Ордер не найден', show_alert=True)
+        await safe_answer_callback(callback, '❌ Ордер не найден', show_alert=True)
         return
 
     if order.get('status') == 'paid' or is_order_already_paid(order_id):
@@ -191,17 +194,29 @@ async def custom_payment_check(callback: CallbackQuery, state: FSMContext):
             order,
             user_id=callback.from_user.id,
         )
-        await callback.answer()
+        await safe_answer_callback(callback)
         return
 
     provider_order = get_payment_provider_order(order_id)
     if not provider_order:
-        await callback.answer('⚠️ Нет данных о платеже. Попробуйте создать счёт заново.', show_alert=True)
+        await safe_answer_callback(
+            callback,
+            '⚠️ Нет данных о платеже. Попробуйте создать счёт заново.',
+            show_alert=True,
+        )
         return
+    await safe_answer_callback(callback, '🔍 Сейчас проверим платёж...')
     if provider_order.get('status') == 'succeeded':
+        update_payment_auto_check(
+            order_id,
+            state='provider_succeeded',
+            next_delay_seconds=0,
+        )
         await _complete_custom_payment_flow(callback, state, order, provider_order)
         return
     if provider_order.get('status') == 'canceled':
+        cancel_pending_order(order_id)
+        update_payment_auto_check(order_id, state='canceled')
         await show_payment_status_message(
             callback.message,
             title_html='❌ <b>Платёж отменён</b>',
@@ -211,7 +226,6 @@ async def custom_payment_check(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    await callback.answer('🔍 Проверяем платёж...')
     try:
         result = await check_custom_payment_order(provider_order['provider_id'], order)
     except Exception as e:
@@ -226,10 +240,17 @@ async def custom_payment_check(callback: CallbackQuery, state: FSMContext):
         return
 
     if result['status'] == 'succeeded':
+        update_payment_auto_check(
+            order_id,
+            state='provider_succeeded',
+            next_delay_seconds=0,
+        )
         await _complete_custom_payment_flow(callback, state, order, provider_order)
         return
 
     if result['status'] == 'canceled':
+        cancel_pending_order(order_id)
+        update_payment_auto_check(order_id, state='canceled')
         await show_payment_status_message(
             callback.message,
             title_html='❌ <b>Платёж отменён</b>',
@@ -276,9 +297,13 @@ async def _create_custom_payment(
     tariff = get_tariff_by_id(tariff_id)
     key = get_key_details_for_user(key_id, callback.from_user.id) if key_id else None
     if not user_id or not tariff or (key_id and not key):
-        await callback.answer('❌ Ошибка тарифа или ключа', show_alert=True)
+        await safe_answer_callback(callback, '❌ Ошибка тарифа или ключа', show_alert=True)
         return
 
+    await safe_answer_callback(
+        callback,
+        '⏳ Создаём платёж, пожалуйста, подождите...',
+    )
     await show_payment_status_message(
         callback.message,
         title_html='⏳ Создаём ссылку на оплату...',
@@ -306,7 +331,6 @@ async def _create_custom_payment(
             payment_provider_title=provider.title,
             reply_markup=home_only_kb(),
         )
-        await callback.answer()
         return
 
     if not result.get('ok'):
@@ -315,14 +339,12 @@ async def _create_custom_payment(
             str(result.get('reason') or 'Попробуйте позже.'),
             payment_provider_title=provider.title,
         )
-        await callback.answer()
         return
 
     order_id = result['order_id']
     quote = result['quote']
     if result.get('is_free'):
         await complete_promo_free_payment(callback, state, order_id, callback.from_user.id)
-        await callback.answer()
         return
 
     payment_url = result['payment_url']
@@ -357,7 +379,6 @@ async def _create_custom_payment(
         fallback_text=default_qr_payment_page_text(),
         media_policy='runtime',
     )
-    await callback.answer()
 
 
 def _get_available_provider(provider_id: str, context: dict | None = None):
@@ -381,15 +402,20 @@ async def _complete_custom_payment_flow(
     provider_order: dict,
 ) -> None:
     from bot.services.billing import complete_payment_flow
+    from database.requests import find_order_by_order_id, update_payment_auto_check
 
+    order_id = str(order.get('order_id') or '')
     await complete_payment_flow(
-        order_id=str(order.get('order_id') or ''),
+        order_id=order_id,
         message=callback.message,
         state=state,
         telegram_id=callback.from_user.id,
         payment_type=str(order.get('payment_type') or provider_order.get('payment_type')),
         referral_amount=_custom_payment_referral_amount(order),
     )
+    completed_order = find_order_by_order_id(order_id)
+    if completed_order and completed_order.get('status') == 'paid':
+        update_payment_auto_check(order_id, state='completed')
 
 
 def _custom_payment_referral_amount(order: dict) -> int:

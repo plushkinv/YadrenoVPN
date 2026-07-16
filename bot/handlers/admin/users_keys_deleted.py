@@ -24,6 +24,7 @@ from database.requests import (
     get_users_stats
 )
 from bot.services.vpn_api import get_client_from_server_data
+from bot.services.panel_sync_coordinator import regular_panel_operation
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -53,6 +54,7 @@ async def on_key_delete_ask(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith('admin_key_delete_confirm:'))
+@regular_panel_operation
 async def on_key_delete_confirm(callback: CallbackQuery):
     """Deleting a key: first from the database, then from the panel."""
     key_id = int(callback.data.split(':')[1])
@@ -173,6 +175,7 @@ async def on_sync_deleted_panel_ask(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == 'admin_sync_deleted_panel_confirm')
+@regular_panel_operation
 async def on_sync_deleted_panel_confirm(callback: CallbackQuery):
     """Removing 'orphaned' keys from VPN servers."""
     await safe_edit_or_send(
@@ -315,6 +318,7 @@ async def on_sync_db_orphans_ask(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == 'admin_sync_db_orphans_confirm')
+@regular_panel_operation
 async def on_sync_db_orphans_confirm(callback: CallbackQuery):
     """Removing keys without a server."""
     from database.connection import get_db
@@ -369,6 +373,7 @@ async def on_sync_db_gone_ask(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith('admin_sync_db_gone_confirm:'))
+@regular_panel_operation
 async def on_sync_db_gone_confirm(callback: CallbackQuery):
     """Removing keys from a remote server."""
     server_id = int(callback.data.split(':')[1])
@@ -463,6 +468,7 @@ async def on_sync_db_missing_ask(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith('admin_sync_db_missing_confirm:'))
+@regular_panel_operation
 async def on_sync_db_missing_confirm(callback: CallbackQuery):
     """Removing keys that are missing from the panel (with re-checking)."""
     server_id = int(callback.data.split(':')[1])
@@ -556,6 +562,7 @@ async def on_sync_db_unreach_ask(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith('admin_sync_db_unreach_confirm:'))
+@regular_panel_operation
 async def on_sync_db_unreach_confirm(callback: CallbackQuery):
     """Forced deletion of keys for an inaccessible server."""
     server_id = int(callback.data.split(':')[1])

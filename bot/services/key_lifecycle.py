@@ -4,9 +4,12 @@ Common VPN key lifecycle operations.
 import logging
 from typing import Any, Dict, Optional
 
+from bot.services.panel_sync_coordinator import regular_panel_operation
+
 logger = logging.getLogger(__name__)
 
 
+@regular_panel_operation
 async def renew_key_access(
     key_id: int,
     days: int,
@@ -147,6 +150,7 @@ async def process_expired_key_lifecycle_events(limit: Optional[int] = None) -> l
     return processed
 
 
+@regular_panel_operation
 async def sync_user_keys_panel_access(telegram_id: int) -> Dict[str, Any]:
     """
     Synchronizes access of all user keys with the panel after a ban/unban.

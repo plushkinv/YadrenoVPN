@@ -50,6 +50,7 @@ from bot.services.yadreno_admin import (
     YadrenoAdminUpload,
     run_dialog_with_uploads,
 )
+from bot.services.panel_sync_coordinator import regular_panel_operation
 from bot.states.admin_states import AdminStates
 from database.requests import get_yadreno_admin_api_key
 
@@ -57,6 +58,7 @@ logger = logging.getLogger(__name__)
 
 from bot.utils.text import escape_html, get_message_text_for_storage, safe_edit_or_send
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock, set_update_blocked
+from bot.utils.yadreno_admin_errors import format_yadreno_admin_error
 
 router = Router()
 
@@ -631,6 +633,7 @@ async def admin_toggle_bot_mode(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("admin_set_bot_mode:"))
+@regular_panel_operation
 async def admin_set_bot_mode(callback: CallbackQuery, state: FSMContext):
     """Saves the new bot operating mode in settings."""
     if not is_admin(callback.from_user.id):
@@ -795,20 +798,18 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             reply_markup=update_confirm_kb(has_updates=False)
         )
     elif has_blocking and blocking_commit:
-        # There is a blocking update - display a warning
-        # Remove the marker! from message when displayed
+        # Install the marked version as a separate update stage.
         blocking_msg = blocking_commit['message'].lstrip('!')
         blocking_hash = blocking_commit['hash'][:8]
         
         await safe_edit_or_send(callback.message, 
-            f"⚠️ <b>Блокирующее обновление!</b>\n\n"
-            f"📦 <b>Доступно обновлений:</b> {commits_behind}\n"
+            f"📦 <b>Доступно обновление</b>\n\n"
+            f"<b>Доступно обновлений:</b> {commits_behind}\n"
             f"Текущая версия: <code>{commit_hash}</code>\n\n"
-            f"🚫 Среди обновлений найден <b>блокирующий коммит</b> <code>{blocking_hash}</code>:\n"
-            f"``<code>\n{blocking_msg}\n</code>``\n\n"
-            f"Будет установлен <b>только этот коммит</b>. "
-            f"После перезапуска вам потребуется выполнить требуемые действия, "
-            f"прежде чем обновляться дальше.\n\n"
+            f"Сначала будет установлена версия <code>{blocking_hash}</code>:\n"
+            f"<pre>{escape_html(blocking_msg)}</pre>\n\n"
+            "Обновление пройдёт отдельным этапом, после чего бот автоматически "
+            "перезапустится. Если потребуется дополнительная настройка, бот сообщит об этом после запуска.\n\n"
             f"{commits_text}",
             reply_markup=update_confirm_kb(has_updates=True, has_blocking=True)
         )
@@ -854,10 +855,9 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
     blocking_commit = data.get('blocking_commit')
     
     if has_blocking and blocking_commit:
-        # Blocking update - update to a specific commit
         await safe_edit_or_send(callback.message, 
-            "🔄 <b>Блокирующее обновление...</b>\n\n"
-            f"Обновляю до коммита <code>{blocking_commit['hash'][:8]}</code>..."
+            "🔄 <b>Обновление...</b>\n\n"
+            f"Устанавливаю версию <code>{blocking_commit['hash'][:8]}</code>..."
         )
         
         success, message = pull_to_commit(blocking_commit['hash'])
@@ -883,16 +883,11 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
     
     if has_blocking:
         set_update_blocked()
-        await safe_edit_or_send(callback.message, 
-            f"✅ <b>Блокирующее обновление завершено!</b>\n\n{message}\n\n"
-            "⚠️ После перезапуска выполните требуемые действия перед следующим обновлением.\n\n"
-            "🔄 Перезапуск бота через 2 секунды..."
-        )
-    else:
-        await safe_edit_or_send(callback.message, 
-            f"✅ <b>Обновление завершено!</b>\n\n{message}\n\n"
-            "🔄 Перезапуск бота через 2 секунды..."
-        )
+
+    await safe_edit_or_send(callback.message,
+        f"✅ <b>Обновление завершено!</b>\n\n{message}\n\n"
+        "🔄 Перезапуск бота через 2 секунды..."
+    )
     
     await callback.answer("Бот перезапускается...", show_alert=True)
     
@@ -983,16 +978,13 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
         # Block updates
         set_update_blocked()
         
-        blocking_msg = blocking_commit['message'].lstrip('!')
         blocking_hash = blocking_commit['hash'][:8]
         
         logger.info(f"🔄 Принудительная перезапись до блокирующего коммита {blocking_hash} администратором {callback.from_user.id}")
         
         await safe_edit_or_send(callback.message, 
-            f"✅ <b>Обновлено до блокирующего коммита!</b>\n\n{message}\n\n"
-            f"🚫 Среди обновлений найден <b>блокирующий коммит</b> <code>{blocking_hash}</code>:\n"
-            f"<code>\n{blocking_msg}\n</code>\n\n"
-            "⚠️ После перезапуска выполните требуемые действия перед следующим обновлением.\n\n"
+            f"✅ <b>Перезапись завершена!</b>\n\n{message}\n\n"
+            "После перезапуска бот проверит готовность к следующим обновлениям.\n\n"
             "🔄 Перезапуск бота через 2 секунды..."
         )
     else:
@@ -1592,6 +1584,7 @@ async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
         _YadrenoProgressRenderer,
         _activate_yadreno_chat_lane,
         _format_final_response,
+        _final_response_keyboard,
     )
 
     await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CHAT_TOPIC_ID)
@@ -1619,13 +1612,16 @@ async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
         )
         await safe_edit_or_send(
             progress.final_target,
-            _format_final_response(final.content, final.viewer_url),
-            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+            _format_final_response(final.content),
+            reply_markup=_final_response_keyboard(
+                YADRENO_ADMIN_CHAT_TOPIC_ID,
+                final.viewer_url,
+            ),
         )
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
-            f"❌ <b>Yadreno Admin недоступен</b>\n\n{escape_html(str(e))}",
+            format_yadreno_admin_error(e),
             reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
         )
 

@@ -28,6 +28,13 @@ from database.requests import (
     update_referral_stat
 )
 from bot.services.exchange_rate import get_usd_rub_rate
+from bot.services.payment_api import (
+    PaymentApiRateLimitError,
+    PaymentApiResponseError,
+    PaymentApiTransientError,
+    payment_client_timeout,
+    run_payment_api_operation,
+)
 from bot.utils.telegram_links import build_telegram_link
 
 logger = logging.getLogger(__name__)
@@ -43,6 +50,93 @@ _payment_order_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Alphabet for Base62 encoding
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def _payment_configuration_error(provider: str, details: str) -> ValueError:
+    logger.error(
+        "Payment API configuration error: provider=%s error=%s",
+        provider,
+        details,
+    )
+    return ValueError(details)
+
+
+def _payment_contract_error(
+    provider: str,
+    operation: str,
+    order_id: str,
+    details: str,
+) -> PaymentApiResponseError:
+    logger.error(
+        "Payment API contract error: provider=%s operation=%s order=%s error=%s",
+        provider,
+        operation,
+        order_id,
+        details,
+    )
+    return PaymentApiResponseError(details)
+
+
+async def _payment_api_json_request(
+    *,
+    provider: str,
+    operation: str,
+    order_id: str,
+    method: str,
+    url: str,
+    expected_statuses: tuple[int, ...],
+    retry: bool,
+    headers: Optional[Dict[str, str]] = None,
+    json_payload: Optional[Dict[str, Any]] = None,
+    data: Any = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Executes one JSON payment API request under the shared reliability policy."""
+
+    async def _request_once() -> Any:
+        async with aiohttp.ClientSession(timeout=payment_client_timeout()) as session:
+            async with session.request(
+                method,
+                url,
+                headers=headers,
+                json=json_payload,
+                data=data,
+                params=params,
+            ) as response:
+                if response.status >= 500:
+                    raise PaymentApiTransientError(f'HTTP {response.status}')
+                if response.status == 429:
+                    raise PaymentApiRateLimitError('HTTP 429')
+                try:
+                    response_data = await response.json(content_type=None)
+                except Exception as error:
+                    raise PaymentApiResponseError(
+                        f'Некорректный JSON-ответ HTTP {response.status}'
+                    ) from error
+                if response.status not in expected_statuses:
+                    error_text = 'Неизвестная ошибка'
+                    if isinstance(response_data, dict):
+                        raw_error = response_data.get('error')
+                        if isinstance(raw_error, dict):
+                            raw_error = raw_error.get('description') or raw_error.get('code')
+                        error_text = str(
+                            response_data.get('message')
+                            or response_data.get('description')
+                            or raw_error
+                            or error_text
+                        )
+                    raise PaymentApiResponseError(
+                        f'HTTP {response.status}: {error_text}'
+                    )
+                return response_data
+
+    return await run_payment_api_operation(
+        provider=provider,
+        operation=operation,
+        order_id=order_id,
+        call=_request_once,
+        retry=retry,
+    )
 
 
 def build_payment_return_url(bot_name: str, provider: str, order_id: str) -> str:
@@ -182,6 +276,11 @@ def _get_order_payment_action(order: Optional[Dict[str, Any]]) -> str:
     return 'new_key'
 
 
+def _supports_payment_completion_retry(order: Optional[Dict[str, Any]]) -> bool:
+    payment_type = str((order or {}).get('payment_type') or '')
+    return payment_type in {'yookassa_qr', 'wata', 'platega', 'cardlink'} or payment_type.startswith('ext_')
+
+
 def _mark_order_runtime_flags(
     order: Optional[Dict[str, Any]],
     *,
@@ -222,7 +321,7 @@ async def _process_payment_order_unlocked(
     """
     from database.requests import (
         is_order_already_paid, find_order_by_order_id, complete_order, 
-        create_initial_vpn_key, update_payment_key_id
+        create_initial_vpn_key, reopen_paid_order, update_payment_key_id
     )
     
     # 1. Check for duplicates (just in case the caller didn't check)
@@ -304,10 +403,15 @@ async def _process_payment_order_unlocked(
             return True, f"✅ Оплата прошла успешно!\n\nВаш ключ продлён на {days} дней.{post_payment_extra_text}", order
         else:
             logger.error(f"Не удалось продлить ключ {order['vpn_key_id']} после оплаты!")
+            if _supports_payment_completion_retry(order):
+                reopen_paid_order(order_id)
+                return False, "❌ Не удалось продлить ключ после подтверждённой оплаты.", order
             return True, "✅ Оплата принята!\n\n⚠️ Возникла проблема с продлением. Мы разберёмся.", order
     else:
         if not order.get('tariff_id'):
             logger.error(f"Ордер {order_id}: тариф не найден или неактивен в БД (received tariff_id could not be resolved).")
+            if _supports_payment_completion_retry(order):
+                reopen_paid_order(order_id)
             from bot.errors import TariffNotFoundError
             raise TariffNotFoundError()
         
@@ -353,6 +457,9 @@ async def _process_payment_order_unlocked(
             
         except Exception as e:
             logger.error(f"Ошибка создания черновика ключа: {e}")
+            if _supports_payment_completion_retry(order):
+                reopen_paid_order(order_id)
+                return False, "❌ Не удалось создать ключ после подтверждённой оплаты.", order
             return True, "✅ Оплата принята, но произошла ошибка при создании ключа. Обратитесь в поддержку.", order
 
 
@@ -517,7 +624,10 @@ async def create_yookassa_qr_payment(
     """
     shop_id, secret_key = get_yookassa_credentials()
     if not shop_id or not secret_key:
-        raise ValueError("ЮКасса: не настроены shop_id или secret_key")
+        raise _payment_configuration_error(
+            'yookassa',
+            'ЮКасса: не настроены shop_id или secret_key',
+        )
 
     # Basic Auth header: base64(shop_id:secret_key)
     credentials = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
@@ -567,56 +677,60 @@ async def create_yookassa_qr_payment(
         "Content-Type": "application/json"
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            YOOKASSA_API_URL,
-            json=payload,
-            headers=headers
-        ) as response:
-            data = await response.json()
+    data = await _payment_api_json_request(
+        provider='yookassa',
+        operation='create',
+        order_id=order_id,
+        method='POST',
+        url=YOOKASSA_API_URL,
+        expected_statuses=(200, 201),
+        retry=True,
+        headers=headers,
+        json_payload=payload,
+    )
+    confirmation = data.get('confirmation', {}) if isinstance(data, dict) else {}
+    qr_url = confirmation.get('confirmation_url', '')
+    payment_id = data.get('id') if isinstance(data, dict) else None
+    if not payment_id or not qr_url:
+        raise _payment_contract_error(
+            'yookassa',
+            'create',
+            order_id,
+            'ЮКасса API не вернул id или confirmation_url',
+        )
 
-            if response.status not in (200, 201):
-                error_desc = data.get('description', 'Неизвестная ошибка')
-                logger.error(f"ЮКасса API ошибка {response.status}: {error_desc} | payload={payload}")
-                raise RuntimeError(f"ЮКасса API ошибка: {error_desc}")
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(qr_url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    bio = io.BytesIO()
+    img.save(bio, format="PNG")
+    qr_image_data = bio.getvalue()
 
-            confirmation = data.get('confirmation', {})
-            qr_url = confirmation.get('confirmation_url', '')
-            
-            if not qr_url:
-                logger.error(f"ЮКасса API не вернул confirmation_url: {data}")
-                raise RuntimeError("ЮКасса API не вернул данные для QR-кода")
-
-            # Generating a QR code from a payment line using the local qrcode library
-            
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=4,
-            )
-            qr.add_data(qr_url)
-            qr.make(fit=True)
-            
-            img = qr.make_image(fill_color="black", back_color="white")
-            bio = io.BytesIO()
-            img.save(bio, format="PNG")
-            qr_image_data = bio.getvalue()
-
-            logger.info(
-                f"ЮКасса QR создан: payment_id={data['id']}, order_id={order_id}, "
-                f"amount={amount_rub} RUB"
-            )
-
-            return {
-                'yookassa_payment_id': data['id'],
-                'qr_image_data': qr_image_data,
-                'qr_url': qr_url,
-                'status': data.get('status', 'pending')
-            }
+    logger.info(
+        "ЮКасса QR создан: payment_id=%s, order_id=%s, amount=%s RUB",
+        payment_id,
+        order_id,
+        amount_rub,
+    )
+    return {
+        'yookassa_payment_id': payment_id,
+        'qr_image_data': qr_image_data,
+        'qr_url': qr_url,
+        'status': data.get('status', 'pending'),
+    }
 
 
-async def check_yookassa_payment_status(yookassa_payment_id: str) -> str:
+async def check_yookassa_payment_status(
+    yookassa_payment_id: str,
+    *,
+    order_id: Optional[str] = None,
+) -> str:
     """
     Checks the payment status in YuKassa REST API.
 
@@ -633,7 +747,10 @@ async def check_yookassa_payment_status(yookassa_payment_id: str) -> str:
     """
     shop_id, secret_key = get_yookassa_credentials()
     if not shop_id or not secret_key:
-        raise ValueError("ЮКасса: не настроены shop_id или secret_key")
+        raise _payment_configuration_error(
+            'yookassa',
+            'ЮКасса: не настроены shop_id или secret_key',
+        )
 
     credentials = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
     headers = {
@@ -643,18 +760,26 @@ async def check_yookassa_payment_status(yookassa_payment_id: str) -> str:
 
     url = f"{YOOKASSA_API_URL}/{yookassa_payment_id}"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            data = await response.json()
-
-            if response.status != 200:
-                error_desc = data.get('description', 'Неизвестная ошибка')
-                logger.error(f"ЮКасса статус ошибка {response.status}: {error_desc}")
-                raise RuntimeError(f"ЮКасса API ошибка: {error_desc}")
-
-            status = data.get('status', 'pending')
-            logger.debug(f"ЮКасса payment {yookassa_payment_id}: status={status}")
-            return status
+    data = await _payment_api_json_request(
+        provider='yookassa',
+        operation='check',
+        order_id=order_id or yookassa_payment_id,
+        method='GET',
+        url=url,
+        expected_statuses=(200,),
+        retry=True,
+        headers=headers,
+    )
+    if not isinstance(data, dict) or not data.get('status'):
+        raise _payment_contract_error(
+            'yookassa',
+            'check',
+            order_id or yookassa_payment_id,
+            'ЮКасса API не вернул статус платежа',
+        )
+    status = data['status']
+    logger.debug("ЮКасса payment %s: status=%s", yookassa_payment_id, status)
+    return status
 
 
 # ============================================================================
@@ -691,7 +816,7 @@ async def create_wata_payment(
     """
     token = get_wata_token()
     if not token:
-        raise ValueError("WATA: JWT-токен не настроен")
+        raise _payment_configuration_error('wata', 'WATA: JWT-токен не настроен')
 
     return_url = build_payment_return_url(bot_name, 'wata', order_id)
 
@@ -712,55 +837,61 @@ async def create_wata_payment(
 
     url = f"{WATA_API_URL}/links/"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers) as response:
-            try:
-                data = await response.json()
-            except Exception:
-                text = await response.text()
-                logger.error(f"WATA API: невозможно разобрать ответ ({response.status}): {text}")
-                raise RuntimeError("WATA API вернул некорректный ответ")
+    data = await _payment_api_json_request(
+        provider='wata',
+        operation='create',
+        order_id=order_id,
+        method='POST',
+        url=url,
+        expected_statuses=(200, 201),
+        retry=False,
+        headers=headers,
+        json_payload=payload,
+    )
+    if not isinstance(data, dict):
+        raise _payment_contract_error(
+            'wata', 'create', order_id,
+            'WATA API вернул ответ неверного типа',
+        )
+    wata_link_id = data.get('id') or data.get('linkId') or data.get('uuid')
+    qr_url = data.get('url') or data.get('paymentUrl')
+    if not wata_link_id or not qr_url:
+        raise _payment_contract_error(
+            'wata', 'create', order_id,
+            'WATA API не вернул id или URL платёжной ссылки',
+        )
 
-            if response.status not in (200, 201):
-                error_desc = data.get('error') or data.get('message') or data.get('description') or 'Неизвестная ошибка'
-                logger.error(f"WATA API ошибка {response.status}: {error_desc} | payload={payload}")
-                raise RuntimeError(f"WATA API ошибка: {error_desc}")
-
-            wata_link_id = data.get('id') or data.get('linkId') or data.get('uuid')
-            qr_url = data.get('url') or data.get('paymentUrl')
-
-            if not wata_link_id or not qr_url:
-                logger.error(f"WATA API не вернул id/url: {data}")
-                raise RuntimeError("WATA API не вернул данные платёжной ссылки")
-
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=4,
-            )
-            qr.add_data(qr_url)
-            qr.make(fit=True)
-
-            img = qr.make_image(fill_color="black", back_color="white")
-            bio = io.BytesIO()
-            img.save(bio, format="PNG")
-            qr_image_data = bio.getvalue()
-
-            logger.info(
-                f"WATA ссылка создана: link_id={wata_link_id}, order_id={order_id}, "
-                f"amount={amount_rub} RUB"
-            )
-
-            return {
-                'wata_link_id': str(wata_link_id),
-                'qr_image_data': qr_image_data,
-                'qr_url': qr_url,
-                'status': str(data.get('status', 'Created')).lower(),
-            }
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(qr_url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    bio = io.BytesIO()
+    img.save(bio, format="PNG")
+    qr_image_data = bio.getvalue()
+    logger.info(
+        "WATA ссылка создана: link_id=%s, order_id=%s, amount=%s RUB",
+        wata_link_id,
+        order_id,
+        amount_rub,
+    )
+    return {
+        'wata_link_id': str(wata_link_id),
+        'qr_image_data': qr_image_data,
+        'qr_url': qr_url,
+        'status': str(data.get('status', 'Created')).lower(),
+    }
 
 
-async def check_wata_payment_status(wata_link_id: str) -> str:
+async def check_wata_payment_status(
+    wata_link_id: str,
+    *,
+    order_id: Optional[str] = None,
+) -> str:
     """
     Checks the status of the WATA payment link by its ID.
 
@@ -784,7 +915,7 @@ async def check_wata_payment_status(wata_link_id: str) -> str:
     """
     token = get_wata_token()
     if not token:
-        raise ValueError("WATA: JWT-токен не настроен")
+        raise _payment_configuration_error('wata', 'WATA: JWT-токен не настроен')
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -793,39 +924,28 @@ async def check_wata_payment_status(wata_link_id: str) -> str:
 
     url = f"{WATA_API_URL}/links/{wata_link_id}"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            try:
-                data = await response.json(content_type=None)
-            except Exception:
-                text = await response.text()
-                logger.error(f"WATA статус: невозможно разобрать ответ ({response.status}): {text}")
-                raise RuntimeError("WATA API вернул некорректный ответ")
-
-            if response.status == 429:
-                # Rate-limit is not an error, just too frequent requests
-                logger.warning(f"WATA rate-limit (429) при проверке {wata_link_id}")
-                return 'pending'
-
-            if response.status != 200:
-                error_desc = (
-                    data.get('error') or data.get('message') or
-                    data.get('description') or 'Неизвестная ошибка'
-                ) if isinstance(data, dict) else f'HTTP {response.status}'
-                logger.error(f"WATA статус ошибка {response.status}: {error_desc}")
-                raise RuntimeError(f"WATA API ошибка: {error_desc}")
-
-            # Link status: Created, Closed, Expired, etc.
-            status = str(data.get('status', '')).lower()
-            logger.debug(f"WATA link {wata_link_id}: status={status}")
-
-            # Closed = link is closed after successful payment
-            if status in ('closed', 'paid'):
-                return 'succeeded'
-            if status in ('declined', 'expired', 'canceled', 'cancelled'):
-                return 'canceled'
-
-            return 'pending'
+    data = await _payment_api_json_request(
+        provider='wata',
+        operation='check',
+        order_id=order_id or wata_link_id,
+        method='GET',
+        url=url,
+        expected_statuses=(200,),
+        retry=True,
+        headers=headers,
+    )
+    if not isinstance(data, dict) or not data.get('status'):
+        raise _payment_contract_error(
+            'wata', 'check', order_id or wata_link_id,
+            'WATA API не вернул статус платежа',
+        )
+    status = str(data['status']).lower()
+    logger.debug("WATA link %s: status=%s", wata_link_id, status)
+    if status in ('closed', 'paid'):
+        return 'succeeded'
+    if status in ('declined', 'expired', 'canceled', 'cancelled'):
+        return 'canceled'
+    return 'pending'
 
 
 # ============================================================================
@@ -864,7 +984,10 @@ async def create_platega_payment(
     """
     merchant_id, secret = get_platega_credentials()
     if not merchant_id or not secret:
-        raise ValueError("Platega: не настроены merchant_id или secret")
+        raise _payment_configuration_error(
+            'platega',
+            'Platega: не настроены merchant_id или secret',
+        )
 
     return_url = build_payment_return_url(bot_name, 'platega', order_id)
     fail_url = return_url
@@ -893,61 +1016,64 @@ async def create_platega_payment(
 
     url = f"{PLATEGA_API_URL}/v2/transaction/process"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers) as response:
-            try:
-                data = await response.json()
-            except Exception:
-                text = await response.text()
-                logger.error(f"Platega API: невозможно разобрать ответ ({response.status}): {text}")
-                raise RuntimeError("Platega API вернул некорректный ответ")
+    data = await _payment_api_json_request(
+        provider='platega',
+        operation='create',
+        order_id=order_id,
+        method='POST',
+        url=url,
+        expected_statuses=(200, 201),
+        retry=False,
+        headers=headers,
+        json_payload=payload,
+    )
+    if not isinstance(data, dict):
+        raise _payment_contract_error(
+            'platega', 'create', order_id,
+            'Platega API вернул ответ неверного типа',
+        )
+    transaction_id = data.get('id') or data.get('transactionId') or data.get('uuid')
+    qr_url = (
+        data.get('redirect') or data.get('redirectUrl') or
+        data.get('url') or data.get('paymentUrl')
+    )
+    if not transaction_id or not qr_url:
+        raise _payment_contract_error(
+            'platega', 'create', order_id,
+            'Platega API не вернул id или URL платёжной ссылки',
+        )
 
-            if response.status not in (200, 201):
-                error_desc = (
-                    data.get('error') or data.get('message') or
-                    data.get('description') or 'Неизвестная ошибка'
-                )
-                logger.error(f"Platega API ошибка {response.status}: {error_desc} | payload={payload}")
-                raise RuntimeError(f"Platega API ошибка: {error_desc}")
-
-            transaction_id = data.get('id') or data.get('transactionId') or data.get('uuid')
-            qr_url = (
-                data.get('redirect') or data.get('redirectUrl') or
-                data.get('url') or data.get('paymentUrl')
-            )
-
-            if not transaction_id or not qr_url:
-                logger.error(f"Platega API не вернул id/url: {data}")
-                raise RuntimeError("Platega API не вернул данные платёжной ссылки")
-
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=4,
-            )
-            qr.add_data(qr_url)
-            qr.make(fit=True)
-
-            img = qr.make_image(fill_color="black", back_color="white")
-            bio = io.BytesIO()
-            img.save(bio, format="PNG")
-            qr_image_data = bio.getvalue()
-
-            logger.info(
-                f"Platega транзакция создана: id={transaction_id}, order_id={order_id}, "
-                f"amount={amount_rub} RUB"
-            )
-
-            return {
-                'platega_transaction_id': str(transaction_id),
-                'qr_image_data': qr_image_data,
-                'qr_url': qr_url,
-                'status': str(data.get('status', 'PENDING')).upper(),
-            }
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(qr_url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    bio = io.BytesIO()
+    img.save(bio, format="PNG")
+    qr_image_data = bio.getvalue()
+    logger.info(
+        "Platega транзакция создана: id=%s, order_id=%s, amount=%s RUB",
+        transaction_id,
+        order_id,
+        amount_rub,
+    )
+    return {
+        'platega_transaction_id': str(transaction_id),
+        'qr_image_data': qr_image_data,
+        'qr_url': qr_url,
+        'status': str(data.get('status', 'PENDING')).upper(),
+    }
 
 
-async def check_platega_payment_status(transaction_id: str) -> str:
+async def check_platega_payment_status(
+    transaction_id: str,
+    *,
+    order_id: Optional[str] = None,
+) -> str:
     """
     Checks the status of a Platega transaction.
 
@@ -971,7 +1097,10 @@ async def check_platega_payment_status(transaction_id: str) -> str:
     """
     merchant_id, secret = get_platega_credentials()
     if not merchant_id or not secret:
-        raise ValueError("Platega: не настроены merchant_id или secret")
+        raise _payment_configuration_error(
+            'platega',
+            'Platega: не настроены merchant_id или secret',
+        )
 
     headers = {
         "X-MerchantId": merchant_id,
@@ -981,31 +1110,28 @@ async def check_platega_payment_status(transaction_id: str) -> str:
 
     url = f"{PLATEGA_API_URL}/transaction/{transaction_id}"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            try:
-                data = await response.json()
-            except Exception:
-                text = await response.text()
-                logger.error(f"Platega статус: невозможно разобрать ответ ({response.status}): {text}")
-                raise RuntimeError("Platega API вернул некорректный ответ")
-
-            if response.status != 200:
-                error_desc = (
-                    data.get('error') or data.get('message') or
-                    data.get('description') or 'Неизвестная ошибка'
-                )
-                logger.error(f"Platega статус ошибка {response.status}: {error_desc}")
-                raise RuntimeError(f"Platega API ошибка: {error_desc}")
-
-            status = str(data.get('status', '')).upper()
-            logger.debug(f"Platega transaction {transaction_id}: status={status}")
-
-            if status == 'CONFIRMED':
-                return 'succeeded'
-            if status in ('CANCELED', 'CANCELLED', 'CHARGEBACKED'):
-                return 'canceled'
-            return 'pending'
+    data = await _payment_api_json_request(
+        provider='platega',
+        operation='check',
+        order_id=order_id or transaction_id,
+        method='GET',
+        url=url,
+        expected_statuses=(200,),
+        retry=True,
+        headers=headers,
+    )
+    if not isinstance(data, dict) or not data.get('status'):
+        raise _payment_contract_error(
+            'platega', 'check', order_id or transaction_id,
+            'Platega API не вернул статус платежа',
+        )
+    status = str(data['status']).upper()
+    logger.debug("Platega transaction %s: status=%s", transaction_id, status)
+    if status == 'CONFIRMED':
+        return 'succeeded'
+    if status in ('CANCELED', 'CANCELLED', 'CHARGEBACKED'):
+        return 'canceled'
+    return 'pending'
 
 
 # ============================================================================
@@ -1050,7 +1176,10 @@ async def create_cardlink_payment(
     """
     shop_id, api_token = get_cardlink_credentials()
     if not shop_id or not api_token:
-        raise ValueError("Cardlink: не настроены shop_id или api_token")
+        raise _payment_configuration_error(
+            'cardlink',
+            'Cardlink: не настроены shop_id или api_token',
+        )
 
     form = aiohttp.FormData()
     form.add_field("shop_id", shop_id)
@@ -1073,84 +1202,64 @@ async def create_cardlink_payment(
 
     url = f"{CARDLINK_API_URL}/api/v1/bill/create"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=form, headers=headers) as response:
-            try:
-                data = await response.json(content_type=None)
-            except Exception:
-                text = await response.text()
-                logger.error(f"Cardlink API: невозможно разобрать ответ ({response.status}): {text}")
-                raise RuntimeError("Cardlink API вернул некорректный ответ")
+    data = await _payment_api_json_request(
+        provider='cardlink',
+        operation='create',
+        order_id=order_id,
+        method='POST',
+        url=url,
+        expected_statuses=(200, 201),
+        retry=False,
+        headers=headers,
+        data=form,
+    )
+    nested = data.get('success') if isinstance(data, dict) else None
+    payload = nested if isinstance(nested, dict) else data
+    bill_id = (
+        payload.get('bill_id') or payload.get('id') or payload.get('uuid')
+        if isinstance(payload, dict) else None
+    )
+    qr_url = (
+        payload.get('link_page_url') or payload.get('url') or payload.get('payment_url')
+        if isinstance(payload, dict) else None
+    )
+    if not bill_id or not qr_url:
+        raise _payment_contract_error(
+            'cardlink', 'create', order_id,
+            'Cardlink API не вернул bill_id или URL',
+        )
 
-            if response.status not in (200, 201):
-                error_desc = 'Неизвестная ошибка'
-                validation_details = ''
-                if isinstance(data, dict):
-                    err = data.get('error')
-                    if isinstance(err, dict):
-                        error_desc = err.get('description') or err.get('code') or error_desc
-                    elif isinstance(err, str):
-                        error_desc = err
-                    error_desc = (
-                        data.get('message')
-                        or data.get('description')
-                        or error_desc
-                    )
-                    validation = data.get('validation') or data.get('errors')
-                    if validation:
-                        validation_details = f" | validation={validation}"
-                logger.error(
-                    f"Cardlink API ошибка {response.status}: {error_desc} "
-                    f"| order_id={order_id} | full_response={data}{validation_details}"
-                )
-                raise RuntimeError(f"Cardlink API ошибка: {error_desc}")
-
-            # The answer can be nested in the 'success' (dict) field or in the root.
-            # If 'success' is a flag (string/bool), we use the data itself.
-            nested = data.get('success') if isinstance(data, dict) else None
-            payload = nested if isinstance(nested, dict) else data
-
-            bill_id = (
-                payload.get('bill_id') or payload.get('id') or payload.get('uuid')
-                if isinstance(payload, dict) else None
-            )
-            qr_url = (
-                payload.get('link_page_url') or payload.get('url') or payload.get('payment_url')
-                if isinstance(payload, dict) else None
-            )
-
-            if not bill_id or not qr_url:
-                logger.error(f"Cardlink API не вернул bill_id/url: {data}")
-                raise RuntimeError("Cardlink API не вернул данные платёжной ссылки")
-
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=4,
-            )
-            qr.add_data(qr_url)
-            qr.make(fit=True)
-
-            img = qr.make_image(fill_color="black", back_color="white")
-            bio = io.BytesIO()
-            img.save(bio, format="PNG")
-            qr_image_data = bio.getvalue()
-
-            logger.info(
-                f"Cardlink счёт создан: bill_id={bill_id}, order_id={order_id}, "
-                f"amount={amount_rub} RUB"
-            )
-
-            return {
-                'cardlink_bill_id': str(bill_id),
-                'qr_image_data': qr_image_data,
-                'qr_url': qr_url,
-                'status': str(payload.get('status', 'NEW')).upper() if isinstance(payload, dict) else 'NEW',
-            }
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(qr_url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    bio = io.BytesIO()
+    img.save(bio, format="PNG")
+    qr_image_data = bio.getvalue()
+    logger.info(
+        "Cardlink счёт создан: bill_id=%s, order_id=%s, amount=%s RUB",
+        bill_id,
+        order_id,
+        amount_rub,
+    )
+    return {
+        'cardlink_bill_id': str(bill_id),
+        'qr_image_data': qr_image_data,
+        'qr_url': qr_url,
+        'status': str(payload.get('status', 'NEW')).upper() if isinstance(payload, dict) else 'NEW',
+    }
 
 
-async def check_cardlink_payment_status(bill_id: str) -> str:
+async def check_cardlink_payment_status(
+    bill_id: str,
+    *,
+    order_id: Optional[str] = None,
+) -> str:
     """
     Checks Cardlink account status.
 
@@ -1173,7 +1282,10 @@ async def check_cardlink_payment_status(bill_id: str) -> str:
     """
     shop_id, api_token = get_cardlink_credentials()
     if not shop_id or not api_token:
-        raise ValueError("Cardlink: не настроены shop_id или api_token")
+        raise _payment_configuration_error(
+            'cardlink',
+            'Cardlink: не настроены shop_id или api_token',
+        )
 
     headers = {
         "Authorization": f"Bearer {api_token}",
@@ -1183,39 +1295,31 @@ async def check_cardlink_payment_status(bill_id: str) -> str:
     url = f"{CARDLINK_API_URL}/api/v1/bill/status"
     params = {"id": bill_id}
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, params=params, headers=headers) as response:
-            try:
-                data = await response.json(content_type=None)
-            except Exception:
-                text = await response.text()
-                logger.error(f"Cardlink статус: невозможно разобрать ответ ({response.status}): {text}")
-                raise RuntimeError("Cardlink API вернул некорректный ответ")
-
-            if response.status != 200:
-                error_desc = (
-                    (data.get('message') if isinstance(data, dict) else None) or
-                    (data.get('error') if isinstance(data, dict) else None) or
-                    'Неизвестная ошибка'
-                )
-                logger.error(f"Cardlink статус ошибка {response.status}: {error_desc}")
-                raise RuntimeError(f"Cardlink API ошибка: {error_desc}")
-
-            # The answer can be nested in the 'success' (dict) field or in the root.
-            # If 'success' is a flag (string/bool), we use the data itself.
-            nested = data.get('success') if isinstance(data, dict) else None
-            payload = nested if isinstance(nested, dict) else data
-            status = ''
-            if isinstance(payload, dict):
-                status = str(payload.get('status', '')).upper()
-
-            logger.debug(f"Cardlink bill {bill_id}: status={status}")
-
-            if status in ('SUCCESS', 'OVERPAID'):
-                return 'succeeded'
-            if status == 'FAIL':
-                return 'canceled'
-            return 'pending'
+    data = await _payment_api_json_request(
+        provider='cardlink',
+        operation='check',
+        order_id=order_id or bill_id,
+        method='GET',
+        url=url,
+        expected_statuses=(200,),
+        retry=True,
+        headers=headers,
+        params=params,
+    )
+    nested = data.get('success') if isinstance(data, dict) else None
+    payload = nested if isinstance(nested, dict) else data
+    if not isinstance(payload, dict) or not payload.get('status'):
+        raise _payment_contract_error(
+            'cardlink', 'check', order_id or bill_id,
+            'Cardlink API не вернул статус платежа',
+        )
+    status = str(payload['status']).upper()
+    logger.debug("Cardlink bill %s: status=%s", bill_id, status)
+    if status in ('SUCCESS', 'OVERPAID'):
+        return 'succeeded'
+    if status == 'FAIL':
+        return 'canceled'
+    return 'pending'
 
 
 def convert_to_rub_cents(amount_raw: int, payment_type: str, usd_rub_rate: int) -> int:
@@ -1452,6 +1556,157 @@ async def _show_complete_payment_status(
     )
 
 
+def _payment_order_referral_amount(order: Dict[str, Any]) -> int:
+    """Returns the persisted amount used by post-payment referral processing."""
+    try:
+        if order.get('final_amount_cents') is not None:
+            return int(order.get('final_amount_cents') or 0)
+        return int(order.get('amount_cents') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _run_payment_post_actions(
+    order: Dict[str, Any],
+    *,
+    bot: Any,
+    payment_type: str,
+    referral_amount: int,
+    balance_override_cents: int = 0,
+    force: bool = False,
+) -> None:
+    """Runs first-processing-only financial and notification side effects."""
+    if not order.get('_payment_processed_now', True) and not force:
+        logger.info("Повторная обработка платежа %s: побочные действия пропущены", order.get('order_id'))
+        return
+
+    user_internal_id = int(order['user_id'])
+    persisted_balance = int(order.get('balance_deduct_cents') or 0)
+    balance_to_deduct = persisted_balance or max(0, int(balance_override_cents or 0))
+    if balance_to_deduct > 0:
+        from database.requests import has_balance_operation_reference
+
+        order_reference = str(order.get('order_id') or '')
+        already_debited = has_balance_operation_reference(
+            user_id=user_internal_id,
+            operation_type='debit',
+            source='payment_balance',
+            reference_type='payment_order',
+            reference_id=order_reference,
+        )
+        current_balance = get_user_balance(user_internal_id)
+        actual_deduct = 0 if already_debited else min(balance_to_deduct, current_balance)
+        if actual_deduct > 0:
+            from bot.services.balance import debit_user_balance
+
+            deduct_result = await debit_user_balance(
+                user_internal_id,
+                actual_deduct,
+                source='payment_balance',
+                reason='Списание баланса при оплате тарифа',
+                reference_type='payment_order',
+                reference_id=order_reference,
+                metadata={'payment_type': payment_type},
+            )
+            if not deduct_result.get('ok'):
+                raise RuntimeError(
+                    f"Не удалось списать сохранённую часть баланса: {deduct_result.get('status')}"
+                )
+            logger.info(
+                "Списано %s коп с баланса user=%s при частичной оплате (%s)",
+                actual_deduct,
+                user_internal_id,
+                payment_type,
+            )
+
+    days = order.get('period_days') or order.get('duration_days') or 30
+    await process_referral_reward(
+        user_internal_id,
+        days,
+        referral_amount,
+        payment_type,
+        bot=bot,
+        order=order,
+    )
+
+    try:
+        from bot.services.notifications import notify_admins_payment
+
+        await notify_admins_payment(bot, order)
+    except Exception as notify_err:
+        logger.warning("Ошибка уведомления об оплате order=%s: %s", order.get('order_id'), notify_err)
+
+
+async def _notify_automatic_payment_user(bot: Any, order: Dict[str, Any]) -> bool:
+    """Notifies a user that background polling completed the payment."""
+    from database.requests import get_user_by_id, mark_user_bot_blocked
+    from bot.keyboards.user import payment_auto_complete_kb
+    from bot.utils.delivery import is_bot_blocked_error
+
+    user = get_user_by_id(int(order.get('user_id') or 0))
+    telegram_id = int((user or {}).get('telegram_id') or 0)
+    if not telegram_id:
+        return False
+    try:
+        await bot.send_message(
+            telegram_id,
+            (
+                '✅ <b>Оплата получена</b>\n\n'
+                'Платёж обработан автоматически. Откройте «Мои ключи», '
+                'чтобы настроить или посмотреть доступ.'
+            ),
+            parse_mode='HTML',
+            reply_markup=payment_auto_complete_kb(),
+        )
+        return True
+    except Exception as error:
+        if is_bot_blocked_error(error):
+            mark_user_bot_blocked(telegram_id)
+        logger.warning(
+            "Не удалось уведомить пользователя об автозавершении order=%s: %s",
+            order.get('order_id'),
+            error,
+        )
+        return False
+
+
+async def complete_payment_order_background(
+    order_id: str,
+    *,
+    bot: Any,
+    notify_user: bool = True,
+    retry_post_actions: bool = False,
+) -> Dict[str, Any]:
+    """Completes a provider-confirmed order without Telegram callback or FSM state."""
+    success, text, order = await process_payment_order(
+        order_id,
+        bot=bot,
+        process_referrals=False,
+    )
+    result: Dict[str, Any] = {
+        'ok': bool(success and order),
+        'text': text,
+        'order': order,
+        'processed_now': bool(order and order.get('_payment_processed_now', True)),
+        'user_notified': False,
+    }
+    if not success or not order:
+        return result
+
+    if result['processed_now'] or retry_post_actions:
+        payment_type = str(order.get('payment_type') or '')
+        await _run_payment_post_actions(
+            order,
+            bot=bot,
+            payment_type=payment_type,
+            referral_amount=_payment_order_referral_amount(order),
+            force=retry_post_actions,
+        )
+        if notify_user:
+            result['user_notified'] = await _notify_automatic_payment_user(bot, order)
+    return result
+
+
 async def complete_payment_flow(
     order_id: str,
     message,
@@ -1496,47 +1751,13 @@ async def complete_payment_flow(
         )
         
         if success and order:
-            user_internal_id = order['user_id']
-            days = order.get('period_days') or order.get('duration_days') or 30
-            processed_now = order.get('_payment_processed_now', True)
-
-            if processed_now:
-                # Write-off of balance upon partial payment
-                if balance_to_deduct > 0:
-                    current_balance = get_user_balance(user_internal_id)
-                    actual_deduct = min(balance_to_deduct, current_balance)
-                    if actual_deduct > 0:
-                        from bot.services.balance import debit_user_balance
-
-                        deduct_result = await debit_user_balance(
-                            user_internal_id,
-                            actual_deduct,
-                            source='payment_balance',
-                            reason='Списание баланса при оплате тарифа',
-                            reference_type='payment_order',
-                            reference_id=str(order.get('order_id') or order_id),
-                            metadata={'payment_type': payment_type},
-                        )
-                        if deduct_result.get('ok'):
-                            logger.info(
-                                f'Списано {actual_deduct} коп с баланса user '
-                                f'{user_internal_id} при частичной оплате ({payment_type})'
-                            )
-
-                # Referral reward
-                await process_referral_reward(
-                    user_internal_id, days, referral_amount, payment_type,
-                    bot=message.bot, order=order
-                )
-
-                # Notifying administrators about payment
-                try:
-                    from bot.services.notifications import notify_admins_payment
-                    await notify_admins_payment(message.bot, order)
-                except Exception as notify_err:
-                    logger.warning(f'Ошибка уведомления об оплате: {notify_err}')
-            else:
-                logger.info(f'Повторная обработка платежа {order_id}: побочные действия пропущены')
+            await _run_payment_post_actions(
+                order,
+                bot=message.bot,
+                payment_type=payment_type,
+                referral_amount=referral_amount,
+                balance_override_cents=balance_to_deduct,
+            )
 
             # Clearing FSM balance data
             await state.update_data(balance_to_deduct=0, remaining_cents=0)

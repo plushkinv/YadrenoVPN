@@ -6,6 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from bot.utils.text import escape_html
+from bot.services.panel_sync_coordinator import regular_panel_operation
 from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,7 @@ async def process_new_key_server_selection(callback: CallbackQuery, state: FSMCo
     await _continue_new_key_config(callback, state, server)
 
 
+@regular_panel_operation
 async def process_new_key_subscription_final(target, state: FSMContext, server_id: int):
     """
     The final stage of creating a key in Subscription mode.
@@ -263,7 +265,7 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
         get_key_details_for_user, create_initial_vpn_key,
         get_tariff_by_id, update_vpn_key_config,
     )
-    from bot.services.vpn_api import get_client
+    from bot.services.vpn_api import get_client, get_client_subscription_inbounds
     from bot.handlers.admin.users_keys import generate_unique_email
     from bot.utils.key_sender import send_key_with_qr
 
@@ -329,7 +331,7 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
         sub_id = _uuid.uuid4().hex
 
         client = await get_client(server_id)
-        inbounds = await client.get_inbounds()
+        inbounds = await get_client_subscription_inbounds(client)
         if not inbounds:
             raise RuntimeError('На сервере нет доступных inbound')
 
@@ -424,6 +426,7 @@ async def process_new_key_inbound_selection(callback: CallbackQuery, state: FSMC
     server_id = data.get('new_key_server_id')
     await process_new_key_final(callback, state, server_id, inbound_id)
 
+@regular_panel_operation
 async def process_new_key_final(target, state: FSMContext, server_id: int, inbound_id: int):
     """The final stage of key creation."""
     from database.requests import get_server_by_id, update_vpn_key_config, update_payment_key_id, find_order_by_order_id, get_user_internal_id, get_key_details_for_user, create_initial_vpn_key

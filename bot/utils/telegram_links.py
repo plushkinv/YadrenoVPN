@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TELEGRAM_LINK_DOMAIN = "telegram.me"
+DEFAULT_TELEGRAM_LINK_DOMAIN = "t.me"
 TELEGRAM_LINK_DOMAIN_SETTING = "telegram_link_domain"
 
 _DOMAIN_RE = re.compile(
@@ -15,7 +15,7 @@ _DOMAIN_RE = re.compile(
     r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
 )
-_LEGACY_TELEGRAM_LINK_DOMAINS = frozenset({"t.me", DEFAULT_TELEGRAM_LINK_DOMAIN})
+_LEGACY_TELEGRAM_LINK_DOMAINS = frozenset({"t.me", "telegram.me"})
 
 _telegram_link_domain = DEFAULT_TELEGRAM_LINK_DOMAIN
 

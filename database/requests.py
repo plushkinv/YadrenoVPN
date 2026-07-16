@@ -20,6 +20,8 @@ from database.db_extension_core import *
 from database.db_business_operations import *
 from database.db_key_lifecycle import *
 from database.db_payment_providers import *
+from database.db_payment_auto_checks import *
+from database.db_broadcast_editor import *
 from database.db_backup import *
 from database.db_customization_reset import *
 from database.db_support import *

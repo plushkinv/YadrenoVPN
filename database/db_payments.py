@@ -49,9 +49,12 @@ __all__ = [
     'create_paid_order_external',
     'find_order_by_order_id',
     'complete_order',
+    'reopen_paid_order',
     'update_order_tariff',
     'update_payment_type',
     'update_payment_key_id',
+    'save_payment_balance_deduction',
+    'cancel_pending_order',
     'is_order_already_paid',
     'get_key_payments_history',
     'get_referral_levels',
@@ -602,6 +605,58 @@ def complete_order(order_id: str) -> bool:
         if success:
             logger.info(f"Order {order_id} завершён (paid)")
         return success
+
+
+def reopen_paid_order(order_id: str) -> bool:
+    """Returns an API order to pending when fulfillment failed after settlement."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET status = 'pending', paid_at = NULL
+            WHERE order_id = ? AND status = 'paid'
+            """,
+            (str(order_id),),
+        )
+        if cursor.rowcount > 0:
+            logger.warning("Order %s reopened after fulfillment failure", order_id)
+            return True
+        return False
+
+
+def save_payment_balance_deduction(order_id: str, amount_cents: int) -> bool:
+    """Persists the internal-balance part that must be debited after settlement."""
+    amount = max(0, int(amount_cents or 0))
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE payments SET balance_deduct_cents = ? WHERE order_id = ?",
+            (amount, str(order_id)),
+        )
+        return cursor.rowcount > 0
+
+
+def cancel_pending_order(order_id: str) -> bool:
+    """Marks a provider-canceled pending order and releases its promo reservation."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET status = 'canceled'
+            WHERE order_id = ? AND status = 'pending'
+            """,
+            (str(order_id),),
+        )
+        if cursor.rowcount > 0:
+            conn.execute(
+                """
+                UPDATE promo_redemptions
+                SET status = 'canceled'
+                WHERE order_id = ? AND status = 'reserved'
+                """,
+                (str(order_id),),
+            )
+            return True
+        return False
 
 def update_order_tariff(order_id: str, tariff_id: int, payment_type: Optional[str] = None) -> bool:
     """

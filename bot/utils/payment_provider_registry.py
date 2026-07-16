@@ -1,6 +1,7 @@
 """Registry of custom payment providers for custom extensions."""
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import re
@@ -9,6 +10,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
+
+from bot.services.payment_api import run_payment_api_operation
 
 logger = logging.getLogger(__name__)
 
@@ -203,10 +206,27 @@ async def create_payment(provider_id: str, context: Mapping[str, Any]) -> dict[s
     provider = get_payment_provider(provider_id)
     if provider is None:
         raise ValueError('payment provider не зарегистрирован')
-    raw_result = provider.create_payment(_normalize_required_context(context))
-    if inspect.isawaitable(raw_result):
-        raw_result = await raw_result
-    return _normalize_create_result(raw_result)
+    normalized_context = _normalize_required_context(context)
+
+    async def _create_once() -> dict[str, Any]:
+        if inspect.iscoroutinefunction(provider.create_payment):
+            raw_result = provider.create_payment(dict(normalized_context))
+        else:
+            raw_result = await asyncio.to_thread(
+                provider.create_payment,
+                dict(normalized_context),
+            )
+        if inspect.isawaitable(raw_result):
+            raw_result = await raw_result
+        return _normalize_create_result(raw_result)
+
+    return await run_payment_api_operation(
+        provider=provider.provider_id,
+        operation='create',
+        order_id=str(normalized_context.get('order_id') or ''),
+        call=_create_once,
+        retry=False,
+    )
 
 
 async def check_payment(provider_id: str, context: Mapping[str, Any]) -> dict[str, Any]:
@@ -214,10 +234,27 @@ async def check_payment(provider_id: str, context: Mapping[str, Any]) -> dict[st
     provider = get_payment_provider(provider_id)
     if provider is None:
         raise ValueError('payment provider не зарегистрирован')
-    raw_result = provider.check_payment(_normalize_required_context(context))
-    if inspect.isawaitable(raw_result):
-        raw_result = await raw_result
-    return _normalize_check_result(raw_result)
+    normalized_context = _normalize_required_context(context)
+
+    async def _check_once() -> dict[str, Any]:
+        if inspect.iscoroutinefunction(provider.check_payment):
+            raw_result = provider.check_payment(dict(normalized_context))
+        else:
+            raw_result = await asyncio.to_thread(
+                provider.check_payment,
+                dict(normalized_context),
+            )
+        if inspect.isawaitable(raw_result):
+            raw_result = await raw_result
+        return _normalize_check_result(raw_result)
+
+    return await run_payment_api_operation(
+        provider=provider.provider_id,
+        operation='check',
+        order_id=str(normalized_context.get('order_id') or ''),
+        call=_check_once,
+        retry=True,
+    )
 
 
 async def handle_payment_webhook(provider_id: str, context: Mapping[str, Any]) -> dict[str, Any]:

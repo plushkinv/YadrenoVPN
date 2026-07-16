@@ -22,8 +22,10 @@ class AdminStates(StatesGroup):
     server_view = State()            # View a specific server
     
     # ========== Adding a server (step-by-step dialogue) ==========
+    add_server_auth_method = State() # Authentication method selection
     add_server_name = State()        # Step 1: Title
     add_server_url = State()         # Step 2: Panel URL
+    add_server_api_token = State()   # Step 3: 3X-UI API token
     add_server_login = State()       # Step 3: Login
     add_server_password = State()    # Step 4: Password
     add_server_confirm = State()     # Confirmation after verification
@@ -131,7 +133,7 @@ class AdminStates(StatesGroup):
 # SERVER SETTINGS
 # ============================================================================
 
-SERVER_PARAMS = [
+SERVER_COMMON_PARAMS = [
     {
         "key": "name",
         "label": "Название",
@@ -146,6 +148,17 @@ SERVER_PARAMS = [
         "validate": lambda x: len(x.strip()) >= 5 and ":" in x,
         "error": "Введите корректную ссылку с портом, например: https://123.45.67.89:2053/api/"
     },
+]
+
+SERVER_API_TOKEN_PARAM = {
+    "key": "api_token",
+    "label": "API-ключ",
+    "hint": "создайте отдельный токен в настройках безопасности 3X-UI и отправьте его сюда",
+    "validate": lambda x: len(x.strip()) >= 8,
+    "error": "API-ключ должен содержать минимум 8 символов"
+}
+
+SERVER_LOGIN_PARAMS = [
     {
         "key": "login",
         "label": "Логин",
@@ -162,17 +175,27 @@ SERVER_PARAMS = [
     },
 ]
 
+SERVER_PARAMS = SERVER_COMMON_PARAMS + SERVER_LOGIN_PARAMS
 
-def get_param_by_index(index: int) -> dict:
+
+def get_server_params(auth_method: str = "login_password") -> list:
+    """Returns server fields for the selected authentication method."""
+    if auth_method == "api_token":
+        return SERVER_COMMON_PARAMS + [SERVER_API_TOKEN_PARAM]
+    return SERVER_COMMON_PARAMS + SERVER_LOGIN_PARAMS
+
+
+def get_param_by_index(index: int, auth_method: str = "login_password") -> dict:
     """Gets the server parameter by index."""
-    if 0 <= index < len(SERVER_PARAMS):
-        return SERVER_PARAMS[index]
-    return SERVER_PARAMS[0]
+    params = get_server_params(auth_method)
+    if 0 <= index < len(params):
+        return params[index]
+    return params[0]
 
 
-def get_total_params() -> int:
+def get_total_params(auth_method: str = "login_password") -> int:
     """Returns the total number of server parameters."""
-    return len(SERVER_PARAMS)
+    return len(get_server_params(auth_method))
 
 
 # ============================================================================

@@ -84,7 +84,10 @@ def add_server(
     login: str,
     password: str,
     protocol: str = 'https',
-    group_id: int = 1
+    group_id: int = 1,
+    api_token: Optional[str] = None,
+    panel_version: Optional[str] = None,
+    panel_api_profile: Optional[str] = None,
 ) -> int:
     """
     Adds a new VPN server.
@@ -98,15 +101,28 @@ def add_server(
         password: Password for the panel
         protocol: Connection protocol (http/https)
         group_id: tariff group ID (default 1 - “Main”)
+        api_token: Existing 3X-UI Bearer token, if provided by the administrator
+        panel_version: Version detected during the connection test
+        panel_api_profile: API profile detected during the connection test
         
     Returns:
         ID of the created server
     """
+    panel_checked_at = None
+    if panel_version or panel_api_profile:
+        panel_checked_at = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
     with get_db() as conn:
         cursor = conn.execute("""
-            INSERT INTO servers (name, host, port, web_base_path, login, password, is_active, protocol)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-        """, (name, host, port, web_base_path, login, password, protocol))
+            INSERT INTO servers (
+                name, host, port, web_base_path, login, password, is_active,
+                protocol, api_token, panel_version, panel_api_profile, panel_checked_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+        """, (
+            name, host, port, web_base_path, login, password, protocol,
+            api_token, panel_version, panel_api_profile, panel_checked_at,
+        ))
         server_id = cursor.lastrowid
         
         # Add the server to the server_groups connection table

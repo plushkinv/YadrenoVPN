@@ -1,38 +1,61 @@
 """
-Handlers for the “Mailmail” section in the admin panel.
+Handlers for the broadcast section in the admin panel.
 
 Functional:
-- Sending messages to all users with filters
+- Sending messages and Telegram-native polls with recipient filters
 - Setting up auto-notifications about key expiration
 """
-import json
 import asyncio
 import logging
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
-from config import ADMIN_IDS
 from database.requests import (
     get_setting, set_setting,
     get_users_for_broadcast, count_users_for_broadcast,
-    mark_user_bot_blocked
+    mark_user_bot_blocked, set_broadcast_filter_with_revision,
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
 from bot.keyboards.admin import (
     broadcast_main_kb, broadcast_confirm_kb,
     broadcast_stop_kb, broadcast_notifications_kb, broadcast_back_kb,
-    broadcast_notify_back_kb, home_only_kb,
+    broadcast_notify_back_kb, broadcast_poll_mode_kb, broadcast_result_kb,
+    home_only_kb,
     BROADCAST_FILTERS
 )
 
 logger = logging.getLogger(__name__)
 
-from bot.utils.text import safe_edit_or_send
+from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.delivery import is_bot_blocked_error
 from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
+from bot.services.broadcast_content import (
+    BROADCAST_KIND_POLL,
+    POLL_MODE_CLEAN,
+    POLL_MODE_PRESERVE,
+    create_poll_draft,
+    is_broadcast_content_ready,
+    load_broadcast_content,
+    poll_metadata,
+    poll_type_label,
+    prepare_poll_delivery,
+    preview_poll,
+    save_message_content,
+    send_poll_to_recipient,
+    validate_poll_message,
+)
+from bot.services.broadcast_editor import (
+    BroadcastEditorError,
+    broadcast_material_hash,
+    consume_valid_broadcast_confirmation,
+    create_broadcast_confirmation,
+    load_broadcast_style_profile,
+    style_profile_summary,
+)
+from bot.services.broadcast_validation import BroadcastValidationError
 
 router = Router()
 
@@ -58,21 +81,14 @@ def get_broadcast_message() -> dict | None:
     Receives a saved message for distribution.
     
     Returns:
-        Dictionary with keys 'text' and 'photo_file_id' or None
+        Normalized text/photo or poll payload, or None.
     """
-    msg_json = get_setting('broadcast_message')
-    if msg_json:
-        try:
-            return json.loads(msg_json)
-        except json.JSONDecodeError:
-            return None
-    return None
+    return load_broadcast_content()
 
 
 def save_broadcast_message(text: str, photo_file_id: str | None = None) -> None:
     """Saves the message for distribution."""
-    data = {'text': text, 'photo_file_id': photo_file_id}
-    set_setting('broadcast_message', json.dumps(data, ensure_ascii=False))
+    save_message_content(text, photo_file_id)
 
 
 def render_broadcast_message_text(text: str, telegram_id: int | None) -> str:
@@ -160,8 +176,8 @@ def get_broadcast_menu_text(in_progress: bool = False) -> str:
     """Generates the text of the main mailing screen."""
     text = (
         "📢 <b>Рассылка</b>\n\n"
-        "Отправьте сообщение всем пользователям бота.\n\n"
-        "1️⃣ Отредактируйте сообщение\n"
+        "Отправьте сообщение или опрос пользователям бота.\n\n"
+        "1️⃣ Подготовьте материал\n"
         "2️⃣ Выберите фильтр получателей\n"
         "3️⃣ Нажмите «Начать рассылку»"
     )
@@ -179,15 +195,39 @@ async def render_broadcast_menu(
 ) -> None:
     """Shows the current mailing main screen."""
     msg_data = get_broadcast_message()
-    has_message = msg_data is not None and msg_data.get('text')
+    has_message = is_broadcast_content_ready(msg_data)
     current_filter = current_filter or get_setting('broadcast_filter', 'all')
     in_progress = is_broadcast_in_progress()
     user_count = count_users_for_broadcast(current_filter)
+    if not msg_data:
+        material_label = "не задан"
+    elif msg_data.get("kind") == BROADCAST_KIND_POLL:
+        material_label = poll_type_label(msg_data)
+    elif msg_data.get("photo_file_id"):
+        material_label = "фото с подписью"
+    else:
+        material_label = "текстовое сообщение"
+    style_summary = style_profile_summary(load_broadcast_style_profile())
+    menu_text = (
+        get_broadcast_menu_text(in_progress)
+        + "\n\n<b>Текущие настройки</b>\n"
+        + f"• Материал: {escape_html(material_label)}\n"
+        + f"• Фильтр: {escape_html(BROADCAST_FILTERS.get(current_filter, current_filter))}\n"
+        + f"• Получателей: {user_count}\n"
+        + f"• Стиль: {escape_html(style_summary)}\n\n"
+        + "💡 Напишите <code>/yaa ваша задача</code>, чтобы открыть редактора рассылки."
+    )
 
     await safe_edit_or_send(
         message,
-        get_broadcast_menu_text(in_progress),
-        reply_markup=broadcast_main_kb(has_message, current_filter, in_progress, user_count),
+        menu_text,
+        reply_markup=broadcast_main_kb(
+            has_message,
+            current_filter,
+            in_progress,
+            user_count,
+            content_kind=msg_data.get('kind') if msg_data else None,
+        ),
         force_new=force_new,
     )
 
@@ -202,7 +242,8 @@ async def show_broadcast_menu(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
-    
+
+    await state.update_data(broadcast_pending_poll=None)
     await state.set_state(AdminStates.broadcast_menu)
     await render_broadcast_menu(callback.message)
     await callback.answer()
@@ -227,16 +268,18 @@ async def broadcast_edit_message(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
-    
+
+    await state.update_data(broadcast_pending_poll=None)
     await state.set_state(AdminStates.broadcast_waiting_message)
     
     text = (
-        "✉️ <b>Редактирование сообщения</b>\n\n"
-        "Отправьте мне сообщение, которое хотите разослать.\n\n"
+        "✉️ <b>Материал рассылки</b>\n\n"
+        "Отправьте материал, который хотите разослать.\n\n"
         "Можно отправить:\n"
         "• Текст (с форматированием)\n"
-        "• Фото с подписью\n\n"
-        "💡 Сообщение будет отправлено пользователям в точности как вы его прислали."
+        "• Фото с подписью\n"
+        "• Нативный опрос Telegram\n\n"
+        "💡 Опрос можно создать прямо здесь или переслать из «Избранного», группы или канала."
     )
     
     await safe_edit_or_send(callback.message, 
@@ -247,16 +290,76 @@ async def broadcast_edit_message(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(AdminStates.broadcast_waiting_message)
-async def broadcast_save_message(message: Message, state: FSMContext):
+async def broadcast_save_message(message: Message, state: FSMContext, bot: Bot):
     """Saves the message for distribution."""
     if not is_admin(message.from_user.id):
         return
-    
+
+    await state.update_data(broadcast_pending_poll=None)
     from bot.utils.text import get_message_text_for_storage, safe_edit_or_send
     
     text = None
     photo_file_id = None
-    
+
+    if message.poll:
+        validation_error = validate_poll_message(message)
+        if validation_error:
+            await safe_edit_or_send(
+                message,
+                validation_error,
+                reply_markup=broadcast_back_kb(),
+                force_new=True,
+            )
+            return
+
+        metadata = poll_metadata(message.poll)
+        if metadata["total_voter_count"] > 0:
+            await state.update_data(
+                broadcast_pending_poll={
+                    "source_chat_id": message.chat.id,
+                    "source_message_id": message.message_id,
+                    "metadata": metadata,
+                }
+            )
+            await safe_edit_or_send(
+                message,
+                "📊 <b>В опросе уже есть голоса</b>\n\n"
+                f"<b>Вопрос:</b> {escape_html(metadata['question'])}\n"
+                f"<b>Голосов:</b> {metadata['total_voter_count']}\n\n"
+                "Выберите, сохранить результаты и видимый источник или создать чистый опрос от имени бота.",
+                reply_markup=broadcast_poll_mode_kb(),
+                force_new=True,
+            )
+            return
+
+        try:
+            await create_poll_draft(
+                bot,
+                source_chat_id=message.chat.id,
+                source_message_id=message.message_id,
+                target_chat_id=message.chat.id,
+                metadata=metadata,
+                delivery_mode=POLL_MODE_CLEAN,
+            )
+        except TelegramAPIError as error:
+            logger.warning("Не удалось создать чистый черновик опроса: %s", error)
+            await safe_edit_or_send(
+                message,
+                "❌ <b>Не удалось скопировать опрос</b>\n\n"
+                "Проверьте защиту содержимого и для викторины убедитесь, что задан правильный ответ.",
+                reply_markup=broadcast_back_kb(),
+                force_new=True,
+            )
+            return
+
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await state.set_state(AdminStates.broadcast_menu)
+        await render_broadcast_menu(message, force_new=True)
+        return
+
     if message.photo:
         photo_file_id = message.photo[-1].file_id
         text = get_message_text_for_storage(message, 'html')
@@ -264,12 +367,22 @@ async def broadcast_save_message(message: Message, state: FSMContext):
         text = get_message_text_for_storage(message, 'html')
     else:
         await safe_edit_or_send(message,
-            "❌ Поддерживаются только текст или фото с подписью.",
+            "❌ <b>Материал не поддерживается</b>\n\n"
+            "Поддерживаются только текст, фото с подписью или нативный опрос Telegram.",
             reply_markup=broadcast_back_kb()
         )
         return
     
-    save_broadcast_message(text, photo_file_id)
+    try:
+        save_broadcast_message(text, photo_file_id)
+    except BroadcastValidationError as error:
+        await safe_edit_or_send(
+            message,
+            "❌ <b>Материал не сохранён</b>\n\n" + escape_html(str(error)),
+            reply_markup=broadcast_back_kb(),
+            force_new=True,
+        )
+        return
     
     await safe_edit_or_send(message,
         "✅ <b>Сообщение сохранено!</b>\n\n"
@@ -282,23 +395,86 @@ async def broadcast_save_message(message: Message, state: FSMContext):
     await render_broadcast_menu(message, force_new=True)
 
 
+@router.callback_query(F.data.startswith("broadcast_poll_mode:"))
+async def broadcast_choose_poll_mode(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Saves an imported voted poll using the selected delivery mode."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    delivery_mode = callback.data.split(":", 1)[1]
+    if delivery_mode not in {POLL_MODE_CLEAN, POLL_MODE_PRESERVE}:
+        await callback.answer("❌ Неизвестный режим опроса", show_alert=True)
+        return
+
+    state_data = await state.get_data()
+    pending = state_data.get("broadcast_pending_poll")
+    if not isinstance(pending, dict):
+        await callback.answer("❌ Черновик опроса устарел. Отправьте опрос ещё раз.", show_alert=True)
+        return
+
+    try:
+        await create_poll_draft(
+            bot,
+            source_chat_id=int(pending["source_chat_id"]),
+            source_message_id=int(pending["source_message_id"]),
+            target_chat_id=callback.message.chat.id,
+            metadata=dict(pending["metadata"]),
+            delivery_mode=delivery_mode,
+        )
+    except (KeyError, TypeError, ValueError, TelegramAPIError) as error:
+        logger.warning("Не удалось сохранить импортированный опрос: %s", error)
+        await callback.answer(
+            "❌ Не удалось подготовить опрос. Возможно, исходное сообщение удалено или защищено.",
+            show_alert=True,
+        )
+        return
+
+
+    try:
+        await bot.delete_message(
+            chat_id=int(pending["source_chat_id"]),
+            message_id=int(pending["source_message_id"]),
+        )
+    except Exception:
+        pass
+
+    await state.update_data(broadcast_pending_poll=None)
+    await state.set_state(AdminStates.broadcast_menu)
+    await render_broadcast_menu(callback.message)
+    await callback.answer("✅ Опрос сохранён")
+
+
 # ============================================================================
 # PREVIEW MESSAGE
 # ============================================================================
 
 @router.callback_query(F.data == "broadcast_preview")
-async def broadcast_preview(callback: CallbackQuery):
+async def broadcast_preview(callback: CallbackQuery, bot: Bot):
     """Shows a preview of the message for the newsletter."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
     msg_data = get_broadcast_message()
-    
-    if not msg_data or not msg_data.get('text'):
-        await callback.answer("❌ Сообщение не задано", show_alert=True)
+
+    if not is_broadcast_content_ready(msg_data):
+        await callback.answer("❌ Материал рассылки не задан", show_alert=True)
         return
-    
+
+    if msg_data.get('kind') == BROADCAST_KIND_POLL:
+        try:
+            await preview_poll(bot=bot, content=msg_data, chat_id=callback.message.chat.id)
+        except TelegramAPIError as error:
+            logger.warning("Не удалось показать превью опроса: %s", error)
+            await callback.answer(
+                "❌ Черновик опроса недоступен. Отправьте опрос заново.",
+                show_alert=True,
+            )
+            return
+        await callback.answer("📤 Превью отправлено")
+        return
+
     await callback.answer("📤 Отправляю превью...")
     
     preview_text = render_broadcast_message_text(
@@ -337,7 +513,7 @@ async def broadcast_set_filter(callback: CallbackQuery):
         await callback.answer("❌ Неизвестный фильтр", show_alert=True)
         return
     
-    set_setting('broadcast_filter', filter_key)
+    set_broadcast_filter_with_revision(filter_key)
     
     await render_broadcast_menu(callback.message, current_filter=filter_key)
     await callback.answer(f"Фильтр: {BROADCAST_FILTERS[filter_key]}")
@@ -359,10 +535,10 @@ async def broadcast_start(callback: CallbackQuery):
         await callback.answer("⏳ Рассылка уже идёт!", show_alert=True)
         return
     
-    # Checking for a message
+    # Checking for prepared content
     msg_data = get_broadcast_message()
-    if not msg_data or not msg_data.get('text'):
-        await callback.answer("❌ Сначала задайте сообщение!", show_alert=True)
+    if not is_broadcast_content_ready(msg_data):
+        await callback.answer("❌ Сначала подготовьте сообщение или опрос!", show_alert=True)
         return
     
     current_filter = get_setting('broadcast_filter', 'all')
@@ -372,18 +548,49 @@ async def broadcast_start(callback: CallbackQuery):
         await callback.answer("❌ Нет пользователей для рассылки!", show_alert=True)
         return
     
+    try:
+        confirmation = create_broadcast_confirmation(callback.from_user.id)
+    except BroadcastEditorError as error:
+        await callback.answer(str(error), show_alert=True)
+        return
+
     filter_name = BROADCAST_FILTERS.get(current_filter, 'Все')
     
+    content_lines = []
+    if msg_data.get('kind') == BROADCAST_KIND_POLL:
+        content_lines.extend([
+            f"<b>Материал:</b> {poll_type_label(msg_data)}",
+            f"<b>Вопрос:</b> {escape_html(msg_data.get('question', ''))}",
+            "<b>Результаты:</b> " + (
+                "начнутся с нуля" if msg_data.get('delivery_mode') == POLL_MODE_CLEAN
+                else "сохраняются вместе с источником"
+            ),
+        ])
+        if not msg_data.get('is_anonymous', True):
+            content_lines.extend([
+                "",
+                "⚠️ Опрос неанонимный: сведения о голосах могут быть доступны участникам.",
+            ])
+        if msg_data.get('delivery_mode') == POLL_MODE_PRESERVE:
+            content_lines.extend([
+                "",
+                "ℹ️ Этот опрос закрывается только в месте, где был создан.",
+            ])
+    else:
+        content_lines.append("<b>Материал:</b> Сообщение")
+
     text = (
         "🚀 <b>Подтверждение рассылки</b>\n\n"
-        f"<b>Фильтр:</b> {filter_name}\n"
+        + "\n".join(content_lines)
+        + "\n\n"
+        + f"<b>Фильтр:</b> {filter_name}\n"
         f"<b>Получателей:</b> {user_count} чел.\n\n"
         "Начать рассылку?"
     )
     
     await safe_edit_or_send(callback.message, 
         text,
-        reply_markup=broadcast_confirm_kb(user_count)
+        reply_markup=broadcast_confirm_kb(user_count, str(confirmation["token"]))
     )
     await callback.answer()
 
@@ -424,7 +631,7 @@ async def broadcast_stop(callback: CallbackQuery):
     await callback.answer("ℹ️ Активной рассылки нет", show_alert=True)
 
 
-@router.callback_query(F.data == "broadcast_confirm")
+@router.callback_query(F.data.startswith("broadcast_confirm"))
 async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
     """Launches a newsletter."""
     if not is_admin(callback.from_user.id):
@@ -435,6 +642,35 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         await callback.answer("⏳ Рассылка уже идёт!", show_alert=True)
         return
     
+    _, separator, token = str(callback.data or "").partition(":")
+    confirmation = (
+        consume_valid_broadcast_confirmation(callback.from_user.id, token)
+        if separator and token
+        else None
+    )
+    if confirmation is None:
+        try:
+            fresh = create_broadcast_confirmation(callback.from_user.id)
+        except BroadcastEditorError:
+            await render_broadcast_menu(callback.message)
+            await callback.answer(
+                "Материал, фильтр или число получателей изменились. Проверьте рассылку заново.",
+                show_alert=True,
+            )
+            return
+        await safe_edit_or_send(
+            callback.message,
+            "⚠️ <b>Подтверждение устарело</b>\n\n"
+            "Материал, фильтр или число получателей изменились. "
+            "Проверьте актуальные данные и подтвердите ещё раз.",
+            reply_markup=broadcast_confirm_kb(
+                int(fresh["recipient_count"]),
+                str(fresh["token"]),
+            ),
+        )
+        await callback.answer("Подтверждение обновлено", show_alert=True)
+        return
+
     msg_data = get_broadcast_message()
     if not msg_data:
         await callback.answer("❌ Сообщение не задано!", show_alert=True)
@@ -442,7 +678,40 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
     
     current_filter = get_setting('broadcast_filter', 'all')
     user_ids = get_users_for_broadcast(current_filter)
-    
+
+    try:
+        current_revision = int(get_setting('broadcast_config_revision', '0') or 0)
+    except (TypeError, ValueError):
+        current_revision = 0
+    confirmation_is_current = (
+        str(confirmation.get("filter") or "") == str(current_filter)
+        and int(confirmation.get("recipient_count") or 0) == len(user_ids)
+        and int(confirmation.get("config_revision") or 0) == current_revision
+        and str(confirmation.get("material_hash") or "") == broadcast_material_hash(msg_data)
+    )
+    if not confirmation_is_current:
+        try:
+            fresh = create_broadcast_confirmation(callback.from_user.id)
+        except BroadcastEditorError:
+            await render_broadcast_menu(callback.message)
+            await callback.answer(
+                "Материал, фильтр или число получателей изменились. Проверьте рассылку заново.",
+                show_alert=True,
+            )
+            return
+        await safe_edit_or_send(
+            callback.message,
+            "⚠️ <b>Подтверждение устарело</b>\n\n"
+            "Материал, фильтр или число получателей изменились. "
+            "Проверьте актуальные данные и подтвердите ещё раз.",
+            reply_markup=broadcast_confirm_kb(
+                int(fresh["recipient_count"]),
+                str(fresh["token"]),
+            ),
+        )
+        await callback.answer("Подтверждение обновлено", show_alert=True)
+        return
+
     if not user_ids:
         await callback.answer("❌ Нет получателей!", show_alert=True)
         return
@@ -459,10 +728,19 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
     unexpected_error = None
     callback_answered = False
 
+    is_poll = msg_data.get('kind') == BROADCAST_KIND_POLL
+    poll_reference = None
     text = msg_data.get('text', '')
     photo_file_id = msg_data.get('photo_file_id')
 
     try:
+        if is_poll:
+            poll_reference = await prepare_poll_delivery(
+                bot,
+                msg_data,
+                master_chat_id=callback.message.chat.id,
+            )
+
         await safe_edit_or_send(
             callback.message,
             f"📤 <b>Рассылка запущена</b>\n\n"
@@ -480,8 +758,14 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                 break
 
             try:
-                rendered_text = render_broadcast_message_text(text, int(user_id))
-                if photo_file_id:
+                if is_poll:
+                    await send_poll_to_recipient(
+                        bot,
+                        poll_reference,
+                        chat_id=int(user_id),
+                    )
+                elif photo_file_id:
+                    rendered_text = render_broadcast_message_text(text, int(user_id))
                     await bot.send_photo(
                         chat_id=user_id,
                         photo=photo_file_id,
@@ -489,6 +773,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                         parse_mode="HTML"
                     )
                 else:
+                    rendered_text = render_broadcast_message_text(text, int(user_id))
                     await bot.send_message(
                         chat_id=user_id,
                         text=rendered_text,
@@ -535,6 +820,19 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         await finish_broadcast_state()
 
     processed = sent + blocked + failed
+    poll_close_callback = None
+    preserved_poll_notice = ""
+    if poll_reference and poll_reference.can_close:
+        poll_close_callback = (
+            f"broadcast_poll_close:{poll_reference.chat_id}:{poll_reference.message_id}"
+        )
+    elif is_poll and msg_data.get('delivery_mode') == POLL_MODE_PRESERVE:
+        preserved_poll_notice = (
+            "\n\nℹ️ Опрос сохраняет исходные результаты. Закрыть его можно только "
+            "в месте, где он был создан."
+        )
+
+    result_markup = broadcast_result_kb(poll_close_callback)
 
     if unexpected_error is not None:
         if not callback_answered:
@@ -551,8 +849,9 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                 f"🚫 Заблокировали бота: {blocked}\n"
                 f"⚠️ Ошибки отправки: {failed}\n"
                 f"📌 Обработано: {processed}/{total}\n\n"
-                "Флаг рассылки сброшен, можно запустить новую рассылку.",
-                reply_markup=home_only_kb(),
+                "Флаг рассылки сброшен, можно запустить новую рассылку."
+                f"{preserved_poll_notice}",
+                reply_markup=result_markup,
             )
         except Exception as report_error:
             logger.error(f"Не удалось показать отчёт о прерванной рассылке: {report_error}")
@@ -566,8 +865,9 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
             f"📤 Отправлено: {sent}\n"
             f"🚫 Заблокировали бота: {blocked}\n"
             f"⚠️ Ошибки отправки: {failed}\n"
-            f"⏸️ Не отправлено: {remaining}",
-            reply_markup=home_only_kb(),
+            f"⏸️ Не отправлено: {remaining}"
+            f"{preserved_poll_notice}",
+            reply_markup=result_markup,
         )
         return
 
@@ -576,9 +876,58 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         f"✅ <b>Рассылка завершена!</b>\n\n"
         f"📤 Отправлено: {sent}\n"
         f"🚫 Заблокировали бота: {blocked}\n"
-        f"⚠️ Ошибки отправки: {failed}",
-        reply_markup=home_only_kb()
+        f"⚠️ Ошибки отправки: {failed}"
+        f"{preserved_poll_notice}",
+        reply_markup=result_markup,
     )
+
+
+@router.callback_query(F.data.startswith("broadcast_poll_close:"))
+async def broadcast_close_poll(callback: CallbackQuery, bot: Bot):
+    """Closes a bot-owned common poll from a persisted result button."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    try:
+        _, chat_id_raw, message_id_raw = callback.data.split(":", 2)
+        chat_id = int(chat_id_raw)
+        message_id = int(message_id_raw)
+    except (TypeError, ValueError):
+        await callback.answer("❌ Некорректная ссылка на опрос", show_alert=True)
+        return
+
+    already_closed = False
+    try:
+        await bot.stop_poll(chat_id=chat_id, message_id=message_id)
+    except TelegramBadRequest as error:
+        error_text = str(error).lower()
+        if "already closed" in error_text or "poll has already been closed" in error_text:
+            already_closed = True
+        else:
+            logger.warning("Не удалось закрыть опрос %s/%s: %s", chat_id, message_id, error)
+            await callback.answer(
+                "❌ Не удалось закрыть опрос. Возможно, эталонное сообщение удалено.",
+                show_alert=True,
+            )
+            return
+    except TelegramAPIError as error:
+        logger.warning("Ошибка Telegram при закрытии опроса %s/%s: %s", chat_id, message_id, error)
+        await callback.answer(
+            "❌ Telegram временно недоступен. Попробуйте закрыть опрос ещё раз.",
+            show_alert=True,
+        )
+        return
+
+    report_text = callback.message.html_text or callback.message.text or "✅ <b>Рассылка завершена</b>"
+    if "Опрос закрыт" not in report_text:
+        report_text += "\n\n🛑 <b>Опрос закрыт.</b>"
+    await safe_edit_or_send(
+        callback.message,
+        report_text,
+        reply_markup=home_only_kb(),
+    )
+    await callback.answer("ℹ️ Опрос уже был закрыт" if already_closed else "✅ Опрос закрыт")
 
 
 # ============================================================================

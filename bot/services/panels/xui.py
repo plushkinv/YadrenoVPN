@@ -28,10 +28,33 @@ BOT_API_TOKEN_NAME = "YadrenoVPN Bot"
 JSON_INBOUND_FIELDS = ("settings", "streamSettings", "sniffing")
 SETTING_BASE_LEGACY = "/panel/setting"
 SETTING_BASE_API = "/panel/api/setting"
+MTPROTO_MULTI_CLIENT_MIN_VERSION = (3, 5, 0)
+READ_ONLY_POST_ENDPOINTS = {
+    "/login",
+    "/panel/api/inbounds/onlines",
+    "/panel/api/clients/onlines",
+    "/panel/api/clients/lastOnline",
+    "/panel/api/clients/onlinesByGuid",
+    "/panel/api/clients/clientIpsByGuid",
+    "/panel/api/clients/activeInbounds",
+}
 
 
-from .base import BaseVPNClient, PanelDatabaseBackup, VPNAPIError
-from bot.utils.inbounds import filter_visible_inbounds
+from .base import (
+    BaseVPNClient,
+    PanelClientState,
+    PanelDatabaseBackup,
+    PanelServerSnapshot,
+    VPNAPIError,
+    build_legacy_panel_snapshot,
+)
+from bot.services.panel_sync_coordinator import panel_sync_coordinator
+from bot.utils.inbounds import (
+    filter_regular_inbounds,
+    filter_visible_inbounds,
+    is_ignored_inbound,
+    is_mtproto_inbound,
+)
 
 
 class StaleAPIProfileError(Exception):
@@ -98,6 +121,17 @@ class XUIClient(BaseVPNClient):
             f"Инициализирован XUIClient для {server['name']}: {self.base_url} "
             f"(api_token={'есть' if self.api_token else 'нет'})"
         )
+
+    def _has_cookie_credentials(self) -> bool:
+        """Whether a complete username/password pair is available for session login."""
+        return bool(
+            str(self.server.get("login") or "").strip()
+            and str(self.server.get("password") or "").strip()
+        )
+
+    def _uses_api_token_only(self) -> bool:
+        """Whether this server intentionally has only a Bearer token."""
+        return bool(self.api_token) and not self._has_cookie_credentials()
     
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Creates a session if there is none."""
@@ -212,7 +246,13 @@ class XUIClient(BaseVPNClient):
         """Returns the technical client ID for old update/delete."""
         if not isinstance(client, dict):
             return ""
-        return client.get("id") or client.get("password") or client.get("auth") or ""
+        return (
+            client.get("id")
+            or client.get("password")
+            or client.get("auth")
+            or client.get("email")
+            or ""
+        )
 
     @classmethod
     def _find_client_in_inbounds(
@@ -302,7 +342,8 @@ class XUIClient(BaseVPNClient):
         record_id = record.get("id")
         if not uuid_value and isinstance(record_id, str):
             uuid_value = record_id
-        if not uuid_value and fallback_uuid:
+        is_mtproto_record = "secret" in record or "adTag" in record
+        if not uuid_value and fallback_uuid and not is_mtproto_record:
             uuid_value = fallback_uuid
 
         payload: Dict[str, Any] = {
@@ -320,7 +361,7 @@ class XUIClient(BaseVPNClient):
 
         if uuid_value:
             payload["id"] = uuid_value
-        for field in ("password", "auth", "flow"):
+        for field in ("password", "auth", "flow", "secret", "adTag"):
             value = record.get(field)
             if value:
                 payload[field] = value
@@ -366,6 +407,17 @@ class XUIClient(BaseVPNClient):
         padded = parts + (0,) * (len(minimum) - len(parts))
         return padded[:len(minimum)] >= minimum
 
+    def _supports_mtproto_multi_client(self, profile: Optional[str] = None) -> bool:
+        """Whether this panel can manage one MTProto secret per client."""
+        effective_profile = profile or self.api_profile
+        return (
+            effective_profile == API_PROFILE_CLIENTS
+            and self._version_at_least(
+                self.panel_version,
+                MTPROTO_MULTI_CLIENT_MIN_VERSION,
+            )
+        )
+
     def _setting_bases(self) -> List[str]:
         """
         Returns the namespace order for setting routes.
@@ -374,6 +426,8 @@ class XUIClient(BaseVPNClient):
         they moved to /panel/api/setting/*. If the version is unknown, first
         We are trying the old way so as not to change the behavior of existing panels.
         """
+        if self._uses_api_token_only():
+            return [SETTING_BASE_API]
         if self._version_at_least(self.panel_version, (3, 3, 0)):
             return [SETTING_BASE_API, SETTING_BASE_LEGACY]
         return [SETTING_BASE_LEGACY, SETTING_BASE_API]
@@ -445,7 +499,15 @@ class XUIClient(BaseVPNClient):
         )
         if status == 200 and isinstance(data, dict) and data.get("success"):
             return API_PROFILE_CLIENTS
-        return API_PROFILE_LEGACY
+        if status in (404, 405):
+            return API_PROFILE_LEGACY
+        if status == 0 or status >= 500:
+            raise TransientPanelError(
+                "Пакетный Clients API временно недоступен; профиль панели не изменён"
+            )
+        raise VPNAPIError(
+            f"Не удалось определить профиль Clients API (HTTP {status})"
+        )
 
     async def _refresh_panel_metadata(self, force: bool = False) -> None:
         """Updates the version/profile of the panel and writes the cache to servers."""
@@ -536,6 +598,29 @@ class XUIClient(BaseVPNClient):
         obj = result.get("obj")
         return obj if isinstance(obj, dict) else None
 
+    async def _get_verified_mtproto_client(
+        self,
+        email: str,
+        inbound_id: int,
+        attempts: int = 3,
+    ) -> Dict[str, Any]:
+        """Re-read a 3X-UI 3.5+ MTProto client and verify its generated secret."""
+        delays = RETRY_CONFIG.get("delays", [])
+        for attempt in range(max(1, attempts)):
+            record = await self._get_clients_api_record(email, log_error=False)
+            if record:
+                client, inbound_ids = self._split_clients_api_record(record)
+                if inbound_id in inbound_ids and client.get("secret"):
+                    return client
+            if attempt < max(1, attempts) - 1:
+                delay = delays[min(attempt, len(delays) - 1)] if delays else 0
+                if delay:
+                    await asyncio.sleep(delay)
+        raise VPNAPIError(
+            f"3X-UI не подтвердил индивидуальный MTProto-secret для клиента {email} "
+            f"в inbound {inbound_id}. Требуется 3X-UI 3.5.0 или новее."
+        )
+
     async def _recover_added_client(
         self,
         profile: str,
@@ -592,7 +677,12 @@ class XUIClient(BaseVPNClient):
         include_ignored: bool = False,
     ) -> tuple:
         """Looks up the client in /inbounds/list and returns (inbound, client)."""
-        inbounds = await self.get_inbounds(include_ignored=include_ignored)
+        if self._supports_mtproto_multi_client():
+            inbounds = await self._get_all_inbounds()
+            if not include_ignored:
+                inbounds = filter_visible_inbounds(inbounds)
+        else:
+            inbounds = await self.get_inbounds(include_ignored=include_ignored)
         for inbound in inbounds:
             if inbound_id is not None and inbound.get("id") != inbound_id:
                 continue
@@ -804,6 +894,43 @@ class XUIClient(BaseVPNClient):
         endpoint: str,
         data: Optional[Dict] = None,
         retry: bool = True,
+        log_error: bool = True,
+    ) -> Dict[str, Any]:
+        """Coordinate mutating API calls and delegate the HTTP request."""
+        normalized_method = method.upper()
+        read_only_post = (
+            normalized_method == "POST"
+            and (
+                endpoint in READ_ONLY_POST_ENDPOINTS
+                or endpoint in {
+                    f"{SETTING_BASE_LEGACY}/all",
+                    f"{SETTING_BASE_API}/all",
+                }
+            )
+        )
+        if normalized_method not in {"GET", "HEAD", "OPTIONS"} and not read_only_post:
+            async with panel_sync_coordinator.regular():
+                return await self._request_impl(
+                    method,
+                    endpoint,
+                    data=data,
+                    retry=retry,
+                    log_error=log_error,
+                )
+        return await self._request_impl(
+            method,
+            endpoint,
+            data=data,
+            retry=retry,
+            log_error=log_error,
+        )
+
+    async def _request_impl(
+        self,
+        method: str,
+        endpoint: str,
+        data: Optional[Dict] = None,
+        retry: bool = True,
         log_error: bool = True
     ) -> Dict[str, Any]:
         """
@@ -855,6 +982,12 @@ class XUIClient(BaseVPNClient):
 
                     # Bearer is rotten (rotated in the panel) - reset the token, re-login
                     if response.status == 401 and self.panel_mode == 'bearer' and not is_cookie_setting_route:
+                        if self._uses_api_token_only():
+                            await self._reset_session()
+                            raise VPNAPIError(
+                                "API-ключ отклонён панелью. Проверьте, что токен включён "
+                                "и не был удалён или пересоздан."
+                            )
                         logger.warning(
                             f"HTTP 401 в режиме bearer — токен невалиден, "
                             f"переключаемся на обычный логин"
@@ -957,6 +1090,12 @@ class XUIClient(BaseVPNClient):
         receive Bearer. For the old /panel/setting/* fetch_token=False, so as not to call
         recursion when servicing setting routes.
         """
+        if not self._has_cookie_credentials():
+            raise VPNAPIError(
+                "Для этого сервера не сохранены логин и пароль. "
+                "Обновите API-ключ или подключите сервер по логину и паролю."
+            )
+
         mode, csrf_token = await self._detect_panel_version()
         self.panel_mode = mode
         self.auth_mode = mode
@@ -975,8 +1114,8 @@ class XUIClient(BaseVPNClient):
             async with session.post(
                 url,
                 json={
-                    "username": self.server["login"],
-                    "password": self.server["password"],
+                    "username": self.server.get("login", ""),
+                    "password": self.server.get("password", ""),
                 },
                 headers=login_headers,
             ) as resp:
@@ -1026,6 +1165,11 @@ class XUIClient(BaseVPNClient):
 
     async def _ensure_cookie_auth(self) -> bool:
         """Guarantees a cookie session for the old /panel/setting/* even in Bearer mode."""
+        if not self._has_cookie_credentials():
+            raise VPNAPIError(
+                "Эта операция требует cookie-сессию панели. Подключение только по "
+                "API-ключу полностью поддерживается в 3X-UI 3.3.0 и новее."
+            )
         if self.cookie_authenticated and self.session is not None and not self.session.closed:
             return True
         bearer_token = self.api_token
@@ -1064,36 +1208,203 @@ class XUIClient(BaseVPNClient):
                 self.is_authenticated = True
                 self.cookie_authenticated = False
                 await self._refresh_panel_metadata(force=True)
+                if self._uses_api_token_only() and not self._version_at_least(
+                    self.panel_version,
+                    (3, 3, 0),
+                ):
+                    detected = self.panel_version or "не определена"
+                    raise VPNAPIError(
+                        "Подключение только по API-ключу требует 3X-UI 3.3.0 или новее. "
+                        f"Версия панели: {detected}."
+                    )
                 logger.info(f"✅ Авторизация через Bearer-токен (v3.0+) на {self.server['name']}")
                 return True
+            if self._uses_api_token_only():
+                raise VPNAPIError(
+                    "API-ключ недействителен или отключён в панели. "
+                    "Создайте либо включите токен в настройках безопасности 3X-UI."
+                )
             await self._invalidate_api_token()
+
+        if not self._has_cookie_credentials():
+            raise VPNAPIError(
+                "Не указан рабочий API-ключ и отсутствуют логин с паролем панели."
+            )
 
         await self._login_with_cookie(fetch_token=True)
         await self._refresh_panel_metadata(force=True)
         return True
 
-    async def get_inbounds(self, include_ignored: bool = False) -> List[Dict[str, Any]]:
-        """
-        Gets a list of connections (Inbounds).
-
-        Args:
-            include_ignored: True — also return inbounds with the prefix --! in remark.
-
-        Returns:
-            List of inbound connections
-        """
+    async def _get_all_inbounds(self) -> List[Dict[str, Any]]:
+        """Fetch and normalize every inbound returned by the panel."""
         result = await self._request("GET", "/panel/api/inbounds/list")
         obj = result.get("obj", [])
         if not isinstance(obj, list):
             return []
-        inbounds = [
+        return [
             self._normalize_inbound(inbound)
             for inbound in obj
             if isinstance(inbound, dict)
         ]
+
+    async def get_inbounds(self, include_ignored: bool = False) -> List[Dict[str, Any]]:
+        """Return regular single-key inbounds; MTProto is subscription-only."""
+        inbounds = filter_regular_inbounds(await self._get_all_inbounds())
         if include_ignored:
             return inbounds
         return filter_visible_inbounds(inbounds)
+
+    async def get_subscription_inbounds(
+        self,
+        include_ignored: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Return subscription inbounds, including MTProto on 3X-UI 3.5+."""
+        profile = await self._ensure_api_profile()
+        inbounds = await self._get_all_inbounds()
+        if not self._supports_mtproto_multi_client(profile):
+            skipped = [inbound for inbound in inbounds if is_mtproto_inbound(inbound)]
+            if skipped:
+                logger.debug(
+                    "MTProto inbounds skipped on panel %s: multi-client requires "
+                    "3X-UI 3.5.0+ with clients_api (version=%s, profile=%s, ids=%s)",
+                    self.server.get("name", self.server_id),
+                    self.panel_version or "unknown",
+                    profile or "unknown",
+                    [inbound.get("id") for inbound in skipped],
+                )
+            inbounds = filter_regular_inbounds(inbounds)
+        if include_ignored:
+            return inbounds
+        return filter_visible_inbounds(inbounds)
+
+    async def get_sync_snapshot(
+        self,
+        subscription_mode: bool = False,
+    ) -> PanelServerSnapshot:
+        """Download all eligible inbounds and all logical clients once."""
+        return await self._get_sync_snapshot_impl(subscription_mode)
+
+    async def _get_sync_snapshot_impl(
+        self,
+        subscription_mode: bool,
+    ) -> PanelServerSnapshot:
+        profile = await self._ensure_api_profile()
+        all_inbounds = await self._get_all_inbounds()
+        if subscription_mode and self._supports_mtproto_multi_client(profile):
+            inbounds = all_inbounds
+        else:
+            inbounds = filter_regular_inbounds(all_inbounds)
+
+        snapshot = build_legacy_panel_snapshot(inbounds, api_profile=profile)
+        if profile != API_PROFILE_CLIENTS:
+            return snapshot
+
+        rows: List[Dict[str, Any]] = []
+        page = 1
+        page_size = 200
+        expected_total: Optional[int] = None
+        try:
+            while True:
+                query = urllib.parse.urlencode({"page": page, "pageSize": page_size})
+                result = await self._request(
+                    "GET",
+                    f"/panel/api/clients/list/paged?{query}",
+                )
+                obj = result.get("obj")
+                if not isinstance(obj, dict) or not isinstance(obj.get("items"), list):
+                    raise VPNAPIError("Clients API returned an invalid paged client list")
+                items = [item for item in obj["items"] if isinstance(item, dict)]
+                rows.extend(items)
+
+                if expected_total is None:
+                    expected_total = self._traffic_int(
+                        obj.get("filtered", obj.get("total"))
+                    )
+                if expected_total is not None and len(rows) >= expected_total:
+                    break
+                if not items:
+                    break
+                if expected_total is None and len(items) < page_size:
+                    break
+                page += 1
+                if page > 10000:
+                    raise VPNAPIError("Clients API pagination did not terminate")
+        except VPNAPIError as exc:
+            # A cached clients profile may survive a panel downgrade. Re-probe
+            # only after the paged endpoint itself is confirmed missing. Reuse
+            # the inbounds already downloaded for this pass when it is legacy.
+            if "404" not in str(exc):
+                raise
+            if self.api_profile == API_PROFILE_CLIENTS:
+                await self._refresh_panel_metadata(force=True)
+            if self.api_profile != API_PROFILE_CLIENTS:
+                snapshot.api_profile = self.api_profile or API_PROFILE_LEGACY
+                return snapshot
+            raise
+
+        eligible_ids = {
+            int(inbound["id"])
+            for inbound in inbounds
+            if str(inbound.get("id", "")).isdigit()
+        }
+        for row in rows:
+            email = str(row.get("email") or "").strip()
+            normalized_email = email.lower()
+            if not normalized_email:
+                continue
+
+            previous = snapshot.clients.get(normalized_email)
+            raw_ids = row.get("inboundIds") or []
+            inbound_ids = {
+                int(value)
+                for value in raw_ids
+                if str(value).isdigit() and int(value) in eligible_ids
+            }
+            placements = dict(previous.placements) if previous else {}
+            identity = {}
+            if previous and previous.client:
+                identity.update(previous.client)
+            identity.update(row)
+
+            traffic_payload = row.get("traffic")
+            # In ListPaged a missing optional traffic object means the client
+            # has no counter row yet, i.e. a known zero rather than an unknown
+            # value requiring a per-email lookup.
+            traffic_known = True
+            traffic_used = 0
+            if isinstance(traffic_payload, dict):
+                normalized_traffic = self._traffic_used_from_payload(traffic_payload)
+                traffic_used = normalized_traffic if normalized_traffic is not None else 0
+            else:
+                normalized_traffic = self._traffic_used_from_payload(row)
+                if normalized_traffic is not None:
+                    traffic_used = normalized_traffic
+
+            snapshot.clients[normalized_email] = PanelClientState(
+                email=email,
+                client=identity,
+                inbound_ids=inbound_ids,
+                placements=placements,
+                traffic_used=traffic_used,
+                traffic_known=traffic_known,
+                total_gb=self._first_traffic_int(
+                    row,
+                    ("totalGB", "total", "trafficLimit"),
+                    0,
+                ),
+                expiry_time=self._first_traffic_int(
+                    row,
+                    ("expiryTime", "expiry_time", "expire"),
+                    0,
+                ),
+                enable=bool(row.get("enable", True)),
+                sub_id=str(row.get("subId") or ""),
+                limit_ip=self._first_traffic_int(row, ("limitIp",), 1),
+                reset=self._first_traffic_int(row, ("reset",), 0),
+                source="clients_api_paged",
+            )
+
+        return snapshot
     
     async def get_server_status(self) -> Dict[str, Any]:
         """
@@ -1122,7 +1433,9 @@ class XUIClient(BaseVPNClient):
             - online: True if the server is available
         """
         try:
-            inbounds = await self.get_inbounds()
+            # Aggregate server traffic includes service inbounds such as MTProto,
+            # while the manual --! marker still hides an inbound from bot stats.
+            inbounds = filter_visible_inbounds(await self._get_all_inbounds())
             
             total_clients = 0
             active_clients = 0
@@ -1244,6 +1557,7 @@ class XUIClient(BaseVPNClient):
         tg_id: str = "",
         flow: str = "",
         sub_id: Optional[str] = None,
+        panel_snapshot: Optional[PanelServerSnapshot] = None,
     ) -> Dict[str, Any]:
         return await self._run_with_stale_profile_retry(
             lambda: self._add_client_impl(
@@ -1256,6 +1570,7 @@ class XUIClient(BaseVPNClient):
                 tg_id=tg_id,
                 flow=flow,
                 sub_id=sub_id,
+                panel_snapshot=panel_snapshot,
             )
         )
 
@@ -1270,6 +1585,7 @@ class XUIClient(BaseVPNClient):
         tg_id: str = "",
         flow: str = "",
         sub_id: Optional[str] = None,
+        panel_snapshot: Optional[PanelServerSnapshot] = None,
     ) -> Dict[str, Any]:
         """
         Adds the client to inbound.
@@ -1311,20 +1627,37 @@ class XUIClient(BaseVPNClient):
             if delay:
                 await asyncio.sleep(delay)
 
-        # Defining the inbound protocol for the correct client structure
-        protocol = ""
-        method = ""
-        inbounds = []
-        try:
-            inbounds = await self.get_inbounds()
-            for ib in inbounds:
-                if ib['id'] == inbound_id:
-                    protocol = ib.get('protocol', '')
-                    settings = self._load_json_field(ib.get('settings', '{}'))
-                    method = settings.get('method', '')
-                    break
-        except Exception:
-            pass
+        # Regular protocols stay compatible with the public list method. If the
+        # target is MTProto, it is resolved from the raw panel list because
+        # get_inbounds() deliberately hides MTProto from single-key mode.
+        inbounds = (
+            panel_snapshot.inbounds
+            if panel_snapshot is not None
+            else await self.get_inbounds(include_ignored=True)
+        )
+        target_inbound = next(
+            (ib for ib in inbounds if ib.get("id") == inbound_id),
+            None,
+        )
+        if target_inbound is None:
+            raw_inbounds = await self._get_all_inbounds()
+            target_inbound = next(
+                (ib for ib in raw_inbounds if ib.get("id") == inbound_id),
+                None,
+            )
+        if target_inbound is None:
+            raise VPNAPIError(f"Inbound {inbound_id} не найден в панели")
+        if is_ignored_inbound(target_inbound):
+            raise VPNAPIError(f"Inbound {inbound_id} исключён из управления префиксом --!")
+
+        protocol = str(target_inbound.get("protocol") or "").strip().lower()
+        if protocol == "mtproto" and not self._supports_mtproto_multi_client(profile):
+            raise VPNAPIError(
+                "Индивидуальные клиенты MTProto поддерживаются только в "
+                "3X-UI 3.5.0+ через clients_api"
+            )
+        settings = self._load_json_field(target_inbound.get("settings", "{}"))
+        method = settings.get("method", "") if isinstance(settings, dict) else ""
 
         client_uuid = str(uuid.uuid4())
         
@@ -1381,8 +1714,40 @@ class XUIClient(BaseVPNClient):
             })
         }
 
+        async def finalize_add_result(result: Dict[str, Any]) -> Dict[str, Any]:
+            if protocol != "mtproto":
+                return result
+            verified_client = await self._get_verified_mtproto_client(
+                email,
+                inbound_id,
+                attempts=add_attempts,
+            )
+            return self._build_add_client_result(
+                verified_client,
+                inbound_id,
+                email,
+                result.get("uuid") or client_uuid,
+                expire_time,
+                total_gb,
+                client_entry["subId"],
+            )
+
         if profile == API_PROFILE_CLIENTS:
-            record = await self._get_clients_api_record(email)
+            snapshot_state = (
+                panel_snapshot.get_client(email)
+                if panel_snapshot is not None
+                else None
+            )
+            record = (
+                {
+                    "client": dict(snapshot_state.client),
+                    "inboundIds": sorted(snapshot_state.inbound_ids),
+                }
+                if snapshot_state is not None
+                else None
+            )
+            if panel_snapshot is None:
+                record = await self._get_clients_api_record(email)
             if record:
                 existing_client, inbound_ids = self._split_clients_api_record(record)
                 existing_result = self._build_add_client_result(
@@ -1416,11 +1781,15 @@ class XUIClient(BaseVPNClient):
                                 client_entry["subId"],
                             )
                             if recovered:
-                                return recovered
+                                return await finalize_add_result(recovered)
                             if attempt >= add_attempts - 1:
                                 raise
                             await wait_before_next_attempt(attempt)
-                if flow and (existing_client.get("flow") or "") != flow:
+                if (
+                    panel_snapshot is None
+                    and flow
+                    and (existing_client.get("flow") or "") != flow
+                ):
                     updated_client = self._build_client_payload_from_record(
                         existing_client,
                         fallback_email=email,
@@ -1449,12 +1818,12 @@ class XUIClient(BaseVPNClient):
                                 client_entry["subId"],
                             )
                             if recovered:
-                                return recovered
+                                return await finalize_add_result(recovered)
                             if attempt >= add_attempts - 1:
                                 raise
                             await wait_before_next_attempt(attempt)
                     existing_client["flow"] = flow
-                return existing_result
+                return await finalize_add_result(existing_result)
 
             api_client_entry = dict(client_entry)
             api_client_entry["tgId"] = self._normalize_tg_id(tg_id)
@@ -1478,14 +1847,19 @@ class XUIClient(BaseVPNClient):
                         client_entry["subId"],
                     )
                     if recovered:
-                        return recovered
+                        return await finalize_add_result(recovered)
                     if attempt >= add_attempts - 1:
                         raise
                     await wait_before_next_attempt(attempt)
-            created_record = await self._get_clients_api_record(email, log_error=False)
+            created_record = None
+            if panel_snapshot is None:
+                created_record = await self._get_clients_api_record(
+                    email,
+                    log_error=False,
+                )
             if created_record:
                 created_client, _ = self._split_clients_api_record(created_record)
-                return self._build_add_client_result(
+                result = self._build_add_client_result(
                     created_client,
                     inbound_id,
                     email,
@@ -1494,6 +1868,7 @@ class XUIClient(BaseVPNClient):
                     total_gb,
                     client_entry["subId"],
                 )
+                return await finalize_add_result(result)
         else:
             _, existing_client = self._find_client_in_inbounds(
                 inbounds,
@@ -1536,14 +1911,14 @@ class XUIClient(BaseVPNClient):
                         raise
                     await wait_before_next_attempt(attempt)
 
-        return {
+        return await finalize_add_result({
             "uuid": client_uuid,
             "email": email,
             "inbound_id": inbound_id,
             "expire_time": expire_time,
             "total_gb": total_gb,
             "sub_id": client_entry["subId"],
-        }
+        })
     
     async def get_inbound_flow(self, inbound_id: int) -> str:
         """
@@ -1740,12 +2115,28 @@ class XUIClient(BaseVPNClient):
             logger.warning(f"Ошибка получения статистики клиента {email}: {e}")
         return None
     
-    async def delete_client(self, inbound_id: int, client_uuid: str) -> bool:
+    async def delete_client(
+        self,
+        inbound_id: int,
+        client_uuid: str,
+        *,
+        panel_state: Optional[PanelClientState] = None,
+    ) -> bool:
         return await self._run_with_stale_profile_retry(
-            lambda: self._delete_client_impl(inbound_id, client_uuid)
+            lambda: self._delete_client_impl(
+                inbound_id,
+                client_uuid,
+                panel_state=panel_state,
+            )
         )
 
-    async def _delete_client_impl(self, inbound_id: int, client_uuid: str) -> bool:
+    async def _delete_client_impl(
+        self,
+        inbound_id: int,
+        client_uuid: str,
+        *,
+        panel_state: Optional[PanelClientState] = None,
+    ) -> bool:
         """
         Removes a client from inbound.
 
@@ -1758,25 +2149,31 @@ class XUIClient(BaseVPNClient):
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
-            _, client = await self._find_panel_client(
-                inbound_id=inbound_id,
-                client_uuid=client_uuid,
-                include_ignored=True,
-            )
-            email = client.get("email") if isinstance(client, dict) else None
-            if not email:
-                email = client_uuid
-            record = await self._get_clients_api_record(email, log_error=False)
+            if panel_state is not None:
+                email = panel_state.email or client_uuid
+                inbound_ids = set(panel_state.inbound_ids)
+            else:
+                _, client = await self._find_panel_client(
+                    inbound_id=inbound_id,
+                    client_uuid=client_uuid,
+                    include_ignored=True,
+                )
+                email = client.get("email") if isinstance(client, dict) else None
+                if not email:
+                    email = client_uuid
+                record = await self._get_clients_api_record(email, log_error=False)
+                inbound_ids = set()
+                if record:
+                    _, record_inbound_ids = self._split_clients_api_record(record)
+                    inbound_ids = set(record_inbound_ids)
             encoded_email = urllib.parse.quote(email, safe="")
-            if record:
-                _, inbound_ids = self._split_clients_api_record(record)
-                if len(inbound_ids) > 1:
-                    await self._request(
-                        "POST",
-                        f"/panel/api/clients/{encoded_email}/detach",
-                        data={"inboundIds": [inbound_id]},
-                    )
-                    return True
+            if len(inbound_ids) > 1:
+                await self._request(
+                    "POST",
+                    f"/panel/api/clients/{encoded_email}/detach",
+                    data={"inboundIds": [inbound_id]},
+                )
+                return True
             await self._request("POST", f"/panel/api/clients/del/{encoded_email}")
             return True
 
@@ -2222,6 +2619,7 @@ class XUIClient(BaseVPNClient):
         sub_id: Optional[str] = None,
         limit_ip: Optional[int] = None,
         flow: Optional[str] = None,
+        panel_client: Optional[Dict[str, Any]] = None,
     ) -> bool:
         return await self._run_with_stale_profile_retry(
             lambda: self._update_client_full_impl(
@@ -2234,6 +2632,7 @@ class XUIClient(BaseVPNClient):
                 sub_id=sub_id,
                 limit_ip=limit_ip,
                 flow=flow,
+                panel_client=panel_client,
             )
         )
 
@@ -2248,6 +2647,7 @@ class XUIClient(BaseVPNClient):
         sub_id: Optional[str] = None,
         limit_ip: Optional[int] = None,
         flow: Optional[str] = None,
+        panel_client: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Updates ALL client parameters on the panel with data from our database.
@@ -2273,11 +2673,12 @@ class XUIClient(BaseVPNClient):
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
-            record = await self._get_clients_api_record(email, log_error=False)
-            target_client = None
-            if record:
-                target_client, _ = self._split_clients_api_record(record)
-            if not target_client:
+            target_client = dict(panel_client) if panel_client else None
+            if target_client is None:
+                record = await self._get_clients_api_record(email, log_error=False)
+                if record:
+                    target_client, _ = self._split_clients_api_record(record)
+            if target_client is None:
                 _, target_client = await self._find_panel_client(
                     inbound_id=inbound_id,
                     client_uuid=client_uuid,
@@ -2317,20 +2718,21 @@ class XUIClient(BaseVPNClient):
             )
             return True
 
-        # Reading current client data from the panel - only for protocol fields
-        inbounds = await self.get_inbounds()
-        target_client = None
-        
-        for inbound in inbounds:
-            if inbound.get('id') == inbound_id:
-                settings = self._load_json_field(inbound.get('settings', '{}'))
-                clients = settings.get('clients', [])
-                
-                for client in clients:
-                    if client.get('id') == client_uuid or client.get('password') == client_uuid:
-                        target_client = client
-                        break
-                break
+        # Reading current client data is unnecessary when a batch snapshot
+        # already supplied the exact placement being changed.
+        target_client = dict(panel_client) if panel_client else None
+        if target_client is None:
+            inbounds = await self.get_inbounds()
+            for inbound in inbounds:
+                if inbound.get('id') == inbound_id:
+                    settings = self._load_json_field(inbound.get('settings', '{}'))
+                    clients = settings.get('clients', [])
+
+                    for client in clients:
+                        if client.get('id') == client_uuid or client.get('password') == client_uuid:
+                            target_client = client
+                            break
+                    break
         
         if not target_client:
             raise VPNAPIError(f"Клиент {email} не найден в inbound {inbound_id}")
@@ -2699,6 +3101,8 @@ class XUIClient(BaseVPNClient):
             "/panel/api/getDb",
             "/server/getDb"
         ]
+        if self._uses_api_token_only():
+            endpoints = [endpoint for endpoint in endpoints if endpoint.startswith("/panel/api/")]
         
         last_status = None
         last_response_preview = ""

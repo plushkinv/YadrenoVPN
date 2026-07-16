@@ -9,7 +9,6 @@ Includes:
 """
 
 import asyncio
-import json
 import logging
 import os
 import tempfile
@@ -17,7 +16,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
 from io import BytesIO
-from typing import Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, ReplyKeyboardRemove
@@ -31,13 +30,18 @@ from database.requests import (
 )
 from database.db_backup import backup_bot_database_to
 from bot.services.vpn_api import (
-    calculate_panel_total_for_key,
     get_client_from_server_data,
     VPNAPIError,
     format_traffic,
-    get_key_traffic_snapshot,
 )
 from bot.services.panels.base import PanelDatabaseBackup
+from bot.services.panel_sync import (
+    SnapshotCollection,
+    collect_changed_traffic_updates,
+    collect_server_snapshots,
+    run_db_to_panel_sync,
+)
+from bot.services.panel_sync_coordinator import panel_sync_coordinator
 from bot.utils.git_utils import check_for_updates
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock
 from bot.utils.delivery import is_bot_blocked_error
@@ -746,11 +750,6 @@ async def check_and_notify_updates(bot: Bot) -> None:
             # Generating the notification text
             notify_text = f"📦 <b>Доступно обновление!</b>\n\n{log_text}"
             
-            # If there is a blocking commit, add a warning
-            if has_blocking and blocking_commit:
-                blocking_msg = blocking_commit['message'].lstrip('!')
-                notify_text += f"\n\n⚠️ Среди обновлений есть <b>блокирующий коммит</b>.\n<code>{blocking_msg}</code>"
-            
             # Sending notifications to admins
             for admin_id in ADMIN_IDS:
                 try:
@@ -820,7 +819,7 @@ async def run_update_check_scheduler(bot: Bot) -> None:
 TRAFFIC_THRESHOLDS = [10, 5, 3, 2, 1, 0]
 
 
-async def monthly_traffic_reset(bot: Bot) -> None:
+async def _monthly_traffic_reset_impl(bot: Bot) -> None:
     """
     Monthly tasks (1st day of each month):
     
@@ -839,31 +838,42 @@ async def monthly_traffic_reset(bot: Bot) -> None:
     from bot.services.vpn_api import sync_key_to_panel_state
     
     reset_enabled = get_setting('monthly_traffic_reset_enabled', '0') == '1'
+    all_keys = get_all_active_keys_with_server()
+    all_servers = get_all_servers()
+    initial_snapshots = await collect_server_snapshots(all_keys, all_servers)
     
     # === PART 1: Traffic reset (if enabled) ===
     reset_success = 0
     reset_errors = 0
-    
+
     if reset_enabled:
         logger.info("🔄 Запуск ежемесячного сброса трафика...")
-        keys = get_all_active_keys_with_server()
+        keys = all_keys
         keys_with_limit = [k for k in keys if (k.get('traffic_limit', 0) or 0) > 0] if keys else []
-        
+
         for key in keys_with_limit:
             try:
+                panel_snapshot = initial_snapshots.snapshots.get(int(key['server_id']))
+                if panel_snapshot is None:
+                    raise RuntimeError("Panel snapshot is unavailable")
+
                 tariff_limit = key.get('traffic_limit', 0) or 0
                 tariff_id = key.get('tariff_id')
                 if tariff_id:
                     tariff = get_tariff_by_id(tariff_id)
                     if tariff and (tariff.get('traffic_limit_gb', 0) or 0) > 0:
                         tariff_limit = tariff['traffic_limit_gb'] * (1024**3)
-                
+
                 # Updating the database
                 update_key_traffic_limit(key['id'], tariff_limit)
                 reset_key_traffic_notification(key['id'])
-                
+
                 # Push to the panel (up/down reset + correct data from the database)
-                await sync_key_to_panel_state(key['id'], reset_traffic=True)
+                await sync_key_to_panel_state(
+                    key['id'],
+                    reset_traffic=True,
+                    panel_snapshot=panel_snapshot,
+                )
                 reset_success += 1
             except Exception as e:
                 reset_errors += 1
@@ -876,89 +886,20 @@ async def monthly_traffic_reset(bot: Bot) -> None:
     sync_fixed = 0
     sync_errors = 0
     
-    all_keys = get_all_active_keys_with_server()
-    if all_keys:
-        keys_by_server: dict = {}
-        for key in all_keys:
-            sid = key['server_id']
-            if sid not in keys_by_server:
-                keys_by_server[sid] = []
-            keys_by_server[sid].append(key)
-        
-        servers = get_all_servers()
-        server_map = {s['id']: s for s in servers}
-        
-        for server_id, server_keys in keys_by_server.items():
-            server = server_map.get(server_id)
-            if not server or not server.get('is_active'):
-                continue
-            try:
-                client = get_client_from_server_data(server)
-                inbounds = await client.get_inbounds()
-                
-                # Email card → data on the panel
-                panel_map = {}
-                for inbound in inbounds:
-                    settings = json.loads(inbound.get('settings', '{}'))
-                    for cl in settings.get('clients', []):
-                        panel_map[cl.get('email', '')] = {
-                            'expiryTime': cl.get('expiryTime', 0),
-                            'totalGB': cl.get('totalGB', 0)
-                        }
-                
-                for key in server_keys:
-                    email = key.get('panel_email')
-                    if not email or email not in panel_map:
-                        continue
-                    
-                    panel = panel_map[email]
-                    needs_fix = False
-                    
-                    # Check expiryTime
-                    expires_at = key.get('expires_at')
-                    panel_ms = panel['expiryTime']
-                    if expires_at:
-                        dt = datetime.fromisoformat(str(expires_at))
-                        expected_ms = int(dt.timestamp() * 1000)
-                        
-                        # Discrepancy > 1 day
-                        if panel_ms > 0 and abs(expected_ms - panel_ms) > 86400 * 1000:
-                            needs_fix = True
-                        elif panel_ms == 0 and expected_ms > 0:
-                            needs_fix = True
-                    else:
-                        expected_ms = 0
-                        if panel_ms > 0:
-                            needs_fix = True
-                    
-                    # Checking totalGB
-                    traffic_limit = key.get('traffic_limit', 0) or 0
-                    panel_total = panel['totalGB']
-                    if traffic_limit > 0:
-                        snapshot = await get_key_traffic_snapshot(client, key, inbounds)
-                        panel_used = snapshot.get('panel_traffic_used', 0) if snapshot else 0
-                        panel_total = snapshot.get('totalGB', panel_total) if snapshot else panel_total
-                        expected_total = calculate_panel_total_for_key(key, panel_used)
-                        if panel_total == 0 or abs(panel_total - expected_total) > 1024**3:
-                            needs_fix = True
-                    elif traffic_limit == 0 and panel_total > 0:
-                        needs_fix = True
-                    
-                    if needs_fix:
-                        # We skip those that have already been updated when the traffic is reset
-                        already_pushed = reset_enabled and (traffic_limit > 0)
-                        if not already_pushed:
-                            try:
-                                await sync_key_to_panel_state(key['id'])
-                                sync_fixed += 1
-                            except Exception as e:
-                                sync_errors += 1
-                                logger.error(f"Ошибка сверки ключа {key['id']} ({email}): {e}")
-                        else:
-                            sync_fixed += 1  # Already fixed on reset
-            except Exception as e:
-                logger.error(f"Ошибка сверки сервера {server.get('name', server_id)}: {e}")
-    
+    reconciliation_snapshots = (
+        await collect_server_snapshots(all_keys, all_servers)
+        if reset_enabled
+        else initial_snapshots
+    )
+    reconciliation_plan = await run_db_to_panel_sync(
+        all_keys,
+        all_servers,
+        apply=True,
+        snapshots=reconciliation_snapshots,
+    )
+    sync_fixed = sum(report.changed for report in reconciliation_plan.reports)
+    sync_errors = reconciliation_plan.errors
+
     # ===Report to admins ===
     report_parts = ["🔄 <b>Ежемесячное обслуживание</b>\n"]
     if reset_enabled:
@@ -981,7 +922,19 @@ async def monthly_traffic_reset(bot: Bot) -> None:
         except Exception as e:
             logger.warning(f"Не удалось отправить отчёт админу {admin_id}: {e}")
 
-async def sync_traffic_stats(bot: Bot) -> None:
+async def monthly_traffic_reset(bot: Bot) -> None:
+    """Run monthly panel maintenance under the regular mutation gate."""
+    async with panel_sync_coordinator.regular():
+        await _monthly_traffic_reset_impl(bot)
+
+
+async def sync_traffic_stats(
+    bot: Bot,
+    *,
+    keys: Optional[List[Dict[str, Any]]] = None,
+    servers: Optional[List[Dict[str, Any]]] = None,
+    snapshots: Optional[SnapshotCollection] = None,
+) -> SnapshotCollection:
     """
     Queries all servers and updates the traffic cache for each key.
     Checks notification thresholds and sends notifications to users.
@@ -994,58 +947,41 @@ async def sync_traffic_stats(bot: Bot) -> None:
         update_key_notified_pct, get_setting
     )
     
-    keys = get_all_active_keys_with_server()
+    keys = list(keys) if keys is not None else get_all_active_keys_with_server()
     if not keys:
-        return
+        return snapshots or SnapshotCollection()
     
-    # Grouping keys by server
-    keys_by_server: dict = {}
-    for key in keys:
-        sid = key['server_id']
-        if sid not in keys_by_server:
-            keys_by_server[sid] = []
-        keys_by_server[sid].append(key)
-    
-    # Getting servers
-    servers = get_all_servers()
-    server_map = {s['id']: s for s in servers}
-    
-    # Collecting traffic updates
-    traffic_updates = []  # (traffic_used, key_id)
-    
-    for server_id, server_keys in keys_by_server.items():
-        server = server_map.get(server_id)
-        if not server or not server.get('is_active'):
-            continue
-        
-        try:
-            client = get_client_from_server_data(server)
-            inbounds = await client.get_inbounds()
+    servers = list(servers) if servers is not None else get_all_servers()
+    collection = snapshots or await collect_server_snapshots(keys, servers)
+    for server_id, error in collection.errors.items():
+        logger.warning(
+            "Traffic synchronization skipped server %s: %s",
+            server_id,
+            error,
+        )
 
-            for key in server_keys:
-                snapshot = await get_key_traffic_snapshot(client, key, inbounds)
-                if snapshot:
-                    traffic_used = snapshot['traffic_used']
-
-                    traffic_updates.append((traffic_used, key['id']))
-                    key['_new_traffic_used'] = traffic_used
-
-        except Exception as e:
-            # Graceful degradation: don’t touch the data, continue
-            logger.warning(f"⚠️ Синхронизация трафика: сервер {server.get('name', server_id)} недоступен: {e}")
-            continue
+    # Only changed cumulative counters are written to SQLite.
+    traffic_updates = collect_changed_traffic_updates(keys, collection.snapshots)
     
     # Mass update of traffic in the database
     if traffic_updates:
         bulk_update_traffic(traffic_updates)
-    
+
     # Checking notification thresholds
     notification_text_template = get_setting(
         'traffic_notification_text',
         '⚠️ По ключу <b>%ключ_имя%</b> осталось %ключ_трафик_процент_остатка%% трафика (%ключ_трафик_использовано% из %ключ_трафик_лимит%)'
     )
-    
+
     for key in keys:
+        try:
+            server_id = int(key['server_id'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if server_id not in collection.snapshots:
+            continue
+        if not key.get('_traffic_snapshot_known'):
+            continue
         traffic_limit = key.get('traffic_limit', 0) or 0
         if traffic_limit == 0:
             continue  # Unlimited - skip it
@@ -1109,9 +1045,8 @@ async def sync_traffic_stats(bot: Bot) -> None:
     # totalGB on individual inbounds is the same, but clients will not disconnect themselves
     # until their own counter reaches the limit, so we do it manually.
     from database.db_keys import is_key_active, is_traffic_exhausted
-    from bot.services.vpn_api import ensure_subscription_keys_on_server, is_subscription_mode
+    from bot.services.vpn_api import ensure_subscription_keys_on_server
 
-    sub_mode_active = is_subscription_mode()
     for key in keys:
         if not key.get('sub_id'):
             continue
@@ -1120,8 +1055,14 @@ async def sync_traffic_stats(bot: Bot) -> None:
         if '_new_traffic_used' in key:
             merged['traffic_used'] = key['_new_traffic_used']
         if is_traffic_exhausted(merged) or not is_key_active(merged):
+            panel_snapshot = collection.snapshots.get(int(key['server_id']))
+            if panel_snapshot is None:
+                continue
             try:
-                await ensure_subscription_keys_on_server(key['id'])
+                await ensure_subscription_keys_on_server(
+                    key['id'],
+                    panel_snapshot=panel_snapshot,
+                )
             except Exception as e:
                 logger.warning(
                     f"sync_traffic_stats: ensure_subscription_keys для key {key['id']} "
@@ -1129,9 +1070,15 @@ async def sync_traffic_stats(bot: Bot) -> None:
                 )
 
     logger.debug(f"Синхронизация трафика завершена: обновлено {len(traffic_updates)} ключей")
+    return collection
 
 
-async def materialize_subscription_state() -> None:
+async def materialize_subscription_state(
+    *,
+    keys: Optional[List[Dict[str, Any]]] = None,
+    servers: Optional[List[Dict[str, Any]]] = None,
+    snapshots: Optional[SnapshotCollection] = None,
+) -> None:
     """
     Full pass through all active keys with challenge
     ensure_subscription_keys_on_server() - finishes missing clients
@@ -1140,22 +1087,27 @@ async def materialize_subscription_state() -> None:
     Runs once every ~30 minutes (every 6 traffic-sync cycles).
     """
     from database.requests import get_all_active_keys_with_server
-    from bot.services.vpn_api import ensure_subscription_keys_on_server
-
-    keys = get_all_active_keys_with_server()
+    keys = list(keys) if keys is not None else get_all_active_keys_with_server()
     if not keys:
         return
 
     logger.info(f"🔁 materialize_subscription_state: проход по {len(keys)} ключам")
-    stats_total = {'created': 0, 'deleted': 0, 'enabled': 0, 'disabled': 0}
-    for key in keys:
-        try:
-            res = await ensure_subscription_keys_on_server(key['id'])
-            for k, v in res.items():
-                stats_total[k] = stats_total.get(k, 0) + v
-        except Exception as e:
+    servers = list(servers) if servers is not None else get_all_servers()
+    plan = await run_db_to_panel_sync(
+        keys,
+        servers,
+        apply=True,
+        snapshots=snapshots,
+    )
+    stats_total: Dict[str, int] = {}
+    for report in plan.reports:
+        for name, value in report.stats.items():
+            stats_total[name] = stats_total.get(name, 0) + int(value or 0)
+        if report.error:
             logger.warning(
-                f"materialize_subscription_state: ключ {key['id']} не обработан: {e}"
+                "materialize_subscription_state skipped server %s: %s",
+                report.server_name,
+                report.error,
             )
     if any(stats_total.values()):
         logger.info(f"🔁 materialize_subscription_state завершён: {stats_total}")
@@ -1179,33 +1131,38 @@ async def run_traffic_sync_scheduler(bot: Bot) -> None:
     cycle = 0
     while True:
         try:
-            await sync_traffic_stats(bot)
-            try:
-                from bot.services.key_lifecycle import process_expired_key_lifecycle_events
+            async with panel_sync_coordinator.regular():
+                from database.requests import get_all_active_keys_with_server
 
-                await process_expired_key_lifecycle_events()
-            except Exception as e:
-                logger.error(f"Ошибка обработки key_expired lifecycle events: {e}")
-            try:
-                from bot.services.custom_payments import auto_check_custom_payment_orders
-
-                payment_summary = await auto_check_custom_payment_orders(bot=bot, limit=25)
-                if (
-                    payment_summary.get('checked')
-                    or payment_summary.get('completed')
-                    or payment_summary.get('canceled')
-                    or payment_summary.get('errors')
-                ):
-                    logger.info("Custom payment auto-check: %s", payment_summary)
-            except Exception as e:
-                logger.error(f"Ошибка автопроверки custom payment providers: {e}")
-            cycle += 1
-            # Once every 6 cycles (≈30 min) - materialization of the subscription state
-            if cycle % 6 == 0:
+                cycle_keys = get_all_active_keys_with_server()
+                cycle_servers = get_all_servers()
+                cycle_snapshots = await collect_server_snapshots(
+                    cycle_keys,
+                    cycle_servers,
+                )
+                await sync_traffic_stats(
+                    bot,
+                    keys=cycle_keys,
+                    servers=cycle_servers,
+                    snapshots=cycle_snapshots,
+                )
                 try:
-                    await materialize_subscription_state()
+                    from bot.services.key_lifecycle import process_expired_key_lifecycle_events
+
+                    await process_expired_key_lifecycle_events()
                 except Exception as e:
-                    logger.error(f"Ошибка в materialize_subscription_state: {e}")
+                    logger.error(f"Ошибка обработки key_expired lifecycle events: {e}")
+                cycle += 1
+                # Reuse the same snapshots every sixth cycle (about 30 minutes).
+                if cycle % 6 == 0:
+                    try:
+                        await materialize_subscription_state(
+                            keys=cycle_keys,
+                            servers=cycle_servers,
+                            snapshots=cycle_snapshots,
+                        )
+                    except Exception as e:
+                        logger.error(f"Ошибка в materialize_subscription_state: {e}")
 
             # Wait 5 minutes
             await asyncio.sleep(300)

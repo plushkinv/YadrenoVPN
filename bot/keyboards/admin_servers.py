@@ -98,6 +98,17 @@ def add_server_step_kb(step: int, total_steps: int=6) -> InlineKeyboardMarkup:
     builder.row(*buttons)
     return builder.as_markup()
 
+
+def add_server_auth_method_kb() -> InlineKeyboardMarkup:
+    """Authentication method selector shown before server fields."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text='🔑 По API-ключу', callback_data='admin_server_auth_api_token'),
+        InlineKeyboardButton(text='👤 Логин и пароль', callback_data='admin_server_auth_login_password'),
+    )
+    builder.row(back_button('admin_servers'), home_button())
+    return builder.as_markup()
+
 def add_server_confirm_kb() -> InlineKeyboardMarkup:
     """Keyboard to confirm adding a server."""
     builder = InlineKeyboardBuilder()
@@ -105,11 +116,12 @@ def add_server_confirm_kb() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_server_add_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_servers'))
     return builder.as_markup()
 
-def add_server_test_failed_kb() -> InlineKeyboardMarkup:
+def add_server_test_failed_kb(allow_save_anyway: bool = True) -> InlineKeyboardMarkup:
     """Keyboard when the connection test fails."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🔄 Проверить снова', callback_data='admin_server_add_test'))
-    builder.row(InlineKeyboardButton(text='✅ Сохранить всё равно', callback_data='admin_server_add_save'))
+    if allow_save_anyway:
+        builder.row(InlineKeyboardButton(text='✅ Сохранить всё равно', callback_data='admin_server_add_save'))
     builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_server_add_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_servers'))
     return builder.as_markup()
 

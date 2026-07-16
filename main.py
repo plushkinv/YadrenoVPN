@@ -17,6 +17,7 @@ from database.migrations import run_migrations
 
 from bot.services.vpn_api import close_all_clients
 from bot.services.scheduler import run_daily_tasks, run_update_check_scheduler, run_traffic_sync_scheduler
+from bot.services.payment_auto_check import run_payment_auto_check_scheduler
 
 # Importing routers
 from bot.handlers.user import router as user_router
@@ -165,14 +166,18 @@ async def main():
     # Global Network Error Handler
     from aiogram.exceptions import TelegramNetworkError
     from aiogram.types import ErrorEvent
+    from bot.utils.callbacks import is_expired_callback_error
     
     @dp.errors()
     async def global_error_handler(event: ErrorEvent):
-        """Intercepts Telegram API network errors and writes a short warning."""
+        """Intercepts safe Telegram network/callback errors with short warnings."""
         exception = event.exception
         if isinstance(exception, TelegramNetworkError):
             logger.warning(f"⚠️ Нет связи с Telegram API: {exception}")
             return True  # The error has been processed, do not forward it further
+        if is_expired_callback_error(exception):
+            logger.warning("⚠️ Просроченный Telegram callback: %s", exception)
+            return True
         # We log the rest of the errors as usual
         logger.error(f"Необработанная ошибка: {exception}", exc_info=True)
         return True
@@ -192,7 +197,8 @@ async def main():
     update_tasks = asyncio.create_task(run_update_check_scheduler(bot))
     # Launch the traffic synchronization scheduler (every 5 minutes)
     traffic_tasks = asyncio.create_task(run_traffic_sync_scheduler(bot))
-    background_tasks = [daily_tasks, update_tasks, traffic_tasks]
+    payment_check_tasks = asyncio.create_task(run_payment_auto_check_scheduler(bot))
+    background_tasks = [daily_tasks, update_tasks, traffic_tasks, payment_check_tasks]
     
     try:
         await dp.start_polling(bot)

@@ -17,13 +17,13 @@ from bot.services.vpn_api import (
     get_client_from_server_data,
     VPNAPIError,
     format_traffic,
-    get_key_traffic_snapshot,
+    get_client_subscription_inbounds,
 )
 from bot.handlers.admin.users_manage import format_user_display, _show_user_view_edit
 from bot.handlers.admin.users_list import show_users_menu
+from bot.services.panel_sync_coordinator import regular_panel_operation
 
 logger = logging.getLogger(__name__)
-from bot.utils.text import safe_edit_or_send
 
 router = Router()
 USERS_PER_PAGE = 20
@@ -155,6 +155,7 @@ async def process_key_extend(message: Message, state: FSMContext):
         await safe_edit_or_send(message, '❌ Ошибка продления ключа')
 
 @router.callback_query(F.data.startswith('admin_key_reset_traffic:'))
+@regular_panel_operation
 async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
     """Reset key traffic."""
     if not is_admin(callback.from_user.id):
@@ -208,6 +209,7 @@ async def start_change_traffic_limit(callback: CallbackQuery, state: FSMContext)
     await callback.answer()
 
 @router.message(AdminStates.key_change_traffic, F.text, ~F.text.startswith('/'))
+@regular_panel_operation
 async def process_change_traffic_limit(message: Message, state: FSMContext):
     """Processing the entry of a new traffic limit."""
     if not is_admin(message.from_user.id):
@@ -283,7 +285,7 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
     if is_subscription_mode():
         try:
             client = get_client_from_server_data(server)
-            inbounds = await client.get_inbounds()
+            inbounds = await get_client_subscription_inbounds(client)
             if not inbounds:
                 await callback.answer('❌ На сервере нет inbound', show_alert=True)
                 return
@@ -357,6 +359,7 @@ async def process_add_key_days(message: Message, state: FSMContext):
     await safe_edit_or_send(message, f"✅ <b>Подтверждение создания ключа</b>\n\n🖥️ Сервер: {(server['name'] if server else '?')}\n📊 Трафик: {traffic_text}\n📅 Срок: {days} дней\n", reply_markup=add_key_confirm_kb(), force_new=True)
 
 @router.callback_query(F.data == 'admin_add_key_confirm')
+@regular_panel_operation
 async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Confirmation and key creation."""
     if not is_admin(callback.from_user.id):
@@ -387,12 +390,12 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
         tariff_id = admin_tariff['id']
 
         if subscription_mode:
-            inbounds = await client.get_inbounds()
+            inbounds = await get_client_subscription_inbounds(client)
             if not inbounds:
                 await callback.answer('❌ На сервере нет inbound', show_alert=True)
                 return
             sub_id = _uuid.uuid4().hex
-            min_inbound_id = min(inb['id'] for inb in inbounds)
+            first_inbound_id = None
             first_uuid = None
             created = 0
             for inb in inbounds:
@@ -404,7 +407,8 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
                         limit_ip=admin_tariff.get('max_ips', 1), tg_id=str(user_telegram_id),
                         flow=flow, sub_id=sub_id,
                     )
-                    if inb['id'] == min_inbound_id:
+                    if first_inbound_id is None or inb['id'] < first_inbound_id:
+                        first_inbound_id = inb['id']
                         first_uuid = res['uuid']
                     created += 1
                 except Exception as e:
@@ -412,11 +416,11 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
                         f"admin_add_key (subscription): не удалось создать клиента "
                         f"в inbound {inb['id']}: {e}"
                     )
-            if not first_uuid or created == 0:
+            if not first_uuid or first_inbound_id is None or created == 0:
                 raise RuntimeError('Не удалось создать ни одного клиента на сервере')
             key_id = create_vpn_key_subscription_admin(
                 user_id=user_id, server_id=server_id, tariff_id=tariff_id,
-                panel_inbound_id=min_inbound_id, panel_email=email,
+                panel_inbound_id=first_inbound_id, panel_email=email,
                 client_uuid=first_uuid, sub_id=sub_id,
                 days=days, traffic_limit=traffic_limit_bytes,
             )
@@ -486,188 +490,286 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
     else:
         await cancel_add_key(callback, state)
 
-@router.callback_query(F.data == 'admin_sync_db_to_panel')
-async def sync_db_to_panel(callback: CallbackQuery, state: FSMContext):
-    """Uploading data from the database to the panel (DB → Panel)."""
+def _manual_sync_plan_text(plan, *, preview: bool) -> str:
+    direction_title = (
+        'БД → Панель'
+        if plan.direction == 'db_to_panel'
+        else 'Панель → БД'
+    )
+    heading = (
+        '🔎 <b>Предпросмотр синхронизации</b>'
+        if preview
+        else '✅ <b>Синхронизация завершена</b>'
+    )
+    lines = [heading, '', f'Направление: <b>{direction_title}</b>', '']
+
+    if not plan.reports:
+        lines.append('✅ Нет ключей для проверки.')
+    for report in plan.reports:
+        server_name = escape_html(report.server_name)
+        if report.error:
+            lines.append(
+                f'❌ <b>{server_name}</b>: '
+                f'{escape_html(str(report.error)[:180])}'
+            )
+            continue
+
+        if plan.direction == 'db_to_panel':
+            stats = report.stats
+            action_word = 'изменится' if preview else 'применено'
+            lines.append(
+                f'🖥 <b>{server_name}</b>: проверено {report.checked}, '
+                f'{action_word} {report.changed}, пропущено {report.skipped}'
+            )
+            details = []
+            if stats.get('created'):
+                details.append(f"создать/подключить {stats['created']}")
+            if stats.get('updated'):
+                details.append(f"обновить {stats['updated']}")
+            if stats.get('deleted'):
+                details.append(f"отключить {stats['deleted']}")
+            if stats.get('enabled'):
+                details.append(f"включить {stats['enabled']}")
+            if stats.get('disabled'):
+                details.append(f"выключить {stats['disabled']}")
+            if stats.get('reset'):
+                details.append(f"сбросить трафик {stats['reset']}")
+            if details:
+                lines.append('  • ' + ', '.join(details))
+            if stats.get('errors'):
+                lines.append(f"  • ошибок: {stats['errors']}")
+        else:
+            stats = report.stats
+            applied = stats.get('applied')
+            action_word = (
+                f'применено {applied}'
+                if applied is not None
+                else f'изменится {report.changed}'
+            )
+            lines.append(
+                f'🖥 <b>{server_name}</b>: проверено {report.checked}, '
+                f'{action_word}, пропущено {report.skipped}'
+            )
+            details = []
+            if stats.get('expiry'):
+                details.append(f"срок {stats['expiry']}")
+            if stats.get('traffic'):
+                details.append(f"трафик {stats['traffic']}")
+            if stats.get('revived'):
+                details.append(f"восстановить истёкших {stats['revived']}")
+            if details:
+                lines.append('  • ' + ', '.join(details))
+
+    lines.extend([
+        '',
+        f'🔑 Ключей с изменениями: <b>{len(plan.candidate_key_ids)}</b>',
+    ])
+    if plan.errors:
+        lines.append(f'❌ Ошибок: <b>{plan.errors}</b>')
+    if preview and plan.has_changes:
+        lines.extend([
+            '',
+            'Запись ещё не выполнялась. После подтверждения данные '
+            'будут скачаны и проверены повторно.',
+        ])
+    elif not plan.has_changes:
+        lines.extend(['', '✅ Всё уже актуально, применять нечего.'])
+    return '\n'.join(lines)
+
+
+async def _manual_sync_keys(direction: str):
+    from database.requests import (
+        get_all_active_keys_with_server,
+        get_all_panel_sync_keys,
+    )
+
+    if direction == 'db_to_panel':
+        return get_all_active_keys_with_server()
+    return get_all_panel_sync_keys()
+
+
+async def _show_manual_sync_preview(
+    callback: CallbackQuery,
+    state: FSMContext,
+    direction: str,
+) -> None:
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    
-    await callback.answer('📤 Запуск выгрузки...')
-    await safe_edit_or_send(callback.message, '⏳ <b>Выгрузка данных в панель (БД → Панель)...</b>\n\nЭто может занять некоторое время.')
-    
-    from database.requests import get_all_active_keys_with_server
-    from bot.services.vpn_api import sync_key_to_panel_state
-    
-    keys = get_all_active_keys_with_server()
-    if not keys:
-        await safe_edit_or_send(callback.message, '✅ Нет активных ключей для синхронизации.')
-        return
-    
-    processed = 0
-    errors = 0
-    created = 0
-    updated = 0
-    skipped = 0
-    
-    for key in keys:
-        try:
-            stats = await sync_key_to_panel_state(key['id'])
-            created += stats.get('created', 0)
-            updated += stats.get('updated', 0)
-            skipped += stats.get('skipped', 0)
-            if stats.get('ok'):
-                processed += 1
-            else:
-                errors += 1
-                logger.warning(f"Ключ {key['id']} синхронизирован не полностью: {stats}")
-        except Exception as e:
-            errors += 1
-            logger.error(f"Ошибка синхронизации ключа {key['id']}: {e}")
-    
-    result = (
-        f"✅ <b>Выгрузка в панель завершена</b>\n\n"
-        f"📤 Обработано ключей: <b>{processed}</b>\n"
-        f"🔧 Обновлено записей: <b>{updated}</b>\n"
-        f"➕ Создано клиентов: <b>{created}</b>\n"
-        f"⏭️ Без изменений: <b>{skipped}</b>\n"
+
+    from database.requests import get_all_servers
+    from bot.keyboards.admin import manual_sync_preview_kb
+    from bot.services.panel_sync import (
+        build_panel_to_db_plan,
+        run_db_to_panel_sync,
     )
-    if errors > 0:
-        result += f"❌ Ошибок: <b>{errors}</b>\n"
-    result += f"\n📊 Всего ключей: <b>{len(keys)}</b>"
-    
-    await safe_edit_or_send(callback.message, result, reply_markup=back_and_home_kb('admin_users'))
+    from bot.services.panel_sync_coordinator import panel_sync_coordinator
+
+    if panel_sync_coordinator.manual_pending:
+        await callback.answer(
+            '⏳ Другая ручная синхронизация уже выполняется',
+            show_alert=True,
+        )
+        return
+
+    await callback.answer('🔎 Составляю предпросмотр…')
+    await safe_edit_or_send(
+        callback.message,
+        '⏳ <b>Проверяю БД и панели…</b>\n\n'
+        'На этом этапе ничего не изменяется.',
+    )
+
+    keys = await _manual_sync_keys(direction)
+    servers = get_all_servers()
+    if direction == 'db_to_panel':
+        plan = await run_db_to_panel_sync(keys, servers, apply=False)
+    else:
+        plan = await build_panel_to_db_plan(keys, servers)
+
+    token = uuid.uuid4().hex[:12]
+    preview_data = {
+        'token': token,
+        'direction': direction,
+        'candidate_key_ids': list(plan.candidate_key_ids),
+        'server_ids': list(plan.successful_server_ids),
+    }
+    await state.update_data(manual_sync_preview=preview_data)
+
+    markup = (
+        manual_sync_preview_kb(direction, token)
+        if plan.has_changes
+        else back_and_home_kb('admin_users')
+    )
+    await safe_edit_or_send(
+        callback.message,
+        _manual_sync_plan_text(plan, preview=True),
+        reply_markup=markup,
+    )
+
+
+@router.callback_query(F.data == 'admin_sync_db_to_panel')
+async def sync_db_to_panel(callback: CallbackQuery, state: FSMContext):
+    """Build a read-only DB -> Panel synchronization preview."""
+    await _show_manual_sync_preview(callback, state, 'db_to_panel')
 
 
 @router.callback_query(F.data == 'admin_sync_panel_to_db')
 async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
-    """Loading data from the panel into the database (Panel → DB)."""
+    """Build a read-only Panel -> DB synchronization preview."""
+    await _show_manual_sync_preview(callback, state, 'panel_to_db')
+
+
+@router.callback_query(F.data.startswith('admin_sync_cancel:'))
+async def cancel_manual_sync(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    
-    await callback.answer('📥 Запуск загрузки...')
-    await safe_edit_or_send(callback.message, '⏳ <b>Загрузка данных из панели (Панель → БД)...</b>\n\nЭто может занять некоторое время.')
-    
-    from database.requests import get_all_active_keys_with_server, get_all_servers
-    from database.db_keys import update_key_traffic_limit, update_key_traffic
-    from datetime import datetime
-    
-    keys = get_all_active_keys_with_server()
-    if not keys:
-        await safe_edit_or_send(callback.message, '✅ Нет активных ключей для загрузки.', reply_markup=back_and_home_kb('admin_users'))
-        return
-    
-    # Grouping by servers
-    keys_by_server = {}
-    for key in keys:
-        sid = key['server_id']
-        if sid not in keys_by_server:
-            keys_by_server[sid] = []
-        keys_by_server[sid].append(key)
-    
-    servers = get_all_servers()
-    server_map = {s['id']: s for s in servers}
-    
-    updated = 0
-    errors = 0
-    skipped = 0
-    
-    for server_id, server_keys in keys_by_server.items():
-        server = server_map.get(server_id)
-        if not server or not server.get('is_active'):
-            continue
-        try:
-            client = get_client_from_server_data(server)
-            inbounds = await client.get_inbounds()
-            
-            for key in server_keys:
-                email = key.get('panel_email')
-                if not email:
-                    skipped += 1
-                    continue
-                
-                panel = await get_key_traffic_snapshot(client, key, inbounds)
-                if not panel:
-                    skipped += 1
-                    continue
-                changed = False
-                
-                try:
-                    from datetime import timezone, timedelta
-                    # Update expires_at from the panel
-                    panel_ms = panel['expiryTime']
-                    max_expires = datetime.now(timezone.utc) + timedelta(days=99999)
-                    
-                    if panel_ms == 0:
-                        # Infinite key on the panel → set to maximum
-                        panel_dt = max_expires
-                    else:
-                        panel_dt = datetime.fromtimestamp(panel_ms / 1000, tz=timezone.utc)
-                        # We limit dates that are too distant
-                        if panel_dt > max_expires:
-                            panel_dt = max_expires
-                    
-                    # For the SQLite database we use a naive string (which is implied in UTC)
-                    panel_expires_str = panel_dt.replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S')
-                    
-                    db_expires = key.get('expires_at')
-                    need_update = False
-                    if db_expires:
-                        db_dt_str = str(db_expires).replace('Z', '+00:00')
-                        db_dt = datetime.fromisoformat(db_dt_str)
-                        if db_dt.tzinfo is None:
-                            db_dt = db_dt.replace(tzinfo=timezone.utc)
-                            
-                        # We update if the difference is more than a day
-                        if abs((panel_dt - db_dt).total_seconds()) > 86400:
-                            need_update = True
-                    else:
-                        need_update = True
-                        
-                    if need_update:
-                        from database.connection import get_db
-                        with get_db() as conn:
-                            conn.execute(
-                                "UPDATE vpn_keys SET expires_at = ? WHERE id = ?",
-                                (panel_expires_str, key['id'])
-                            )
-                        changed = True
-                    
-                    # Update traffic_limit from the panel
-                    panel_total_bytes = panel['totalGB']
-                    db_limit = key.get('traffic_limit', 0) or 0
-                    if panel_total_bytes != db_limit:
-                        update_key_traffic_limit(key['id'], panel_total_bytes)
-                        changed = True
-                    
-                    # Update traffic_used from the panel
-                    panel_traffic = panel['traffic_used']
-                    db_traffic = key.get('traffic_used', 0) or 0
-                    if panel_traffic != db_traffic:
-                        update_key_traffic(key['id'], panel_traffic)
-                        changed = True
-                    
-                    if changed:
-                        updated += 1
-                    else:
-                        skipped += 1
-                        
-                except Exception as e:
-                    errors += 1
-                    logger.error(f"Ошибка обновления ключа {key['id']} ({email}): {e}")
-                    
-        except Exception as e:
-            errors += len(server_keys)
-            logger.error(f"Ошибка подключения к серверу {server.get('name', server_id)}: {e}")
-    
-    result = (
-        f"✅ <b>Загрузка из панели завершена</b>\n\n"
-        f"📥 Обновлено: <b>{updated}</b>\n"
-        f"✅ Без расхождений: <b>{skipped}</b>\n"
+
+    token = callback.data.split(':', 1)[1]
+    data = await state.get_data()
+    preview = data.get('manual_sync_preview') or {}
+    if preview.get('token') == token:
+        data.pop('manual_sync_preview', None)
+        await state.set_data(data)
+    await callback.answer('Синхронизация отменена')
+    await safe_edit_or_send(
+        callback.message,
+        '❌ <b>Ручная синхронизация отменена</b>\n\n'
+        'Никакие данные не изменялись.',
+        reply_markup=back_and_home_kb('admin_users'),
     )
-    if errors > 0:
-        result += f"❌ Ошибок: <b>{errors}</b>\n"
-    result += f"\n📊 Всего ключей: <b>{len(keys)}</b>"
-    
-    await safe_edit_or_send(callback.message, result, reply_markup=back_and_home_kb('admin_users'))
+
+
+@router.callback_query(F.data.startswith('admin_sync_apply:'))
+async def apply_manual_sync(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+
+    parts = callback.data.split(':', 2)
+    if len(parts) != 3:
+        await callback.answer('Предпросмотр повреждён', show_alert=True)
+        return
+    _, direction, token = parts
+    data = await state.get_data()
+    preview = data.get('manual_sync_preview') or {}
+    if (
+        preview.get('token') != token
+        or preview.get('direction') != direction
+        or direction not in {'db_to_panel', 'panel_to_db'}
+    ):
+        await callback.answer(
+            'Предпросмотр устарел. Выполните проверку заново.',
+            show_alert=True,
+        )
+        return
+
+    from database.requests import get_all_servers
+    from bot.keyboards.admin import manual_sync_preview_kb
+    from bot.services.panel_sync import (
+        apply_panel_to_db_plan,
+        build_panel_to_db_plan,
+        run_db_to_panel_sync,
+    )
+    from bot.services.panel_sync_coordinator import panel_sync_coordinator
+
+    await callback.answer('⏳ Применяю изменения…')
+    await safe_edit_or_send(
+        callback.message,
+        '⏳ <b>Применяю ручную синхронизацию…</b>\n\n'
+        'Новые изменения VPN-ключей временно ожидают завершения.',
+    )
+
+    try:
+        async with panel_sync_coordinator.try_manual() as acquired:
+            if not acquired:
+                await safe_edit_or_send(
+                    callback.message,
+                    '⏳ <b>Уже выполняется другая ручная синхронизация</b>\n\n'
+                    'Этот предпросмотр сохранён — повторите применение после её завершения.',
+                    reply_markup=manual_sync_preview_kb(direction, token),
+                )
+                return
+
+            keys = await _manual_sync_keys(direction)
+            servers = get_all_servers()
+            candidate_ids = preview.get('candidate_key_ids') or []
+            server_ids = preview.get('server_ids') or []
+
+            if direction == 'db_to_panel':
+                plan = await run_db_to_panel_sync(
+                    keys,
+                    servers,
+                    apply=True,
+                    candidate_key_ids=candidate_ids,
+                    allowed_server_ids=server_ids,
+                )
+            else:
+                plan = await build_panel_to_db_plan(
+                    keys,
+                    servers,
+                    candidate_key_ids=candidate_ids,
+                    allowed_server_ids=server_ids,
+                )
+                plan = await apply_panel_to_db_plan(plan)
+    except Exception as exc:
+        logger.exception('Manual synchronization failed')
+        await safe_edit_or_send(
+            callback.message,
+            '❌ <b>Не удалось завершить синхронизацию</b>\n\n'
+            f'{escape_html(str(exc)[:500])}',
+            reply_markup=manual_sync_preview_kb(direction, token),
+        )
+        return
+
+    data = await state.get_data()
+    current_preview = data.get('manual_sync_preview') or {}
+    if current_preview.get('token') == token:
+        data.pop('manual_sync_preview', None)
+        await state.set_data(data)
+
+    await safe_edit_or_send(
+        callback.message,
+        _manual_sync_plan_text(plan, preview=False),
+        reply_markup=back_and_home_kb('admin_users'),
+    )

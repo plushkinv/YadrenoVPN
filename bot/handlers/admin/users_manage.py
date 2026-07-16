@@ -15,6 +15,7 @@ from bot.states.admin_states import AdminStates
 from bot.keyboards.admin import users_menu_kb, users_list_kb, user_view_kb, user_ban_confirm_kb, key_view_kb, add_key_server_kb, add_key_inbound_kb, add_key_step_kb, add_key_confirm_kb, users_input_cancel_kb, key_action_cancel_kb, back_and_home_kb, home_only_kb
 from bot.services.key_lifecycle import sync_user_keys_panel_access
 from bot.services.vpn_api import get_client_from_server_data, VPNAPIError, format_traffic
+from bot.services.panel_sync_coordinator import regular_panel_operation
 
 logger = logging.getLogger(__name__)
 from bot.utils.text import safe_edit_or_send
@@ -167,6 +168,7 @@ async def request_ban_confirmation(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 @router.callback_query(F.data.startswith('admin_user_ban_confirm:'))
+@regular_panel_operation
 async def confirm_ban_toggle(callback: CallbackQuery, state: FSMContext):
     """Confirmation and execution of ban/unban."""
     if not is_admin(callback.from_user.id):

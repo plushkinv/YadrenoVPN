@@ -22,6 +22,21 @@ def users_menu_kb(stats: Dict[str, int]) -> InlineKeyboardMarkup:
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
 
+
+def manual_sync_preview_kb(direction: str, token: str) -> InlineKeyboardMarkup:
+    """Confirmation keyboard for a previously calculated manual sync preview."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text='✅ Применить изменения',
+        callback_data=f'admin_sync_apply:{direction}:{token}',
+    ))
+    builder.row(InlineKeyboardButton(
+        text='❌ Отмена',
+        callback_data=f'admin_sync_cancel:{token}',
+    ))
+    builder.row(back_button('admin_users'), home_button())
+    return builder.as_markup()
+
 def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, current_filter: str='all') -> InlineKeyboardMarkup:
     """
     User list keyboard with pagination and filters.

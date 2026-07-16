@@ -44,14 +44,35 @@ def yadreno_admin_chat_kb(topic_id: int = 0) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def yadreno_admin_agent_kb(topic_id: int = 0) -> InlineKeyboardMarkup:
-    """Agent message keyboard."""
+def yadreno_admin_agent_kb(
+    topic_id: int = 0,
+    *,
+    active_request: bool = True,
+    viewer_url: str | None = None,
+) -> InlineKeyboardMarkup:
+    """Build controls for an active request or a completed agent response."""
     builder = InlineKeyboardBuilder()
-    builder.row(
+    if viewer_url:
+        builder.row(
+            InlineKeyboardButton(
+                text='📄 Открыть ответ',
+                url=viewer_url,
+            )
+        )
+
+    primary_button = (
         InlineKeyboardButton(
             text='❌ Отмена',
             callback_data=f'admin_yadreno_cancel:{int(topic_id)}',
-        ),
+        )
+        if active_request
+        else InlineKeyboardButton(
+            text='🚪 Выйти',
+            callback_data='admin_panel',
+        )
+    )
+    builder.row(
+        primary_button,
         InlineKeyboardButton(
             text='🔄 Ну чё там?',
             callback_data=f'admin_yadreno_nudge:{int(topic_id)}',

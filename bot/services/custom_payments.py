@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from bot.utils.payment_provider_registry import (
@@ -14,12 +13,14 @@ from bot.utils.payment_provider_registry import (
     is_payment_provider_enabled,
 )
 from database.requests import (
+    cancel_pending_order,
     create_pending_order,
     find_order_by_order_id,
     find_payment_provider_order_by_external_id,
     get_payment_provider_order,
-    get_open_payment_provider_orders,
     save_payment_provider_order,
+    schedule_payment_auto_check,
+    update_payment_auto_check,
     update_payment_provider_order_status,
 )
 from bot.services.promotions import prepare_order_pricing
@@ -80,7 +81,7 @@ async def create_custom_payment_order(
         'description': _payment_description(tariff, action=action, key=key),
     }
     result = await create_payment(provider.provider_id, context)
-    save_payment_provider_order(
+    saved = save_payment_provider_order(
         order_id=order_id,
         provider_id=provider.provider_id,
         payment_type=provider.payment_type,
@@ -89,6 +90,26 @@ async def create_custom_payment_order(
         status=result.get('status') or 'pending',
         metadata=result.get('metadata') or {},
     )
+    if saved is False:
+        raise RuntimeError('Не удалось сохранить custom provider order')
+    if provider.auto_check_interval_seconds:
+        try:
+            schedule_payment_auto_check(
+                order_id,
+                provider.provider_id,
+                first_delay_seconds=min(
+                    1800,
+                    max(120, int(provider.auto_check_interval_seconds)),
+                ),
+            )
+        except Exception as error:
+            logger.error(
+                "Не удалось поставить custom payment в очередь provider=%s order=%s: %s",
+                provider.provider_id,
+                order_id,
+                error,
+                exc_info=True,
+            )
     return {
         'ok': True,
         'order_id': order_id,
@@ -141,58 +162,13 @@ async def complete_custom_payment_order(
     notify_user: bool = False,
 ) -> dict[str, Any]:
     """Completes custom payment via core billing without UI/FSM."""
-    from bot.services.billing import process_payment_order, process_referral_reward
+    from bot.services.billing import complete_payment_order_background
 
-    success, text, order = await process_payment_order(
+    return await complete_payment_order_background(
         order_id,
         bot=bot,
-        process_referrals=False,
+        notify_user=notify_user,
     )
-    result = {
-        'ok': success,
-        'text': text,
-        'order': order,
-        'processed_now': bool(order and order.get('_payment_processed_now', True)),
-        'referral_processed': False,
-        'admin_notified': False,
-        'user_notified': False,
-    }
-    if not success or not order:
-        return result
-
-    if not result['processed_now']:
-        return result
-
-    user_internal_id = order['user_id']
-    days = order.get('period_days') or order.get('duration_days') or 30
-    referral_amount = _order_referral_amount(order)
-
-    try:
-        await process_referral_reward(
-            user_internal_id,
-            days,
-            referral_amount,
-            str(order.get('payment_type') or ''),
-            bot=bot,
-            order=order,
-        )
-        result['referral_processed'] = True
-    except Exception as e:
-        logger.warning("Ошибка реферальной обработки custom payment order=%s: %s", order_id, e)
-
-    if bot is not None:
-        try:
-            from bot.services.notifications import notify_admins_payment
-
-            await notify_admins_payment(bot, order)
-            result['admin_notified'] = True
-        except Exception as e:
-            logger.warning("Ошибка уведомления администраторов о custom payment order=%s: %s", order_id, e)
-
-    if bot is not None and notify_user:
-        result['user_notified'] = await _notify_custom_payment_user(bot, order)
-
-    return result
 
 
 async def auto_check_custom_payment_orders(
@@ -200,80 +176,10 @@ async def auto_check_custom_payment_orders(
     bot: Any = None,
     limit: int = 50,
 ) -> dict[str, int]:
-    """Background checks open custom payment orders and closes those paid through core billing."""
-    summary = {
-        'queued': 0,
-        'checked': 0,
-        'pending': 0,
-        'completed': 0,
-        'canceled': 0,
-        'skipped': 0,
-        'errors': 0,
-    }
+    """Compatibility wrapper for the shared bounded payment polling queue."""
+    from bot.services.payment_auto_check import auto_check_payment_orders
 
-    provider_orders = get_open_payment_provider_orders(limit=limit)
-    summary['queued'] = len(provider_orders)
-    for provider_order in provider_orders:
-        order_id = str(provider_order.get('order_id') or '')
-        if not order_id:
-            summary['skipped'] += 1
-            continue
-
-        try:
-            order = find_order_by_order_id(order_id)
-            if not order or order.get('status') != 'pending':
-                summary['skipped'] += 1
-                continue
-
-            try:
-                provider = get_payment_provider(str(provider_order.get('provider_id') or ''))
-            except ValueError:
-                provider = None
-            if provider is None:
-                summary['skipped'] += 1
-                continue
-
-            if provider_order.get('status') == 'succeeded':
-                completed = await complete_custom_payment_order(order_id, bot=bot, notify_user=True)
-                if completed.get('ok'):
-                    if completed.get('processed_now'):
-                        summary['completed'] += 1
-                    else:
-                        summary['skipped'] += 1
-                else:
-                    summary['errors'] += 1
-                continue
-
-            if not _is_auto_check_due(provider_order, provider.auto_check_interval_seconds):
-                summary['skipped'] += 1
-                continue
-
-            summary['checked'] += 1
-            check_result = await check_custom_payment_order(provider.provider_id, order)
-            status = check_result['status']
-            if status == 'succeeded':
-                completed = await complete_custom_payment_order(order_id, bot=bot, notify_user=True)
-                if completed.get('ok'):
-                    if completed.get('processed_now'):
-                        summary['completed'] += 1
-                    else:
-                        summary['skipped'] += 1
-                else:
-                    summary['errors'] += 1
-            elif status == 'canceled':
-                summary['canceled'] += 1
-            else:
-                summary['pending'] += 1
-        except Exception as e:
-            summary['errors'] += 1
-            logger.warning("Ошибка автопроверки custom payment order=%s: %s", order_id, e)
-            if order_id and provider_order.get('status') == 'pending':
-                try:
-                    update_payment_provider_order_status(order_id, 'pending')
-                except Exception:
-                    pass
-
-    return summary
+    return await auto_check_payment_orders(bot=bot, limit=min(int(limit), 10))
 
 
 async def process_custom_payment_webhook(
@@ -332,9 +238,19 @@ async def process_custom_payment_webhook(
         'processed_now': False,
     }
     if status == 'succeeded':
+        update_payment_auto_check(
+            order_id,
+            state='provider_succeeded',
+            next_delay_seconds=0,
+        )
         completed = await complete_custom_payment_order(order_id, bot=bot, notify_user=True)
         response['completed'] = bool(completed.get('ok'))
         response['processed_now'] = bool(completed.get('processed_now'))
+        if completed.get('ok'):
+            update_payment_auto_check(order_id, state='completed')
+    elif status == 'canceled':
+        cancel_pending_order(order_id)
+        update_payment_auto_check(order_id, state='canceled')
     return response
 
 
@@ -366,84 +282,6 @@ def _find_provider_order_for_webhook(
     if provider_payment_id:
         return find_payment_provider_order_by_external_id(provider_id, str(provider_payment_id))
     return None
-
-
-def _order_referral_amount(order: Mapping[str, Any]) -> int:
-    try:
-        if order.get('final_amount_cents') is not None:
-            return int(order.get('final_amount_cents') or 0)
-        return int(order.get('amount_cents') or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _is_auto_check_due(provider_order: Mapping[str, Any], interval_seconds: int | None) -> bool:
-    if interval_seconds is None or int(interval_seconds or 0) <= 0:
-        return False
-    updated_at = _parse_db_timestamp(provider_order.get('updated_at'))
-    if updated_at is None:
-        return True
-    return datetime.utcnow() - updated_at >= timedelta(seconds=int(interval_seconds))
-
-
-def _parse_db_timestamp(value: Any) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        parsed = value
-    else:
-        text = str(value).strip()
-        if not text:
-            return None
-        parsed = None
-        for candidate in (text, text.replace(' ', 'T')):
-            try:
-                parsed = datetime.fromisoformat(candidate)
-                break
-            except ValueError:
-                continue
-        if parsed is None:
-            return None
-    if parsed.tzinfo is not None:
-        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
-    return parsed
-
-
-async def _notify_custom_payment_user(bot: Any, order: Mapping[str, Any]) -> bool:
-    try:
-        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-        from database.requests import get_user_by_id, mark_user_bot_blocked
-        from bot.utils.delivery import is_bot_blocked_error
-
-        user = get_user_by_id(int(order.get('user_id') or 0))
-        telegram_id = int((user or {}).get('telegram_id') or 0)
-        if not telegram_id:
-            return False
-
-        reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text='🔑 Мои ключи', callback_data='my_keys')],
-            [InlineKeyboardButton(text='🈴 На главную', callback_data='start')],
-        ])
-        text = (
-            "✅ <b>Оплата получена</b>\n\n"
-            "Платёж обработан автоматически. Откройте «Мои ключи», чтобы настроить или посмотреть доступ."
-        )
-        try:
-            await bot.send_message(
-                telegram_id,
-                text,
-                parse_mode='HTML',
-                reply_markup=reply_markup,
-            )
-            return True
-        except Exception as e:
-            if is_bot_blocked_error(e):
-                mark_user_bot_blocked(telegram_id)
-            logger.warning("Не удалось отправить уведомление о custom payment пользователю %s: %s", telegram_id, e)
-            return False
-    except Exception as e:
-        logger.warning("Ошибка подготовки уведомления о custom payment order=%s: %s", order.get('order_id'), e)
-        return False
 
 
 __all__ = [

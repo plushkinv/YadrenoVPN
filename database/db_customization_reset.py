@@ -1,6 +1,7 @@
 """Database operations for resetting local customization only."""
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -77,6 +78,11 @@ def _customization_default_settings() -> dict[str, str | None]:
         "referral_new_ref_notification_text": migrations._referral_new_ref_notification_text(),
         "referral_purchase_notification_text": migrations._referral_purchase_notification_text(),
         "broadcast_message": None,
+        "broadcast_style_profile": json.dumps(
+            migrations.DEFAULT_BROADCAST_STYLE_PROFILE,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
         "broadcast_in_progress": "0",
         "broadcast_stop_requested": "0",
         "custom_extensions_enabled": "0",
@@ -221,6 +227,7 @@ def _reset_settings(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
         return ["settings table is missing; skipped"]
 
     actions: list[str] = []
+    broadcast_config_changed = False
     for key, value in _customization_default_settings().items():
         row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         if value is None:
@@ -228,6 +235,7 @@ def _reset_settings(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
             actions.append(f"settings.{key}: {'delete' if exists else 'already absent'}")
             if exists and not dry_run:
                 conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+                broadcast_config_changed = broadcast_config_changed or key == "broadcast_message"
             continue
 
         changed = row is None or row["value"] != value
@@ -241,6 +249,24 @@ def _reset_settings(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
                 """,
                 (key, value),
             )
+            broadcast_config_changed = broadcast_config_changed or key == "broadcast_style_profile"
+    if broadcast_config_changed and not dry_run:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'broadcast_config_revision'"
+        ).fetchone()
+        try:
+            revision = max(0, int(row["value"] if row else 0)) + 1
+        except (TypeError, ValueError):
+            revision = 1
+        conn.execute(
+            """
+            INSERT INTO settings (key, value) VALUES ('broadcast_config_revision', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (str(revision),),
+        )
+        conn.execute("DELETE FROM settings WHERE key LIKE 'broadcast_confirm:%'")
+        actions.append(f"settings.broadcast_config_revision: advanced to {revision}")
     return actions
 
 

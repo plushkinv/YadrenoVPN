@@ -131,7 +131,7 @@ def update_confirm_kb(has_updates: bool=True, has_blocking: bool=False, is_beta_
     builder = InlineKeyboardBuilder()
     if has_updates:
         if has_blocking:
-            button_text = '⚠️ Обновить до блокирующего коммита'
+            button_text = '✅ Обновить и перезапустить'
             callback = 'admin_update_bot_confirm'
             builder.row(InlineKeyboardButton(text=button_text, callback_data=callback))
         elif is_beta_only:

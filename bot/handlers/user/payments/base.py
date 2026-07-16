@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from bot.utils.page_flow import build_page_flow_context
 from bot.utils.page_renderer import render_page
 from bot.utils.text import escape_html, safe_edit_or_send
+from bot.utils.callbacks import safe_answer_callback
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -500,7 +501,11 @@ async def create_qr_payment_flow(
         hint_text: Custom hint (None → standard)
         instruction_text: User instructions with payment link
     """
-    from database.requests import get_user_internal_id, create_pending_order
+    from database.requests import (
+        create_pending_order,
+        get_user_internal_id,
+        schedule_payment_auto_check,
+    )
     from bot.keyboards.user import qr_payment_kb
     from bot.keyboards.admin import home_only_kb
     from bot.services.promotions import describe_quote_lines, format_amount, prepare_order_pricing
@@ -512,7 +517,7 @@ async def create_qr_payment_flow(
     # User Validation
     user_id = get_user_internal_id(callback.from_user.id)
     if not user_id:
-        await callback.answer('❌ Пользователь не найден', show_alert=True)
+        await safe_answer_callback(callback, '❌ Пользователь не найден', show_alert=True)
         return
 
     # Creating an order
@@ -534,14 +539,19 @@ async def create_qr_payment_flow(
             quote['unavailable_reason'],
             payment_provider_title=error_name,
         )
-        await callback.answer()
+        await safe_answer_callback(callback)
         return
     if quote['is_free']:
         await complete_promo_free_payment(callback, state, order_id, callback.from_user.id)
-        await callback.answer()
+        await safe_answer_callback(callback)
         return
 
     price_rub = quote['final_amount'] / 100
+
+    await safe_answer_callback(
+        callback,
+        '⏳ Создаём платёж, пожалуйста, подождите...',
+    )
 
     await show_payment_status_message(
         callback.message,
@@ -582,7 +592,21 @@ async def create_qr_payment_flow(
         except (TypeError, ValueError):
             pass
         result = await create_func(**create_kwargs)
-        save_func(order_id, result[result_key])
+        save_result = save_func(order_id, result[result_key])
+        if save_result is False:
+            raise RuntimeError(
+                f'Не удалось сохранить внешний идентификатор {error_name}'
+            )
+        try:
+            schedule_payment_auto_check(order_id, payment_type, first_delay_seconds=120)
+        except Exception as queue_error:
+            logger.error(
+                'Не удалось поставить платёж в очередь автопроверки provider=%s order=%s: %s',
+                payment_type,
+                order_id,
+                queue_error,
+                exc_info=True,
+            )
 
         qr_image_data = result.get('qr_image_data')
         qr_url = result.get('qr_url', '')
@@ -629,8 +653,8 @@ async def create_qr_payment_flow(
             runtime_media=photo,
             runtime_media_type='photo',
         )
-    except (ValueError, RuntimeError) as e:
-        logger.error(f'Ошибка создания {error_name}-счёта: {e}')
+    except Exception as e:
+        logger.warning('Не удалось создать платёж %s order=%s: %s', error_name, order_id, e)
         await show_payment_status_message(
             callback.message,
             title_html='❌ <b>Ошибка создания платежа</b>',
@@ -641,10 +665,6 @@ async def create_qr_payment_flow(
             payment_provider_title=error_name,
             reply_markup=home_only_kb()
         )
-
-    await callback.answer()
-
-
 async def check_qr_payment_flow(
     message,
     state: FSMContext,
@@ -685,7 +705,8 @@ async def check_qr_payment_flow(
     import time
     from database.requests import (
         find_order_by_order_id, get_user_internal_id,
-        is_order_already_paid, update_payment_type
+        cancel_pending_order, is_order_already_paid, update_payment_auto_check,
+        update_payment_type,
     )
     from bot.handlers.user.payments.status_page import show_payment_status_message
     from bot.services.billing import complete_payment_flow
@@ -693,7 +714,7 @@ async def check_qr_payment_flow(
 
     async def _show_order_not_found() -> None:
         if callback:
-            await callback.answer('❌ Ордер не найден', show_alert=True)
+            await safe_answer_callback(callback, '❌ Ордер не найден', show_alert=True)
         else:
             await show_payment_status_message(
                 message,
@@ -727,14 +748,18 @@ async def check_qr_payment_flow(
             order, user_id=telegram_id
         )
         if callback:
-            await callback.answer()
+            await safe_answer_callback(callback)
         return
 
     # 4. Payment_id validation
     payment_id = order.get(payment_id_field)
     if not payment_id:
         if callback:
-            await callback.answer('⚠️ Нет данных о платеже. Попробуйте чуть позже.', show_alert=True)
+            await safe_answer_callback(
+                callback,
+                '⚠️ Нет данных о платеже. Попробуйте чуть позже.',
+                show_alert=True,
+            )
         else:
             await show_payment_status_message(
                 message,
@@ -755,7 +780,8 @@ async def check_qr_payment_flow(
         if last_check and elapsed < rate_limit_seconds:
             wait = int(rate_limit_seconds - elapsed)
             if callback:
-                await callback.answer(
+                await safe_answer_callback(
+                    callback,
                     f'⏳ Подождите {wait} сек. перед повторной проверкой.',
                     show_alert=True
                 )
@@ -764,12 +790,24 @@ async def check_qr_payment_flow(
 
     # 6. Notification of inspection
     if callback:
-        await callback.answer('🔍 Проверяем платёж...')
+        await safe_answer_callback(callback, '🔍 Сейчас проверим платёж...')
 
     # 7. Call the verification API
     try:
         check_arg = order_id if check_arg_is_order_id else payment_id
-        status = await check_func(check_arg)
+        check_kwargs = {}
+        try:
+            import inspect
+            signature = inspect.signature(check_func)
+            accepts_kwargs = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
+            )
+            if accepts_kwargs or 'order_id' in signature.parameters:
+                check_kwargs['order_id'] = order_id
+        except (TypeError, ValueError):
+            pass
+        status = await check_func(check_arg, **check_kwargs)
     except Exception as e:
         logger.error(f'Ошибка проверки статуса {payment_type} {order_id}: {e}')
         await show_payment_status_message(
@@ -785,6 +823,11 @@ async def check_qr_payment_flow(
     # 8. Processing the result
     if status == 'succeeded':
         update_payment_type(order_id, payment_type)
+        update_payment_auto_check(
+            order_id,
+            state='provider_succeeded',
+            next_delay_seconds=0,
+        )
 
         # Referral reward
         if referral_override_func:
@@ -813,7 +856,12 @@ async def check_qr_payment_flow(
             payment_type=payment_type,
             referral_amount=referral_amount
         )
+        completed_order = find_order_by_order_id(order_id)
+        if completed_order and completed_order.get('status') == 'paid':
+            update_payment_auto_check(order_id, state='completed')
     elif status == 'canceled':
+        cancel_pending_order(order_id)
+        update_payment_auto_check(order_id, state='canceled')
         await show_payment_status_message(
             message,
             title_html='❌ <b>Платёж отменён</b>',

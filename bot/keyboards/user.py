@@ -7,6 +7,14 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
+def payment_auto_complete_kb() -> InlineKeyboardMarkup:
+    """Navigation shown after a payment was completed by background polling."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"))
+    builder.row(InlineKeyboardButton(text="🈴 На главную", callback_data="start"))
+    return builder.as_markup()
+
+
 def balance_payment_kb(
     tariff_id: int,
     key_id: int = None,

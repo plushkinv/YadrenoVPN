@@ -13,6 +13,7 @@ from bot.states.user_states import RenameKey, ReplaceKey
 from bot.utils.text import escape_html
 from bot.utils.key_status_page import render_key_status_page
 from bot.utils.user_pages import render_access_blocked_page
+from bot.services.panel_sync_coordinator import regular_panel_operation
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,7 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
     )
 
 @router.callback_query(F.data.startswith('key_delete:'))
+@regular_panel_operation
 async def key_delete_handler(callback: CallbackQuery):
     """Removing an expired key by the user."""
     key_id = int(callback.data.split(':')[1])
@@ -370,7 +372,12 @@ async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
 async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext):
     """Selecting a server to replace."""
     from database.requests import get_server_by_id, get_key_details_for_user
-    from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
+    from bot.services.vpn_api import (
+        get_client,
+        get_client_subscription_inbounds,
+        VPNAPIError,
+        is_subscription_mode,
+    )
     from bot.keyboards.user import replace_inbound_list_kb, replace_confirm_kb
     from bot.utils.key_pages import build_replace_confirm_data, build_server_screen_data, keyboard_rows
     from bot.utils.page_renderer import render_page
@@ -392,7 +399,7 @@ async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext)
         # Minimum server test (we will receive inbounds later during execution)
         try:
             client = await get_client(server_id)
-            inbounds = await client.get_inbounds()
+            inbounds = await get_client_subscription_inbounds(client)
             if not inbounds:
                 await callback.answer('❌ На сервере нет доступных протоколов', show_alert=True)
                 return
@@ -474,12 +481,14 @@ async def key_replace_inbound_handler(callback: CallbackQuery, state: FSMContext
     await callback.answer()
 
 @router.callback_query(ReplaceKey.confirm, F.data == 'replace_confirm')
+@regular_panel_operation
 async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
     """Performing a key replacement."""
     from database.requests import get_key_details_for_user, get_server_by_id, update_key_traffic, update_vpn_key_connection
     from bot.services.vpn_api import (
         calculate_panel_total_for_key,
         get_client,
+        get_client_subscription_inbounds,
         get_key_traffic_snapshot,
         VPNAPIError,
         is_subscription_mode,
@@ -519,7 +528,10 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
             old_client = await get_client(current_key['server_id'])
             if traffic_limit > 0:
                 try:
-                    old_inbounds = await old_client.get_inbounds()
+                    if old_had_sub:
+                        old_inbounds = await get_client_subscription_inbounds(old_client)
+                    else:
+                        old_inbounds = await old_client.get_inbounds()
                     snapshot = await get_key_traffic_snapshot(old_client, current_key, old_inbounds)
                     if not snapshot:
                         raise VPNAPIError('панель не вернула счётчики трафика старого ключа')
@@ -596,11 +608,11 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
 
         # === 4. Creating a new one ===
         if subscription_mode:
-            inbounds = await new_client.get_inbounds()
+            inbounds = await get_client_subscription_inbounds(new_client)
             if not inbounds:
                 raise RuntimeError('На сервере нет доступных inbound')
             new_sub_id = _uuid.uuid4().hex
-            min_inb_id = min(inb['id'] for inb in inbounds)
+            first_inbound_id = None
             first_uuid = None
             created = 0
             for inb in inbounds:
@@ -612,7 +624,8 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
                         limit_ip=limit_ip, enable=True, tg_id=str(telegram_id),
                         flow=flow, sub_id=new_sub_id,
                     )
-                    if inb['id'] == min_inb_id:
+                    if first_inbound_id is None or inb['id'] < first_inbound_id:
+                        first_inbound_id = inb['id']
                         first_uuid = res['uuid']
                     created += 1
                 except Exception as e:
@@ -620,11 +633,11 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
                         f"replace_execute (subscription): не удалось создать клиента "
                         f"в inbound {inb['id']}: {e}"
                     )
-            if not first_uuid or created == 0:
+            if not first_uuid or first_inbound_id is None or created == 0:
                 raise RuntimeError('Не удалось создать ни одного клиента на новом сервере')
             update_vpn_key_connection(
                 key_id=key_id, server_id=new_server_id,
-                panel_inbound_id=min_inb_id, panel_email=new_email,
+                panel_inbound_id=first_inbound_id, panel_email=new_email,
                 client_uuid=first_uuid, sub_id=new_sub_id,
             )
         else:

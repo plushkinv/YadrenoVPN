@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from bot.utils.page_flow import build_page_flow_context
 from bot.utils.page_renderer import render_page
 from bot.utils.text import escape_html
+from bot.utils.callbacks import safe_answer_callback
 from bot.handlers.user.payments.base import (
     _format_price_compact,
     _is_cards_via_yookassa_direct,
@@ -478,7 +479,15 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
     Takes data from FSM state: balance_to_deduct, remaining_cents, tariff_id, key_id
     Creates an invoice for remaining_cents / 100 rubles (UKassa accepts rubles)
     """
-    from database.requests import get_tariff_by_id, get_user_internal_id, get_user_balance, create_pending_order, save_yookassa_payment_id
+    from database.requests import (
+        create_pending_order,
+        get_tariff_by_id,
+        get_user_balance,
+        get_user_internal_id,
+        save_payment_balance_deduction,
+        save_yookassa_payment_id,
+        schedule_payment_auto_check,
+    )
     from bot.services.billing import create_yookassa_qr_payment
     from bot.keyboards.user import yookassa_qr_kb
     from bot.keyboards.admin import home_only_kb
@@ -497,15 +506,15 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
     if not key_id:
         key_id = int(parts[2]) if len(parts) > 2 and parts[2] != '0' else None
     if not tariff_id:
-        await callback.answer('❌ Ошибка: тариф не определён', show_alert=True)
+        await safe_answer_callback(callback, '❌ Ошибка: тариф не определён', show_alert=True)
         return
     tariff = get_tariff_by_id(tariff_id)
     if not tariff:
-        await callback.answer('❌ Тариф не найден', show_alert=True)
+        await safe_answer_callback(callback, '❌ Тариф не найден', show_alert=True)
         return
     user_id = get_user_internal_id(callback.from_user.id)
     if not user_id:
-        await callback.answer('❌ Пользователь не найден', show_alert=True)
+        await safe_answer_callback(callback, '❌ Пользователь не найден', show_alert=True)
         return
     if not tariff_price_cents:
         tariff_price_cents = int(tariff.get('price_rub', 0) * 100)
@@ -528,6 +537,7 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
         amount_unit='cents',
         promo=quote['promo'],
     )
+    save_payment_balance_deduction(order_id, balance_to_deduct)
     if quote.get('promo'):
         reserve_promo_for_order(
             order_id=order_id,
@@ -540,6 +550,10 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
             final_amount=remaining_cents,
             amount_unit='cents',
         )
+    await safe_answer_callback(
+        callback,
+        '⏳ Создаём платёж, пожалуйста, подождите...',
+    )
     await show_payment_status_message(
         callback.message,
         title_html='⏳ Создаём оплату через ЮКассу...',
@@ -551,7 +565,18 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
         bot_name = bot_info.username
         description = f"Покупка «{tariff['name']}» — {tariff['duration_days']} дней"
         result = await create_yookassa_qr_payment(amount_rub=remaining_rub, order_id=order_id, description=description, bot_name=bot_name)
-        save_yookassa_payment_id(order_id, result['yookassa_payment_id'])
+        save_result = save_yookassa_payment_id(order_id, result['yookassa_payment_id'])
+        if save_result is False:
+            raise RuntimeError('Не удалось сохранить идентификатор платежа ЮКассы')
+        try:
+            schedule_payment_auto_check(order_id, 'yookassa_qr', first_delay_seconds=120)
+        except Exception as queue_error:
+            logger.error(
+                'Не удалось поставить доплату в очередь автопроверки order=%s: %s',
+                order_id,
+                queue_error,
+                exc_info=True,
+            )
         qr_image_data = result.get('qr_image_data')
         qr_url = result.get('qr_url', '')
         if not qr_image_data or not qr_url:
@@ -596,8 +621,8 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
             runtime_media=photo,
             runtime_media_type='photo',
         )
-    except (ValueError, RuntimeError) as e:
-        logger.error(f'Ошибка создания QR ЮКасса: {e}')
+    except Exception as e:
+        logger.warning('Не удалось создать QR ЮКасса order=%s: %s', order_id, e)
         await show_payment_status_message(
             callback.message,
             title_html='❌ <b>Ошибка ЮКассы</b>',
@@ -608,4 +633,3 @@ async def pay_qr_balance_handler(callback: CallbackQuery, state: FSMContext):
             payment_provider_title='ЮКасса',
             reply_markup=home_only_kb(),
         )
-    await callback.answer()

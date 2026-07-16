@@ -56,9 +56,13 @@ UPLOAD_TMP_DIR = TMP_DIR / "yadreno_uploads"
 YADRENO_ADMIN_CHAT_TOPIC_ID = 0
 YADRENO_ADMIN_YAA_TOPIC_ID = 1001
 YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID = 1002
+YADRENO_ADMIN_BROADCAST_TOPIC_ID = 1003
 YADRENO_ADMIN_DEFAULT_SKILL_ID = "yadreno_vpn"
 YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID = "yadreno_vpn_customization"
+YADRENO_ADMIN_BROADCAST_SKILL_ID = "yadreno_vpn_broadcast"
+YADRENO_ADMIN_SATELLITE_TYPE = "yadreno_vpn"
 PROGRESS_EVENTS_CAPABILITY = "progress_events"
+BROADCAST_EDITOR_CAPABILITY = "broadcast_editor_v1"
 SATELLITE_CAPABILITIES: tuple[str, ...] = (PROGRESS_EVENTS_CAPABILITY,)
 PUBLIC_IP_URLS = (
     "https://api.ipify.org",
@@ -130,13 +134,31 @@ def is_yadreno_admin_customization_topic(topic_id: int) -> bool:
     }
 
 
+def is_yadreno_admin_broadcast_topic(topic_id: int) -> bool:
+    """Return True only for the structured broadcast editor lane."""
+    return int(topic_id) == YADRENO_ADMIN_BROADCAST_TOPIC_ID
+
+
+def _capabilities_for_skill(skill_id: str) -> list[str]:
+    """Advertise the editor capability only inside its isolated skill."""
+    capabilities = list(SATELLITE_CAPABILITIES)
+    if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
+        capabilities.append(BROADCAST_EDITOR_CAPABILITY)
+    return capabilities
+
+
 def yadreno_admin_skill_id_for_topic(
     topic_id: int,
     requested_skill_id: Optional[str] = None,
 ) -> str:
     """Resolve the skill id sent to the hub for a local Yadreno Admin lane."""
     requested = (requested_skill_id or "").strip()
-    if requested in {YADRENO_ADMIN_DEFAULT_SKILL_ID, YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID}:
+    if is_yadreno_admin_broadcast_topic(topic_id):
+        return YADRENO_ADMIN_BROADCAST_SKILL_ID
+    if requested in {
+        YADRENO_ADMIN_DEFAULT_SKILL_ID,
+        YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID,
+    }:
         return requested
     if is_yadreno_admin_customization_topic(topic_id):
         return YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID
@@ -207,6 +229,17 @@ def _with_agent_env_context(message: str, env_context: dict[str, Any]) -> str:
 
 class YadrenoAdminError(RuntimeError):
     """Error communicating with the Yadreno Admin hub."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        user_message: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.user_message = user_message
 
 
 class DangerousShellCommandError(ValueError):
@@ -650,7 +683,8 @@ async def _request_json(
                 if response.status >= 400:
                     body = await response.text()
                     raise YadrenoAdminError(
-                        f"Хаб вернул HTTP {response.status}: {body[:500]}"
+                        f"Хаб вернул HTTP {response.status}: {body[:500]}",
+                        status_code=response.status,
                     )
                 data = await response.json()
                 return response.status, data
@@ -669,7 +703,67 @@ async def _request_json(
             )
             await asyncio.sleep(delay)
 
-    raise YadrenoAdminError(f"Не удалось связаться с хабом Yadreno Admin: {last_error}")
+    raise YadrenoAdminError(
+        f"Не удалось связаться с хабом Yadreno Admin: {last_error}",
+        status_code=(
+            last_error.status_code
+            if isinstance(last_error, YadrenoAdminError)
+            else None
+        ),
+    ) from last_error
+
+
+def _incompatible_broadcast_hub(detail: str) -> YadrenoAdminError:
+    """Build a stable user-facing error for a missing safe editor contract."""
+    return YadrenoAdminError(
+        f"incompatible broadcast editor hub: {detail}",
+        user_message=(
+            "Редактор рассылок пока несовместим с хабом. "
+            "Сначала обновите Yadreno Admin на хабе, затем повторите /yaa. "
+            "Обычная рассылка при этом продолжает работать."
+        ),
+    )
+
+
+async def _ensure_broadcast_hub_support(
+    session: aiohttp.ClientSession,
+    api_key: str,
+    skill_id: str,
+) -> None:
+    """Negotiate the broadcast capability before any agent request starts."""
+    if skill_id != YADRENO_ADMIN_BROADCAST_SKILL_ID:
+        return
+    try:
+        _, data = await _request_json(
+            session,
+            api_key,
+            "GET",
+            "/api/v1/satellite/capabilities",
+        )
+    except YadrenoAdminError as error:
+        raise _incompatible_broadcast_hub(
+            f"capability discovery failed ({error.status_code or 'network'})"
+        ) from error
+    if not isinstance(data, dict):
+        raise _incompatible_broadcast_hub("empty capability response")
+    capabilities = data.get("capabilities")
+    allowed_skills = data.get("allowed_skill_ids")
+    if data.get("satellite_type") != YADRENO_ADMIN_SATELLITE_TYPE:
+        raise _incompatible_broadcast_hub("wrong satellite_type")
+    if not isinstance(capabilities, list) or BROADCAST_EDITOR_CAPABILITY not in capabilities:
+        raise _incompatible_broadcast_hub("broadcast_editor_v1 is absent")
+    if not isinstance(allowed_skills, list) or skill_id not in allowed_skills:
+        raise _incompatible_broadcast_hub("broadcast skill is not allowed")
+
+
+def _validate_broadcast_hub_response(data: dict[str, Any], skill_id: str) -> None:
+    """Reject fallback to a general skill after broadcast negotiation."""
+    if skill_id != YADRENO_ADMIN_BROADCAST_SKILL_ID:
+        return
+    if data.get("satellite_type") != YADRENO_ADMIN_SATELLITE_TYPE:
+        raise _incompatible_broadcast_hub("response satellite_type mismatch")
+    if data.get("skill_id") != skill_id:
+        raise _incompatible_broadcast_hub("response skill_id mismatch")
 
 
 async def _request_multipart(
@@ -711,7 +805,8 @@ async def _request_multipart(
                 if response.status >= 400:
                     body = await response.text()
                     raise YadrenoAdminError(
-                        f"Хаб вернул HTTP {response.status}: {body[:500]}"
+                        f"Хаб вернул HTTP {response.status}: {body[:500]}",
+                        status_code=response.status,
                     )
                 return response.status, await response.json()
         except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
@@ -734,7 +829,14 @@ async def _request_multipart(
                 except Exception:
                     pass
 
-    raise YadrenoAdminError(f"Не удалось загрузить файл в Yadreno Admin: {last_error}")
+    raise YadrenoAdminError(
+        f"Не удалось загрузить файл в Yadreno Admin: {last_error}",
+        status_code=(
+            last_error.status_code
+            if isinstance(last_error, YadrenoAdminError)
+            else None
+        ),
+    ) from last_error
 
 
 async def _execute_shell(
@@ -1041,10 +1143,43 @@ async def _run_tool_call(
     event: dict[str, Any],
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
+    telegram_id: int = 0,
 ) -> dict[str, Any]:
     """Executes one tool_call of the hub."""
     tool = str(event.get("tool") or "")
     args = event.get("args") or {}
+    if is_yadreno_admin_broadcast_topic(topic_id):
+        if tool != "satellite_broadcast_editor":
+            result = {
+                "result": "",
+                "error": f"tool {tool} is forbidden in broadcast topic 1003",
+            }
+        elif not isinstance(args, dict) or telegram_id <= 0:
+            result = {
+                "result": "",
+                "error": "invalid local broadcast editor context",
+            }
+        else:
+            from bot.services.broadcast_editor import execute_broadcast_editor_action
+
+            result = {
+                "result": await asyncio.to_thread(
+                    execute_broadcast_editor_action,
+                    telegram_id,
+                    args,
+                ),
+                "error": None,
+            }
+        _log_tool_audit(event, result)
+        return result
+    if tool == "satellite_broadcast_editor":
+        result = {
+            "result": "",
+            "error": "satellite_broadcast_editor is allowed only in topic 1003",
+        }
+        _log_tool_audit(event, result)
+        return result
+
     runtime = _runtime_context_from_event(event, topic_id=topic_id)
     _remember_tool_runtime(runtime)
 
@@ -1205,7 +1340,17 @@ async def _poll_until_final(
                     tool_started_here = True
                 try:
                     if tool_started_here:
-                        tool_result = await _run_tool_call(event, topic_id=topic_id)
+                        if is_yadreno_admin_broadcast_topic(topic_id):
+                            tool_result = await _run_tool_call(
+                                event,
+                                topic_id=topic_id,
+                                telegram_id=telegram_id,
+                            )
+                        else:
+                            tool_result = await _run_tool_call(
+                                event,
+                                topic_id=topic_id,
+                            )
                     deferred_restart = bool(tool_result.pop("_deferred_restart", False))
                     await _request_json(
                         session,
@@ -1267,19 +1412,24 @@ async def run_dialog(
     async with _request_locks[key]:
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            server_ip = await _get_server_ip(session)
             effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
+            await _ensure_broadcast_hub_support(session, api_key, effective_skill_id)
+            server_ip = await _get_server_ip(session)
             core_changes_allowed = _core_policy_for_skill(effective_skill_id)
-            agent_message = _with_agent_env_context(
-                message,
-                build_agent_env_context(core_changes_allowed),
+            agent_message = (
+                message
+                if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                else _with_agent_env_context(
+                    message,
+                    build_agent_env_context(core_changes_allowed),
+                )
             )
             payload: dict[str, Any] = {
                 "message": agent_message,
                 "server_ip": server_ip,
                 "topic_id": topic_id,
                 "skill_id": effective_skill_id,
-                "capabilities": list(SATELLITE_CAPABILITIES),
+                "capabilities": _capabilities_for_skill(effective_skill_id),
             }
             if core_changes_allowed is not None:
                 payload["core_changes_allowed"] = core_changes_allowed
@@ -1293,6 +1443,7 @@ async def run_dialog(
             if not process_data:
                 raise YadrenoAdminError("Хаб вернул пустой ответ на /process")
 
+            _validate_broadcast_hub_response(process_data, effective_skill_id)
             status = process_data.get("status")
             if status != "accepted":
                 response_text = process_data.get("response_text") or f"Запрос отклонён: {status}"
@@ -1337,12 +1488,17 @@ async def run_dialog_with_uploads(
     async with _request_locks[key]:
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            server_ip = await _get_server_ip(session)
             effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
+            await _ensure_broadcast_hub_support(session, api_key, effective_skill_id)
+            server_ip = await _get_server_ip(session)
             core_changes_allowed = _core_policy_for_skill(effective_skill_id)
-            agent_message = _with_agent_env_context(
-                message,
-                build_agent_env_context(core_changes_allowed),
+            agent_message = (
+                message
+                if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                else _with_agent_env_context(
+                    message,
+                    build_agent_env_context(core_changes_allowed),
+                )
             )
             is_batch = len(uploads) > 1
             path = (
@@ -1355,7 +1511,7 @@ async def run_dialog_with_uploads(
                 "topic_id": topic_id,
                 "server_ip": server_ip,
                 "skill_id": effective_skill_id,
-                "capabilities": ",".join(SATELLITE_CAPABILITIES),
+                "capabilities": ",".join(_capabilities_for_skill(effective_skill_id)),
             }
             if core_changes_allowed is not None:
                 fields["core_changes_allowed"] = "true" if core_changes_allowed else "false"
@@ -1372,6 +1528,7 @@ async def run_dialog_with_uploads(
             if not upload_data:
                 raise YadrenoAdminError("Хаб вернул пустой ответ на upload")
 
+            _validate_broadcast_hub_response(upload_data, effective_skill_id)
             status = upload_data.get("status")
             if status != "accepted":
                 response_text = upload_data.get("response_text") or f"Загрузка отклонена: {status}"
@@ -1605,16 +1762,24 @@ async def start_new_chat(
     timeout = aiohttp.ClientTimeout(total=20)
     effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
     async with aiohttp.ClientSession(timeout=timeout) as session:
+        await _ensure_broadcast_hub_support(session, api_key, effective_skill_id)
+        payload: dict[str, Any] = {
+            "topic_id": topic_id,
+            "skill_id": effective_skill_id,
+        }
+        if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
+            payload["capabilities"] = _capabilities_for_skill(effective_skill_id)
         _, data = await _request_json(
             session,
             api_key,
             "POST",
             "/api/v1/satellite/new_chat",
-            json_payload={"topic_id": topic_id, "skill_id": effective_skill_id},
+            json_payload=payload,
         )
     if not data:
         raise YadrenoAdminError("Хаб вернул пустой ответ на /new_chat")
 
+    _validate_broadcast_hub_response(data, effective_skill_id)
     result = YadrenoAdminNewChatResult(
         status=str(data.get("status") or ""),
         response_text=str(data.get("response_text") or ""),
@@ -1673,14 +1838,24 @@ async def cancel_active_dialog(
     )
 
 
-def _format_recovered_final(content: str, viewer_url: Optional[str]) -> str:
+def _format_recovered_final(content: str) -> str:
     """Formats the final delivered by background startup recovery."""
-    response = content or "Готово."
-    if viewer_url:
-        from bot.utils.text import escape_html
+    return content or "Готово."
 
-        response += f'\n\n<a href="{escape_html(viewer_url)}">Полная версия ответа</a>'
-    return response
+
+def _recovered_final_keyboard(topic_id: int, viewer_url: Optional[str]) -> Any:
+    """Build inactive agent controls for a startup-recovered final response."""
+    if is_yadreno_admin_broadcast_topic(topic_id):
+        from bot.keyboards.admin_broadcast import broadcast_editor_kb
+
+        return broadcast_editor_kb()
+    from bot.keyboards.admin_yadreno import yadreno_admin_agent_kb
+
+    return yadreno_admin_agent_kb(
+        topic_id,
+        active_request=False,
+        viewer_url=viewer_url,
+    )
 
 
 async def _recover_one_active_dialog_on_startup(
@@ -1709,11 +1884,12 @@ async def _recover_one_active_dialog_on_startup(
                 if latest is not None and latest.final is not None:
                     await bot.send_message(
                         chat_id=telegram_id,
-                        text=_format_recovered_final(
-                            latest.final.content,
+                        text=_format_recovered_final(latest.final.content),
+                        parse_mode="HTML",
+                        reply_markup=_recovered_final_keyboard(
+                            topic_id,
                             latest.final.viewer_url,
                         ),
-                        parse_mode="HTML",
                     )
             logger.info(
                 "Yadreno Admin startup recovery skipped: admin=%s topic=%s request_id=%s status=%s",
@@ -1734,8 +1910,9 @@ async def _recover_one_active_dialog_on_startup(
             return
         await bot.send_message(
             chat_id=telegram_id,
-            text=_format_recovered_final(final.content, final.viewer_url),
+            text=_format_recovered_final(final.content),
             parse_mode="HTML",
+            reply_markup=_recovered_final_keyboard(topic_id, final.viewer_url),
         )
     except Exception as e:
         logger.warning(

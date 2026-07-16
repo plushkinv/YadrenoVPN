@@ -5,6 +5,24 @@ from typing import Any, Dict, List, Tuple
 
 
 IGNORED_INBOUND_PREFIX = "--!"
+MTPROTO_PROTOCOL = "mtproto"
+
+
+def inbound_protocol(inbound: Dict[str, Any]) -> str:
+    """Return a normalized panel protocol name."""
+    if not isinstance(inbound, dict):
+        return ""
+    return str(inbound.get("protocol") or "").strip().lower()
+
+
+def is_mtproto_inbound(inbound: Dict[str, Any]) -> bool:
+    """Whether the inbound is an MTProto proxy rather than a regular VPN key."""
+    return inbound_protocol(inbound) == MTPROTO_PROTOCOL
+
+
+def filter_regular_inbounds(inbounds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return inbounds supported by the single-key flow (MTProto excluded)."""
+    return [inbound for inbound in inbounds if not is_mtproto_inbound(inbound)]
 
 
 def is_ignored_inbound(inbound: Dict[str, Any]) -> bool:

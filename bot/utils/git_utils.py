@@ -230,7 +230,7 @@ def pull_to_commit(commit_hash: str) -> Tuple[bool, str]:
         
         commit_info = get_last_commit_info('HEAD')
         logger.info(f"✅ Успешно обновлено до блокирующего коммита {commit_hash[:8]}")
-        return True, f"✅ Обновление до блокирующего коммита завершено!\n\n🔹 Текущий коммит:\n<pre>{commit_info}</pre>"
+        return True, f"✅ Обновление успешно!\n\n🔹 Текущая версия:\n<pre>{commit_info}</pre>"
     except Exception as e:
         logger.error(f"Исключение в pull_to_commit({commit_hash}): {e}", exc_info=True)
         return False, f"❌ Критическая ошибка: {e}"
