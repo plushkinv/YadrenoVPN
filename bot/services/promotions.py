@@ -74,6 +74,20 @@ def _discount_amount(original_amount: int, discount_percent: int) -> int:
     return max(0, min(original_amount, original_amount * int(discount_percent) // 100))
 
 
+def discounted_amount_minor(original_amount: int, discount_percent: int) -> int:
+    """Return a provider-neutral payable preview in base minor units."""
+    nominal = max(0, int(original_amount))
+    return nominal - _discount_amount(nominal, discount_percent)
+
+
+def get_active_promo_discount_percent(user_id: int) -> int:
+    """Return the currently usable promo discount for a pre-intent tariff list."""
+    promo = get_user_active_promo_code(int(user_id))
+    if not promo:
+        return 0
+    return max(0, min(100, int(promo.get("discount_percent") or 0)))
+
+
 def _unavailable_code(payment_type: str, original_amount: int, final_amount: int) -> Optional[str]:
     if original_amount <= 0:
         return "price_unset"

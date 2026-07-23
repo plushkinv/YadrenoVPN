@@ -276,6 +276,7 @@ async def show_renew_payment_page(target, key: dict, key_id: int, force_new: boo
     from bot.utils.page_renderer import render_page
     from bot.utils.page_button_items import build_tariff_button_items
     from bot.utils.groups import get_tariffs_for_renewal
+    from database.requests import get_user_internal_id
 
     telegram_id = target.from_user.id
     context = {
@@ -285,6 +286,7 @@ async def show_renew_payment_page(target, key: dict, key_id: int, force_new: boo
             get_tariffs_for_renewal(int(key.get('tariff_id') or 0)),
             'key_renewal',
             key_id=key_id,
+            user_id=get_user_internal_id(telegram_id),
         ),
         'tariff_back_callback': f'key:{key_id}',
         **build_key_page_context(key),

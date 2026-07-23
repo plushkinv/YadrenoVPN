@@ -17,10 +17,12 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.services.payment_intents import (
     PURPOSE_KEY_PURCHASE,
     PURPOSE_KEY_RENEWAL,
+    cancel_payment_intent,
     create_payment_intent,
     format_base_minor,
     load_payment_intent,
     quote_payment_intent,
+    restart_payment_intent_for_method_change,
 )
 from bot.services.payment_provider_adapters import (
     check_provider_invoice,
@@ -187,14 +189,52 @@ async def payment_intent_tariff_handler(callback: CallbackQuery, state: FSMConte
 
 
 @router.callback_query(F.data.startswith('payment_intent_methods:'))
-async def payment_intent_methods_handler(callback: CallbackQuery):
-    """Returns from an invoice to the provider list of the same intent."""
+async def payment_intent_methods_handler(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    """Returns from an invoice to a fresh provider-selection intent."""
     intent = await _owned_intent(callback)
     if not intent:
         return
-    await show_payment_method_select(
+
+    replacement = restart_payment_intent_for_method_change(
+        intent.order_id,
+        user_id=intent.user_id,
+    )
+    if replacement is None:
+        await _render_callback_page(callback, "payment_order_unavailable")
+        return
+    await start_payment_intent_method_selection(
         callback,
-        intent,
+        state,
+        replacement,
+        telegram_id=callback.from_user.id,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('payment_legacy_methods:'))
+async def payment_legacy_methods_handler(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    """Moves a compatibility invoice into the provider-first intent flow."""
+    try:
+        order_id = callback.data.split(':', 1)[1]
+    except (AttributeError, IndexError):
+        order_id = ''
+    replacement = restart_payment_intent_for_method_change(
+        order_id,
+        user_id=_get_or_create_internal_user_id(callback),
+    )
+    if replacement is None:
+        await _render_callback_page(callback, "payment_order_unavailable")
+        return
+    await start_payment_intent_method_selection(
+        callback,
+        state,
+        replacement,
         telegram_id=callback.from_user.id,
     )
     await callback.answer()
@@ -205,6 +245,9 @@ async def payment_intent_cancel_handler(callback: CallbackQuery, state: FSMConte
     """Returns through the validated declarative cancel target of the intent."""
     intent = await _owned_intent(callback)
     if not intent:
+        return
+    if not cancel_payment_intent(intent.order_id, user_id=intent.user_id):
+        await _render_callback_page(callback, "payment_order_unavailable")
         return
 
     target = intent.navigation.cancel_target

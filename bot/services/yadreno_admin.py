@@ -340,6 +340,17 @@ def build_customization_sources_context(page_key: str | None = None) -> dict[str
             ],
             "effective_rule": "each *_custom value overrides the matching *_default value",
             "owns": "full screens, media, static buttons, and page-owned dynamic button templates",
+            "button_ordering": {
+                "row": "sparse integer sort key, not a visible row number",
+                "col": "position within the same row; at most two buttons",
+                "stock_bottom_row": 1000,
+                "relative_placement": (
+                    "copy the target button row and choose the other col"
+                ),
+                "custom_position_rule": (
+                    "explicit buttons_custom row/col is authoritative"
+                ),
+            },
         },
         "user_ui_texts": {
             "table": "user_ui_texts",

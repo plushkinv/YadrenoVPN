@@ -7,13 +7,16 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from database.requests import (
+    cancel_unconfirmed_payment_for_method_change,
     create_payment_intent_record,
+    find_order_by_order_id,
     get_base_currency,
     get_page,
     get_page_route,
     get_payment_intent,
     get_tariff_by_id,
     get_vpn_key_by_id,
+    save_payment_balance_deduction,
     update_payment_intent_quote,
 )
 
@@ -356,6 +359,117 @@ def load_payment_intent(order_id: str) -> PaymentIntent | None:
     )
 
 
+def cancel_payment_intent(order_id: str, *, user_id: int) -> bool:
+    """Cancel one owned pending intent before leaving its payment flow."""
+    return cancel_unconfirmed_payment_for_method_change(
+        str(order_id),
+        user_id=int(user_id),
+    )
+
+
+def restart_payment_intent_for_method_change(
+    order_id: str,
+    *,
+    user_id: int,
+) -> PaymentIntent | None:
+    """Replace an unconfirmed provider-bound order with a fresh provider choice."""
+    row = find_order_by_order_id(str(order_id))
+    if (
+        not row
+        or int(row.get('user_id') or 0) != int(user_id)
+        or str(row.get('status') or '') != 'pending'
+        or row.get('provider_confirmed_at')
+    ):
+        return None
+
+    current = load_payment_intent(str(order_id))
+    if current is not None:
+        purpose = current.purpose
+        purpose_data = dict(current.purpose_data)
+        nominal_amount = (
+            current.nominal_amount_minor
+            if purpose == PURPOSE_BALANCE_TOPUP
+            else None
+        )
+        description = current.description
+        navigation = current.navigation
+        balance_deduct_minor = current.balance_deduct_minor
+    else:
+        key_id = _optional_positive_int(row.get('vpn_key_id'))
+        raw_purpose = str(row.get('purpose') or '')
+        if raw_purpose in PURPOSE_REGISTRY:
+            purpose = raw_purpose
+        else:
+            purpose = PURPOSE_KEY_RENEWAL if key_id else PURPOSE_KEY_PURCHASE
+        tariff_id = _optional_positive_int(row.get('tariff_id'))
+        if purpose == PURPOSE_BALANCE_TOPUP:
+            purpose_data = {}
+            nominal_amount = int(
+                row.get('nominal_amount_minor')
+                or row.get('nominal_amount_cents')
+                or row.get('amount_cents')
+                or 0
+            )
+        else:
+            if tariff_id is None:
+                return None
+            purpose_data = {'tariff_id': tariff_id}
+            if purpose == PURPOSE_KEY_RENEWAL:
+                if key_id is None:
+                    return None
+                purpose_data['key_id'] = key_id
+            nominal_amount = None
+        description = None
+        navigation = None
+        balance_deduct_minor = int(
+            row.get('balance_deduct_minor')
+            or row.get('balance_deduct_cents')
+            or 0
+        )
+
+    try:
+        replacement = create_payment_intent(
+            user_id=int(user_id),
+            purpose=purpose,
+            purpose_data=purpose_data,
+            nominal_amount_minor=nominal_amount,
+            description=description,
+            navigation=navigation,
+        )
+    except ValueError:
+        return None
+
+    if balance_deduct_minor > 0:
+        if not save_payment_balance_deduction(
+            replacement.order_id,
+            balance_deduct_minor,
+        ):
+            cancel_payment_intent(
+                replacement.order_id,
+                user_id=int(user_id),
+            )
+            raise RuntimeError('Replacement balance deduction could not be persisted')
+        refreshed = load_payment_intent(replacement.order_id)
+        if refreshed is None:
+            cancel_payment_intent(
+                replacement.order_id,
+                user_id=int(user_id),
+            )
+            raise RuntimeError('Replacement Payment Intent cannot be loaded')
+        replacement = refreshed
+
+    if not cancel_payment_intent(
+        str(order_id),
+        user_id=int(user_id),
+    ):
+        cancel_payment_intent(
+            replacement.order_id,
+            user_id=int(user_id),
+        )
+        return None
+    return replacement
+
+
 def default_payment_navigation(purpose: str) -> PaymentNavigation:
     """Returns stock declarative targets without Python callbacks."""
     _purpose_definition(purpose)
@@ -493,6 +607,7 @@ def _decimal_text(value: Decimal) -> str:
 
 
 __all__ = [
+    'cancel_payment_intent',
     'PURPOSE_BALANCE_TOPUP',
     'PURPOSE_KEY_PURCHASE',
     'PURPOSE_KEY_RENEWAL',
@@ -508,5 +623,6 @@ __all__ = [
     'format_rub_cents',
     'load_payment_intent',
     'quote_payment_intent',
+    'restart_payment_intent_for_method_change',
     'validate_payment_target',
 ]

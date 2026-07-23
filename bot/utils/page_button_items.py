@@ -13,8 +13,15 @@ def build_tariff_button_items(
     purpose: str,
     *,
     key_id: int | None = None,
+    user_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return tariff data/actions; the visible label remains page-owned."""
+    discount_percent = 0
+    if user_id:
+        from bot.services.promotions import get_active_promo_discount_percent
+
+        discount_percent = get_active_promo_discount_percent(user_id)
+
     items: list[dict[str, Any]] = []
     for tariff in tariffs:
         price_minor = int(
@@ -24,16 +31,27 @@ def build_tariff_button_items(
         if price_minor <= 0:
             continue
         tariff_id = int(tariff['id'])
+        currency = str(tariff.get('base_currency') or 'RUB')
+        price_text = format_money_minor(price_minor, currency)
+        if discount_percent:
+            from bot.services.promotions import discounted_amount_minor
+
+            discounted_minor = discounted_amount_minor(
+                price_minor,
+                discount_percent,
+            )
+            if discounted_minor != price_minor:
+                price_text = (
+                    f"{price_text} → "
+                    f"{format_money_minor(discounted_minor, currency)}"
+                )
         items.append({
             'callback_data': (
                 f"payment_intent_tariff:{purpose}:{tariff_id}:{int(key_id or 0)}"
             ),
             'data': {
                 'item_name': str(tariff.get('name') or tariff_id),
-                'item_price': format_money_minor(
-                    price_minor,
-                    str(tariff.get('base_currency') or 'RUB'),
-                ),
+                'item_price': price_text,
             },
         })
     return items

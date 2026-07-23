@@ -38,7 +38,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 73
 
 # Current version of the database schema (incremented when new migrations are added)
-LATEST_VERSION = 81
+LATEST_VERSION = 84
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
     "schema_version": 1,
@@ -126,6 +126,23 @@ def _renew_payment_page_text() -> str:
         "🔑 Ключ: <b>%key(field=name)%</b>\n\n"
         "Выберите способ оплаты:"
     )
+
+
+def _legacy_prepayment_page_buttons() -> str:
+    """Return the provider-first purchase buttons stored by the v73 baseline."""
+    return json.dumps([
+        {"id": "btn_enter_promo", "label": "🎟 Ввести промокод",        "color": "primary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_crypto",  "label": "🪙 Оплатить USDT",          "color": "primary",   "row": 1, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_stars",   "label": "⭐ Оплатить звёздами",      "color": "primary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_cards",   "label": "💳 TG payments",           "color": "primary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_qr",      "label": "📱 ЮКасса",                "color": "primary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_wata",    "label": "🌊 WATA",                  "color": "primary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_platega", "label": "💸 Platega",               "color": "primary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_cardlink", "label": "🔗 Cardlink",             "color": "primary",   "row": 7, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_demo",    "label": "🏦 Демо оплата (РФ карта)", "color": "primary",   "row": 8, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_pay_balance", "label": "💎 Использовать баланс",    "color": "primary",   "row": 9, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_back_main",   "label": "🈴 На главную",             "color": "secondary", "row": 10, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
 
 
 def _renew_payment_page_buttons() -> str:
@@ -1130,19 +1147,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
                 "• Мы не можем гарантировать, что данная технология останется рабочей\n\n"
                 "<i>Приобретая ключ, вы соглашаетесь с этими условиями.</i>"
             ),
-            'buttons': json.dumps([
-                {"id": "btn_enter_promo", "label": "🎟 Ввести промокод",        "color": "primary",   "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_crypto",  "label": "🪙 Оплатить USDT",          "color": "primary",   "row": 1, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_stars",   "label": "⭐ Оплатить звёздами",      "color": "primary",   "row": 2, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_cards",   "label": "💳 TG payments",           "color": "primary",   "row": 3, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_qr",      "label": "📱 ЮКасса",                "color": "primary",   "row": 4, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_wata",    "label": "🌊 WATA",                  "color": "primary",   "row": 5, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_platega", "label": "💸 Platega",               "color": "primary",   "row": 6, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_cardlink", "label": "🔗 Cardlink",             "color": "primary",   "row": 7, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_demo",    "label": "🏦 Демо оплата (РФ карта)", "color": "primary",   "row": 8, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_pay_balance", "label": "💎 Использовать баланс",    "color": "primary",   "row": 9, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
-                {"id": "btn_back_main",   "label": "🈴 На главную",             "color": "secondary", "row": 10, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
-            ], ensure_ascii=False),
+            'buttons': _legacy_prepayment_page_buttons(),
         },
         'renew_payment': {
             'text': _renew_payment_page_text(),
@@ -1939,8 +1944,8 @@ def _ui_promo_buttons(primary_label: str) -> str:
     )
 
 
-def _ui_intent_method_buttons() -> str:
-    provider_buttons = [
+def _ui_intent_method_buttons(*, include_promo: bool = True) -> str:
+    buttons = [
         _ui_system_button("btn_intent_provider_crypto", "🪙 Оплатить USDT", 0),
         _ui_system_button("btn_intent_provider_stars", "⭐ Оплатить звёздами", 1),
         _ui_system_button("btn_intent_provider_cards", "💳 TG payments", 2),
@@ -1950,11 +1955,24 @@ def _ui_intent_method_buttons() -> str:
         _ui_system_button("btn_intent_provider_cardlink", "🔗 Cardlink", 6),
         _ui_system_button("btn_intent_provider_demo", "🏦 Демо оплата", 7),
         _ui_system_button("btn_intent_balance", "💎 Использовать баланс", 8),
-        _ui_system_button("btn_intent_promo", "🎟 Ввести промокод", 9),
-        _ui_system_button("btn_intent_cancel", "⬅️ Назад", 10, 0),
-        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 10, 1),
     ]
-    return _ui_page_buttons(*provider_buttons)
+    navigation_row = 9
+    if include_promo:
+        buttons.append(
+            _ui_system_button("btn_intent_promo", "🎟 Ввести промокод", 9)
+        )
+        navigation_row = 10
+    buttons.extend((
+        _ui_system_button("btn_intent_cancel", "⬅️ Назад", navigation_row, 0),
+        _ui_internal_button(
+            "btn_back_main",
+            "🈴 На главную",
+            "cmd_back_main",
+            navigation_row,
+            1,
+        ),
+    ))
+    return _ui_page_buttons(*buttons)
 
 
 def _ui_intent_link_buttons() -> str:
@@ -1980,6 +1998,35 @@ def _ui_tariff_collection_buttons() -> str:
         _ui_collection_button("btn_tariff_items", "💳 %item_name% — %item_price%"),
         _ui_system_button("btn_tariff_back", "⬅️ Назад", 1000, 0),
         _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1000, 1),
+    )
+
+
+def _ui_purchase_tariff_collection_buttons() -> str:
+    """Return purchase tariff controls without a duplicate route to Home."""
+    return _ui_page_buttons(
+        _ui_collection_button("btn_tariff_items", "💳 %item_name% — %item_price%"),
+        _ui_system_button("btn_enter_promo", "🎟 Ввести промокод", 999),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1000),
+    )
+
+
+def _ui_renewal_tariff_collection_buttons() -> str:
+    """Return renewal tariffs, promotion entry, and final navigation row."""
+    return _ui_page_buttons(
+        _ui_collection_button("btn_tariff_items", "💳 %item_name% — %item_price%"),
+        _ui_system_button(
+            "btn_renew_enter_promo",
+            "🎟 Ввести промокод",
+            999,
+        ),
+        _ui_system_button("btn_tariff_back", "⬅️ Назад", 1000, 0),
+        _ui_internal_button(
+            "btn_back_main",
+            "🈴 На главную",
+            "cmd_back_main",
+            1000,
+            1,
+        ),
     )
 
 
@@ -2038,7 +2085,7 @@ def _user_ui_page_defaults_v81() -> dict[str, tuple[str, str]]:
         ),
         "payment_method_select_renewal": (
             "💳 <b>Продление ключа</b>\n\n🔑 <b>%key(field=name)%</b>\n💰 К оплате: <b>%payment_amount%</b>\n%payment_discount_line%\nВыберите способ оплаты:",
-            _ui_intent_method_buttons(),
+            _ui_intent_method_buttons(include_promo=False),
         ),
         "payment_method_select_topup": (
             "💰 <b>Пополнение баланса</b>\n\nНа баланс: <b>%payment_nominal%</b>\nК оплате: <b>%payment_amount%</b>\nВыберите способ оплаты:",
@@ -2046,7 +2093,7 @@ def _user_ui_page_defaults_v81() -> dict[str, tuple[str, str]]:
         ),
         "payment_method_select_surcharge": (
             "💎 <b>Доплата после списания баланса</b>\n\nС баланса: <b>%payment_balance_deduct%</b>\nОсталось оплатить: <b>%payment_remaining%</b>\nВыберите способ доплаты:",
-            _ui_intent_method_buttons(),
+            _ui_intent_method_buttons(include_promo=False),
         ),
         "payment_link_renewal": (
             "💳 <b>Оплата продления</b>\n\n🔑 <b>%key(field=name)%</b>\n💰 Сумма: <b>%payment_amount%</b>\n%payment_discount_line%\nПерейдите к оплате по кнопке ниже.\n\n<i>Статус обновится автоматически; если доступна ручная проверка, используйте кнопку ниже.</i>",
@@ -2386,7 +2433,7 @@ def migration_81(conn: sqlite3.Connection) -> None:
         SET text_default = ?, buttons_default = ?
         WHERE page_key = 'payment_method_select'
         """,
-        (purchase_method_text, _ui_intent_method_buttons()),
+        (purchase_method_text, _ui_intent_method_buttons(include_promo=False)),
     )
     conn.execute(
         """
@@ -2546,9 +2593,9 @@ def migration_81(conn: sqlite3.Connection) -> None:
     )
     dynamic_page_buttons = {
         "my_keys": _ui_key_collection_buttons(),
-        "prepayment": _ui_tariff_collection_buttons(),
+        "prepayment": _ui_purchase_tariff_collection_buttons(),
         "payment_tariff_select": _ui_tariff_collection_buttons(),
-        "renew_payment": _ui_tariff_collection_buttons(),
+        "renew_payment": _ui_renewal_tariff_collection_buttons(),
         "key_replace_server_select": _ui_server_collection_buttons(with_back=True),
         "key_replace_inbound_select": _ui_protocol_collection_buttons(),
         "new_key_server_select": _ui_server_collection_buttons(with_back=False),
@@ -2608,6 +2655,531 @@ def migration_81(conn: sqlite3.Connection) -> None:
     )
 
 
+_BUTTON_COSMETIC_FIELDS_V82 = (
+    'label',
+    'color',
+    'row',
+    'col',
+    'is_hidden',
+    'icon_custom_emoji_id',
+)
+
+_PURCHASE_METHOD_BUTTON_MAP_V82 = {
+    'btn_pay_crypto': 'btn_intent_provider_crypto',
+    'btn_pay_stars': 'btn_intent_provider_stars',
+    'btn_pay_cards': 'btn_intent_provider_cards',
+    'btn_pay_qr': 'btn_intent_provider_yookassa_qr',
+    'btn_pay_wata': 'btn_intent_provider_wata',
+    'btn_pay_platega': 'btn_intent_provider_platega',
+    'btn_pay_cardlink': 'btn_intent_provider_cardlink',
+    'btn_pay_demo': 'btn_intent_provider_demo',
+    'btn_pay_balance': 'btn_intent_balance',
+}
+
+_RENEWAL_METHOD_BUTTON_MAP_V82 = {
+    'btn_renew_pay_crypto': 'btn_intent_provider_crypto',
+    'btn_renew_pay_stars': 'btn_intent_provider_stars',
+    'btn_renew_pay_cards': 'btn_intent_provider_cards',
+    'btn_renew_pay_qr': 'btn_intent_provider_yookassa_qr',
+    'btn_renew_pay_wata': 'btn_intent_provider_wata',
+    'btn_renew_pay_platega': 'btn_intent_provider_platega',
+    'btn_renew_pay_cardlink': 'btn_intent_provider_cardlink',
+    'btn_renew_pay_demo': 'btn_intent_provider_demo',
+    'btn_renew_pay_balance': 'btn_intent_balance',
+}
+
+
+def _legacy_purchase_page_buttons_v82() -> str:
+    """Return every purchase control that may remain in v81 custom data."""
+    buttons = json.loads(_legacy_prepayment_page_buttons())
+    buttons.append(
+        _ui_system_button('btn_tariff_back', '⬅️ Назад', 1000, 0)
+    )
+    return json.dumps(buttons, ensure_ascii=False)
+
+
+def _migration_button_array_v82(raw: str | None) -> list | None:
+    """Parse a stored button array without treating malformed custom data as empty."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, list) else None
+
+
+def _migration_button_index_v82(buttons: list | None) -> dict[str, dict]:
+    """Index valid migration button records by stable id."""
+    if buttons is None:
+        return {}
+    return {
+        str(button['id']): button
+        for button in buttons
+        if isinstance(button, dict)
+        and isinstance(button.get('id'), str)
+        and button['id']
+    }
+
+
+def _button_cosmetic_overrides_v82(
+    custom_button: dict,
+    legacy_default: dict,
+) -> dict:
+    """Keep only administrator-visible changes while replacing obsolete semantics."""
+    return {
+        field: custom_button[field]
+        for field in _BUTTON_COSMETIC_FIELDS_V82
+        if field in custom_button
+        and custom_button[field] != legacy_default.get(field)
+    }
+
+
+def _build_button_override_v82(
+    target_defaults: dict[str, dict],
+    target_id: str,
+    overrides: dict,
+) -> dict | None:
+    """Build a complete override on top of the target page's current button."""
+    target_default = target_defaults.get(target_id)
+    if target_default is None or not overrides:
+        return None
+    result = dict(target_default)
+    result.update(overrides)
+    return result
+
+
+def _append_button_override_v82(buttons: list, button: dict | None) -> bool:
+    """Append an override only when the target id has no newer customization."""
+    if button is None:
+        return False
+    button_id = button.get('id')
+    if not isinstance(button_id, str) or not button_id:
+        return False
+    if any(
+        isinstance(item, dict) and item.get('id') == button_id
+        for item in buttons
+    ):
+        return False
+    buttons.append(button)
+    return True
+
+
+def _migrate_tariff_first_page_buttons_v82(
+    conn: sqlite3.Connection,
+    *,
+    tariff_page_key: str,
+    method_page_key: str,
+    legacy_defaults_json: str,
+    method_button_map: dict[str, str],
+    source_navigation_map: dict[str, str],
+    method_navigation_map: dict[str, str],
+    extension_button_prefix: str,
+) -> tuple[int, int]:
+    """Separate legacy provider overrides from one tariff-first page."""
+    source = conn.execute(
+        """
+        SELECT buttons_default, buttons_custom
+        FROM pages
+        WHERE page_key = ?
+        """,
+        (tariff_page_key,),
+    ).fetchone()
+    if source is None or not source[1]:
+        return 0, 0
+
+    source_custom = _migration_button_array_v82(source[1])
+    if source_custom is None:
+        logger.warning(
+            "Migration v82 skipped malformed buttons_custom on page %s",
+            tariff_page_key,
+        )
+        return 0, 0
+
+    legacy_defaults = _migration_button_index_v82(
+        _migration_button_array_v82(legacy_defaults_json)
+    )
+    source_defaults = _migration_button_index_v82(
+        _migration_button_array_v82(source[0])
+    )
+    method = conn.execute(
+        """
+        SELECT buttons_default, buttons_custom
+        FROM pages
+        WHERE page_key = ?
+        """,
+        (method_page_key,),
+    ).fetchone()
+    method_defaults = _migration_button_index_v82(
+        _migration_button_array_v82(method[0] if method else None)
+    )
+    method_custom = _migration_button_array_v82(method[1] if method else None)
+    can_transfer = method is not None and method_custom is not None
+    if method is not None and method_custom is None:
+        logger.warning(
+            "Migration v82 cannot transfer button labels into malformed "
+            "buttons_custom on page %s",
+            method_page_key,
+        )
+    target_custom = list(method_custom or [])
+    source_result: list = []
+    source_pending: list[dict] = []
+    method_pending: list[dict] = []
+    removed_count = 0
+
+    for item in source_custom:
+        if not isinstance(item, dict) or not isinstance(item.get('id'), str):
+            source_result.append(item)
+            continue
+        button_id = item['id']
+        is_legacy_extension = button_id.startswith(extension_button_prefix)
+        is_legacy_button = (
+            button_id in method_button_map
+            or button_id in source_navigation_map
+            or button_id in method_navigation_map
+            or is_legacy_extension
+        )
+        if not is_legacy_button:
+            source_result.append(item)
+            continue
+
+        removed_count += 1
+        legacy_default = legacy_defaults.get(button_id, {})
+        overrides = _button_cosmetic_overrides_v82(item, legacy_default)
+
+        source_target_id = source_navigation_map.get(button_id)
+        if source_target_id:
+            source_override = _build_button_override_v82(
+                source_defaults,
+                source_target_id,
+                overrides,
+            )
+            if source_override is not None:
+                source_pending.append(source_override)
+
+        method_target_id = (
+            method_button_map.get(button_id)
+            or method_navigation_map.get(button_id)
+        )
+        if method_target_id and can_transfer:
+            method_override = _build_button_override_v82(
+                method_defaults,
+                method_target_id,
+                overrides,
+            )
+            if method_override is not None:
+                method_pending.append(method_override)
+
+    if not removed_count:
+        return 0, 0
+
+    for button in source_pending:
+        _append_button_override_v82(source_result, button)
+
+    transferred_count = 0
+    if can_transfer:
+        for button in method_pending:
+            if _append_button_override_v82(target_custom, button):
+                transferred_count += 1
+
+    conn.execute(
+        """
+        UPDATE pages
+        SET buttons_custom = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE page_key = ?
+        """,
+        (
+            json.dumps(source_result, ensure_ascii=False) if source_result else None,
+            tariff_page_key,
+        ),
+    )
+    if can_transfer and transferred_count:
+        conn.execute(
+            """
+            UPDATE pages
+            SET buttons_custom = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE page_key = ?
+            """,
+            (json.dumps(target_custom, ensure_ascii=False), method_page_key),
+        )
+    return removed_count, transferred_count
+
+
+def migration_82(conn: sqlite3.Connection) -> None:
+    """Migration v82: separate stale customized provider buttons from tariff pages."""
+    page_defaults = {
+        'prepayment': _ui_purchase_tariff_collection_buttons(),
+        'renew_payment': _ui_renewal_tariff_collection_buttons(),
+        'payment_method_select': _ui_intent_method_buttons(include_promo=False),
+        'payment_method_select_renewal': _ui_intent_method_buttons(
+            include_promo=False
+        ),
+    }
+    for page_key, buttons_default in page_defaults.items():
+        conn.execute(
+            """
+            UPDATE pages
+            SET buttons_default = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE page_key = ?
+            """,
+            (buttons_default, page_key),
+        )
+
+    purchase_counts = _migrate_tariff_first_page_buttons_v82(
+        conn,
+        tariff_page_key='prepayment',
+        method_page_key='payment_method_select',
+        legacy_defaults_json=_legacy_purchase_page_buttons_v82(),
+        method_button_map=_PURCHASE_METHOD_BUTTON_MAP_V82,
+        source_navigation_map={
+            'btn_enter_promo': 'btn_enter_promo',
+            'btn_back_main': 'btn_back_main',
+        },
+        method_navigation_map={
+            'btn_tariff_back': 'btn_intent_cancel',
+            'btn_back_main': 'btn_back_main',
+        },
+        extension_button_prefix='btn_pay_ext_',
+    )
+    renewal_counts = _migrate_tariff_first_page_buttons_v82(
+        conn,
+        tariff_page_key='renew_payment',
+        method_page_key='payment_method_select_renewal',
+        legacy_defaults_json=_renew_payment_page_buttons(),
+        method_button_map=_RENEWAL_METHOD_BUTTON_MAP_V82,
+        source_navigation_map={
+            'btn_renew_enter_promo': 'btn_renew_enter_promo',
+            'btn_renew_back': 'btn_tariff_back',
+            'btn_back_main': 'btn_back_main',
+        },
+        method_navigation_map={
+            'btn_renew_back': 'btn_intent_cancel',
+            'btn_back_main': 'btn_back_main',
+        },
+        extension_button_prefix='btn_renew_pay_ext_',
+    )
+    logger.info(
+        "Migration v82 applied: removed %s stale tariff-page payment buttons "
+        "and transferred %s compatible custom overrides",
+        purchase_counts[0] + renewal_counts[0],
+        purchase_counts[1] + renewal_counts[1],
+    )
+
+
+_PROMO_COSMETIC_FIELDS_V83 = (
+    'label',
+    'color',
+    'is_hidden',
+    'icon_custom_emoji_id',
+)
+
+
+def _move_intent_promo_customization_v83(
+    conn: sqlite3.Connection,
+    *,
+    method_page_key: str,
+    tariff_page_key: str,
+    tariff_button_id: str,
+    tariff_defaults_json: str,
+) -> bool:
+    """Move promo cosmetics back without carrying obsolete row coordinates."""
+    method = conn.execute(
+        """
+        SELECT buttons_default, buttons_custom
+        FROM pages
+        WHERE page_key = ?
+        """,
+        (method_page_key,),
+    ).fetchone()
+    tariff = conn.execute(
+        "SELECT buttons_custom FROM pages WHERE page_key = ?",
+        (tariff_page_key,),
+    ).fetchone()
+    if method is None or tariff is None:
+        return False
+
+    method_custom = _migration_button_array_v82(method[1])
+    tariff_custom = _migration_button_array_v82(tariff[0])
+    if method_custom is None or tariff_custom is None:
+        logger.warning(
+            "Migration v83 skipped malformed promo customization on %s or %s",
+            method_page_key,
+            tariff_page_key,
+        )
+        return False
+
+    method_defaults = _migration_button_index_v82(
+        _migration_button_array_v82(method[0])
+    )
+    tariff_defaults = _migration_button_index_v82(
+        _migration_button_array_v82(tariff_defaults_json)
+    )
+    old_default = method_defaults.get('btn_intent_promo', {})
+    method_result: list = []
+    promo_overrides: dict | None = None
+    found = False
+
+    for item in method_custom:
+        if (
+            isinstance(item, dict)
+            and item.get('id') == 'btn_intent_promo'
+        ):
+            found = True
+            promo_overrides = {
+                field: item[field]
+                for field in _PROMO_COSMETIC_FIELDS_V83
+                if field in item and item[field] != old_default.get(field)
+            }
+            continue
+        method_result.append(item)
+
+    if not found:
+        return False
+
+    target_custom = list(tariff_custom)
+    target_override = _build_button_override_v82(
+        tariff_defaults,
+        tariff_button_id,
+        promo_overrides or {},
+    )
+    _append_button_override_v82(target_custom, target_override)
+    conn.execute(
+        """
+        UPDATE pages
+        SET buttons_custom = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE page_key = ?
+        """,
+        (
+            json.dumps(method_result, ensure_ascii=False)
+            if method_result else None,
+            method_page_key,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE pages
+        SET buttons_custom = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE page_key = ?
+        """,
+        (
+            json.dumps(target_custom, ensure_ascii=False)
+            if target_custom else None,
+            tariff_page_key,
+        ),
+    )
+    return True
+
+
+def migration_83(conn: sqlite3.Connection) -> None:
+    """Migration v83: show promotions before tariffs and reset payment methods."""
+    purchase_defaults = _ui_purchase_tariff_collection_buttons()
+    renewal_defaults = _ui_renewal_tariff_collection_buttons()
+    moved_purchase = _move_intent_promo_customization_v83(
+        conn,
+        method_page_key='payment_method_select',
+        tariff_page_key='prepayment',
+        tariff_button_id='btn_enter_promo',
+        tariff_defaults_json=purchase_defaults,
+    )
+    moved_renewal = _move_intent_promo_customization_v83(
+        conn,
+        method_page_key='payment_method_select_renewal',
+        tariff_page_key='renew_payment',
+        tariff_button_id='btn_renew_enter_promo',
+        tariff_defaults_json=renewal_defaults,
+    )
+    page_defaults = {
+        'prepayment': purchase_defaults,
+        'renew_payment': renewal_defaults,
+        'payment_method_select': _ui_intent_method_buttons(
+            include_promo=False
+        ),
+        'payment_method_select_renewal': _ui_intent_method_buttons(
+            include_promo=False
+        ),
+        'payment_method_select_topup': _ui_intent_method_buttons(),
+        'payment_method_select_surcharge': _ui_intent_method_buttons(
+            include_promo=False
+        ),
+    }
+    for page_key, buttons_default in page_defaults.items():
+        conn.execute(
+            """
+            UPDATE pages
+            SET buttons_default = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE page_key = ?
+            """,
+            (buttons_default, page_key),
+        )
+    logger.info(
+        "Migration v83 applied: promo entry restored to tariff pages "
+        "(purchase_custom=%s, renewal_custom=%s)",
+        moved_purchase,
+        moved_renewal,
+    )
+
+
+def migration_84(conn: sqlite3.Connection) -> None:
+    """Migration v84: normalize the legacy My Keys Home position once."""
+    row = conn.execute(
+        """
+        SELECT buttons_custom
+        FROM pages
+        WHERE page_key = 'my_keys'
+        """
+    ).fetchone()
+    if row is None or not row[0]:
+        logger.info(
+            "Migration v84 applied: no legacy My Keys Home position to normalize"
+        )
+        return
+
+    buttons = _migration_button_array_v82(row[0])
+    if buttons is None:
+        logger.warning(
+            "Migration v84 skipped malformed buttons_custom on page my_keys"
+        )
+        return
+
+    changed = False
+    normalized: list = []
+    for item in buttons:
+        if (
+            isinstance(item, dict)
+            and item.get('id') == 'btn_back_main'
+            and item.get('action_type') == 'internal'
+            and item.get('action_value') == 'cmd_back_main'
+            and item.get('row') == 0
+            and item.get('col') == 0
+        ):
+            item = dict(item)
+            item['row'] = 1000
+            changed = True
+        normalized.append(item)
+
+    if changed:
+        conn.execute(
+            """
+            UPDATE pages
+            SET buttons_custom = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE page_key = 'my_keys'
+            """,
+            (json.dumps(normalized, ensure_ascii=False),),
+        )
+
+    logger.info(
+        "Migration v84 applied: legacy My Keys Home position normalized=%s",
+        changed,
+    )
+
+
 MIGRATIONS = {
     74: migration_74,
     75: migration_75,
@@ -2617,6 +3189,9 @@ MIGRATIONS = {
     79: migration_79,
     80: migration_80,
     81: migration_81,
+    82: migration_82,
+    83: migration_83,
+    84: migration_84,
 }
 
 

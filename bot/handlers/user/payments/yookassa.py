@@ -49,7 +49,7 @@ async def _show_order_unavailable(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-def _cards_invoice_markup(amount_minor: int, cancel_callback: str):
+def _cards_invoice_markup(amount_minor: int, change_method_callback: str):
     amount = format_money_minor(amount_minor, 'RUB')
     return (
         InlineKeyboardBuilder()
@@ -57,7 +57,7 @@ def _cards_invoice_markup(amount_minor: int, cancel_callback: str):
         .row(
             InlineKeyboardButton(
                 text=invoice_change_method_button(),
-                callback_data=cancel_callback,
+                callback_data=change_method_callback,
             )
         )
         .as_markup()
@@ -137,12 +137,10 @@ async def _send_cards_invoice(
     if key:
         description = renewal_invoice_description(key['display_name'], tariff['name'])
         payload = f'renew:{order_id}'
-        cancel_callback = f'renew_invoice_cancel:{key_id}:{tariff_id}'
         log_context = f'cards:renew order={order_id} tariff={tariff_id} key={key_id}'
     else:
         description = purchase_invoice_description(tariff['name'], tariff['duration_days'])
         payload = f'vpn_key:{order_id}'
-        cancel_callback = 'buy_key'
         log_context = f'cards:new_key order={order_id} tariff={tariff_id}'
 
     amount_rub = amount_minor / 100
@@ -178,7 +176,10 @@ async def _send_cards_invoice(
             )
         ],
         provider_data=json.dumps(provider_data),
-        reply_markup=_cards_invoice_markup(amount_minor, cancel_callback),
+        reply_markup=_cards_invoice_markup(
+            amount_minor,
+            f'payment_legacy_methods:{order_id}',
+        ),
     )
     if not invoice_sent:
         return

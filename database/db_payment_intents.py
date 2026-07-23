@@ -162,6 +162,60 @@ def update_payment_intent_quote(
         return cursor.rowcount > 0
 
 
+def cancel_unconfirmed_payment_for_method_change(
+    order_id: str,
+    *,
+    user_id: int,
+) -> bool:
+    """Cancel one unconfirmed order and all active provider-side tracking."""
+    normalized_order_id = str(order_id)
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET status = 'canceled'
+            WHERE order_id = ?
+              AND user_id = ?
+              AND status = 'pending'
+              AND provider_confirmed_at IS NULL
+            """,
+            (normalized_order_id, int(user_id)),
+        )
+        if cursor.rowcount <= 0:
+            return False
+        conn.execute(
+            """
+            UPDATE payment_provider_orders
+            SET status = 'canceled',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE order_id = ?
+              AND status = 'pending'
+            """,
+            (normalized_order_id,),
+        )
+        conn.execute(
+            """
+            UPDATE payment_auto_checks
+            SET state = 'canceled',
+                next_check_at = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE order_id = ?
+              AND state IN ('active', 'exhausted', 'completion_failed')
+            """,
+            (normalized_order_id,),
+        )
+        conn.execute(
+            """
+            UPDATE promo_redemptions
+            SET status = 'canceled'
+            WHERE order_id = ?
+              AND status = 'reserved'
+            """,
+            (normalized_order_id,),
+        )
+        return True
+
+
 def update_payment_intent_purpose_data(
     order_id: str,
     purpose_data: Mapping[str, Any],
@@ -752,6 +806,7 @@ def _non_negative_int(value: Any, field: str) -> int:
 
 __all__ = [
     'begin_payment_fulfillment',
+    'cancel_unconfirmed_payment_for_method_change',
     'claim_payment_effect',
     'complete_payment_effect',
     'complete_payment_fulfillment',

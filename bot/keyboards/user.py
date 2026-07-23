@@ -182,7 +182,7 @@ def qr_payment_kb(
             'order_id': order_id,
             'payment_url': qr_url or '',
             'payment_check_callback': f'{check_prefix}:{order_id}',
-            'payment_methods_callback': back_callback,
+            'payment_methods_callback': f'payment_legacy_methods:{order_id}',
             'payment_cancel_callback': back_callback,
             'payment_can_check': True,
         },

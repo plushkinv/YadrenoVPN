@@ -171,7 +171,7 @@ async def renew_crypto_invoice(callback: CallbackQuery, state: FSMContext):
     )
     context.update({
         'order_id': order_id,
-        'payment_methods_callback': cb_data,
+        'payment_methods_callback': f'payment_legacy_methods:{order_id}',
         'payment_cancel_callback': cb_data,
     })
     context = build_page_flow_context(callback, **context)
@@ -283,7 +283,7 @@ async def pay_crypto_invoice(callback: CallbackQuery, state: FSMContext):
     back_callback = f'pay_crypto:{order_id}'
     context.update({
         'order_id': order_id,
-        'payment_methods_callback': back_callback,
+        'payment_methods_callback': f'payment_legacy_methods:{order_id}',
         'payment_cancel_callback': back_callback,
     })
     context = build_page_flow_context(callback, **context)

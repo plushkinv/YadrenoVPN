@@ -299,7 +299,7 @@ async def _create_custom_payment(
         'bot_username': bot_info.username,
         'order_id': order_id,
         'payment_check_callback': f'check_ext:{order_id}',
-        'payment_methods_callback': back_callback,
+        'payment_methods_callback': f'payment_legacy_methods:{order_id}',
         'payment_cancel_callback': back_callback,
         'payment_can_check': True,
     })

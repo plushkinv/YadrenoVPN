@@ -125,7 +125,10 @@ async def renew_stars_invoice(callback: CallbackQuery, state: FSMContext):
         reply_markup=(
             InlineKeyboardBuilder()
             .row(InlineKeyboardButton(text=invoice_pay_button(f"{quote['final_amount']} XTR"), pay=True))
-            .row(InlineKeyboardButton(text=invoice_change_method_button(), callback_data=f'renew_invoice_cancel:{key_id}:{tariff_id}'))
+            .row(InlineKeyboardButton(
+                text=invoice_change_method_button(),
+                callback_data=f'payment_legacy_methods:{order_id}',
+            ))
             .as_markup()
         ),
     )
@@ -236,7 +239,10 @@ async def pay_stars_invoice(callback: CallbackQuery, state: FSMContext):
         reply_markup=(
             InlineKeyboardBuilder()
             .row(InlineKeyboardButton(text=invoice_pay_button(f'{price_stars} XTR'), pay=True))
-            .row(InlineKeyboardButton(text=invoice_change_method_button(), callback_data='buy_key'))
+            .row(InlineKeyboardButton(
+                text=invoice_change_method_button(),
+                callback_data=f'payment_legacy_methods:{order_id}',
+            ))
             .as_markup()
         ),
     )

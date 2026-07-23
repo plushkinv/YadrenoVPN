@@ -42,6 +42,7 @@ async def _render_buy_page(target):
         is_cardlink_configured,
         is_demo_payment_enabled,
         get_all_tariffs,
+        get_user_internal_id,
     )
     from bot.utils.page_renderer import render_page
 
@@ -80,7 +81,11 @@ async def _render_buy_page(target):
 
     context = {
         'telegram_id': telegram_id,
-        'tariff_button_items': build_tariff_button_items(tariffs, 'key_purchase'),
+        'tariff_button_items': build_tariff_button_items(
+            tariffs,
+            'key_purchase',
+            user_id=get_user_internal_id(telegram_id),
+        ),
         'tariff_back_callback': 'start',
     }
     await render_page(
