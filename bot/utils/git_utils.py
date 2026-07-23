@@ -80,15 +80,93 @@ def check_git_available() -> bool:
     return success
 
 
-def get_current_commit() -> Optional[str]:
+def get_current_commit(*, full: bool = False) -> Optional[str]:
     """
     Gets the hash of the current commit.
     
     Returns:
-        Short commit hash or None on error
+        Commit hash or None on error
     """
-    success, output = run_git_command(['rev-parse', '--short', 'HEAD'])
+    args = ['rev-parse', 'HEAD'] if full else ['rev-parse', '--short', 'HEAD']
+    success, output = run_git_command(args)
     return output if success else None
+
+
+def _prepare_update_snapshot(
+    *,
+    update_mode: str,
+    requested_target: Optional[str],
+    actor: Optional[str],
+):
+    """Create a fail-closed pre-update database snapshot."""
+    try:
+        from bot.services.update_rollback import create_pre_update_snapshot
+
+        return create_pre_update_snapshot(
+            update_mode=update_mode,
+            requested_target=requested_target,
+            actor=actor,
+            project_root=get_project_root(),
+        ), None
+    except Exception as exc:
+        logger.exception("Cannot create pre-update database snapshot")
+        return None, (
+            "❌ Не удалось создать и проверить резервную копию базы данных "
+            f"перед обновлением. Обновление отменено.\n{exc}"
+        )
+
+
+def _finalize_update_snapshot(snapshot, *, git_succeeded: bool) -> Optional[str]:
+    """Publish a rollback point when Git changed HEAD."""
+    try:
+        from bot.services.update_rollback import finalize_snapshot_after_git
+
+        finalize_snapshot_after_git(
+            snapshot,
+            git_succeeded=git_succeeded,
+            project_root=get_project_root(),
+        )
+        return None
+    except Exception as exc:
+        logger.exception(
+            "Cannot finalize pre-update snapshot %s",
+            getattr(snapshot, "snapshot_id", "unknown"),
+        )
+        return (
+            "❌ Код изменён, но точку отката не удалось зафиксировать. "
+            f"Автоматический перезапуск отменён.\n{exc}"
+        )
+
+
+def _run_snapshotted_git_mutation(
+    git_args: List[str],
+    *,
+    update_mode: str,
+    requested_target: Optional[str],
+    actor: Optional[str],
+    timeout: int = 120,
+) -> Tuple[bool, str, Optional[str]]:
+    """Run one Git mutation while holding the shared update/rollback lock."""
+    try:
+        from bot.services.update_rollback import update_operation_lock
+
+        with update_operation_lock(get_project_root()):
+            snapshot, snapshot_error = _prepare_update_snapshot(
+                update_mode=update_mode,
+                requested_target=requested_target,
+                actor=actor,
+            )
+            if snapshot is None:
+                return False, "", snapshot_error
+            success, output = run_git_command(git_args, timeout=timeout)
+            finalize_error = _finalize_update_snapshot(
+                snapshot,
+                git_succeeded=success,
+            )
+            return success, output, finalize_error
+    except Exception as exc:
+        logger.exception("Cannot run protected Git update mutation")
+        return False, "", f"❌ Обновление не выполнено: {exc}"
 
 
 def get_current_branch() -> Optional[str]:
@@ -206,7 +284,12 @@ def find_first_blocking_commit(commits: List[Dict[str, str]]) -> Optional[Dict[s
     return None
 
 
-def pull_to_commit(commit_hash: str) -> Tuple[bool, str]:
+def pull_to_commit(
+    commit_hash: str,
+    *,
+    update_mode: str = "admin_target_commit",
+    actor: Optional[str] = None,
+) -> Tuple[bool, str]:
     """
     Updates code to a specific commit via git reset --hard.
     
@@ -223,7 +306,21 @@ def pull_to_commit(commit_hash: str) -> Tuple[bool, str]:
         return False, blocked_message
 
     try:
-        success, output = run_git_command(['reset', '--hard', commit_hash], timeout=120)
+        success, output = run_git_command(
+            ['rev-parse', '--verify', f'{commit_hash}^{{commit}}']
+        )
+        if not success:
+            return False, f"❌ Коммит обновления недоступен:\n{output}"
+
+        success, output, snapshot_error = _run_snapshotted_git_mutation(
+            ['reset', '--hard', commit_hash],
+            update_mode=update_mode,
+            requested_target=commit_hash,
+            actor=actor,
+            timeout=120,
+        )
+        if snapshot_error:
+            return False, snapshot_error or "❌ Не удалось создать backup перед обновлением."
         if not success:
             logger.error(f"Ошибка pull_to_commit({commit_hash}): {output}")
             return False, f"❌ Ошибка обновления до коммита {commit_hash[:8]}:\n{output}"
@@ -284,7 +381,11 @@ def check_for_updates() -> Tuple[bool, int, str, bool, Optional[Dict[str, str]],
     return True, commits_behind, log_text, has_blocking, blocking_commit, is_beta_only
 
 
-def pull_updates() -> Tuple[bool, str]:
+def pull_updates(
+    *,
+    update_mode: str = "admin_pull",
+    actor: Optional[str] = None,
+) -> Tuple[bool, str]:
     """
     Performs a git pull to update the code.
     
@@ -298,8 +399,17 @@ def pull_updates() -> Tuple[bool, str]:
     success, status = run_git_command(['status', '--porcelain'])
     if success and status.strip():
         return False, "❌ Есть локальные изменения. Сделайте commit или stash перед обновлением."
-    
-    success, output = run_git_command(['pull', 'origin'], timeout=120)
+
+    branch = get_current_branch() or "main"
+    success, output, snapshot_error = _run_snapshotted_git_mutation(
+        ['pull', 'origin'],
+        update_mode=update_mode,
+        requested_target=f"origin/{branch}",
+        actor=actor,
+        timeout=120,
+    )
+    if snapshot_error:
+        return False, snapshot_error or "❌ Не удалось создать backup перед обновлением."
     
     if not success:
         if 'conflict' in output.lower():
@@ -310,7 +420,11 @@ def pull_updates() -> Tuple[bool, str]:
     return True, f"✅ Обновление успешно!\n\n🔹 Последний коммит:\n<pre>{commit_info}</pre>"
 
 
-def force_pull_updates() -> Tuple[bool, str]:
+def force_pull_updates(
+    *,
+    update_mode: str = "admin_force",
+    actor: Optional[str] = None,
+) -> Tuple[bool, str]:
     """
     Performs a forced git fetch and reset, completely overwriting local changes.
     
@@ -333,9 +447,21 @@ def force_pull_updates() -> Tuple[bool, str]:
     branch = get_current_branch()
     if not branch:
         branch = "main"
-        
-    # Force a reset to a remote branch - blocking markers are ignored
-    success, output = run_git_command(['reset', '--hard', f'origin/{branch}'], timeout=120)
+
+    target = f'origin/{branch}'
+    success, output = run_git_command(['rev-parse', '--verify', f'{target}^{{commit}}'])
+    if not success:
+        return False, f"❌ Целевой коммит обновления недоступен:\n{output}"
+
+    success, output, snapshot_error = _run_snapshotted_git_mutation(
+        ['reset', '--hard', target],
+        update_mode=update_mode,
+        requested_target=target,
+        actor=actor,
+        timeout=120,
+    )
+    if snapshot_error:
+        return False, snapshot_error or "❌ Не удалось создать backup перед обновлением."
     if not success:
         return False, f"❌ Ошибка принудительного обновления:\n{output}"
         

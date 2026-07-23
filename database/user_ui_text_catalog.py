@@ -71,19 +71,19 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
     ),
     UserUITextDefinition(
         "key.status.active",
-        "🟢 Активен",
+        "🟢",
         "plain",
         "Display status for an active VPN key.",
     ),
     UserUITextDefinition(
         "key.status.expired",
-        "🔴 Истёк",
+        "🔴",
         "plain",
         "Display status for an expired VPN key.",
     ),
     UserUITextDefinition(
         "key.status.traffic_exhausted",
-        "🔴 Трафик исчерпан",
+        "🔴",
         "plain",
         "Display status for a VPN key with exhausted traffic.",
     ),

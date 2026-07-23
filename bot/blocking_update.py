@@ -38,7 +38,7 @@ def check_unblock_conditions():
     return get_setting('referral_enabled', '0') == '1'
 """
 
-REQUIRED_SCHEMA_VERSION = 84
+REQUIRED_SCHEMA_VERSION = 85
 
 BLOCKING_MESSAGE = (
     "🔒 <b>Обновление 10.1 проверяет обязательную миграцию</b>\n\n"
@@ -53,7 +53,7 @@ BLOCKING_MESSAGE = (
 
 
 def check_unblock_conditions() -> bool:
-    """Unlock further updates only after the v84 migration fully completes."""
+    """Unlock further updates only after the v85 migration fully completes."""
     from database.migrations import LATEST_VERSION, get_current_version
 
     return (

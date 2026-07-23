@@ -131,7 +131,6 @@ def _format_user_card(user: dict) -> tuple[str, any]:
         base_totals = payment_stats.get('base_totals') or {}
         last_payment = format_datetime_for_display(payment_stats.get('last_payment_at'), fallback='?')
         lines.append(f'  📊 Всего платежей: {total_payments}')
-        from bot.services.money import format_money_minor
 
         for currency, amount in sorted(base_totals.items()):
             if int(amount or 0) > 0:

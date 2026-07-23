@@ -15,7 +15,6 @@ from database.requests import (
     clear_user_active_promo_code,
     create_auto_coupon_for_user,
     get_promo_code_availability,
-    get_promo_code_by_id,
     get_promo_code_by_source,
     get_user_active_promo_code,
     reserve_promo_for_order,
@@ -149,7 +148,11 @@ def build_quote(
     promo_error = None
 
     if explicit_code:
-        availability = get_promo_code_availability(explicit_code, order_id=order_id)
+        availability = get_promo_code_availability(
+            explicit_code,
+            order_id=order_id,
+            user_id=user_id,
+        )
         if availability.get("ok"):
             promo = availability.get("promo")
         else:
@@ -157,7 +160,11 @@ def build_quote(
     else:
         promo = get_user_active_promo_code(user_id, order_id=order_id)
         if promo:
-            availability = get_promo_code_availability(promo["code"], order_id=order_id)
+            availability = get_promo_code_availability(
+                promo["code"],
+                order_id=order_id,
+                user_id=user_id,
+            )
             if not availability.get("ok"):
                 promo = None
 
@@ -330,7 +337,10 @@ def prepare_order_pricing(
 
 def activate_promo_code_for_user(user_id: int, code: str, *, allow_coupons: bool = True) -> Dict[str, Any]:
     """Checks the code and saves it to the user as active for the next payment."""
-    availability = get_promo_code_availability((code or "").strip())
+    availability = get_promo_code_availability(
+        (code or "").strip(),
+        user_id=user_id,
+    )
     if not availability.get("ok"):
         return {
             "ok": False,
@@ -389,9 +399,11 @@ def apply_order_promotion_after_payment(order: Dict[str, Any]) -> Optional[Dict[
         return None
 
     redemption = apply_promo_for_order(order["order_id"])
-    promo = get_promo_code_by_id(order["promo_code_id"])
-    if promo and promo.get("type") == "coupon":
-        clear_user_active_promo_code(order["user_id"])
+    if redemption:
+        clear_user_active_promo_code(
+            order["user_id"],
+            promo_code_id=redemption["promo_code_id"],
+        )
     return redemption
 
 

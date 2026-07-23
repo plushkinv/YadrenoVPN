@@ -38,7 +38,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 73
 
 # Current version of the database schema (incremented when new migrations are added)
-LATEST_VERSION = 84
+LATEST_VERSION = 85
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
     "schema_version": 1,
@@ -3180,6 +3180,49 @@ def migration_84(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_85(conn: sqlite3.Connection) -> None:
+    """Migration v85: use indicator-only key statuses and space legacy rows."""
+    status_keys = {
+        'key.status.active',
+        'key.status.expired',
+        'key.status.traffic_exhausted',
+    }
+    update_user_ui_text_defaults(
+        (
+            definition
+            for definition in USER_UI_TEXT_DEFINITIONS
+            if definition.text_key in status_keys
+        ),
+        conn=conn,
+    )
+
+    legacy_item_template = (
+        "%key(field=status)%<b>%key(field=name)%</b> - "
+        "%key(field=traffic)% - до %key(field=expires_at)%\n"
+        "     📍%key(field=server)% - %key(field=inbound)% "
+        "(%key(field=protocol)%)"
+    )
+    spaced_item_template = legacy_item_template.replace(
+        "%key(field=status)%<b>",
+        "%key(field=status)% <b>",
+        1,
+    )
+    cursor = conn.execute(
+        """
+        UPDATE settings
+        SET value = ?
+        WHERE key = 'my_keys_item_template'
+          AND value = ?
+        """,
+        (spaced_item_template, legacy_item_template),
+    )
+    logger.info(
+        "Migration v85 applied: key statuses use indicators only "
+        "(legacy_template_spaced=%s)",
+        cursor.rowcount > 0,
+    )
+
+
 MIGRATIONS = {
     74: migration_74,
     75: migration_75,
@@ -3192,6 +3235,7 @@ MIGRATIONS = {
     82: migration_82,
     83: migration_83,
     84: migration_84,
+    85: migration_85,
 }
 
 

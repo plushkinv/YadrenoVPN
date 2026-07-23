@@ -285,26 +285,71 @@ def get_promo_codes(code_type: Optional[str] = None, *, include_inactive: bool =
         return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
 
-def _usage_count_for_limit(conn, promo_id: int, exclude_order_id: Optional[str] = None) -> int:
+def _usage_count_for_limit(
+    conn,
+    promo_id: int,
+    exclude_order_id: Optional[str] = None,
+    exclude_reserved_user_id: Optional[int] = None,
+) -> int:
     params: List[Any] = [promo_id]
-    exclude_sql = ""
+    conditions = [
+        "promo_code_id = ?",
+        "status IN ('reserved', 'applied')",
+    ]
     if exclude_order_id:
-        exclude_sql = " AND order_id != ?"
+        conditions.append("order_id != ?")
         params.append(exclude_order_id)
+    if exclude_reserved_user_id is not None:
+        conditions.append("NOT (status = 'reserved' AND user_id = ?)")
+        params.append(int(exclude_reserved_user_id))
     row = conn.execute(
         f"""
         SELECT COUNT(*) AS cnt
         FROM promo_redemptions
-        WHERE promo_code_id = ?
-          AND status IN ('reserved', 'applied')
-          {exclude_sql}
+        WHERE {' AND '.join(conditions)}
         """,
         params,
     ).fetchone()
     return int(row["cnt"] if row else 0)
 
 
-def _availability_for_row(conn, promo: Dict[str, Any], order_id: Optional[str] = None) -> Dict[str, Any]:
+def _user_redemption_status(
+    conn,
+    *,
+    promo_id: int,
+    user_id: int,
+    current_order_id: Optional[str] = None,
+) -> Optional[str]:
+    conditions = [
+        "promo_code_id = ?",
+        "user_id = ?",
+        "status IN ('reserved', 'applied')",
+    ]
+    params: List[Any] = [int(promo_id), int(user_id)]
+    if current_order_id:
+        conditions.append("NOT (status = 'reserved' AND order_id = ?)")
+        params.append(str(current_order_id))
+    row = conn.execute(
+        f"""
+        SELECT status
+        FROM promo_redemptions
+        WHERE {' AND '.join(conditions)}
+        ORDER BY CASE status WHEN 'applied' THEN 0 ELSE 1 END, id DESC
+        LIMIT 1
+        """,
+        params,
+    ).fetchone()
+    return str(row["status"]) if row else None
+
+
+def _availability_for_row(
+    conn,
+    promo: Dict[str, Any],
+    order_id: Optional[str] = None,
+    *,
+    user_id: Optional[int] = None,
+    block_user_reservations: bool = False,
+) -> Dict[str, Any]:
     if not promo:
         return {"ok": False, "reason": "not_found", "promo": None}
     if not int(promo.get("is_active") or 0):
@@ -319,22 +364,54 @@ def _availability_for_row(conn, promo: Dict[str, Any], order_id: Optional[str] =
         if row and int(row["expired"] or 0):
             return {"ok": False, "reason": "expired", "promo": promo}
 
+    user_redemption_status = None
+    if user_id is not None:
+        user_redemption_status = _user_redemption_status(
+            conn,
+            promo_id=int(promo["id"]),
+            user_id=int(user_id),
+            current_order_id=order_id,
+        )
+        if user_redemption_status == "applied":
+            return {"ok": False, "reason": "already_used", "promo": promo}
+        if user_redemption_status == "reserved" and block_user_reservations:
+            return {"ok": False, "reason": "already_reserved", "promo": promo}
+
     effective_limit = 1 if promo.get("type") == "coupon" else promo.get("activation_limit")
     if effective_limit:
-        used = _usage_count_for_limit(conn, int(promo["id"]), exclude_order_id=order_id)
+        used = _usage_count_for_limit(
+            conn,
+            int(promo["id"]),
+            exclude_order_id=order_id,
+            exclude_reserved_user_id=(
+                int(user_id)
+                if user_redemption_status == "reserved" and not block_user_reservations
+                else None
+            ),
+        )
         if used >= int(effective_limit):
             return {"ok": False, "reason": "exhausted", "promo": promo}
 
     return {"ok": True, "reason": None, "promo": promo}
 
 
-def get_promo_code_availability(code: str, order_id: Optional[str] = None) -> Dict[str, Any]:
+def get_promo_code_availability(
+    code: str,
+    order_id: Optional[str] = None,
+    *,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM promo_codes WHERE code = ?",
             ((code or "").strip(),),
         ).fetchone()
-        return _availability_for_row(conn, dict(row) if row else None, order_id=order_id)
+        return _availability_for_row(
+            conn,
+            dict(row) if row else None,
+            order_id=order_id,
+            user_id=user_id,
+        )
 
 
 def has_available_promo_codes() -> bool:
@@ -428,12 +505,25 @@ def set_user_active_promo_code(user_id: int, promo_code_id: int) -> bool:
         return cursor.rowcount > 0
 
 
-def clear_user_active_promo_code(user_id: int) -> bool:
+def clear_user_active_promo_code(
+    user_id: int,
+    promo_code_id: Optional[int] = None,
+) -> bool:
     with get_db() as conn:
-        cursor = conn.execute(
-            "UPDATE users SET active_promo_code_id = NULL WHERE id = ?",
-            (user_id,),
-        )
+        if promo_code_id is None:
+            cursor = conn.execute(
+                "UPDATE users SET active_promo_code_id = NULL WHERE id = ?",
+                (user_id,),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                UPDATE users
+                SET active_promo_code_id = NULL
+                WHERE id = ? AND active_promo_code_id = ?
+                """,
+                (user_id, promo_code_id),
+            )
         return cursor.rowcount > 0
 
 
@@ -451,7 +541,12 @@ def get_user_active_promo_code(user_id: int, order_id: Optional[str] = None) -> 
         promo = _row_to_dict(row)
         if not promo:
             return None
-        availability = _availability_for_row(conn, promo, order_id=order_id)
+        availability = _availability_for_row(
+            conn,
+            promo,
+            order_id=order_id,
+            user_id=user_id,
+        )
         if not availability["ok"]:
             conn.execute("UPDATE users SET active_promo_code_id = NULL WHERE id = ?", (user_id,))
             return None
@@ -554,11 +649,18 @@ def reserve_promo_for_order(
     amount_unit: str,
 ) -> Dict[str, Any]:
     with get_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         promo_row = conn.execute(
             "SELECT * FROM promo_codes WHERE id = ?",
             (promo["id"],),
         ).fetchone()
-        availability = _availability_for_row(conn, dict(promo_row) if promo_row else None, order_id=order_id)
+        availability = _availability_for_row(
+            conn,
+            dict(promo_row) if promo_row else None,
+            order_id=order_id,
+            user_id=user_id,
+            block_user_reservations=True,
+        )
         if not availability["ok"]:
             return availability
 
@@ -620,14 +722,21 @@ def apply_promo_for_order(order_id: str) -> Optional[Dict[str, Any]]:
         if redemption.get("status") != "reserved":
             return None
 
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE promo_redemptions
             SET status = 'applied', applied_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+            WHERE id = ? AND status = 'reserved'
             """,
             (redemption["id"],),
         )
+        if cursor.rowcount <= 0:
+            refreshed = conn.execute(
+                "SELECT * FROM promo_redemptions WHERE id = ?",
+                (redemption["id"],),
+            ).fetchone()
+            current = _row_to_dict(refreshed)
+            return current if current and current.get("status") == "applied" else None
         conn.execute(
             """
             UPDATE promo_codes

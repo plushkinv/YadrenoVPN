@@ -103,6 +103,13 @@ async def on_startup(bot: Bot):
     bot_info = await bot.get_me()
     bot.my_username = bot_info.username
     logger.info(f"✅ Бот запущен: @{bot_info.username}")
+
+    from bot.services.update_rollback import notify_pending_rollback_result
+
+    try:
+        await notify_pending_rollback_result(bot)
+    except Exception as e:
+        logger.warning(f"Не удалось отправить результат отката обновления: {e}")
     
     # If updates are blocked, we immediately notify the admins
     from bot.utils.update_block import is_update_blocked, get_blocked_message

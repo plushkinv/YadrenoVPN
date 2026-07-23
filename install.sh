@@ -9,10 +9,12 @@
 # bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) install <BOT_TOKEN> <ADMIN_ID>
 # bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) update [COMMIT_OR_BRANCH]
 # bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) reset [COMMIT_OR_BRANCH]
+# bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) rollback
 #
 # 2. Локальный запуск (если репозиторий уже установлен и нужно просто обновить/сбросить):
 # bash install.sh update [COMMIT_OR_BRANCH]
 # bash install.sh reset [COMMIT_OR_BRANCH]
+# bash install.sh rollback
 
 set -e
 
@@ -20,6 +22,7 @@ INSTALL_DIR="/root/YadrenoVPN"
 REPO_URL="https://github.com/plushkinv/YadrenoVPN.git"
 VENV_DIR="$INSTALL_DIR/venv"
 SERVICE_FILE="yadreno-vpn.service"
+DB_PATH="$INSTALL_DIR/database/vpn_bot.db"
 
 # Цвета для вывода
 RED='\033[0;31m'
@@ -44,6 +47,74 @@ print_warn() {
 
 print_err() {
     echo -e "${RED}[✗]${NC} $1"
+}
+
+# Создание обязательной точки отката перед изменением Git-версии
+prepare_update_snapshot() {
+    local update_mode="$1"
+    local requested_target="$2"
+    local python_bin="$VENV_DIR/bin/python"
+
+    if [ ! -x "$python_bin" ]; then
+        print_err "Python из виртуального окружения не найден: $python_bin"
+        return 1
+    fi
+
+    local output
+    if ! output=$(
+        cd "$INSTALL_DIR" &&
+        "$python_bin" -m bot.services.update_rollback prepare \
+            --project-root "$INSTALL_DIR" \
+            --mode "$update_mode" \
+            --requested-target "$requested_target" \
+            --actor "installer"
+    ); then
+        print_err "Не удалось создать и проверить backup базы данных. Обновление отменено."
+        return 1
+    fi
+
+    UPDATE_SNAPSHOT_ID=$(echo "$output" | tail -n 1 | tr -d '\r')
+    if [ -z "$UPDATE_SNAPSHOT_ID" ]; then
+        print_err "Исполнитель backup не вернул идентификатор точки отката"
+        return 1
+    fi
+    print_ok "Создан pre-update backup: $UPDATE_SNAPSHOT_ID"
+}
+
+# Фиксация целевого коммита после успешного изменения Git-версии
+mark_update_snapshot_applied() {
+    local python_bin="$VENV_DIR/bin/python"
+    local runner="$INSTALL_DIR/backup/pre_update/$UPDATE_SNAPSHOT_ID/rollback_runner.py"
+
+    if [ -z "$UPDATE_SNAPSHOT_ID" ] || [ ! -f "$runner" ]; then
+        print_err "Не найден исполнитель созданной точки отката"
+        return 1
+    fi
+    "$python_bin" "$runner" mark-applied \
+        --project-root "$INSTALL_DIR" \
+        --snapshot-id "$UPDATE_SNAPSHOT_ID" \
+        > /dev/null
+    print_ok "Точка отката привязана к установленному коммиту"
+}
+
+# Общая блокировка не допускает одновременный update и rollback
+acquire_update_operation_lock() {
+    if ! command -v flock > /dev/null 2>&1; then
+        print_err "Команда flock не найдена; безопасное обновление невозможно"
+        return 1
+    fi
+    mkdir -p "$INSTALL_DIR/backup/pre_update"
+    exec 9> "$INSTALL_DIR/backup/pre_update/.operation.lock"
+    if ! flock -n 9; then
+        print_err "Уже выполняется другое обновление или откат"
+        exec 9>&-
+        return 1
+    fi
+}
+
+release_update_operation_lock() {
+    flock -u 9 2>/dev/null || true
+    exec 9>&-
 }
 
 # Запрос настроек у пользователя
@@ -209,8 +280,8 @@ do_install() {
             cp "$INSTALL_DIR/config.py" /tmp/yadreno_config_backup.py
             BACKUP_CONFIG=1
         fi
-        if [ -f "$INSTALL_DIR/vpn_bot.db" ]; then
-            cp "$INSTALL_DIR/vpn_bot.db" /tmp/yadreno_db_backup.db
+        if [ -f "$DB_PATH" ]; then
+            cp "$DB_PATH" /tmp/yadreno_db_backup.db
             BACKUP_DB=1
         fi
         rm -rf "$INSTALL_DIR"
@@ -236,7 +307,8 @@ do_install() {
         NEED_WRITE_CONFIG=0
     fi
     if [ "$BACKUP_DB" = "1" ] && [ -f "/tmp/yadreno_db_backup.db" ]; then
-        cp /tmp/yadreno_db_backup.db "$INSTALL_DIR/vpn_bot.db"
+        mkdir -p "$INSTALL_DIR/database"
+        cp /tmp/yadreno_db_backup.db "$DB_PATH"
         rm /tmp/yadreno_db_backup.db
         print_ok "База данных восстановлена из резервной копии"
     fi
@@ -269,6 +341,8 @@ do_install() {
 # ============================================================
 do_soft_update() {
     print_header "🔄 Мягкое обновление"
+    STASHED=0
+    UPDATE_SNAPSHOT_ID=""
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
         print_err "Yadreno VPN не установлен в $INSTALL_DIR"
@@ -276,6 +350,13 @@ do_soft_update() {
     fi
 
     cd "$INSTALL_DIR"
+    acquire_update_operation_lock
+
+    local requested_target="origin/main"
+    if [ -n "$TARGET_COMMIT" ]; then
+        requested_target="$TARGET_COMMIT"
+    fi
+    prepare_update_snapshot "installer_update" "$requested_target"
 
     # Сохраняем текущие изменения в stash (если есть)
     if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
@@ -296,6 +377,8 @@ do_soft_update() {
         git stash pop -q 2>/dev/null || print_warn "Не удалось восстановить локальные изменения (конфликт)"
     fi
 
+    mark_update_snapshot_applied
+
     print_ok "Код обновлён"
 
     # Обновляем зависимости
@@ -314,6 +397,7 @@ do_soft_update() {
         print_err "Бот не запустился после обновления"
         echo "  systemctl status yadreno-vpn"
     fi
+    release_update_operation_lock
 }
 
 # ============================================================
@@ -321,6 +405,7 @@ do_soft_update() {
 # ============================================================
 do_hard_reset() {
     print_header "⚠️  Жёсткая перезапись"
+    UPDATE_SNAPSHOT_ID=""
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
         print_err "Yadreno VPN не установлен в $INSTALL_DIR"
@@ -328,7 +413,7 @@ do_hard_reset() {
     fi
 
     echo -e "${RED}Внимание! Все локальные изменения в коде будут перезаписаны.${NC}"
-    echo -e "${YELLOW}config.py и vpn_bot.db затронуты НЕ будут.${NC}"
+    echo -e "${YELLOW}config.py и database/vpn_bot.db затронуты НЕ будут.${NC}"
     if [ "$AUTO_MODE" = "1" ]; then
         confirm="y"
     else
@@ -340,15 +425,26 @@ do_hard_reset() {
     fi
 
     cd "$INSTALL_DIR"
+    acquire_update_operation_lock
 
-    # Жёсткая перезапись: config.py и vpn_bot.db в .gitignore — не затрагиваются
+    # Жёсткая перезапись: config.py и database/vpn_bot.db игнорируются Git
     git fetch origin -q
     local target="origin/main"
     if [ -n "$TARGET_COMMIT" ]; then
         target="$TARGET_COMMIT"
     fi
+    prepare_update_snapshot "installer_reset" "$target"
     git reset --hard "$target" -q
-    git clean -fd -q
+    git clean -fd -q \
+        -e backup/ \
+        -e config.py \
+        -e custom_extensions/ \
+        -e database/vpn_bot.db \
+        -e database/vpn_bot.db-wal \
+        -e database/vpn_bot.db-shm \
+        -e logs/ \
+        -e venv/
+    mark_update_snapshot_applied
     print_ok "Код перезаписан ($target)"
 
     # Обновляем зависимости
@@ -367,6 +463,28 @@ do_hard_reset() {
         print_err "Бот не запустился после перезаписи"
         echo "  systemctl status yadreno-vpn"
     fi
+    release_update_operation_lock
+}
+
+# ============================================================
+# ПУНКТ 4: ОТКАТ ПО PRE-UPDATE BACKUP
+# ============================================================
+do_rollback() {
+    print_header "↩️ Откат обновления"
+
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
+        print_err "Yadreno VPN не установлен в $INSTALL_DIR"
+        return 1
+    fi
+    if [ ! -x "$VENV_DIR/bin/python" ]; then
+        print_err "Python из виртуального окружения не найден: $VENV_DIR/bin/python"
+        return 1
+    fi
+
+    cd "$INSTALL_DIR"
+    "$VENV_DIR/bin/python" -m bot.services.update_rollback interactive \
+        --project-root "$INSTALL_DIR" \
+        --service-name "yadreno-vpn"
 }
 
 # ============================================================
@@ -382,15 +500,17 @@ show_menu() {
     echo "  1) 🚀 Установка"
     echo "  2) 🔄 Мягкое обновление (git pull)"
     echo "  3) ⚠️  Жёсткая перезапись (с GitHub)"
+    echo "  4) ↩️  Откат обновления"
     echo ""
     echo "  0) Выход"
     echo ""
-    read -p "  Выберите действие [0-3]: " choice
+    read -p "  Выберите действие [0-4]: " choice
 
     case $choice in
         1) do_install ;;
         2) do_soft_update ;;
         3) do_hard_reset ;;
+        4) do_rollback ;;
         0) echo "Пока! 👋"; exit 0 ;;
         *) echo "Неверный выбор"; return 1 ;;
     esac
@@ -426,8 +546,11 @@ if [ -n "$1" ]; then
             export TARGET_COMMIT="$2"
             do_hard_reset 
             ;;
+        rollback)
+            do_rollback
+            ;;
         *)
-            print_err "Неизвестное действие: $ACTION. Доступно: install, update, reset"
+            print_err "Неизвестное действие: $ACTION. Доступно: install, update, reset, rollback"
             exit 1
             ;;
     esac

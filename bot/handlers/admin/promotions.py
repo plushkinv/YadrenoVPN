@@ -87,7 +87,8 @@ async def admin_promocodes(callback: CallbackQuery, state: FSMContext):
     promocodes = get_promo_codes("promo")
     text = (
         "🎟 <b>Промокоды</b>\n\n"
-        "Промокоды многоразовые. Их можно вводить вручную при оплате, а ещё каждый промокод работает как промо-ссылка формата "
+        "Промокоды многоразовые для разных клиентов, но каждый пользователь может применить один и тот же код только один раз. "
+        "Их можно вводить вручную при оплате, а ещё каждый промокод работает как промо-ссылка формата "
         f"<code>https://{escape_html(get_telegram_link_domain())}/&lt;bot&gt;?start=pr_CODE</code>.\n\n"
         "Промо-ссылки удобно использовать в рекламе и партнёрских размещениях: бот сохранит код пользователю, а успешная покупка попадёт в аналитику."
     )
@@ -147,7 +148,14 @@ async def promocode_add_expires(message: Message, state: FSMContext):
         return
     await state.update_data(promocode_expires=expires_at)
     await state.set_state(AdminStates.promocode_add_limit)
-    await safe_edit_or_send(message, "🔢 <b>Лимит активаций</b>\n\nВведите количество применений или <code>0</code> для многоразового промокода без лимита.", reply_markup=promotion_cancel_kb("admin_promocodes"), force_new=True)
+    await safe_edit_or_send(
+        message,
+        "🔢 <b>Лимит активаций</b>\n\n"
+        "Введите общее количество применений разными пользователями или <code>0</code> без общего лимита. "
+        "Один пользователь в любом случае может применить этот промокод только один раз.",
+        reply_markup=promotion_cancel_kb("admin_promocodes"),
+        force_new=True,
+    )
 
 
 @router.message(AdminStates.promocode_add_limit, F.text, ~F.text.startswith("/"))

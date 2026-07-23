@@ -118,13 +118,19 @@ def force_overwrite_confirm_kb() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text='❌ Нет, отмена', callback_data='admin_bot_settings'))
     return builder.as_markup()
 
-def update_confirm_kb(has_updates: bool=True, has_blocking: bool=False, is_beta_only: bool=False) -> InlineKeyboardMarkup:
+def update_confirm_kb(
+    has_updates: bool = True,
+    has_blocking: bool = False,
+    is_beta_only: bool = False,
+    has_rollback_points: bool = False,
+) -> InlineKeyboardMarkup:
     """Bot update confirmation keyboard.
     
     Args:
         has_updates: Are there any updates available?
         has_blocking: Whether there is a blocking commit among the updates
         is_beta_only: Whether all available updates are beta versions
+        has_rollback_points: Whether at least one verified rollback point exists
     """
     builder = InlineKeyboardBuilder()
     if has_updates:
@@ -140,6 +146,14 @@ def update_confirm_kb(has_updates: bool=True, has_blocking: bool=False, is_beta_
             button_text = '✅ Обновить и перезапустить'
             callback = 'admin_update_bot_confirm'
             builder.row(InlineKeyboardButton(text=button_text, callback_data=callback))
+
+    if has_rollback_points:
+        builder.row(
+            InlineKeyboardButton(
+                text='↩️ Откатить обновление',
+                callback_data='admin_update_rollback',
+            )
+        )
     
     builder.row(InlineKeyboardButton(text='⚠️ Принудительно перезаписать', callback_data='admin_force_overwrite_confirm'))
     
@@ -147,6 +161,55 @@ def update_confirm_kb(has_updates: bool=True, has_blocking: bool=False, is_beta_
         builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_bot_settings'))
     else:
         builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_bot_settings'))
+    return builder.as_markup()
+
+
+def update_rollback_entry_kb(
+    *,
+    has_rollback_points: bool,
+    back_callback: str = 'admin_bot_settings',
+) -> InlineKeyboardMarkup:
+    """Navigation for update error or blocked screens."""
+    builder = InlineKeyboardBuilder()
+    if has_rollback_points:
+        builder.row(
+            InlineKeyboardButton(
+                text='↩️ Откатить обновление',
+                callback_data='admin_update_rollback',
+            )
+        )
+    builder.row(back_button(back_callback), home_button())
+    return builder.as_markup()
+
+
+def update_rollback_points_kb(points: List[Any]) -> InlineKeyboardMarkup:
+    """Build the list of available pre-update rollback points."""
+    builder = InlineKeyboardBuilder()
+    for point in points:
+        created = point.created_at.astimezone()
+        builder.row(
+            InlineKeyboardButton(
+                text=(
+                    f'↩️ {point.display_release} · '
+                    f'{point.source_short_commit} · {created:%d.%m %H:%M}'
+                ),
+                callback_data=f'admin_rb_pick:{point.snapshot_id}',
+            )
+        )
+    builder.row(back_button('admin_update_bot'), home_button())
+    return builder.as_markup()
+
+
+def update_rollback_confirm_kb(snapshot_id: str) -> InlineKeyboardMarkup:
+    """Confirmation keyboard for a selected update rollback point."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text='↩️ Подтвердить откат',
+            callback_data=f'admin_rb_go:{snapshot_id}',
+        )
+    )
+    builder.row(back_button('admin_update_rollback'), home_button())
     return builder.as_markup()
 
 def author_support_kb() -> InlineKeyboardMarkup:

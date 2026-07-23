@@ -43,6 +43,7 @@ from bot.services.panel_sync import (
     run_db_to_panel_sync,
 )
 from bot.services.panel_sync_coordinator import panel_sync_coordinator
+from bot.services.update_rollback import cleanup_pre_update_snapshots
 from bot.utils.git_utils import check_for_updates
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock
 from bot.utils.delivery import is_bot_blocked_error
@@ -558,9 +559,9 @@ def cleanup_old_backups() -> None:
     """
     Recursively deletes any files and links older than the retention period.
 
-    Names and extensions are not taken into account: the backup directory is only for
-    for temporary backups. Symbolic links are not bypassed.
-    After deleting files, empty subfolders are cleared.
+    Pre-update snapshot bundles use the same seven-day policy, but are removed
+    as complete directories and are additionally capped at three applied points.
+    Other backup files retain the generic mtime-based cleanup behavior.
     """
     if not os.path.exists(BACKUP_DIR):
         return
@@ -573,8 +574,26 @@ def cleanup_old_backups() -> None:
         datetime.now() - timedelta(days=BACKUP_RETENTION_DAYS)
     ).timestamp()
     removed_count = 0
+    pre_update_root = os.path.abspath(
+        os.path.join(backup_root, "pre_update")
+    )
 
     try:
+        configured_backup_root = os.path.abspath(
+            os.path.join(PROJECT_ROOT, "backup")
+        )
+        if backup_root == configured_backup_root:
+            try:
+                removed_count += cleanup_pre_update_snapshots(
+                    project_root=PROJECT_ROOT,
+                    retention_days=BACKUP_RETENTION_DAYS,
+                    max_points=3,
+                )
+            except Exception as e:
+                logger.error(
+                    "Ошибка при очистке pre-update backup: %s",
+                    e,
+                )
         for current_root, dirnames, filenames in os.walk(
             backup_root,
             topdown=False,
@@ -583,6 +602,15 @@ def cleanup_old_backups() -> None:
             current_root = os.path.abspath(current_root)
             if os.path.commonpath([backup_root, current_root]) != backup_root:
                 logger.error("Пропущен путь за пределами backup: %s", current_root)
+                continue
+            if (
+                current_root == pre_update_root
+                or (
+                    os.path.exists(pre_update_root)
+                    and os.path.commonpath([pre_update_root, current_root])
+                    == pre_update_root
+                )
+            ):
                 continue
 
             for filename in filenames:

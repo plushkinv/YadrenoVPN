@@ -37,6 +37,9 @@ from bot.keyboards.admin import (
     bot_mode_toggle_confirm_kb,
     extensions_diagnostics_kb,
     update_confirm_kb,
+    update_rollback_entry_kb,
+    update_rollback_points_kb,
+    update_rollback_confirm_kb,
     force_overwrite_confirm_kb,
     stop_bot_confirm_kb,
     back_and_home_kb,
@@ -51,6 +54,13 @@ from bot.services.yadreno_admin import (
     run_dialog_with_uploads,
 )
 from bot.services.panel_sync_coordinator import regular_panel_operation
+from bot.services.update_rollback import (
+    UpdateRollbackError,
+    get_current_version_identity,
+    get_rollback_point,
+    list_rollback_points,
+    schedule_admin_rollback,
+)
 from bot.states.admin_states import AdminStates
 from database.requests import get_yadreno_admin_api_key, set_setting
 
@@ -716,7 +726,10 @@ async def admin_update_cmd(message: Message, state: FSMContext):
         "Загружаю изменения с GitHub..."
     )
     
-    success, log_message = pull_updates()
+    success, log_message = pull_updates(
+        update_mode="admin_emergency",
+        actor=f"telegram_admin:{message.from_user.id}",
+    )
     
     if not success:
         await safe_edit_or_send(message,
@@ -759,6 +772,13 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
+
+    try:
+        rollback_points = await asyncio.to_thread(list_rollback_points)
+    except Exception as exc:
+        logger.warning("Не удалось получить точки отката обновлений: %s", exc)
+        rollback_points = []
+    has_rollback_points = bool(rollback_points)
     
     # Checking if GitHub is configured
     if not GITHUB_REPO_URL:
@@ -766,7 +786,9 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             "❌ <b>GitHub не настроен</b>\n\n"
             "Укажите URL репозитория в файле <code>config.py</code>:\n"
             "<code>GITHUB_REPO_URL = \"https://github.com/user/repo.git\"</code>",
-            reply_markup=back_and_home_kb("admin_bot_settings")
+            reply_markup=update_rollback_entry_kb(
+                has_rollback_points=has_rollback_points,
+            ),
         )
         await callback.answer()
         return
@@ -782,7 +804,9 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
     if is_update_blocked():
         await safe_edit_or_send(callback.message,
             get_blocked_message(),
-            reply_markup=back_and_home_kb("admin_bot_settings")
+            reply_markup=update_rollback_entry_kb(
+                has_rollback_points=has_rollback_points,
+            ),
         )
         await callback.answer()
         return
@@ -799,7 +823,9 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
     if not success:
         await safe_edit_or_send(callback.message, 
             f"❌ <b>Ошибка проверки</b>\n\n{log_text}",
-            reply_markup=back_and_home_kb("admin_bot_settings")
+            reply_markup=update_rollback_entry_kb(
+                has_rollback_points=has_rollback_points,
+            ),
         )
         await callback.answer()
         return
@@ -832,7 +858,10 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             "✅ <b>Обновление не требуется, у вас последняя версия</b>\n\n"
             f"{installed_version_text}\n\n"
             f"{commits_text}",
-            reply_markup=update_confirm_kb(has_updates=False)
+            reply_markup=update_confirm_kb(
+                has_updates=False,
+                has_rollback_points=has_rollback_points,
+            ),
         )
     elif has_blocking and blocking_commit:
         # Install the marked version as a separate update stage.
@@ -848,7 +877,11 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             "Обновление пройдёт отдельным этапом, после чего бот автоматически "
             "перезапустится. Если потребуется дополнительная настройка, бот сообщит об этом после запуска.\n\n"
             f"{commits_text}",
-            reply_markup=update_confirm_kb(has_updates=True, has_blocking=True)
+            reply_markup=update_confirm_kb(
+                has_updates=True,
+                has_blocking=True,
+                has_rollback_points=has_rollback_points,
+            ),
         )
     elif is_beta_only:
         # Beta updates only
@@ -858,7 +891,12 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             f"{installed_version_text}\n\n"
             f"{commits_text}\n\n"
             "⚠️ Это тестовая версия. Устанавливайте на свой страх и риск.",
-            reply_markup=update_confirm_kb(has_updates=True, has_blocking=False, is_beta_only=True)
+            reply_markup=update_confirm_kb(
+                has_updates=True,
+                has_blocking=False,
+                is_beta_only=True,
+                has_rollback_points=has_rollback_points,
+            ),
         )
     else:
         # There are regular updates
@@ -868,10 +906,151 @@ async def show_update_confirm(callback: CallbackQuery, state: FSMContext):
             f"{commits_text}\n\n"
             "⚠️ После обновления бот автоматически перезапустится.\n"
             "Это займёт несколько секунд.",
-            reply_markup=update_confirm_kb(has_updates=True, has_blocking=False, is_beta_only=False)
+            reply_markup=update_confirm_kb(
+                has_updates=True,
+                has_blocking=False,
+                is_beta_only=False,
+                has_rollback_points=has_rollback_points,
+            ),
         )
     
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_update_rollback")
+async def show_update_rollback_points(callback: CallbackQuery):
+    """Show up to three verified pre-update rollback points."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    try:
+        points = await asyncio.to_thread(list_rollback_points)
+    except Exception as exc:
+        logger.exception("Не удалось загрузить точки отката обновлений")
+        await safe_edit_or_send(
+            callback.message,
+            "❌ <b>Не удалось проверить точки отката</b>\n\n"
+            f"{escape_html(str(exc))}",
+            reply_markup=back_and_home_kb("admin_update_bot"),
+        )
+        await callback.answer()
+        return
+
+    if not points:
+        await safe_edit_or_send(
+            callback.message,
+            "↩️ <b>Откат обновления</b>\n\n"
+            "Доступных точек отката нет. Они хранятся не более семи дней, "
+            "а в списке остаются только три последние проверенные копии.",
+            reply_markup=update_rollback_points_kb([]),
+        )
+        await callback.answer()
+        return
+
+    await safe_edit_or_send(
+        callback.message,
+        "↩️ <b>Выберите точку отката</b>\n\n"
+        "Для каждой точки указаны версия, короткий коммит и время создания "
+        "резервной копии базы данных.",
+        reply_markup=update_rollback_points_kb(points),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_rb_pick:"))
+async def show_update_rollback_confirmation(callback: CallbackQuery):
+    """Show the destructive database rollback warning."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    snapshot_id = callback.data.split(":", 1)[1]
+    try:
+        point = await asyncio.to_thread(get_rollback_point, snapshot_id)
+        current_release, _, current_short = await asyncio.to_thread(
+            get_current_version_identity
+        )
+    except UpdateRollbackError as exc:
+        await safe_edit_or_send(
+            callback.message,
+            "❌ <b>Точка отката больше недоступна</b>\n\n"
+            f"{escape_html(str(exc))}",
+            reply_markup=back_and_home_kb("admin_update_rollback"),
+        )
+        await callback.answer()
+        return
+
+    current_release_label = (
+        f"Версия {current_release}"
+        if current_release != "unknown"
+        else "Версия не определена"
+    )
+    created = point.created_at.astimezone()
+    await safe_edit_or_send(
+        callback.message,
+        "⚠️ <b>Подтверждение отката обновления</b>\n\n"
+        f"Сейчас: <b>{escape_html(current_release_label)}</b> · "
+        f"<code>{escape_html(current_short)}</code>\n"
+        f"После отката: <b>{escape_html(point.display_release)}</b> · "
+        f"<code>{escape_html(point.source_short_commit)}</code>\n"
+        f"Состояние БД: <b>{created:%d.%m.%Y %H:%M:%S}</b>\n\n"
+        "<b>Внимание:</b> база данных будет полностью возвращена на момент "
+        "создания этого backup. Если после него добавились пользователи, "
+        "прошли оплаты, были созданы ключи, изменены настройки или появились "
+        "любые другие данные — всё это будет потеряно.\n\n"
+        "Локальные изменения Git-контролируемых файлов также будут перезаписаны.",
+        reply_markup=update_rollback_confirm_kb(snapshot_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_rb_go:"))
+async def start_update_rollback(callback: CallbackQuery, state: FSMContext):
+    """Schedule the selected rollback outside the bot service cgroup."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    snapshot_id = callback.data.split(":", 1)[1]
+    try:
+        point = await asyncio.to_thread(get_rollback_point, snapshot_id)
+    except UpdateRollbackError as exc:
+        await safe_edit_or_send(
+            callback.message,
+            "❌ <b>Точка отката больше недоступна</b>\n\n"
+            f"{escape_html(str(exc))}",
+            reply_markup=back_and_home_kb("admin_update_rollback"),
+        )
+        await callback.answer()
+        return
+
+    await safe_edit_or_send(
+        callback.message,
+        "↩️ <b>Запускаю откат обновления</b>\n\n"
+        f"Целевая версия: <b>{escape_html(point.display_release)}</b> · "
+        f"<code>{escape_html(point.source_short_commit)}</code>\n\n"
+        "Бот временно остановится, восстановит код и базу данных, затем "
+        "запустится снова. Итог придёт отдельным сообщением.",
+    )
+    success, detail = await asyncio.to_thread(
+        schedule_admin_rollback,
+        snapshot_id,
+        callback.from_user.id,
+    )
+    if not success:
+        await safe_edit_or_send(
+            callback.message,
+            "❌ <b>Не удалось запустить откат</b>\n\n"
+            f"{escape_html(detail)}\n\n"
+            "Используйте на сервере команду <code>bash install.sh rollback</code>.",
+            reply_markup=back_and_home_kb("admin_update_rollback"),
+        )
+        await callback.answer()
+        return
+
+    await state.clear()
+    await callback.answer("Откат запущен", show_alert=True)
 
 
 @router.callback_query(F.data == "admin_update_bot_confirm")
@@ -897,7 +1076,11 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
             f"Устанавливаю версию <code>{blocking_commit['hash'][:8]}</code>..."
         )
         
-        success, message = pull_to_commit(blocking_commit['hash'])
+        success, message = pull_to_commit(
+            blocking_commit['hash'],
+            update_mode="admin_blocking",
+            actor=f"telegram_admin:{callback.from_user.id}",
+        )
     else:
         # Regular update - git pull
         await safe_edit_or_send(callback.message, 
@@ -905,7 +1088,10 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
             "Загружаю изменения с GitHub..."
         )
         
-        success, message = pull_updates()
+        success, message = pull_updates(
+            update_mode="admin_regular",
+            actor=f"telegram_admin:{callback.from_user.id}",
+        )
     
     if not success:
         await safe_edit_or_send(callback.message, 
@@ -970,7 +1156,7 @@ async def show_force_overwrite(callback: CallbackQuery, state: FSMContext):
     await safe_edit_or_send(callback.message, 
         "⚠️ <b>ПРИНУДИТЕЛЬНАЯ ПЕРЕЗАПИСЬ</b>\n\n"
         f"Все файлы бота (кроме конфигурации и баз данных) будут перезаписаны оригинальными файлами из репозитория:\n<code>{GITHUB_REPO_URL}</code>\n\n"
-        "🛑 *Внимание: Все ваши локальные изменения в коде будут безвозвратно потеряны!*\n\n"
+        "🛑 <b>Внимание: все локальные изменения в коде будут безвозвратно потеряны!</b>\n\n"
         "Вы действительно хотите продолжить?",
         reply_markup=force_overwrite_confirm_kb()
     )
@@ -1002,7 +1188,11 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
     
     if blocking_commit:
         # There is a blocking commit - we update only to it (via reset --hard)
-        success, message = pull_to_commit(blocking_commit['hash'])
+        success, message = pull_to_commit(
+            blocking_commit['hash'],
+            update_mode="admin_force_blocking",
+            actor=f"telegram_admin:{callback.from_user.id}",
+        )
         
         if not success:
             await safe_edit_or_send(callback.message, 
@@ -1026,7 +1216,10 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
         )
     else:
         # No blocking commits - full rewrite
-        success, message = force_pull_updates()
+        success, message = force_pull_updates(
+            update_mode="admin_force",
+            actor=f"telegram_admin:{callback.from_user.id}",
+        )
         
         if not success:
             await safe_edit_or_send(callback.message, 
