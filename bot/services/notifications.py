@@ -115,10 +115,20 @@ def _get_payment_action(order: Dict[str, Any]) -> str:
     payment_type = order.get('payment_type', '')
     if payment_type == 'trial':
         return 'trial'
-    if order.get('purpose') == 'balance_topup':
-        return 'balance_topup'
+
+    purpose_action = {
+        'key_purchase': 'new_key',
+        'key_renewal': 'renewal',
+        'balance_topup': 'balance_topup',
+    }.get(str(order.get('purpose') or ''))
+    if purpose_action:
+        return purpose_action
 
     explicit_action = order.get('_payment_action')
+    explicit_action = {
+        'key_purchase': 'new_key',
+        'key_renewal': 'renewal',
+    }.get(explicit_action, explicit_action)
     if explicit_action in ('new_key', 'renewal', 'trial'):
         return explicit_action
 

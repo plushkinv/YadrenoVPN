@@ -1,7 +1,7 @@
 """Internal provider adapters for the common payment-intent lifecycle."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -47,7 +47,9 @@ class ProviderInvoice:
     payment_url: str | None = None
     provider_payment_id: str | None = None
     qr_image_data: bytes | None = None
-    metadata: Mapping[str, Any] = MappingProxyType({})
+    metadata: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 _ALL_PURPOSES = frozenset({'key_purchase', 'key_renewal', 'balance_topup'})

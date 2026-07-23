@@ -198,8 +198,11 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         try:
             (success, text, order) = await process_crypto_payment(args, user_id=user['id'], bot=message.bot)
             if success and order:
-                # Notifying administrators about payment
-                if order.get('_payment_processed_now', True):
+                # Payment Intent v1 has already run its idempotent post-payment effects.
+                if (
+                    order.get('_payment_processed_now', True)
+                    and not order.get('_post_actions_completed')
+                ):
                     try:
                         from bot.services.notifications import notify_admins_payment
                         await notify_admins_payment(message.bot, order)
