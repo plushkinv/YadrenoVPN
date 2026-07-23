@@ -3,7 +3,7 @@ Module for automatic tasks.
 
 Includes:
 - Sending daily statistics to administrators
-- Creating and sending an archive with backups (bot database + VPN panels)
+- Creating and sending an archive with backups (bot database + VPN panels + custom extensions)
 - Synchronization of traffic with VPN servers (every 5 minutes)
 - Notifications about ending traffic
 """
@@ -11,6 +11,7 @@ Includes:
 import asyncio
 import logging
 import os
+import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -57,9 +58,14 @@ BOT_DB_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'database', 'v
 # Project root folder and local backup folder
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 BACKUP_DIR = os.path.join(PROJECT_ROOT, 'backup')
+CUSTOM_EXTENSIONS_DIR = os.path.join(PROJECT_ROOT, 'custom_extensions')
+CUSTOM_EXTENSIONS_BACKUP_DIRNAME = 'custom_extensions'
 
 # How many days to store local backups
 BACKUP_RETENTION_DAYS = 7
+
+_CUSTOM_EXTENSION_CACHE_DIRS = {'__pycache__'}
+_CUSTOM_EXTENSION_CACHE_SUFFIXES = ('.pyc', '.pyo')
 
 
 @dataclass(frozen=True)
@@ -103,6 +109,123 @@ def _short_panel_warning(message: str, limit: int = 140) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit - 3]}..."
+
+
+def _collect_custom_extension_files() -> Optional[list[tuple[str, str]]]:
+    """Returns safe regular files from custom_extensions and their relative paths."""
+    source_root = os.path.abspath(CUSTOM_EXTENSIONS_DIR)
+    if not os.path.lexists(source_root):
+        return None
+    if os.path.islink(source_root) or not os.path.isdir(source_root):
+        logger.warning(
+            "Бэкап custom_extensions пропущен: путь не является обычным каталогом: %s",
+            source_root,
+        )
+        return None
+
+    files: list[tuple[str, str]] = []
+    for current_root, dirnames, filenames in os.walk(
+        source_root,
+        topdown=True,
+        followlinks=False,
+    ):
+        safe_dirnames = []
+        for dirname in sorted(dirnames):
+            directory_path = os.path.join(current_root, dirname)
+            if dirname in _CUSTOM_EXTENSION_CACHE_DIRS or os.path.islink(directory_path):
+                continue
+            safe_dirnames.append(dirname)
+        dirnames[:] = safe_dirnames
+
+        for filename in sorted(filenames):
+            if filename.casefold().endswith(_CUSTOM_EXTENSION_CACHE_SUFFIXES):
+                continue
+            source_path = os.path.join(current_root, filename)
+            if os.path.islink(source_path) or not os.path.isfile(source_path):
+                continue
+            relative_path = os.path.relpath(source_path, source_root)
+            if relative_path == os.pardir or relative_path.startswith(f"{os.pardir}{os.sep}"):
+                logger.warning(
+                    "Файл custom_extensions за пределами каталога пропущен: %s",
+                    source_path,
+                )
+                continue
+            files.append((source_path, relative_path))
+
+    return files
+
+
+def _add_custom_extensions_to_archive(zf: zipfile.ZipFile) -> Optional[int]:
+    """Adds the custom extension tree to an open daily ZIP archive."""
+    files = _collect_custom_extension_files()
+    if files is None:
+        return None
+    if not files:
+        zf.writestr(f"{CUSTOM_EXTENSIONS_BACKUP_DIRNAME}/", b"")
+        return 0
+
+    added_count = 0
+    for source_path, relative_path in files:
+        archive_path = (
+            f"{CUSTOM_EXTENSIONS_BACKUP_DIRNAME}/"
+            f"{relative_path.replace(os.sep, '/')}"
+        )
+        try:
+            zf.write(source_path, archive_path)
+            added_count += 1
+        except OSError as e:
+            logger.warning(
+                "Не удалось добавить файл расширения %s в архив: %s",
+                relative_path,
+                e,
+            )
+
+    return added_count
+
+
+def _save_local_custom_extensions_backup(day_dir: str) -> Optional[int]:
+    """Fully replaces the day's local custom extension snapshot."""
+    files = _collect_custom_extension_files()
+    if files is None:
+        return None
+
+    day_root = os.path.abspath(day_dir)
+    destination_root = os.path.abspath(
+        os.path.join(day_root, CUSTOM_EXTENSIONS_BACKUP_DIRNAME)
+    )
+    if os.path.commonpath([day_root, destination_root]) != day_root:
+        raise RuntimeError("Каталог бэкапа custom_extensions находится вне дневного бэкапа")
+
+    temp_root = tempfile.mkdtemp(prefix='.custom_extensions_', dir=day_root)
+    try:
+        for source_path, relative_path in files:
+            destination_path = os.path.abspath(os.path.join(temp_root, relative_path))
+            if os.path.commonpath([temp_root, destination_path]) != temp_root:
+                raise RuntimeError("Некорректный относительный путь custom_extensions")
+            os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+            with open(source_path, 'rb') as source_file, open(
+                destination_path,
+                'xb',
+            ) as destination_file:
+                shutil.copyfileobj(source_file, destination_file, length=1024 * 1024)
+
+        if os.path.lexists(destination_root):
+            destination_real_path = os.path.realpath(destination_root)
+            if os.path.commonpath([day_root, destination_real_path]) != day_root:
+                raise RuntimeError(
+                    "Существующий бэкап custom_extensions ведёт за пределы дневного каталога"
+                )
+            if os.path.islink(destination_root) or not os.path.isdir(destination_root):
+                os.unlink(destination_root)
+            else:
+                shutil.rmtree(destination_root)
+
+        os.replace(temp_root, destination_root)
+        temp_root = ''
+        return len(files)
+    finally:
+        if temp_root:
+            shutil.rmtree(temp_root, ignore_errors=True)
 
 
 async def collect_panel_database_backups() -> PanelBackupCollection:
@@ -150,7 +273,7 @@ def build_backup_caption(today: str, panel_warnings: Sequence[PanelBackupWarning
     lines = [
         f"📦 <b>Ежедневный бэкап за {escape_html(today)}</b>",
         "",
-        "Содержит базу данных бота и доступные бэкапы VPN-панелей.",
+        "Содержит базу данных бота, файлы расширений и доступные бэкапы VPN-панелей.",
     ]
     if panel_warnings:
         lines.extend(["", "⚠️ <b>Предупреждения:</b>"])
@@ -226,6 +349,15 @@ async def collect_daily_stats() -> str:
     payments_pending = payments.get('pending_count', 0)
     
     payments_text = []
+    base_totals = payments.get('paid_base') or {}
+    if base_totals:
+        from bot.services.money import format_money_minor
+
+        payments_text.extend(
+            format_money_minor(amount, currency)
+            for currency, amount in sorted(base_totals.items())
+            if int(amount or 0) > 0
+        )
     if payments_cents > 0:
         payments_val = payments_cents / 100
         payments_str = f"{payments_val:g}".replace('.', ',')
@@ -298,6 +430,7 @@ async def create_backup_archive(
     Includes:
     - vpn_bot.db — bot database
     - server_NAME_x-ui.db/.dump — backup file of each available VPN panel
+    - custom_extensions/ — custom extension files without runtime caches
     
     Returns:
         ZIP archive bytes or None on error
@@ -337,6 +470,16 @@ async def create_backup_archive(
                     logger.warning(
                         f"Не удалось добавить бэкап панели {item.server_name} в архив: {e}"
                     )
+
+            try:
+                custom_files_count = _add_custom_extensions_to_archive(zf)
+                if custom_files_count is not None:
+                    logger.info(
+                        "Добавлен в архив: custom_extensions (%s файлов)",
+                        custom_files_count,
+                    )
+            except Exception as e:
+                logger.warning(f"Не удалось добавить custom_extensions в архив: {e}")
         
         archive_buffer.seek(0)
         return archive_buffer.read()
@@ -358,7 +501,7 @@ async def save_local_backup(
     panel_backups: Optional[PanelBackupCollection] = None,
 ) -> None:
     """
-    Saves local copies of all databases to the backup/YYYY-MM-DD/ folder.
+    Saves local database and custom extension copies to backup/YYYY-MM-DD/.
     
     Panel files are saved in the actual format: SQLite .db
     or PostgreSQL .dump.
@@ -394,6 +537,16 @@ async def save_local_backup(
                 logger.warning(
                     f"Не удалось сохранить локальный бэкап панели {item.server_name}: {e}"
                 )
+
+        try:
+            custom_files_count = _save_local_custom_extensions_backup(day_dir)
+            if custom_files_count is not None:
+                logger.info(
+                    "Локальный бэкап: custom_extensions (%s файлов)",
+                    custom_files_count,
+                )
+        except Exception as e:
+            logger.warning(f"Не удалось сохранить локальный бэкап custom_extensions: {e}")
         
         logger.info(f"✅ Локальные бэкапы сохранены в {day_dir}")
         
@@ -526,18 +679,15 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
     logger.info("⏳ Запуск проверки истекающих ключей...")
     try:
         from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
+        from bot.utils.page_renderer import build_page_keyboard
         from bot.utils.text import send_media_or_text
         days = int(get_setting('notification_days', '3'))
         from bot.utils.message_editor import get_message_data
-        
-        # Default text in HTML
-        default_notification = (
-            '⚠️ <b>Ваш VPN-ключ %ключ_имя% скоро истекает!</b>\n\n'
-            'Через %ключ_дней_до_окончания% дней закончится срок действия вашего ключа.\n\n'
-            'Продлите подписку, чтобы сохранить доступ к VPN без перерыва!'
-        )
-        notification_data = get_message_data('notification_text', default_notification)
-        notification_text = notification_data.get('text', default_notification)
+
+        notification_data = get_message_data('notification_text')
+        notification_text = notification_data.get('text') or ''
+        if not notification_text:
+            raise RuntimeError("Required setting 'notification_text' is empty")
         notification_media = notification_data.get('media_file_id')
         notification_media_type = notification_data.get('media_type')
         
@@ -548,7 +698,7 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
             vpn_key_id = key_info['vpn_key_id']
             user_telegram_id = key_info['user_telegram_id']
             days_left = key_info['days_left']
-            keyname = key_info.get('custom_name', f"Key #{vpn_key_id}")
+            keyname = key_info.get('custom_name') or f"#{vpn_key_id}"
             
             # Checking if we sent today
             if is_notification_sent_today(vpn_key_id):
@@ -566,11 +716,7 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
                 mode='html',
             )
             
-            # Keyboard with "My keys" and "Home" buttons
-            builder = InlineKeyboardBuilder()
-            builder.row(InlineKeyboardButton(text="🔑 Мои ключи", callback_data="my_keys"))
-            builder.row(InlineKeyboardButton(text="🈴 На главную", callback_data="start"))
-            kb = builder.as_markup()
+            kb = build_page_keyboard('expiry_notification_actions')
             
             try:
                 await send_media_or_text(
@@ -968,10 +1114,9 @@ async def sync_traffic_stats(
         bulk_update_traffic(traffic_updates)
 
     # Checking notification thresholds
-    notification_text_template = get_setting(
-        'traffic_notification_text',
-        '⚠️ По ключу <b>%ключ_имя%</b> осталось %ключ_трафик_процент_остатка%% трафика (%ключ_трафик_использовано% из %ключ_трафик_лимит%)'
-    )
+    notification_text_template = get_setting('traffic_notification_text') or ''
+    if not notification_text_template:
+        raise RuntimeError("Required setting 'traffic_notification_text' is empty")
 
     for key in keys:
         try:
@@ -1006,7 +1151,7 @@ async def sync_traffic_stats(
                         uuid = key['client_uuid']
                         keyname = f"{uuid[:4]}...{uuid[-4:]}" if len(uuid) >= 8 else uuid
                     else:
-                        keyname = f"Ключ #{key['id']}"
+                        keyname = f"#{key['id']}"
                     
                     from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
 

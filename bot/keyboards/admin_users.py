@@ -37,6 +37,23 @@ def manual_sync_preview_kb(direction: str, token: str) -> InlineKeyboardMarkup:
     builder.row(back_button('admin_users'), home_button())
     return builder.as_markup()
 
+
+def _user_list_button_text(user: Dict[str, Any]) -> str:
+    """Builds a compact user label for the admin user list."""
+    username = str(user.get('username') or '').strip()
+    telegram_id = user.get('telegram_id')
+    identifier = f'@{username}' if username else f'ID: {telegram_id}'
+    name_parts = [
+        ' '.join(str(user.get(field) or '').split())
+        for field in ('first_name', 'last_name')
+    ]
+    display_name = ' '.join(part for part in name_parts if part)
+    text = f'{identifier} = {display_name}' if display_name else identifier
+    if len(text) <= 64:
+        return text
+    return f'{text[:63].rstrip()}…'
+
+
 def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, current_filter: str='all') -> InlineKeyboardMarkup:
     """
     User list keyboard with pagination and filters.
@@ -55,12 +72,8 @@ def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, curr
     builder.row(*filter_buttons[:3])
     builder.row(*filter_buttons[3:])
     for user in users:
-        username = user.get('username')
         telegram_id = user.get('telegram_id')
-        if username:
-            text = f'@{username}'
-        else:
-            text = f'ID: {telegram_id}'
+        text = _user_list_button_text(user)
         builder.row(InlineKeyboardButton(text=text, callback_data=f'admin_user_view:{telegram_id}'))
     if total_pages > 1:
         nav_buttons = []
@@ -81,7 +94,7 @@ def user_view_kb(telegram_id: int, vpn_keys: List[Dict[str, Any]], is_banned: bo
         telegram_id: Telegram user ID
         vpn_keys: List of user's VPN keys
         is_banned: Whether the user is banned
-        balance_cents: Balance in kopecks
+        balance_cents: Balance in current base-currency minor units
         referral_coefficient: Referral coefficient
     """
     builder = InlineKeyboardBuilder()
@@ -103,8 +116,11 @@ def user_view_kb(telegram_id: int, vpn_keys: List[Dict[str, Any]], is_banned: bo
         builder.row(InlineKeyboardButton(text=f'{status} {key_name}', callback_data=f'admin_key_view:{key_id}'))
     builder.row(InlineKeyboardButton(text='➕ Добавить ключ', callback_data=f'admin_user_add_key:{telegram_id}'))
     builder.row(InlineKeyboardButton(text='💬 Написать', callback_data=f'admin_support_start:{telegram_id}'))
-    balance_rub = balance_cents / 100
-    builder.row(InlineKeyboardButton(text=f'💰 Баланс: {balance_rub:.2f} ₽', callback_data=f'admin_user_balance:{telegram_id}'), InlineKeyboardButton(text='➕ Пополнить', callback_data=f'admin_user_balance_add:{telegram_id}'), InlineKeyboardButton(text='➖ Списать', callback_data=f'admin_user_balance_deduct:{telegram_id}'))
+    from bot.services.money import format_money_minor
+    from database.requests import get_base_currency
+
+    balance_text = format_money_minor(balance_cents, get_base_currency())
+    builder.row(InlineKeyboardButton(text=f'💰 Баланс: {balance_text}', callback_data=f'admin_user_balance:{telegram_id}'), InlineKeyboardButton(text='➕ Пополнить', callback_data=f'admin_user_balance_add:{telegram_id}'), InlineKeyboardButton(text='➖ Списать', callback_data=f'admin_user_balance_deduct:{telegram_id}'))
     builder.row(InlineKeyboardButton(text=f'📊 Реферальный коэффициент: {referral_coefficient}x', callback_data=f'admin_user_coefficient:{telegram_id}'))
     if is_banned:
         ban_text = '✅ Разблокировать'

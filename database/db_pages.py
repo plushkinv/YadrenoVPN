@@ -17,10 +17,18 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     'get_page',
+    'get_page_keys',
     'update_page_custom',
     'update_page_flow',
     'upsert_page_defaults',
 ]
+
+
+def get_page_keys() -> frozenset[str]:
+    """Return every stored page key for startup integrity validation."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT page_key FROM pages").fetchall()
+    return frozenset(str(row['page_key']) for row in rows)
 
 
 def get_page(page_key: str) -> Optional[Dict[str, Any]]:

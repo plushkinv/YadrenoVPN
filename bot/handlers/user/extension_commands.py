@@ -15,6 +15,7 @@ from bot.utils.extension_commands import (
     parse_extension_command,
 )
 from bot.utils.extension_rendering import render_extension_page, render_extension_route
+from bot.utils.page_renderer import render_page
 from bot.utils.text import safe_edit_or_send
 from bot.utils.user_pages import render_access_blocked_page
 from database.requests import is_user_banned
@@ -89,7 +90,7 @@ async def extension_command_handler(
             force_new_for_message=True,
         )
         if not handled and not rendered:
-            await safe_edit_or_send(message, "⚠️ Страница недоступна", force_new=True)
+            await render_page(message, 'screen_unavailable', force_new=True)
         return
 
     if result.get('route_key'):
@@ -100,7 +101,7 @@ async def extension_command_handler(
             force_new_for_message=True,
         )
         if not handled and not rendered:
-            await safe_edit_or_send(message, "⚠️ Маршрут недоступен", force_new=True)
+            await render_page(message, 'screen_unavailable', force_new=True)
         return
 
     if result.get('answer_text'):

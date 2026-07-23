@@ -78,7 +78,8 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
         cursor = conn.execute("""
             SELECT 
                 vk.*,
-                t.name as tariff_name, t.duration_days, t.price_cents,
+                t.name as tariff_name, t.duration_days, t.price_rub, t.price_minor,
+                COALESCE((SELECT value FROM settings WHERE key = 'base_currency'), 'RUB') AS base_currency,
                 s.name as server_name, s.host, s.port, s.web_base_path,
                 s.login, s.password, s.protocol, s.api_token,
                 s.panel_version, s.panel_api_profile, s.panel_checked_at,
@@ -678,12 +679,14 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
                 s.name as server_name, s.id as server_id, vk.panel_email,
                 vk.sub_id,
                 vk.traffic_used, vk.traffic_limit,
+                t.name as tariff_name, t.max_ips as tariff_max_ips,
                 CASE
                     WHEN vk.expires_at > datetime('now') THEN 1
                     ELSE 0
                 END as is_active
             FROM vpn_keys vk
             LEFT JOIN servers s ON vk.server_id = s.id
+            LEFT JOIN tariffs t ON vk.tariff_id = t.id
             JOIN users u ON vk.user_id = u.id
             WHERE u.telegram_id = ?
             ORDER BY vk.expires_at DESC
@@ -723,7 +726,9 @@ def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str
             SELECT 
                 vk.*, 
                 s.name as server_name, s.id as server_id,
-                t.name as tariff_name, t.duration_days, t.price_cents, t.price_stars,
+                t.name as tariff_name, t.duration_days, t.price_rub, t.price_minor,
+                COALESCE((SELECT value FROM settings WHERE key = 'base_currency'), 'RUB') AS base_currency,
+                t.max_ips as tariff_max_ips,
                 u.telegram_id, u.username,
                 s.is_active as server_active,
                 CASE 

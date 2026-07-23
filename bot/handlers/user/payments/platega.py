@@ -1,197 +1,184 @@
-import logging
-from aiogram import Router, F
-from aiogram.types import CallbackQuery
+"""Platega compatibility payment callbacks backed by configurable UI pages."""
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery
 
-from bot.utils.text import escape_html, safe_edit_or_send
-from bot.handlers.user.payments.base import create_qr_payment_flow, check_qr_payment_flow
-from bot.handlers.user.payments.tariff_select_page import (
-    build_payment_tariff_select_page_context,
-    show_payment_no_tariffs_page,
-    show_payment_tariff_select_page,
-)
-
-logger = logging.getLogger(__name__)
+from bot.handlers.user.payments.base import check_qr_payment_flow, create_qr_payment_flow
+from bot.handlers.user.payments.tariff_select_page import show_provider_tariff_select_page
+from bot.services.money import format_money_minor
+from bot.utils.page_renderer import render_page
 
 router = Router()
 
-# Platega provider configuration
-_PLATEGA_TITLE = '💸 <b>Platega</b>'
 _PLATEGA_TYPE = 'platega'
 _PLATEGA_ERROR = 'Platega'
 _PLATEGA_QR_FILE = 'platega.png'
 _PLATEGA_CHECK_PREFIX = 'check_platega'
 _PLATEGA_RESULT_KEY = 'platega_transaction_id'
 _PLATEGA_MIN_PRICE = 10
-_PLATEGA_INSTRUCTION = (
-    'Откройте {payment_link} или отсканируйте QR-код и выберите способ оплаты '
-    'на странице Platega.'
-)
+
+
+async def _show_minimum_page(callback: CallbackQuery) -> None:
+    await render_page(
+        callback,
+        'payment_minimum_unavailable',
+        context={'payment_minimum_text': format_money_minor(_PLATEGA_MIN_PRICE * 100, 'RUB')},
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == 'pay_platega')
 async def pay_platega_select_tariff(callback: CallbackQuery):
-    """Selecting a tariff for payment via Platega (new key)."""
+    """Select a tariff for a new-key Platega payment."""
     from database.requests import get_all_tariffs
-    from bot.keyboards.user import tariff_select_kb
-    from bot.keyboards.admin import home_only_kb
 
-    tariffs = get_all_tariffs(include_hidden=False)
-    rub_tariffs = [t for t in tariffs if t.get('price_rub') and t['price_rub'] >= _PLATEGA_MIN_PRICE]
-    if not rub_tariffs:
-        await show_payment_tariff_select_page(
-            callback,
-            context=build_payment_tariff_select_page_context(
-                provider_title_html=_PLATEGA_TITLE,
-                instruction_html=f'😔 Нет тарифов с ценой в рублях (от {_PLATEGA_MIN_PRICE} ₽).\nОбратитесь к администратору.',
-            ),
-            runtime_markup=home_only_kb(),
-        )
-        await callback.answer()
-        return
-    await show_payment_tariff_select_page(
+    tariffs = [
+        tariff
+        for tariff in get_all_tariffs(include_hidden=False)
+        if float(tariff.get('price_rub') or 0) >= _PLATEGA_MIN_PRICE
+    ]
+    await show_provider_tariff_select_page(
         callback,
-        context=build_payment_tariff_select_page_context(
-            provider_title_html=_PLATEGA_TITLE,
-            instruction_html='Выберите тариф:\n\n<i>Способ оплаты выбирается на странице Platega.</i>',
-        ),
-        runtime_markup=tariff_select_kb(rub_tariffs, is_platega=True),
+        tariffs=tariffs,
+        payment_type=_PLATEGA_TYPE,
+        callback_factory=lambda tariff_id: f'platega_pay:{tariff_id}',
+        back_callback='buy_key',
+        minimum_amount=_PLATEGA_MIN_PRICE * 100,
     )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith('platega_pay:'))
 async def platega_pay_create(callback: CallbackQuery, state: FSMContext):
-    """Creates a Platega payment link for the new key and sends a QR photo."""
-    from database.requests import get_tariff_by_id, save_platega_transaction_id
+    """Create a Platega payment link for a new key."""
     from bot.services.billing import create_platega_payment
+    from database.requests import get_tariff_by_id, save_platega_transaction_id
 
-    tariff_id = int(callback.data.split(':')[1])
+    try:
+        tariff_id = int(callback.data.split(':', 1)[1])
+    except (IndexError, TypeError, ValueError):
+        await render_page(callback, 'payment_order_unavailable')
+        await callback.answer()
+        return
     tariff = get_tariff_by_id(tariff_id)
     if not tariff:
-        await callback.answer('❌ Тариф не найден', show_alert=True)
+        await render_page(callback, 'payment_order_unavailable')
+        await callback.answer()
         return
     price_rub = float(tariff.get('price_rub') or 0)
     if price_rub < _PLATEGA_MIN_PRICE:
-        from bot.handlers.user.payments.status_page import show_payment_unavailable_status
-
-        await show_payment_unavailable_status(
-            callback.message,
-            f'Минимальная сумма для Platega — {_PLATEGA_MIN_PRICE} ₽.',
-            payment_provider_title='Platega',
-        )
-        await callback.answer()
+        await _show_minimum_page(callback)
         return
 
     await create_qr_payment_flow(
-        callback=callback, state=state, tariff=tariff, price_rub=price_rub,
+        callback=callback,
+        state=state,
+        tariff=tariff,
+        price_rub=price_rub,
         payment_type=_PLATEGA_TYPE,
         create_func=create_platega_payment,
         save_func=save_platega_transaction_id,
         result_key=_PLATEGA_RESULT_KEY,
-        title=_PLATEGA_TITLE,
+        title=_PLATEGA_ERROR,
         check_prefix=_PLATEGA_CHECK_PREFIX,
         error_name=_PLATEGA_ERROR,
         qr_filename=_PLATEGA_QR_FILE,
         back_callback='pay_platega',
-        instruction_text=_PLATEGA_INSTRUCTION,
     )
 
 
 @router.callback_query(F.data.startswith('renew_platega_tariff:'))
 async def renew_platega_select_tariff(callback: CallbackQuery):
-    """Selecting a payment plan for Platega when renewing a key."""
-    from database.requests import get_key_details_for_user
-    from bot.keyboards.user import renew_tariff_select_kb
+    """Select a tariff for a Platega key renewal."""
     from bot.utils.groups import get_tariffs_for_renewal
+    from database.requests import get_key_details_for_user
 
-    key_id = int(callback.data.split(':')[1])
-    key = get_key_details_for_user(key_id, callback.from_user.id)
-    if not key:
-        await callback.answer('❌ Ключ не найден', show_alert=True)
-        return
-    tariffs = get_tariffs_for_renewal(key.get('tariff_id', 0))
-    rub_tariffs = [t for t in tariffs if t.get('price_rub') and t['price_rub'] >= _PLATEGA_MIN_PRICE]
-    if not rub_tariffs:
-        await show_payment_no_tariffs_page(
-            callback,
-            provider_title_html=_PLATEGA_TITLE,
-            instruction_html=f'😔 Нет тарифов с ценой в рублях (от {_PLATEGA_MIN_PRICE} ₽) для продления.\nОбратитесь к администратору.',
-            key_name=key['display_name'],
-            back_callback=f'key_renew:{key_id}',
-        )
+    try:
+        key_id = int(callback.data.split(':', 1)[1])
+    except (IndexError, TypeError, ValueError):
+        await render_page(callback, 'key_not_found')
         await callback.answer()
         return
-    await show_payment_tariff_select_page(
+    key = get_key_details_for_user(key_id, callback.from_user.id)
+    if not key:
+        await render_page(callback, 'key_not_found')
+        await callback.answer()
+        return
+    tariffs = [
+        tariff
+        for tariff in get_tariffs_for_renewal(key.get('tariff_id', 0))
+        if float(tariff.get('price_rub') or 0) >= _PLATEGA_MIN_PRICE
+    ]
+    await show_provider_tariff_select_page(
         callback,
-        context=build_payment_tariff_select_page_context(
-            provider_title_html=_PLATEGA_TITLE,
-            instruction_html='Выберите тариф для продления:',
-            key_name=key['display_name'],
-        ),
-        runtime_markup=renew_tariff_select_kb(rub_tariffs, key_id, is_platega=True),
+        tariffs=tariffs,
+        payment_type=_PLATEGA_TYPE,
+        callback_factory=lambda tariff_id: f'renew_pay_platega:{key_id}:{tariff_id}',
+        back_callback=f'key_renew:{key_id}',
+        key=key,
+        minimum_amount=_PLATEGA_MIN_PRICE * 100,
     )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith('renew_pay_platega:'))
 async def renew_platega_create(callback: CallbackQuery, state: FSMContext):
-    """Creates a Platega payment link to renew the key."""
-    from database.requests import get_tariff_by_id, get_key_details_for_user, save_platega_transaction_id
+    """Create a Platega payment link for a key renewal."""
     from bot.services.billing import create_platega_payment
+    from database.requests import get_key_details_for_user, get_tariff_by_id, save_platega_transaction_id
 
-    parts = callback.data.split(':')
-    key_id = int(parts[1])
-    tariff_id = int(parts[2])
+    try:
+        _, key_id_raw, tariff_id_raw = callback.data.split(':', 2)
+        key_id = int(key_id_raw)
+        tariff_id = int(tariff_id_raw)
+    except (TypeError, ValueError):
+        await render_page(callback, 'payment_order_unavailable')
+        await callback.answer()
+        return
     tariff = get_tariff_by_id(tariff_id)
     key = get_key_details_for_user(key_id, callback.from_user.id)
     if not tariff or not key:
-        await callback.answer('❌ Ошибка тарифа или ключа', show_alert=True)
+        await render_page(callback, 'payment_order_unavailable')
+        await callback.answer()
         return
     price_rub = float(tariff.get('price_rub') or 0)
     if price_rub < _PLATEGA_MIN_PRICE:
-        from bot.handlers.user.payments.status_page import show_payment_unavailable_status
-
-        await show_payment_unavailable_status(
-            callback.message,
-            f'Минимальная сумма для Platega — {_PLATEGA_MIN_PRICE} ₽.',
-            payment_provider_title='Platega',
-        )
-        await callback.answer()
+        await _show_minimum_page(callback)
         return
 
     await create_qr_payment_flow(
-        callback=callback, state=state, tariff=tariff, price_rub=price_rub,
+        callback=callback,
+        state=state,
+        tariff=tariff,
+        price_rub=price_rub,
         payment_type=_PLATEGA_TYPE,
         create_func=create_platega_payment,
         save_func=save_platega_transaction_id,
         result_key=_PLATEGA_RESULT_KEY,
-        title=_PLATEGA_TITLE,
+        title=_PLATEGA_ERROR,
         check_prefix=_PLATEGA_CHECK_PREFIX,
         error_name=_PLATEGA_ERROR,
         qr_filename=_PLATEGA_QR_FILE,
         back_callback=f'renew_platega_tariff:{key_id}',
-        key=key, vpn_key_id=key_id,
-        instruction_text=_PLATEGA_INSTRUCTION,
+        key=key,
+        vpn_key_id=key_id,
     )
 
 
 @router.callback_query(F.data.startswith('check_platega:'))
 async def check_platega_payment(callback: CallbackQuery, state: FSMContext):
-    """Checks the status of a Platega payment by clicking “✅ I paid.”"""
+    """Check a Platega payment from its page action."""
     await _run_platega_check(
-        callback.message, state,
+        callback.message,
+        state,
         order_id=callback.data.split(':', 1)[1],
         telegram_id=callback.from_user.id,
         callback=callback,
     )
 
 
-async def _run_platega_check(message, state, order_id: str,
-                             telegram_id: int, callback=None) -> None:
-    """
-    General verification of Platega payment for the “I paid” button and deep-link return.
-    """
+async def _run_platega_check(message, state, order_id: str, telegram_id: int, callback=None) -> None:
+    """Check a Platega payment for both page actions and deep-link returns."""
     from bot.services.billing import check_platega_payment_status
 
     await check_qr_payment_flow(

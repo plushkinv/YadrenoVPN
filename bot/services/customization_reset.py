@@ -248,6 +248,10 @@ async def run_customization_reset_for_bot(
         return report
 
     report.runtime_actions.extend(reset_customization_runtime())
+    from bot.utils.user_ui_texts import reload_user_ui_text_cache
+
+    loaded = reload_user_ui_text_cache()
+    report.runtime_actions.append(f"user UI text cache reloaded: {loaded} entries")
     if bot is not None:
         try:
             from bot.services.bot_commands import sync_bot_commands

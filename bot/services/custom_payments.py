@@ -24,8 +24,14 @@ from database.requests import (
     update_payment_provider_order_status,
 )
 from bot.services.promotions import prepare_order_pricing
+from bot.services.money import minor_to_decimal
 
 logger = logging.getLogger(__name__)
+
+
+def _charge_text(amount_minor: int, currency: str) -> str:
+    """Serializes provider minor units without float arithmetic."""
+    return format(minor_to_decimal(max(0, int(amount_minor)), currency), 'f')
 
 
 async def create_custom_payment_order(
@@ -45,6 +51,9 @@ async def create_custom_payment_order(
         raise ValueError('payment provider не зарегистрирован')
     if not is_payment_provider_enabled(provider.provider_id, {'user_id': user_id, 'telegram_id': telegram_id}):
         return {'ok': False, 'reason': 'Способ оплаты временно недоступен.'}
+    purpose = 'key_renewal' if vpn_key_id else 'key_purchase'
+    if purpose not in provider.supported_purposes:
+        return {'ok': False, 'reason': 'Способ оплаты не поддерживает это назначение.'}
 
     (_, order_id) = create_pending_order(
         user_id=user_id,
@@ -72,10 +81,19 @@ async def create_custom_payment_order(
         'telegram_id': telegram_id,
         'tariff': dict(tariff),
         'action': action,
+        'purpose': purpose,
+        'base_currency': str(quote.get('base_currency') or tariff.get('base_currency') or 'RUB'),
+        'nominal_amount_minor': int(tariff.get('price_minor') or 0),
+        'payable_amount_minor': int(quote.get('payable_amount_minor') or quote.get('payable_amount_cents') or 0),
+        'nominal_amount_cents': int(tariff.get('price_minor') or 0),
+        'payable_amount_cents': int(quote.get('payable_amount_minor') or quote.get('payable_amount_cents') or 0),
+        'charge_amount': _charge_text(int(quote['final_amount']), provider.currency),
+        'charge_currency': provider.currency,
+        'rate_snapshot': dict(quote.get('rate_snapshot') or {}),
         'vpn_key_id': vpn_key_id,
         'key': dict(key or {}),
         'amount_cents': int(quote['final_amount']),
-        'currency': 'RUB',
+        'currency': provider.currency,
         'quote': dict(quote),
         'bot_username': bot_username,
         'description': _payment_description(tariff, action=action, key=key),
@@ -89,6 +107,9 @@ async def create_custom_payment_order(
         payment_url=result.get('payment_url'),
         status=result.get('status') or 'pending',
         metadata=result.get('metadata') or {},
+        purpose=purpose,
+        charge_amount=_charge_text(int(quote['final_amount']), provider.currency),
+        charge_currency=provider.currency,
     )
     if saved is False:
         raise RuntimeError('Не удалось сохранить custom provider order')
@@ -142,7 +163,17 @@ async def check_custom_payment_order(provider_id: str, order: Mapping[str, Any])
             'provider_payment_id': provider_order.get('provider_payment_id'),
             'payment_url': provider_order.get('payment_url'),
             'amount_cents': order.get('final_amount_cents') if order.get('final_amount_cents') is not None else order.get('amount_cents'),
-            'currency': 'RUB',
+            'currency': order.get('charge_currency') or provider.currency,
+            'purpose': order.get('purpose') or ('key_renewal' if order.get('vpn_key_id') else 'key_purchase'),
+            'base_currency': order.get('base_currency') or 'RUB',
+            'nominal_amount_minor': order.get('nominal_amount_minor') or order.get('nominal_amount_cents') or 0,
+            'payable_amount_minor': order.get('payable_amount_minor') or order.get('payable_amount_cents') or order.get('final_amount_cents') or 0,
+            'nominal_amount_cents': order.get('nominal_amount_minor') or order.get('nominal_amount_cents') or 0,
+            'payable_amount_cents': order.get('payable_amount_minor') or order.get('payable_amount_cents') or order.get('final_amount_cents') or 0,
+            'charge_amount': order.get('charge_amount'),
+            'charge_currency': order.get('charge_currency') or provider.currency,
+            'description': order.get('description') or '',
+            'rate_snapshot': order.get('rate_snapshot') or {},
         },
     )
     update_payment_provider_order_status(

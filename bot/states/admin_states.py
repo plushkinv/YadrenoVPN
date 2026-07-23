@@ -54,7 +54,7 @@ class AdminStates(StatesGroup):
 
     # ========== Setting up Platega ==========
     platega_setup_merchant = State()  # Enter Merchant ID Platega
-    platega_setup_secret = State()    # Enter Secret Platega
+    platega_setup_secret = State()    # Enter the Platega API key
 
     # ========== Cardlink setup ==========
     cardlink_setup_shop_id = State()    # Enter Shop ID Cardlink
@@ -88,13 +88,14 @@ class AdminStates(StatesGroup):
     
     # ========== Adding a tariff (step-by-step dialogue) ==========
     add_tariff_name = State()        # Step 1: Title
-    add_tariff_price_cents = State() # Step 2: Price in cents
-    add_tariff_price_stars = State() # Step 3: Price in stars
-    add_tariff_price_rub = State()   # Step 4: Price in rubles (cards)
-    add_tariff_duration = State()    # Step 5: Duration
-    add_tariff_traffic_limit = State() # Step 6: Data Limit (GB)
-    add_tariff_max_ips = State()     # Step 7: Device Limit (IP)
+    add_tariff_price_rub = State()   # Step 2: Price in the current base currency
+    add_tariff_duration = State()    # Step 3: Duration
+    add_tariff_traffic_limit = State() # Step 4: Data Limit (GB)
+    add_tariff_max_ips = State()     # Step 5: Device Limit (IP)
     add_tariff_confirm = State()     # Confirmation
+    payment_rate_value = State()     # Stablecoin/Stars RUB rate input
+    base_currency_transition_rate = State()
+    base_currency_switch_confirm = State()
 
     # ========== Edit tariff ==========
     edit_tariff = State()            # Editing with navigation through parameters
@@ -202,6 +203,28 @@ def get_total_params(auth_method: str = "login_password") -> int:
 # TARIFF PARAMETERS
 # ============================================================================
 
+def _valid_base_price(value: str) -> bool:
+    try:
+        from bot.services.money import parse_major_to_minor
+
+        amount = parse_major_to_minor(value)
+    except (TypeError, ValueError):
+        return False
+    return 1 <= amount <= 10_000_000
+
+
+def _convert_base_price(value: str) -> int:
+    from bot.services.money import parse_major_to_minor
+
+    return parse_major_to_minor(value)
+
+
+def _format_base_price(value: int) -> str:
+    from bot.services.money import format_money_minor
+
+    return format_money_minor(value)
+
+
 TARIFF_PARAMS = [
     {
         "key": "name",
@@ -211,35 +234,14 @@ TARIFF_PARAMS = [
         "error": "Название от 1 до 50 символов"
     },
     {
-        "key": "price_cents",
-        "label": "Цена (USDT)",
-        "hint": "в долларах: 3.00, 5.50, 10",
-        "validate": lambda x: (
-            x.replace('.', '', 1).replace(',', '', 1).isdigit() and 
-            0.01 <= float(x.replace(',', '.')) <= 1000.00
-        ),
-        "error": "Цена от $0.01 до $1000.00",
-        "convert": lambda x: int(float(x.replace(',', '.')) * 100),
-        "format": lambda x: f"${(x / 100):g}".replace('.', ',')
-    },
-    {
-        "key": "price_stars",
-        "label": "Цена (Stars)",
-        "hint": "в Telegram Stars (1-100000)",
-        "validate": lambda x: x.isdigit() and 1 <= int(x) <= 100000,
-        "error": "Цена от 1 до 100000 Stars",
-        "convert": int,
-        "format": lambda x: f"⭐ {x}"
-    },
-    {
-        "key": "price_rub",
-        "label": "Цена (₽)",
-        "hint": "в целых рублях: минимум ~100 руб",
-        "validate": lambda x: x.isdigit() and 0 <= int(x) <= 100000,
-        "error": "Цена от 0 до 100000 рублей (целое число)",
-        "convert": int,
-        "format": lambda x: f"{x} ₽",
-        "help": "⚠️ *Важно:* Telegram не позволяет проводить платежи меньше $1. Минимальная цена в рублях должна быть не менее ~100 руб, иначе бот вернет ошибку. Чтобы скрыть тариф из раздела оплат картами - установите 0."
+        "key": "price_minor",
+        "label": "Цена в базовой валюте",
+        "hint": "положительное число, не более двух знаков после запятой",
+        "validate": _valid_base_price,
+        "error": "Введите положительную цену не более чем с двумя знаками после запятой",
+        "convert": _convert_base_price,
+        "format": _format_base_price,
+        "help": "Курс Stars и USDT применяется автоматически в настройках оплаты."
     },
     {
         "key": "duration_days",

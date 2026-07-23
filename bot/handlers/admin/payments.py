@@ -8,6 +8,7 @@ Processes:
 - Editing crypto settings
 """
 import logging
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
@@ -16,6 +17,9 @@ from config import ADMIN_IDS
 from database.requests import (
     get_setting,
     set_setting,
+    get_base_currency,
+    get_currency_rate,
+    set_currency_rate,
     is_crypto_enabled,
     is_stars_enabled,
     is_cards_enabled,
@@ -44,14 +48,24 @@ from bot.keyboards.admin import (
     wata_management_kb,
     platega_management_kb,
     cardlink_management_kb,
+    payment_rates_kb,
+    base_currency_switch_input_kb,
+    base_currency_switch_confirm_kb,
     back_and_home_kb
 )
 from bot.utils.text import escape_html, safe_edit_or_send
+from bot.services.base_currency import (
+    BaseCurrencySwitchBlocked,
+    build_base_currency_switch_preview,
+    switch_base_currency,
+)
+from bot.services.money import format_money_minor
 
 logger = logging.getLogger(__name__)
 
 
 router = Router()
+_RATE_MESSAGES: dict[int, Message] = {}
 
 
 # ============================================================================
@@ -168,6 +182,302 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
         reply_markup=payments_menu_kb(stars, crypto, cards, qr, monthly_reset, demo, wata, platega, cardlink, notify_enabled=notify)
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == 'admin_payment_rates')
+async def show_payment_rates(callback: CallbackQuery, state: FSMContext):
+    """Shows the global base currency and fixed rates for new invoices."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+    await state.set_state(AdminStates.payments_menu)
+    await _render_payment_rates(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('admin_payment_rate_edit:'))
+async def edit_payment_rate(callback: CallbackQuery, state: FSMContext):
+    """Starts one Decimal rate edit while keeping the source message id."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+    target_currency = callback.data.split(':', 1)[1].upper()
+    labels = {
+        'RUB': 'RUB',
+        'USD': 'USD',
+        'USDT': 'USDT',
+        'XTR': 'Stars',
+    }
+    base_currency = get_base_currency()
+    if target_currency not in labels or target_currency == base_currency:
+        await callback.answer('⚠️ Неизвестный курс', show_alert=True)
+        return
+    _RATE_MESSAGES[callback.from_user.id] = callback.message
+    await state.set_state(AdminStates.payment_rate_value)
+    await state.update_data(
+        payment_rate_currency=target_currency,
+        payment_rate_message_id=callback.message.message_id,
+        payment_rate_chat_id=callback.message.chat.id,
+    )
+    await safe_edit_or_send(
+        callback.message,
+        (
+            f"💱 <b>Курс {labels[target_currency]}</b>\n\n"
+            f"Введите, сколько {labels[target_currency]} приходится на 1 {base_currency}.\n"
+            "Можно использовать точку или запятую.\n\n"
+            "Например: <code>1,05</code>"
+        ),
+        reply_markup=back_and_home_kb('admin_payment_rates'),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.payment_rate_value, F.text)
+async def payment_rate_value_input(message: Message, state: FSMContext):
+    """Stores a positive decimal string and redraws the original admin message."""
+    from bot.utils.text import get_message_text_for_storage
+
+    raw = get_message_text_for_storage(message, 'plain').strip().replace(',', '.')
+    normalized = _normalize_positive_decimal(raw)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    data = await state.get_data()
+    target_currency = data.get('payment_rate_currency')
+    source_message = _RATE_MESSAGES.get(message.from_user.id)
+    if not target_currency or normalized is None:
+        await safe_edit_or_send(
+            source_message or message,
+            (
+                "⚠️ <b>Некорректный курс</b>\n\n"
+                "Введите положительное число, например <code>1,05</code>."
+            ),
+            reply_markup=back_and_home_kb('admin_payment_rates'),
+            force_new=source_message is None,
+        )
+        return
+    set_currency_rate(str(target_currency), normalized)
+    await state.set_state(AdminStates.payments_menu)
+    _RATE_MESSAGES.pop(message.from_user.id, None)
+    await _render_payment_rates(source_message or message, force_new=source_message is None)
+
+
+async def _render_payment_rates(message: Message, *, force_new: bool = False) -> None:
+    base = get_base_currency()
+    rows = [f"💵 Базовая валюта: <code>{base}</code>", ""]
+    for target, icon, label in (
+        ('RUB', '₽', 'RUB'),
+        ('USD', '💵', 'USD'),
+        ('USDT', '🪙', 'USDT'),
+        ('XTR', '⭐', 'Stars'),
+    ):
+        if target == base:
+            continue
+        rate = get_currency_rate(target, base_currency=base)
+        rendered = (
+            escape_html(_format_rate_for_display(rate)) if rate else 'не настроен'
+        )
+        rows.append(f"{icon} 1 {base} = <code>{rendered} {label}</code>")
+    await safe_edit_or_send(
+        message,
+        "💱 <b>Валюта и курсы</b>\n\n"
+        + "\n".join(rows)
+        + "\n\nНовый курс применяется только к новым счетам. Уже созданные счета не меняются.",
+        reply_markup=payment_rates_kb(base),
+        force_new=force_new,
+    )
+
+
+@router.callback_query(F.data.startswith('admin_base_currency_select:'))
+async def select_base_currency(callback: CallbackQuery, state: FSMContext):
+    """Starts the protected base-currency conversion wizard."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+    target = callback.data.split(':', 1)[1].upper()
+    source = get_base_currency()
+    if target not in {'RUB', 'USD'} or target == source:
+        await callback.answer('⚠️ Некорректная валюта', show_alert=True)
+        return
+    _RATE_MESSAGES[callback.from_user.id] = callback.message
+    await state.set_state(AdminStates.base_currency_transition_rate)
+    await state.update_data(
+        base_currency_from=source,
+        base_currency_to=target,
+    )
+    await safe_edit_or_send(
+        callback.message,
+        (
+            f"💵 <b>Переход {source} → {target}</b>\n\n"
+            f"Введите, сколько {source} стоит 1 {target}.\n"
+            f"Пример: <code>1 {target} = 90 {source}</code> — введите <code>90</code>.\n\n"
+            "Перед применением бот покажет точный предварительный расчёт."
+        ),
+        reply_markup=base_currency_switch_input_kb(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.base_currency_transition_rate, F.text)
+async def base_currency_transition_rate_input(message: Message, state: FSMContext):
+    """Builds and displays a non-mutating switch preview."""
+    from bot.utils.text import get_message_text_for_storage
+
+    raw = get_message_text_for_storage(message, 'plain').strip().replace(',', '.')
+    data = await state.get_data()
+    source = str(data.get('base_currency_from') or '')
+    target = str(data.get('base_currency_to') or '')
+    prompt = _RATE_MESSAGES.get(message.from_user.id)
+    try:
+        preview = build_base_currency_switch_preview(target, raw)
+    except (TypeError, ValueError) as error:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await safe_edit_or_send(
+            prompt or message,
+            "⚠️ <b>Некорректный переходный курс</b>\n\n"
+            "Введите положительное число не более 1 000 000.",
+            reply_markup=base_currency_switch_input_kb(),
+            force_new=prompt is None,
+        )
+        return
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    tariff_lines = []
+    for tariff in preview.get('tariffs', [])[:12]:
+        tariff_lines.append(
+            f"• {escape_html(tariff['name'])}: "
+            f"{format_money_minor(tariff['before_minor'], source)} → "
+            f"{format_money_minor(tariff['after_minor'], target)}"
+        )
+    if len(preview.get('tariffs', [])) > 12:
+        tariff_lines.append(f"• …ещё {len(preview['tariffs']) - 12}")
+    blocking = int(preview.get('blocking_intents') or 0)
+    warning = (
+        f"\n\n❌ В обработке платежей: <b>{blocking}</b>. Сначала дождитесь их завершения."
+        if blocking
+        else ''
+    )
+    text = (
+        f"💵 <b>Предварительный расчёт {source} → {target}</b>\n\n"
+        f"Курс: <code>1 {target} = {escape_html(preview['old_units_per_new'])} {source}</code>\n\n"
+        + ("\n".join(tariff_lines) or "Тарифов нет")
+        + "\n\n"
+        f"👥 Балансы: {format_money_minor(preview['balance_before_minor'], source)} → "
+        f"{format_money_minor(preview['balance_after_minor'], target)}\n"
+        f"🎁 Реферальные накопления: {format_money_minor(preview['referral_before_minor'], source)} → "
+        f"{format_money_minor(preview['referral_after_minor'], target)}\n"
+        f"🧾 Неоплаченных счетов будет отменено: <b>{preview['cancelable_intents']}</b>"
+        f"{warning}\n\n"
+        "Перед переключением будет создана проверенная резервная копия БД."
+    )
+    await state.set_state(AdminStates.base_currency_switch_confirm)
+    await state.update_data(base_currency_transition_rate=preview['old_units_per_new'])
+    await safe_edit_or_send(
+        prompt or message,
+        text,
+        reply_markup=(
+            base_currency_switch_input_kb()
+            if blocking
+            else base_currency_switch_confirm_kb(target)
+        ),
+        force_new=prompt is None,
+    )
+
+
+@router.callback_query(AdminStates.base_currency_switch_confirm, F.data == 'admin_base_currency_confirm')
+async def confirm_base_currency_switch(callback: CallbackQuery, state: FSMContext):
+    """Creates a backup and commits the confirmed accounting conversion."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+    data = await state.get_data()
+    source = str(data.get('base_currency_from') or '')
+    target = str(data.get('base_currency_to') or '')
+    rate = data.get('base_currency_transition_rate')
+    await safe_edit_or_send(
+        callback.message,
+        "⏳ <b>Переключаю базовую валюту</b>\n\nСоздаю резервную копию и выполняю пересчёт.",
+        reply_markup=base_currency_switch_input_kb(),
+    )
+    try:
+        result = await switch_base_currency(
+            expected_from_currency=source,
+            target_currency=target,
+            old_units_per_new=rate,
+            admin_telegram_id=callback.from_user.id,
+        )
+    except BaseCurrencySwitchBlocked:
+        await safe_edit_or_send(
+            callback.message,
+            "⚠️ <b>Переключение отложено</b>\n\n"
+            "Есть подтверждённый платёж, который ещё выполняется. Повторите после его завершения.",
+            reply_markup=base_currency_switch_input_kb(),
+        )
+        await callback.answer()
+        return
+    except Exception as error:
+        logger.exception('Base currency switch failed: %s', error)
+        await safe_edit_or_send(
+            callback.message,
+            "❌ <b>Не удалось переключить валюту</b>\n\nИзменения не применены. Подробности записаны в лог.",
+            reply_markup=base_currency_switch_input_kb(),
+        )
+        await callback.answer()
+        return
+    await state.set_state(AdminStates.payments_menu)
+    _RATE_MESSAGES.pop(callback.from_user.id, None)
+    await safe_edit_or_send(
+        callback.message,
+        (
+            f"✅ <b>Базовая валюта переключена на {target}</b>\n\n"
+            f"📋 Пересчитано тарифов: <b>{result['converted_tariffs']}</b>\n"
+            f"👥 Балансов: <b>{result['converted_balances']}</b>\n"
+            f"🎁 Реферальных строк: <b>{result['converted_referral_rows']}</b>\n"
+            f"🧾 Отменено счетов: <b>{result['canceled_intents']}</b>\n"
+            f"💾 Резервная копия: <code>{escape_html(result['backup_path'])}</code>"
+        ),
+        reply_markup=payment_rates_kb(target),
+    )
+    await callback.answer('✅ Базовая валюта переключена')
+
+
+def _normalize_positive_decimal(value: str) -> str | None:
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not parsed.is_finite() or parsed <= 0 or parsed > Decimal('1000000'):
+        return None
+    rendered = format(parsed, 'f')
+    if '.' in rendered:
+        rendered = rendered.rstrip('0').rstrip('.')
+    return rendered or None
+
+
+def _format_rate_for_display(value: object, *, significant_digits: int = 6) -> str:
+    """Formats a stored rate compactly without losing very small non-zero values."""
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return str(value)
+    if not parsed.is_finite() or parsed == 0 or significant_digits < 1:
+        return str(value)
+    quantum = Decimal(1).scaleb(parsed.copy_abs().adjusted() - significant_digits + 1)
+    try:
+        rounded = parsed.quantize(quantum, rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        rounded = parsed
+    rendered = format(rounded, 'f')
+    if '.' in rendered:
+        rendered = rendered.rstrip('0').rstrip('.')
+    return rendered or '0'
 
 
 # ============================================================================
@@ -1396,11 +1706,12 @@ async def show_platega_management_menu(callback: CallbackQuery, state: FSMContex
         "1. Напишите менеджеру <b>@platega_connect_manager</b>\n"
         "2. Скажите, что вы от <b>@plushkinva</b> — получите скидку на подключение.\n"
         "3. По умолчанию подключается <b>SBP</b>; другие методы оплаты подключаются через менеджера Platega.\n"
-        "4. После подключения скопируйте <b>Merchant ID</b> и <b>Secret</b> из ЛК.\n"
-        "5. Укажите их в кнопках ниже.\n\n"
+        "4. После подключения скопируйте <b>Merchant ID</b> и <b>API-ключ</b> из ЛК.\n"
+        "5. Поле <b>Callback URL</b> в панели Platega заполнять не нужно.\n"
+        "6. Укажите Merchant ID и API-ключ в кнопках ниже.\n\n"
         f"{status_emoji} Статус: <b>{status_text}</b>\n"
         f"🆔 Merchant ID: {merchant_display}\n"
-        f"🔐 Secret: {secret_display}\n\n"
+        f"🔐 API-ключ: {secret_display}\n\n"
         "Выберите действие:"
     )
 
@@ -1428,7 +1739,7 @@ async def _set_platega_enabled(callback: CallbackQuery, state: FSMContext, targe
         merchant_id = get_setting('platega_merchant_id', '')
         secret = get_setting('platega_secret', '')
         if not merchant_id or not merchant_id.strip() or not secret or not secret.strip():
-            await callback.answer("❌ Сначала укажите Merchant ID и Secret!", show_alert=True)
+            await callback.answer("❌ Сначала укажите Merchant ID и API-ключ!", show_alert=True)
             return
 
     new_value = '1' if target_enabled else '0'
@@ -1518,7 +1829,7 @@ async def platega_setup_merchant_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin_platega_mgmt_edit_secret")
 async def platega_edit_secret(callback: CallbackQuery, state: FSMContext):
-    """Requests Secret Platega."""
+    """Requests the Platega API key."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
@@ -1528,7 +1839,7 @@ async def platega_edit_secret(callback: CallbackQuery, state: FSMContext):
 
     await safe_edit_or_send(
         callback.message,
-        "🔐 <b>Введите Secret Platega</b>\n\n"
+        "🔐 <b>Введите API-ключ Platega</b>\n\n"
         "Найдите его в личном кабинете Platega после подключения.\n\n"
         "<i>Значение будет частично скрыто после сохранения.</i>",
         reply_markup=back_and_home_kb("admin_payments_platega"),
@@ -1538,13 +1849,13 @@ async def platega_edit_secret(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.platega_setup_secret)
 async def platega_setup_secret_handler(message: Message, state: FSMContext):
-    """Processes Secret Platega input."""
+    """Processes Platega API key input."""
     from bot.utils.text import get_message_text_for_storage
 
     secret = get_message_text_for_storage(message, 'plain').strip()
 
     if len(secret) < 8:
-        await safe_edit_or_send(message, "❌ Слишком короткий Secret. Попробуйте ещё раз.")
+        await safe_edit_or_send(message, "❌ Слишком короткий API-ключ. Попробуйте ещё раз.")
         return
 
     try:

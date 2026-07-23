@@ -95,7 +95,14 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
                     text += f'• <code>{dt}</code>: {reason_safe}\n'
                 continue
             amount = ''
-            if p.get('payment_type') == 'crypto':
+            if int(p.get('intent_version') or 0) == 1:
+                from bot.services.money import format_money_minor
+
+                amount = format_money_minor(
+                    p.get('payable_amount_minor') or p.get('payable_amount_cents') or 0,
+                    p.get('base_currency') or 'RUB',
+                )
+            elif p.get('payment_type') == 'crypto':
                 usd = p['amount_cents'] / 100
                 usd_str = f'{usd:g}'.replace('.', ',')
                 amount = f'${usd_str}'

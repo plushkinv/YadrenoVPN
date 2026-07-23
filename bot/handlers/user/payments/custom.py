@@ -1,4 +1,4 @@
-"""Generic handlers for custom payment providers extensions."""
+"""Generic handlers for extension-owned payment providers."""
 from __future__ import annotations
 
 import logging
@@ -7,118 +7,93 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
+from bot.handlers.user.payments.tariff_select_page import show_provider_tariff_select_page
+from bot.utils.callbacks import safe_answer_callback
 from bot.utils.page_flow import build_page_flow_context
 from bot.utils.page_renderer import render_page
-from bot.utils.text import escape_html
-from bot.utils.callbacks import safe_answer_callback
-from bot.handlers.user.payments.tariff_select_page import (
-    build_payment_tariff_select_page_context,
-    show_payment_no_tariffs_page,
-    show_payment_tariff_select_page,
-)
-from bot.handlers.user.payments.status_page import (
-    show_payment_status_message,
-    show_payment_unavailable_status,
-)
 
 logger = logging.getLogger(__name__)
-
 router = Router()
+
+
+async def _render_callback_page(callback: CallbackQuery, page_key: str, **context) -> None:
+    await render_page(
+        callback,
+        page_key,
+        context=build_page_flow_context(
+            callback,
+            telegram_id=callback.from_user.id,
+            **context,
+        ),
+    )
+    await safe_answer_callback(callback)
 
 
 @router.callback_query(F.data.startswith('pe:'))
 async def custom_payment_select_tariff(callback: CallbackQuery):
+    """Show page-owned tariff rows for an enabled extension provider."""
     provider_id = callback.data.split(':', 1)[1]
     provider = _get_available_provider(provider_id, {'telegram_id': callback.from_user.id})
     if provider is None:
-        await callback.answer('❌ Способ оплаты недоступен', show_alert=True)
+        await _render_callback_page(callback, 'payment_unavailable')
         return
 
     from database.requests import get_all_tariffs
-    from bot.keyboards.user import custom_payment_tariff_select_kb
-    from bot.keyboards.admin import home_only_kb
 
-    tariffs = _eligible_rub_tariffs(get_all_tariffs(include_hidden=False), provider.minimum_amount_cents)
-    if not tariffs:
-        await show_payment_tariff_select_page(
-            callback,
-            context=build_payment_tariff_select_page_context(
-                provider_title_html=f"💳 <b>{escape_html(provider.title)}</b>",
-                instruction_html='😔 Нет тарифов с рублёвой ценой для этого способа оплаты.',
-            ),
-            runtime_markup=home_only_kb(),
-        )
-        await callback.answer()
-        return
-
-    await show_payment_tariff_select_page(
+    tariffs = _eligible_provider_tariffs(
+        get_all_tariffs(include_hidden=False),
+        getattr(provider, 'payment_type', f'ext_{provider.provider_id}'),
+        getattr(provider, 'minimum_amount_minor', provider.minimum_amount_cents),
+    )
+    await show_provider_tariff_select_page(
         callback,
-        context=build_payment_tariff_select_page_context(
-            provider_title_html=f"💳 <b>{escape_html(provider.title)}</b>",
-        ),
-        runtime_markup=custom_payment_tariff_select_kb(
-            tariffs,
-            provider.provider_id,
-            minimum_amount_cents=provider.minimum_amount_cents,
-        ),
+        tariffs=tariffs,
+        payment_type=provider.payment_type,
+        callback_factory=lambda tariff_id: f'pet:{provider.provider_id}:{tariff_id}',
+        back_callback='buy_key',
+        minimum_amount=provider.minimum_amount_minor,
     )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith('re:'))
 async def custom_payment_select_renew_tariff(callback: CallbackQuery):
+    """Show page-owned renewal tariff rows for an extension provider."""
     parts = callback.data.split(':')
-    if len(parts) != 3:
-        await callback.answer('❌ Некорректная кнопка оплаты', show_alert=True)
-        return
-    provider_id = parts[1]
     try:
+        provider_id = parts[1]
         key_id = int(parts[2])
-    except ValueError:
-        await callback.answer('❌ Некорректная кнопка оплаты', show_alert=True)
+    except (IndexError, ValueError):
+        await _render_callback_page(callback, 'action_unavailable')
         return
-    provider = _get_available_provider(provider_id, {'telegram_id': callback.from_user.id, 'key_id': key_id})
+    provider = _get_available_provider(
+        provider_id,
+        {'telegram_id': callback.from_user.id, 'key_id': key_id},
+    )
     if provider is None:
-        await callback.answer('❌ Способ оплаты недоступен', show_alert=True)
+        await _render_callback_page(callback, 'payment_unavailable')
         return
 
-    from database.requests import get_key_details_for_user
-    from bot.keyboards.user import custom_payment_renew_tariff_select_kb
     from bot.utils.groups import get_tariffs_for_renewal
+    from database.requests import get_key_details_for_user
 
     key = get_key_details_for_user(key_id, callback.from_user.id)
     if not key:
-        await callback.answer('❌ Ключ не найден', show_alert=True)
+        await _render_callback_page(callback, 'key_not_found')
         return
-
-    tariffs = _eligible_rub_tariffs(
+    tariffs = _eligible_provider_tariffs(
         get_tariffs_for_renewal(key.get('tariff_id', 0)),
-        provider.minimum_amount_cents,
+        getattr(provider, 'payment_type', f'ext_{provider.provider_id}'),
+        getattr(provider, 'minimum_amount_minor', provider.minimum_amount_cents),
     )
-    if not tariffs:
-        await show_payment_no_tariffs_page(
-            callback,
-            provider_title_html=f"💳 <b>{escape_html(provider.title)}</b>",
-            instruction_html='😔 Нет доступных тарифов для этого способа оплаты.',
-            key_name=key['display_name'],
-            back_callback=f'key_renew:{key_id}',
-        )
-        await callback.answer()
-        return
-
-    await show_payment_tariff_select_page(
+    await show_provider_tariff_select_page(
         callback,
-        context=build_payment_tariff_select_page_context(
-            provider_title_html=f"💳 <b>{escape_html(provider.title)}</b>",
-            instruction_html='Выберите тариф для продления:',
-            key_name=key['display_name'],
-        ),
-        runtime_markup=custom_payment_renew_tariff_select_kb(
-            tariffs,
-            provider.provider_id,
-            key_id,
-            minimum_amount_cents=provider.minimum_amount_cents,
-        ),
+        tariffs=tariffs,
+        payment_type=provider.payment_type,
+        callback_factory=lambda tariff_id: f'ret:{provider.provider_id}:{key_id}:{tariff_id}',
+        back_callback=f'key_renew:{key_id}',
+        key=key,
+        minimum_amount=provider.minimum_amount_minor,
     )
     await callback.answer()
 
@@ -126,30 +101,29 @@ async def custom_payment_select_renew_tariff(callback: CallbackQuery):
 @router.callback_query(F.data.startswith('pet:'))
 async def custom_payment_create(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(':')
-    if len(parts) != 3:
-        await callback.answer('❌ Некорректная кнопка оплаты', show_alert=True)
-        return
-    provider_id = parts[1]
     try:
+        provider_id = parts[1]
         tariff_id = int(parts[2])
-    except ValueError:
-        await callback.answer('❌ Некорректная кнопка оплаты', show_alert=True)
+    except (IndexError, ValueError):
+        await _render_callback_page(callback, 'action_unavailable')
         return
-    await _create_custom_payment(callback, state, provider_id=provider_id, tariff_id=tariff_id)
+    await _create_custom_payment(
+        callback,
+        state,
+        provider_id=provider_id,
+        tariff_id=tariff_id,
+    )
 
 
 @router.callback_query(F.data.startswith('ret:'))
 async def custom_payment_create_renewal(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(':')
-    if len(parts) != 4:
-        await callback.answer('❌ Некорректная кнопка оплаты', show_alert=True)
-        return
-    provider_id = parts[1]
     try:
+        provider_id = parts[1]
         key_id = int(parts[2])
         tariff_id = int(parts[3])
-    except ValueError:
-        await callback.answer('❌ Некорректная кнопка оплаты', show_alert=True)
+    except (IndexError, ValueError):
+        await _render_callback_page(callback, 'action_unavailable')
         return
     await _create_custom_payment(
         callback,
@@ -162,35 +136,34 @@ async def custom_payment_create_renewal(callback: CallbackQuery, state: FSMConte
 
 @router.callback_query(F.data.startswith('check_ext:'))
 async def custom_payment_check(callback: CallbackQuery, state: FSMContext):
+    """Check an extension provider order without exposing provider exceptions."""
     order_id = callback.data.split(':', 1)[1]
-
+    from bot.handlers.user.payments.base import finalize_payment_ui
+    from bot.services.custom_payments import check_custom_payment_order
     from database.requests import (
         cancel_pending_order,
         find_order_by_order_id,
+        get_or_create_user,
         get_payment_provider_order,
-        get_user_internal_id,
         is_order_already_paid,
         update_payment_auto_check,
     )
-    from bot.handlers.user.payments.base import finalize_payment_ui
-    from bot.keyboards.admin import home_only_kb
-    from bot.services.custom_payments import check_custom_payment_order
 
     order = find_order_by_order_id(order_id)
-    if not order:
-        await safe_answer_callback(callback, '❌ Ордер не найден', show_alert=True)
+    user, _ = get_or_create_user(
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.first_name,
+        callback.from_user.last_name,
+    )
+    if not order or int(order.get('user_id') or 0) != int(user['id']):
+        await _render_callback_page(callback, 'payment_order_unavailable')
         return
-
-    owner_user_id = get_user_internal_id(callback.from_user.id)
-    if not owner_user_id or int(order.get('user_id') or 0) != int(owner_user_id):
-        await safe_answer_callback(callback, '❌ Ордер не найден', show_alert=True)
-        return
-
     if order.get('status') == 'paid' or is_order_already_paid(order_id):
         await finalize_payment_ui(
             callback.message,
             state,
-            '✅ Оплата уже была обработана ранее.',
+            '',
             order,
             user_id=callback.from_user.id,
         )
@@ -199,72 +172,39 @@ async def custom_payment_check(callback: CallbackQuery, state: FSMContext):
 
     provider_order = get_payment_provider_order(order_id)
     if not provider_order:
-        await safe_answer_callback(
-            callback,
-            '⚠️ Нет данных о платеже. Попробуйте создать счёт заново.',
-            show_alert=True,
-        )
+        await _render_callback_page(callback, 'payment_order_unavailable')
         return
-    await safe_answer_callback(callback, '🔍 Сейчас проверим платёж...')
     if provider_order.get('status') == 'succeeded':
-        update_payment_auto_check(
-            order_id,
-            state='provider_succeeded',
-            next_delay_seconds=0,
-        )
+        update_payment_auto_check(order_id, state='provider_succeeded', next_delay_seconds=0)
         await _complete_custom_payment_flow(callback, state, order, provider_order)
         return
     if provider_order.get('status') == 'canceled':
         cancel_pending_order(order_id)
         update_payment_auto_check(order_id, state='canceled')
-        await show_payment_status_message(
-            callback.message,
-            title_html='❌ <b>Платёж отменён</b>',
-            body_text='Попробуйте снова выбрать тариф и создать новый счёт.',
-            reply_markup=home_only_kb(),
-            force_new=True,
-        )
+        await _render_callback_page(callback, 'payment_canceled', order_id=order_id)
         return
 
     try:
         result = await check_custom_payment_order(provider_order['provider_id'], order)
-    except Exception as e:
-        logger.warning("Ошибка проверки custom payment %s: %s", order_id, e)
-        await show_payment_status_message(
-            callback.message,
-            title_html='❌ <b>Не удалось проверить статус платежа</b>',
-            body_text='Попробуйте позже.',
-            reply_markup=home_only_kb(),
-            force_new=True,
-        )
+    except Exception as error:
+        logger.warning('Custom payment check failed order=%s: %s', order_id, error)
+        await _render_callback_page(callback, 'payment_failed', order_id=order_id)
         return
-
     if result['status'] == 'succeeded':
-        update_payment_auto_check(
-            order_id,
-            state='provider_succeeded',
-            next_delay_seconds=0,
-        )
+        update_payment_auto_check(order_id, state='provider_succeeded', next_delay_seconds=0)
         await _complete_custom_payment_flow(callback, state, order, provider_order)
         return
-
     if result['status'] == 'canceled':
         cancel_pending_order(order_id)
         update_payment_auto_check(order_id, state='canceled')
-        await show_payment_status_message(
-            callback.message,
-            title_html='❌ <b>Платёж отменён</b>',
-            body_text='Попробуйте снова выбрать тариф и создать новый счёт.',
-            reply_markup=home_only_kb(),
-            force_new=True,
-        )
+        await _render_callback_page(callback, 'payment_canceled', order_id=order_id)
         return
-
-    await show_payment_status_message(
-        callback.message,
-        title_html='⏳ <b>Платёж ещё не поступил</b>',
-        body_text='Оплатите по ссылке и нажмите «✅ Я оплатил» снова.',
-        force_new=True,
+    await _render_callback_page(
+        callback,
+        'payment_pending',
+        order_id=order_id,
+        payment_check_callback=f'check_ext:{order_id}',
+        payment_can_check=True,
     )
 
 
@@ -276,45 +216,42 @@ async def _create_custom_payment(
     tariff_id: int,
     key_id: int | None = None,
 ) -> None:
-    provider = _get_available_provider(provider_id, {'telegram_id': callback.from_user.id, 'key_id': key_id})
+    provider = _get_available_provider(
+        provider_id,
+        {'telegram_id': callback.from_user.id, 'key_id': key_id},
+    )
     if provider is None:
-        await callback.answer('❌ Способ оплаты недоступен', show_alert=True)
+        await _render_callback_page(callback, 'payment_unavailable')
         return
 
-    from database.requests import get_key_details_for_user, get_tariff_by_id, get_user_internal_id
     from bot.handlers.user.payments.base import (
         QR_PAYMENT_PAGE_KEY,
         build_qr_payment_page_context,
         complete_promo_free_payment,
-        default_qr_payment_page_text,
     )
-    from bot.keyboards.admin import home_only_kb
-    from bot.keyboards.user import qr_payment_kb
     from bot.services.custom_payments import create_custom_payment_order
     from bot.services.promotions import describe_quote_lines, format_amount
+    from database.requests import get_key_details_for_user, get_or_create_user, get_tariff_by_id
 
-    user_id = get_user_internal_id(callback.from_user.id)
+    user, _ = get_or_create_user(
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.first_name,
+        callback.from_user.last_name,
+    )
     tariff = get_tariff_by_id(tariff_id)
     key = get_key_details_for_user(key_id, callback.from_user.id) if key_id else None
-    if not user_id or not tariff or (key_id and not key):
-        await safe_answer_callback(callback, '❌ Ошибка тарифа или ключа', show_alert=True)
+    if not tariff or (key_id and not key):
+        await _render_callback_page(callback, 'payment_order_unavailable')
         return
 
-    await safe_answer_callback(
-        callback,
-        '⏳ Создаём платёж, пожалуйста, подождите...',
-    )
-    await show_payment_status_message(
-        callback.message,
-        title_html='⏳ Создаём ссылку на оплату...',
-        body_html='',
-        payment_provider_title=provider.title,
-    )
+    await safe_answer_callback(callback)
+    await render_page(callback, 'payment_creating')
     bot_info = await callback.bot.get_me()
     try:
         result = await create_custom_payment_order(
             provider.provider_id,
-            user_id=user_id,
+            user_id=int(user['id']),
             telegram_id=callback.from_user.id,
             tariff=tariff,
             action='renewal' if key_id else 'new_key',
@@ -322,61 +259,55 @@ async def _create_custom_payment(
             key=key,
             bot_username=bot_info.username,
         )
-    except Exception as e:
-        logger.warning("Ошибка создания custom payment provider=%s tariff=%s: %s", provider.provider_id, tariff_id, e)
-        await show_payment_status_message(
-            callback.message,
-            title_html='❌ <b>Ошибка создания платежа</b>',
-            body_text='Попробуйте другой способ оплаты или повторите позже.',
-            payment_provider_title=provider.title,
-            reply_markup=home_only_kb(),
+    except Exception as error:
+        logger.warning(
+            'Custom payment creation failed provider=%s tariff=%s: %s',
+            provider.provider_id,
+            tariff_id,
+            error,
         )
+        await render_page(callback, 'payment_failed')
         return
-
     if not result.get('ok'):
-        await show_payment_unavailable_status(
-            callback.message,
-            str(result.get('reason') or 'Попробуйте позже.'),
-            payment_provider_title=provider.title,
+        logger.warning(
+            'Custom payment unavailable provider=%s reason=%s',
+            provider.provider_id,
+            result.get('reason'),
         )
+        await render_page(callback, 'payment_unavailable')
         return
 
-    order_id = result['order_id']
+    order_id = str(result['order_id'])
     quote = result['quote']
     if result.get('is_free'):
         await complete_promo_free_payment(callback, state, order_id, callback.from_user.id)
         return
-
-    payment_url = result['payment_url']
-    promo_lines = describe_quote_lines(quote)
+    payment_url = str(result['payment_url'])
     payment_context = build_qr_payment_page_context(
-        title=f"💳 <b>{escape_html(provider.title)}</b>",
-        tariff_name=escape_html(tariff['name']),
+        title=provider.title,
+        tariff_name=tariff['name'],
         price_str=format_amount(quote['final_amount'], provider.payment_type),
         days=int(tariff.get('duration_days') or 0),
         qr_url=payment_url,
-        key_name=escape_html(key['display_name']) if key else None,
+        key_name=key['display_name'] if key else None,
         hint_text=None,
-        instruction_text='Перейдите по {payment_link} и завершите оплату.',
-        promo_lines=promo_lines,
+        instruction_text=None,
+        promo_lines=describe_quote_lines(quote),
     )
-    payment_context.setdefault('bot_username', bot_info.username)
-    payment_context = build_page_flow_context(callback, **payment_context)
-
-    runtime_markup = qr_payment_kb(
-        order_id,
-        'check_ext',
-        f"re:{provider.provider_id}:{key_id}" if key_id else f"pe:{provider.provider_id}",
-        payment_url,
-    )
-    runtime_rows = getattr(runtime_markup, 'inline_keyboard', None)
+    back_callback = f're:{provider.provider_id}:{key_id}' if key_id else f'pe:{provider.provider_id}'
+    payment_context.update({
+        'bot_username': bot_info.username,
+        'order_id': order_id,
+        'payment_check_callback': f'check_ext:{order_id}',
+        'payment_methods_callback': back_callback,
+        'payment_cancel_callback': back_callback,
+        'payment_can_check': True,
+    })
     await render_page(
         callback,
-        page_key=QR_PAYMENT_PAGE_KEY,
-        context=payment_context,
-        append_buttons=runtime_rows,
+        page_key='payment_link_renewal' if key else QR_PAYMENT_PAGE_KEY,
+        context=build_page_flow_context(callback, **payment_context),
         force_new=True,
-        fallback_text=default_qr_payment_page_text(),
         media_policy='runtime',
     )
 
@@ -388,9 +319,7 @@ def _get_available_provider(provider_id: str, context: dict | None = None):
         provider = get_payment_provider(provider_id)
     except ValueError:
         return None
-    if provider is None:
-        return None
-    if not is_payment_provider_enabled(provider.provider_id, context or {}):
+    if provider is None or not is_payment_provider_enabled(provider.provider_id, context or {}):
         return None
     return provider
 
@@ -427,10 +356,28 @@ def _custom_payment_referral_amount(order: dict) -> int:
         return 0
 
 
+def _eligible_provider_tariffs(
+    tariffs: list[dict],
+    payment_type: str,
+    minimum_amount_minor: int,
+) -> list[dict]:
+    from bot.services.exchange_rate import get_payment_rate_snapshot, provider_amount_from_base_minor
+
+    snapshot = get_payment_rate_snapshot()
+    result = []
+    for tariff in tariffs:
+        base_amount = int(
+            tariff.get('price_minor')
+            or int(float(tariff.get('price_rub') or 0) * 100)
+        )
+        if base_amount <= 0:
+            continue
+        charge_amount, _ = provider_amount_from_base_minor(base_amount, payment_type, snapshot)
+        if charge_amount >= int(minimum_amount_minor or 0):
+            result.append(tariff)
+    return result
+
+
 def _eligible_rub_tariffs(tariffs: list[dict], minimum_amount_cents: int) -> list[dict]:
-    min_rub = minimum_amount_cents / 100
-    return [
-        tariff for tariff in tariffs
-        if float(tariff.get('price_rub') or 0) > 0
-        and float(tariff.get('price_rub') or 0) >= min_rub
-    ]
+    """Deprecated compatibility wrapper for old extensions and tests."""
+    return _eligible_provider_tariffs(tariffs, 'cards', minimum_amount_cents)

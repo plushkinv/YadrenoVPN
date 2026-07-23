@@ -10,15 +10,6 @@ from bot.utils.page_renderer import render_page
 PAYMENT_STATUS_PAGE_KEY = 'payment_status'
 
 
-def default_payment_status_page_text() -> str:
-    """Default text of the payment status screen."""
-    return (
-        "%платеж_провайдер%\n\n"
-        "%платеж_инструкция%"
-        "%платеж_подсказка%"
-    )
-
-
 def build_payment_status_page_context(
     *,
     title_html: str,
@@ -56,7 +47,6 @@ async def show_payment_status_page(
         context=context,
         append_buttons=_runtime_rows(reply_markup),
         force_new=force_new,
-        fallback_text=default_payment_status_page_text(),
         send_func=send_func,
     )
 
@@ -101,37 +91,18 @@ async def show_payment_unavailable_status(
     send_func=None,
 ):
     """Shows the typical status of an unavailable payment method."""
-    from bot.keyboards.admin import home_only_kb
-
-    return await show_payment_status_message(
-        message,
-        title_html='⚠️ <b>Способ оплаты недоступен</b>',
-        body_text=reason,
-        payment_provider_title=payment_provider_title,
-        reply_markup=home_only_kb(),
-        send_func=send_func,
-    )
+    return await render_page(message, 'payment_unavailable', send_func=send_func)
 
 
 async def show_payment_configuration_status(
     message,
     *,
-    title_html: str = '❌ <b>Ошибка настройки платежей</b>',
+    title_html: str = '',
     body_html: str | None = None,
     body_text: str | None = None,
     payment_provider_title: str = '',
     send_func=None,
 ):
     """Shows the typical status of a payment method setup error."""
-    from bot.keyboards.admin import home_only_kb
-
-    return await show_payment_status_message(
-        message,
-        title_html=title_html,
-        body_html=body_html,
-        body_text=body_text,
-        payment_provider_title=payment_provider_title,
-        reply_markup=home_only_kb(),
-        send_func=send_func,
-    )
+    return await render_page(message, 'payment_unavailable', send_func=send_func)
 

@@ -83,7 +83,19 @@ async def _handle_denied(event: TelegramObject, result: UserAccessGuardResult) -
             await event.answer(result.message or None, show_alert=bool(result.message and result.show_alert))
         return
 
-    text = result.message or '⚠️ Доступ ограничен'
+    if not result.message:
+        from bot.utils.page_renderer import render_page
+
+        await render_page(
+            event,
+            page_key='action_unavailable',
+            force_new=isinstance(event, Message),
+        )
+        if isinstance(event, CallbackQuery):
+            await event.answer()
+        return
+
+    text = result.message
     reply_markup = _build_reply_markup(result)
     if isinstance(event, CallbackQuery):
         if reply_markup and event.message:

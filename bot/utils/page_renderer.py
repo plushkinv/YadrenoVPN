@@ -9,6 +9,7 @@ Implements a three-layer button visibility system:
 """
 import json
 import logging
+import re
 from collections.abc import Mapping
 from typing import Optional, Dict, List, Any
 from urllib.parse import urlparse
@@ -19,7 +20,11 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.utils.placeholders import apply_page_placeholders, contains_placeholder
+from bot.utils.placeholders import (
+    apply_page_placeholders,
+    apply_placeholder_replacements,
+    contains_placeholder,
+)
 from bot.utils.page_placeholder_context import (
     enrich_page_placeholder_context,
     enrich_page_placeholder_context_sync,
@@ -30,6 +35,19 @@ logger = logging.getLogger(__name__)
 # Maximum number of buttons in one row
 MAX_BUTTONS_PER_ROW = 2
 PAGE_MEDIA_TYPES = {'photo', 'video', 'animation'}
+_COLLECTION_ITEM_KEY_RE = re.compile(r'item_[A-Za-z0-9_]+\Z', re.IGNORECASE)
+
+
+def validate_required_user_pages() -> int:
+    """Fail startup when any stock user screen or keyboard template is absent."""
+    from bot.utils.message_editor import REQUIRED_USER_PAGE_KEYS
+    from database.requests import get_page_keys
+
+    stored = get_page_keys()
+    missing = sorted(REQUIRED_USER_PAGE_KEYS - stored)
+    if missing:
+        raise RuntimeError("Required user pages are missing: " + ", ".join(missing))
+    return len(REQUIRED_USER_PAGE_KEYS)
 
 
 def _normalize_page_media_type(media_type: Optional[str], media_file_id: Optional[str]) -> Optional[str]:
@@ -98,6 +116,8 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
         "image": image,
         "media_type": media_type,
         "buttons": buttons,
+        "_text_default": row.get('text_default') or '',
+        "_text_custom": row.get('text_custom'),
     }
 
 
@@ -131,6 +151,15 @@ def _button_sort_key(button: Dict[str, Any]) -> tuple[int, int]:
         row if row is not None else 10_000,
         col if col is not None else 10_000,
     )
+
+
+def _collection_item_replacements(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Builds the local placeholder map for one repeatable button item."""
+    return {
+        f'%{key}%': value
+        for key, value in data.items()
+        if isinstance(key, str) and _COLLECTION_ITEM_KEY_RE.fullmatch(key)
+    }
 
 
 def _merge_buttons_by_id(
@@ -293,22 +322,29 @@ def _build_keyboard(
         ACTION_REGISTRY,
         SYSTEM_BUTTONS,
         normalize_callback_data,
+        resolve_system_collection,
         resolve_system_button,
     )
 
     visibility, invalid_visibility_ids = _normalize_runtime_visibility(visibility)
     context = _normalize_context_mapping(context)
 
-    def render_label(raw_label: Any, btn_id: str) -> Optional[str]:
+    def render_label(
+        raw_label: Any,
+        btn_id: str,
+        label_context: Optional[Dict[str, Any]] = None,
+        item_replacements: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         if not isinstance(raw_label, str):
             logger.warning("Label кнопки '%s' должен быть строкой — пропускаем", btn_id)
             return None
         rendered = apply_page_placeholders(
             raw_label,
             text_replacements,
-            context,
+            label_context or context,
             mode='button_label',
-        ).strip()
+        )
+        rendered = apply_placeholder_replacements(rendered, item_replacements).strip()
         if not rendered:
             logger.warning("Пустой label после подстановки для кнопки '%s' — пропускаем", btn_id)
             return None
@@ -320,13 +356,19 @@ def _build_keyboard(
             return None
         return raw_value
 
-    def render_url(raw_url: Any, btn_id: str) -> Optional[str]:
+    def render_url(
+        raw_url: Any,
+        btn_id: str,
+        url_context: Optional[Dict[str, Any]] = None,
+        item_replacements: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         rendered = apply_page_placeholders(
             raw_url,
             text_replacements,
-            context,
+            url_context or context,
             mode='url',
-        ).strip()
+        )
+        rendered = apply_placeholder_replacements(rendered, item_replacements).strip()
         if not rendered:
             logger.warning("Пустой URL после подстановки для кнопки '%s' — пропускаем", btn_id)
             return None
@@ -379,6 +421,58 @@ def _build_keyboard(
         # Processing by type
         callback_data = None
         url = None
+
+        if action_type == 'system_collection':
+            if is_hidden:
+                continue
+            try:
+                collection_items = resolve_system_collection(btn_id, context)
+            except Exception as e:
+                logger.error("System collection '%s' failed: %s", btn_id, e)
+                continue
+            for item_index, item in enumerate(collection_items):
+                if item.get('hidden') is True:
+                    continue
+                item_context = dict(context)
+                item_data = item.get('data') or {}
+                item_context.update(item_data)
+                item_replacements = _collection_item_replacements(item_data)
+                rendered_label = render_label(
+                    label,
+                    btn_id,
+                    item_context,
+                    item_replacements,
+                )
+                if rendered_label is None:
+                    continue
+                item_callback = item.get('callback_data')
+                item_url = item.get('url')
+                if item_url:
+                    item_url = render_url(
+                        item_url,
+                        btn_id,
+                        item_context,
+                        item_replacements,
+                    )
+                    if not item_url:
+                        continue
+                if not item_callback and not item_url:
+                    logger.warning(
+                        "System collection '%s' item %s has no action — skipped",
+                        btn_id,
+                        item_index,
+                    )
+                    continue
+                resolved_buttons.append({
+                    'label': rendered_label,
+                    'icon_custom_emoji_id': icon_custom_emoji_id,
+                    'callback_data': item_callback,
+                    'url': item_url,
+                    'style': _resolve_button_style(color),
+                    'row': item.get('row') if item.get('row') is not None else row + item_index,
+                    'col': item.get('col') if item.get('col') is not None else col,
+                })
+            continue
 
         if action_type == 'system':
             if btn_id not in SYSTEM_BUTTONS and not (
@@ -628,7 +722,7 @@ def _apply_text_replacements(
         _normalize_context_mapping(context),
         mode='html',
     )
-    return rendered_text or '(пусто)'
+    return rendered_text
 
 
 def render_page_text(
@@ -919,23 +1013,35 @@ async def render_page(
     sender = send_func or safe_edit_or_send
 
     # 1. Get page data
-    page_data = get_page_data(page_key)
+    rendered_page_key = page_key
+    page_data = get_page_data(rendered_page_key)
 
     if page_data is None and fallback_text is None:
-        logger.error(f"Страница '{page_key}' не найдена в БД")
-        msg = target.message if isinstance(target, CallbackQuery) else target
-        await sender(msg, "⚠️ Страница не настроена", force_new=force_new)
-        return None
-
-    if page_data is None:
+        logger.error("User page %r is missing; rendering screen_unavailable", page_key)
+        rendered_page_key = 'screen_unavailable'
+        page_data = get_page_data(rendered_page_key)
+        if page_data is None:
+            raise RuntimeError(
+                f"Required fallback page 'screen_unavailable' is missing while rendering {page_key!r}"
+            )
+    elif page_data is None:
         page_data = _build_fallback_page_data(fallback_text or '')
 
-    render_context = _build_render_context(target, page_key, context)
+    render_context = _build_render_context(target, rendered_page_key, context)
     render_context = await enrich_page_placeholder_context(
-        page_key,
+        rendered_page_key,
         page_data,
         render_context,
         text_replacements,
+    )
+
+    from bot.utils.action_dispatcher import apply_action_policy_previews
+
+    rendered_buttons = await apply_action_policy_previews(
+        page_data["buttons"],
+        target,
+        page_key=rendered_page_key,
+        context=render_context,
     )
 
     # 2. Text processing
@@ -943,7 +1049,7 @@ async def render_page(
 
     # 3. Assembling the keyboard
     kb = _build_keyboard(
-        buttons=page_data["buttons"],
+        buttons=rendered_buttons,
         visibility=visibility,
         context=render_context,
         text_replacements=text_replacements,
@@ -980,7 +1086,7 @@ async def render_page(
         if viewer_id in ADMIN_IDS:
             remember_page_context(
                 viewer_id,
-                page_key=page_key,
+                page_key=rendered_page_key,
                 message=rendered_message,
                 visibility=visibility,
                 context=render_context,

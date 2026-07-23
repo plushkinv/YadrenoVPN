@@ -1,13 +1,9 @@
 import logging
 from types import SimpleNamespace
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, LabeledPrice, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.filters import Command, CommandObject
+from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from bot.utils.text import escape_html
 from bot.services.panel_sync_coordinator import regular_panel_operation
-from config import ADMIN_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -89,46 +85,19 @@ def _owner_user_stub(telegram_id: int | None, username: str | None):
     return SimpleNamespace(id=telegram_id, username=username)
 
 
-async def _safe_edit_target(target, text: str, **kwargs):
-    from bot.utils.key_status_page import render_key_status_page
+async def _render_key_flow_page(target, page_key: str, *, force_new: bool = False):
+    """Render a concrete database-backed page for a key configuration state."""
+    from bot.utils.page_renderer import render_page
 
-    force_new = kwargs.pop('force_new', False)
-    if not _is_callback_target(target):
-        force_new = True
-
-    title_html, body_text = _build_key_status_parts(text)
-    return await render_key_status_page(
-        _target_message(target),
-        title_html=title_html,
-        body_text=body_text,
-        force_new=force_new,
-        **kwargs,
+    render_target = target if isinstance(target, (Message, CallbackQuery)) else _target_message(target)
+    return await render_page(
+        render_target,
+        page_key=page_key,
+        context={
+            'telegram_id': getattr(_target_user(target), 'id', None),
+        },
+        force_new=force_new or not _is_callback_target(target),
     )
-
-
-def _build_key_status_parts(text: str) -> tuple[str, str]:
-    """Divides a short plain-text status into an HTML header and a plain body."""
-    plain = str(text or '').strip()
-    first_line, separator, rest = plain.partition('\n')
-    indicator = ''
-    for prefix in ('❌', '⚠️', '⏳', '📊', '✅'):
-        if first_line.startswith(prefix):
-            indicator = prefix
-            first_line = first_line[len(prefix):].strip()
-            break
-
-    title_text = first_line or 'Статус ключа'
-    title_prefix = f'{indicator} ' if indicator else ''
-    title_html = f'{title_prefix}<b>{escape_html(title_text)}</b>'
-    body_text = rest.strip() if separator else ''
-    return title_html, body_text
-
-
-async def _show_target_error(target, text: str) -> None:
-    if _is_callback_target(target):
-        await target.answer(text, show_alert=True)
-        return
-    await _safe_edit_target(target, text)
 
 
 async def _answer_callback_if_needed(target, *args, **kwargs) -> None:
@@ -139,9 +108,8 @@ async def _answer_callback_if_needed(target, *args, **kwargs) -> None:
 async def _continue_new_key_config(target, state: FSMContext, server: dict, *, force_new: bool = False):
     """Continues key configuration after manual or automatic server selection."""
     from bot.services.vpn_api import get_client, VPNAPIError, is_subscription_mode
-    from bot.keyboards.user import new_key_inbound_list_kb
     from bot.states.user_states import NewKeyConfig
-    from bot.utils.key_pages import build_server_screen_data, keyboard_rows
+    from bot.utils.page_button_items import build_protocol_button_items
     from bot.utils.page_renderer import render_page
 
     server_id = server['id']
@@ -156,26 +124,30 @@ async def _continue_new_key_config(target, state: FSMContext, server: dict, *, f
         client = await get_client(server_id)
         inbounds = await client.get_inbounds()
         if not inbounds:
-            await _show_target_error(target, '❌ На сервере нет доступных протоколов')
+            await _render_key_flow_page(target, 'key_operation_unavailable', force_new=force_new)
             return
         if len(inbounds) == 1:
             await process_new_key_final(target, state, server_id, inbounds[0]['id'])
             return
         await state.set_state(NewKeyConfig.waiting_for_inbound)
-        screen_data = build_server_screen_data(server)
         await render_page(
             target,
             page_key='new_key_inbound_select',
-            text_replacements={
-                '%screen_data%': screen_data,
-                '%экран_данные%': screen_data,
+            context={
+                'telegram_id': _target_user(target).id,
+                'protocol_button_items': build_protocol_button_items(
+                    inbounds,
+                    callback_prefix='new_key_inbound',
+                ),
+                'key_flow_back_callback': 'back_to_server_select',
+                'selected_server_name': server.get('name'),
             },
-            prepend_buttons=keyboard_rows(new_key_inbound_list_kb(inbounds)),
             force_new=force_new,
         )
         await _answer_callback_if_needed(target)
     except VPNAPIError as e:
-        await _show_target_error(target, f'❌ Ошибка подключения: {e}')
+        logger.warning('Failed to load inbounds from server %s: %s', server_id, e)
+        await _render_key_flow_page(target, 'key_operation_failed', force_new=force_new)
 
 
 async def start_new_key_config(
@@ -191,9 +163,8 @@ async def start_new_key_config(
     Used for both Stars and Crypto.
     """
     from database.requests import get_active_servers, find_order_by_order_id
-    from bot.keyboards.user import new_key_server_list_kb
     from bot.states.user_states import NewKeyConfig
-    from bot.utils.key_pages import build_new_key_server_select_data, keyboard_rows
+    from bot.utils.page_button_items import build_server_button_items
     from bot.utils.groups import get_servers_for_key
     from bot.utils.page_renderer import render_page
     order = find_order_by_order_id(order_id)
@@ -226,15 +197,16 @@ async def start_new_key_config(
         )
         await _continue_new_key_config(message, state, servers[0], force_new=True)
         return
-    screen_data = build_new_key_server_select_data()
     await render_page(
         message,
         page_key='new_key_server_select',
-        text_replacements={
-            '%screen_data%': screen_data,
-            '%экран_данные%': screen_data,
+        context={
+            'telegram_id': owner_telegram_id,
+            'server_button_items': build_server_button_items(
+                servers,
+                callback_prefix='new_key_server',
+            ),
         },
-        prepend_buttons=keyboard_rows(new_key_server_list_kb(servers)),
         force_new=True,
     )
 
@@ -245,7 +217,9 @@ async def process_new_key_server_selection(callback: CallbackQuery, state: FSMCo
     server_id = int(callback.data.split(':')[1])
     server = get_server_by_id(server_id)
     if not server:
-        await callback.answer('Сервер не найден', show_alert=True)
+        logger.warning('New-key server callback references missing server %s', server_id)
+        await _render_key_flow_page(callback, 'screen_unavailable')
+        await callback.answer()
         return
     await _continue_new_key_config(callback, state, server)
 
@@ -273,12 +247,14 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
     order_id = data.get('new_key_order_id')
     key_id = data.get('new_key_id')
     if not order_id:
-        await _safe_edit_target(target, '❌ Ошибка: потерян номер заказа.')
+        logger.warning('New subscription configuration lost order id')
+        await _render_key_flow_page(target, 'payment_order_unavailable')
         await state.clear()
         return
     order = find_order_by_order_id(order_id)
     if not order:
-        await _safe_edit_target(target, '❌ Ошибка: заказ не найден.')
+        logger.warning('New subscription configuration references missing order %s', order_id)
+        await _render_key_flow_page(target, 'payment_order_unavailable')
         await state.clear()
         return
     owner_telegram_id, owner_username = _resolve_new_key_owner(
@@ -287,7 +263,8 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
         state_data=data,
     )
     if not owner_telegram_id:
-        await _safe_edit_target(target, '❌ Ошибка: не удалось определить владельца ключа.')
+        logger.error('Unable to resolve key owner for order %s', order_id)
+        await _render_key_flow_page(target, 'key_operation_failed')
         await state.clear()
         return
     await state.update_data(
@@ -321,7 +298,7 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
                 },
             )
 
-    progress_message = await _safe_edit_target(target, '⏳ Настраиваем вашу подписку...')
+    progress_message = await _render_key_flow_page(target, 'key_progress')
 
     try:
         telegram_id = owner_telegram_id
@@ -414,9 +391,7 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
         )
     except Exception as e:
         logger.error(f'Ошибка настройки subscription-ключа (id={key_id}): {e}')
-        await _safe_edit_target(target,
-            f'❌ Ошибка настройки ключа: {e}\n'
-            f'Обратитесь в поддержку, указав Order ID: {order_id}')
+        await _render_key_flow_page(target, 'key_operation_failed')
 
 @router.callback_query(F.data.startswith('new_key_inbound:'))
 async def process_new_key_inbound_selection(callback: CallbackQuery, state: FSMContext):
@@ -437,12 +412,14 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
     order_id = data.get('new_key_order_id')
     key_id = data.get('new_key_id')
     if not order_id:
-        await _safe_edit_target(target, '❌ Ошибка: потерян номер заказа.')
+        logger.warning('New key configuration lost order id')
+        await _render_key_flow_page(target, 'payment_order_unavailable')
         await state.clear()
         return
     order = find_order_by_order_id(order_id)
     if not order:
-        await _safe_edit_target(target, '❌ Ошибка: заказ не найден.')
+        logger.warning('New key configuration references missing order %s', order_id)
+        await _render_key_flow_page(target, 'payment_order_unavailable')
         await state.clear()
         return
     owner_telegram_id, owner_username = _resolve_new_key_owner(
@@ -451,7 +428,8 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
         state_data=data,
     )
     if not owner_telegram_id:
-        await _safe_edit_target(target, '❌ Ошибка: не удалось определить владельца ключа.')
+        logger.error('Unable to resolve key owner for order %s', order_id)
+        await _render_key_flow_page(target, 'key_operation_failed')
         await state.clear()
         return
     await state.update_data(
@@ -485,7 +463,7 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
                     'source': 'key_config_fallback',
                 },
             )
-    progress_message = await _safe_edit_target(target, '⏳ Настраиваем ваш ключ...')
+    progress_message = await _render_key_flow_page(target, 'key_progress')
     try:
         telegram_id = owner_telegram_id
         username = owner_username
@@ -532,15 +510,14 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
         )
     except Exception as e:
         logger.error(f'Ошибка настройки ключа (id={key_id}): {e}')
-        await _safe_edit_target(target, f'❌ Ошибка настройки ключа: {e}\nОбратитесь в поддержку, указав Order ID: ' + str(order_id))
+        await _render_key_flow_page(target, 'key_operation_failed')
 
 @router.callback_query(F.data == 'back_to_server_select')
 async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
     """Return to server selection."""
     from database.requests import get_active_servers, find_order_by_order_id
-    from bot.keyboards.user import new_key_server_list_kb
     from bot.states.user_states import NewKeyConfig
-    from bot.utils.key_pages import build_new_key_server_back_data, keyboard_rows
+    from bot.utils.page_button_items import build_server_button_items
     from bot.utils.groups import get_servers_for_key
     from bot.utils.page_renderer import render_page
     data = await state.get_data()
@@ -551,13 +528,14 @@ async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
         tariff_id = order.get('tariff_id') if order else None
     servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
     await state.set_state(NewKeyConfig.waiting_for_server)
-    screen_data = build_new_key_server_back_data()
     await render_page(
         callback,
         page_key='new_key_server_select',
-        text_replacements={
-            '%screen_data%': screen_data,
-            '%экран_данные%': screen_data,
+        context={
+            'telegram_id': callback.from_user.id,
+            'server_button_items': build_server_button_items(
+                servers,
+                callback_prefix='new_key_server',
+            ),
         },
-        prepend_buttons=keyboard_rows(new_key_server_list_kb(servers)),
     )

@@ -48,7 +48,7 @@ async def render_extension_page(
     if not guard_result.allowed:
         await _handle_guard_denied(
             target,
-            guard_result.message or "⚠️ Страница временно недоступна",
+            guard_result.message,
             show_alert=guard_result.show_alert,
         )
         return True, True
@@ -107,7 +107,7 @@ async def render_extension_route(
     if not route_guard.allowed:
         await _handle_guard_denied(
             target,
-            route_guard.message or "⚠️ Страница временно недоступна",
+            route_guard.message,
             show_alert=route_guard.show_alert,
         )
         return True, True
@@ -120,7 +120,7 @@ async def render_extension_route(
     if not page_guard.allowed:
         await _handle_guard_denied(
             target,
-            page_guard.message or "⚠️ Страница временно недоступна",
+            page_guard.message,
             show_alert=page_guard.show_alert,
         )
         return True, True
@@ -184,6 +184,15 @@ def _target_telegram_id(target: CallbackQuery | Message) -> int | None:
 
 
 async def _handle_guard_denied(target: CallbackQuery | Message, message: str, *, show_alert: bool) -> None:
+    if not message:
+        await render_page(
+            target,
+            page_key='action_unavailable',
+            force_new=isinstance(target, Message),
+        )
+        if isinstance(target, CallbackQuery):
+            await target.answer()
+        return
     if isinstance(target, CallbackQuery):
         await target.answer(message, show_alert=show_alert)
         return

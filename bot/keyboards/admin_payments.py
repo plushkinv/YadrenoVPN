@@ -56,8 +56,58 @@ def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: b
     builder.row(InlineKeyboardButton(text=f'{reset_status} Автосброс трафика 1-го числа', callback_data='admin_toggle_monthly_reset'))
     builder.row(InlineKeyboardButton(text='📂 Группы тарифов', callback_data='admin_groups'))
     builder.row(InlineKeyboardButton(text='📋 Тарифы', callback_data='admin_tariffs'))
+    builder.row(InlineKeyboardButton(text='💱 Валюта и курсы', callback_data='admin_payment_rates'))
     builder.row(InlineKeyboardButton(text='🎁 Пробная подписка', callback_data='admin_trial'))
     builder.row(back_button('admin_panel'), home_button())
+    return builder.as_markup()
+
+
+def payment_rates_kb(base_currency: str = 'RUB') -> InlineKeyboardMarkup:
+    """Administrator controls for the base currency and fixed conversion rates."""
+    base = str(base_currency or 'RUB').upper()
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text='🪙 Изменить курс USDT',
+        callback_data='admin_payment_rate_edit:USDT',
+    ))
+    builder.row(InlineKeyboardButton(
+        text='⭐ Изменить курс Stars',
+        callback_data='admin_payment_rate_edit:XTR',
+    ))
+    if base == 'USD':
+        builder.row(InlineKeyboardButton(
+            text='₽ Изменить курс RUB',
+            callback_data='admin_payment_rate_edit:RUB',
+        ))
+    else:
+        builder.row(InlineKeyboardButton(
+            text='💵 Изменить курс USD',
+            callback_data='admin_payment_rate_edit:USD',
+        ))
+    target = 'USD' if base == 'RUB' else 'RUB'
+    builder.row(InlineKeyboardButton(
+        text=f'💵 Сменить базовую валюту на {target}',
+        callback_data=f'admin_base_currency_select:{target}',
+    ))
+    builder.row(back_button('admin_payments'), home_button())
+    return builder.as_markup()
+
+
+def base_currency_switch_input_kb() -> InlineKeyboardMarkup:
+    """Navigation while the administrator enters a transition rate."""
+    builder = InlineKeyboardBuilder()
+    builder.row(back_button('admin_payment_rates'), home_button())
+    return builder.as_markup()
+
+
+def base_currency_switch_confirm_kb(target_currency: str) -> InlineKeyboardMarkup:
+    """Explicit confirmation for the destructive accounting conversion."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text=f'✅ Переключить на {str(target_currency).upper()}',
+        callback_data='admin_base_currency_confirm',
+    ))
+    builder.row(back_button('admin_payment_rates'), home_button())
     return builder.as_markup()
 
 
@@ -97,7 +147,7 @@ def platega_management_kb(is_enabled: bool) -> InlineKeyboardMarkup:
         'admin_platega_mgmt_set:0',
     ))
     builder.row(InlineKeyboardButton(text='🆔 Изменить Merchant ID', callback_data='admin_platega_mgmt_edit_merchant'))
-    builder.row(InlineKeyboardButton(text='🔐 Изменить Secret', callback_data='admin_platega_mgmt_edit_secret'))
+    builder.row(InlineKeyboardButton(text='🔐 Изменить API-ключ', callback_data='admin_platega_mgmt_edit_secret'))
     builder.row(back_button('admin_payments'), home_button())
     return builder.as_markup()
 

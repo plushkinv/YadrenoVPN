@@ -1,204 +1,183 @@
-import logging
-from aiogram import Router, F
-from aiogram.types import CallbackQuery
+"""Cardlink compatibility payment callbacks backed by configurable UI pages."""
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery
 
-from bot.utils.text import escape_html, safe_edit_or_send
-from bot.handlers.user.payments.base import (
-    create_qr_payment_flow, check_qr_payment_flow
-)
-from bot.handlers.user.payments.tariff_select_page import (
-    build_payment_tariff_select_page_context,
-    show_payment_no_tariffs_page,
-    show_payment_tariff_select_page,
-)
-
-logger = logging.getLogger(__name__)
+from bot.handlers.user.payments.base import check_qr_payment_flow, create_qr_payment_flow
+from bot.handlers.user.payments.tariff_select_page import show_provider_tariff_select_page
+from bot.services.money import format_money_minor
+from bot.utils.page_renderer import render_page
 
 router = Router()
 
-# Cardlink Provider Configuration
-_CL_TITLE = '🔗 <b>Cardlink</b>'
 _CL_TYPE = 'cardlink'
 _CL_ERROR = 'Cardlink'
 _CL_QR_FILE = 'cardlink.png'
 _CL_CHECK_PREFIX = 'check_cardlink'
 _CL_RESULT_KEY = 'cardlink_bill_id'
 _CL_MIN_PRICE = 10
-# Cardlink hint: after payment you can return to the bot using the link
-_CL_HINT = (
-    'После оплаты нажмите «✅ Я оплатил» — или просто вернитесь '
-    'в бот по ссылке после оплаты, проверка запустится автоматически.'
-)
+
+
+async def _show_minimum_page(callback: CallbackQuery) -> None:
+    await render_page(
+        callback,
+        'payment_minimum_unavailable',
+        context={'payment_minimum_text': format_money_minor(_CL_MIN_PRICE * 100, 'RUB')},
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == 'pay_cardlink')
 async def pay_cardlink_select_tariff(callback: CallbackQuery):
-    """Selecting a tariff for payment via Cardlink (new key)."""
+    """Select a tariff for a new-key Cardlink payment."""
     from database.requests import get_all_tariffs
-    from bot.keyboards.user import tariff_select_kb
-    from bot.keyboards.admin import home_only_kb
 
-    tariffs = get_all_tariffs(include_hidden=False)
-    rub_tariffs = [t for t in tariffs if t.get('price_rub') and t['price_rub'] >= _CL_MIN_PRICE]
-    if not rub_tariffs:
-        await show_payment_tariff_select_page(
-            callback,
-            context=build_payment_tariff_select_page_context(
-                provider_title_html=_CL_TITLE,
-                instruction_html=f'😔 Нет тарифов с ценой в рублях (от {_CL_MIN_PRICE} ₽).\nОбратитесь к администратору.',
-            ),
-            runtime_markup=home_only_kb(),
-        )
-        await callback.answer()
-        return
-    await show_payment_tariff_select_page(
+    tariffs = [
+        tariff
+        for tariff in get_all_tariffs(include_hidden=False)
+        if float(tariff.get('price_rub') or 0) >= _CL_MIN_PRICE
+    ]
+    await show_provider_tariff_select_page(
         callback,
-        context=build_payment_tariff_select_page_context(
-            provider_title_html=_CL_TITLE,
-            instruction_html='Выберите тариф:\n\n<i>Оплата банковской картой или СБП через сервис Cardlink.</i>',
-        ),
-        runtime_markup=tariff_select_kb(rub_tariffs, is_cardlink=True),
+        tariffs=tariffs,
+        payment_type=_CL_TYPE,
+        callback_factory=lambda tariff_id: f'cardlink_pay:{tariff_id}',
+        back_callback='buy_key',
+        minimum_amount=_CL_MIN_PRICE * 100,
     )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith('cardlink_pay:'))
 async def cardlink_pay_create(callback: CallbackQuery, state: FSMContext):
-    """Creates a Cardlink account for the new key and sends a QR photo."""
-    from database.requests import get_tariff_by_id, save_cardlink_bill_id
+    """Create a Cardlink payment link for a new key."""
     from bot.services.billing import create_cardlink_payment
+    from database.requests import get_tariff_by_id, save_cardlink_bill_id
 
-    tariff_id = int(callback.data.split(':')[1])
+    try:
+        tariff_id = int(callback.data.split(':', 1)[1])
+    except (IndexError, TypeError, ValueError):
+        await render_page(callback, 'payment_order_unavailable')
+        await callback.answer()
+        return
     tariff = get_tariff_by_id(tariff_id)
     if not tariff:
-        await callback.answer('❌ Тариф не найден', show_alert=True)
+        await render_page(callback, 'payment_order_unavailable')
+        await callback.answer()
         return
     price_rub = float(tariff.get('price_rub') or 0)
     if price_rub < _CL_MIN_PRICE:
-        from bot.handlers.user.payments.status_page import show_payment_unavailable_status
-
-        await show_payment_unavailable_status(
-            callback.message,
-            f'Минимальная сумма для Cardlink — {_CL_MIN_PRICE} ₽.',
-            payment_provider_title='Cardlink',
-        )
-        await callback.answer()
+        await _show_minimum_page(callback)
         return
 
     await create_qr_payment_flow(
-        callback=callback, state=state, tariff=tariff, price_rub=price_rub,
+        callback=callback,
+        state=state,
+        tariff=tariff,
+        price_rub=price_rub,
         payment_type=_CL_TYPE,
         create_func=create_cardlink_payment,
         save_func=save_cardlink_bill_id,
         result_key=_CL_RESULT_KEY,
-        title=_CL_TITLE,
+        title=_CL_ERROR,
         check_prefix=_CL_CHECK_PREFIX,
         error_name=_CL_ERROR,
         qr_filename=_CL_QR_FILE,
         back_callback='pay_cardlink',
-        hint_text=_CL_HINT,
     )
 
 
 @router.callback_query(F.data.startswith('renew_cardlink_tariff:'))
 async def renew_cardlink_select_tariff(callback: CallbackQuery):
-    """Selecting a tariff for Cardlink payment when renewing a key."""
-    from database.requests import get_key_details_for_user
-    from bot.keyboards.user import renew_tariff_select_kb
+    """Select a tariff for a Cardlink key renewal."""
     from bot.utils.groups import get_tariffs_for_renewal
+    from database.requests import get_key_details_for_user
 
-    key_id = int(callback.data.split(':')[1])
-    key = get_key_details_for_user(key_id, callback.from_user.id)
-    if not key:
-        await callback.answer('❌ Ключ не найден', show_alert=True)
-        return
-    tariffs = get_tariffs_for_renewal(key.get('tariff_id', 0))
-    rub_tariffs = [t for t in tariffs if t.get('price_rub') and t['price_rub'] >= _CL_MIN_PRICE]
-    if not rub_tariffs:
-        await show_payment_no_tariffs_page(
-            callback,
-            provider_title_html=_CL_TITLE,
-            instruction_html=f'😔 Нет тарифов с ценой в рублях (от {_CL_MIN_PRICE} ₽) для продления.\nОбратитесь к администратору.',
-            key_name=key['display_name'],
-            back_callback=f'key_renew:{key_id}',
-        )
+    try:
+        key_id = int(callback.data.split(':', 1)[1])
+    except (IndexError, TypeError, ValueError):
+        await render_page(callback, 'key_not_found')
         await callback.answer()
         return
-    await show_payment_tariff_select_page(
+    key = get_key_details_for_user(key_id, callback.from_user.id)
+    if not key:
+        await render_page(callback, 'key_not_found')
+        await callback.answer()
+        return
+    tariffs = [
+        tariff
+        for tariff in get_tariffs_for_renewal(key.get('tariff_id', 0))
+        if float(tariff.get('price_rub') or 0) >= _CL_MIN_PRICE
+    ]
+    await show_provider_tariff_select_page(
         callback,
-        context=build_payment_tariff_select_page_context(
-            provider_title_html=_CL_TITLE,
-            instruction_html='Выберите тариф для продления:',
-            key_name=key['display_name'],
-        ),
-        runtime_markup=renew_tariff_select_kb(rub_tariffs, key_id, is_cardlink=True),
+        tariffs=tariffs,
+        payment_type=_CL_TYPE,
+        callback_factory=lambda tariff_id: f'renew_pay_cardlink:{key_id}:{tariff_id}',
+        back_callback=f'key_renew:{key_id}',
+        key=key,
+        minimum_amount=_CL_MIN_PRICE * 100,
     )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith('renew_pay_cardlink:'))
 async def renew_cardlink_create(callback: CallbackQuery, state: FSMContext):
-    """Creates a Cardlink account for key renewal."""
-    from database.requests import get_tariff_by_id, get_key_details_for_user, save_cardlink_bill_id
+    """Create a Cardlink payment link for a key renewal."""
     from bot.services.billing import create_cardlink_payment
-
-    parts = callback.data.split(':')
-    key_id = int(parts[1])
-    tariff_id = int(parts[2])
+    from database.requests import get_key_details_for_user, get_tariff_by_id, save_cardlink_bill_id
+    try:
+        _, key_id_raw, tariff_id_raw = callback.data.split(':', 2)
+        key_id = int(key_id_raw)
+        tariff_id = int(tariff_id_raw)
+    except (TypeError, ValueError):
+        await render_page(callback, 'payment_order_unavailable')
+        await callback.answer()
+        return
     tariff = get_tariff_by_id(tariff_id)
     key = get_key_details_for_user(key_id, callback.from_user.id)
     if not tariff or not key:
-        await callback.answer('❌ Ошибка тарифа или ключа', show_alert=True)
+        await render_page(callback, 'payment_order_unavailable')
+        await callback.answer()
         return
     price_rub = float(tariff.get('price_rub') or 0)
     if price_rub < _CL_MIN_PRICE:
-        from bot.handlers.user.payments.status_page import show_payment_unavailable_status
-
-        await show_payment_unavailable_status(
-            callback.message,
-            f'Минимальная сумма для Cardlink — {_CL_MIN_PRICE} ₽.',
-            payment_provider_title='Cardlink',
-        )
-        await callback.answer()
+        await _show_minimum_page(callback)
         return
 
     await create_qr_payment_flow(
-        callback=callback, state=state, tariff=tariff, price_rub=price_rub,
+        callback=callback,
+        state=state,
+        tariff=tariff,
+        price_rub=price_rub,
         payment_type=_CL_TYPE,
         create_func=create_cardlink_payment,
         save_func=save_cardlink_bill_id,
         result_key=_CL_RESULT_KEY,
-        title=_CL_TITLE,
+        title=_CL_ERROR,
         check_prefix=_CL_CHECK_PREFIX,
         error_name=_CL_ERROR,
         qr_filename=_CL_QR_FILE,
         back_callback=f'renew_cardlink_tariff:{key_id}',
-        key=key, vpn_key_id=key_id,
-        hint_text=_CL_HINT,
+        key=key,
+        vpn_key_id=key_id,
     )
 
 
 @router.callback_query(F.data.startswith('check_cardlink:'))
 async def check_cardlink_payment(callback: CallbackQuery, state: FSMContext):
-    """Checks the status of a Cardlink payment by clicking “✅ I paid.”"""
+    """Check a Cardlink payment from its page action."""
     await _run_cardlink_check(
-        callback.message, state,
+        callback.message,
+        state,
         order_id=callback.data.split(':', 1)[1],
         telegram_id=callback.from_user.id,
         callback=callback,
     )
 
 
-async def _run_cardlink_check(message, state, order_id: str,
-                              telegram_id: int, callback=None) -> None:
-    """
-    General logic for checking Cardlink payment.
-
-    Used by both the “✅ I paid” handler (with callback) and deep-link
-    return pay_cardlink_{order_id}. Old cl_Success / cl_Fail / cl_Result
-    are processed as fallback through the user's last pending order.
-    """
+async def _run_cardlink_check(message, state, order_id: str, telegram_id: int, callback=None) -> None:
+    """Check a Cardlink payment for both page actions and deep-link returns."""
     from bot.services.billing import check_cardlink_payment_status
 
     await check_qr_payment_flow(

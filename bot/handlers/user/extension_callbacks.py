@@ -13,6 +13,8 @@ from bot.utils.extension_callbacks import (
     parse_extension_callback_data,
 )
 from bot.utils.extension_rendering import render_extension_page, render_extension_route
+from bot.utils.page_renderer import render_page
+from bot.utils.user_pages import render_access_blocked_page
 from database.requests import is_user_banned
 
 router = Router()
@@ -23,12 +25,14 @@ async def extension_callback_handler(callback: CallbackQuery) -> None:
     """Executes a registered extension callback without passing the raw Telegram API."""
     telegram_id = callback.from_user.id
     if is_user_banned(telegram_id):
-        await callback.answer("⛔ Доступ заблокирован", show_alert=True)
+        await render_access_blocked_page(callback)
+        await callback.answer()
         return
 
     parsed = parse_extension_callback_data(callback.data)
     if not parsed:
-        await callback.answer("⚠️ Действие расширения недоступно", show_alert=True)
+        await render_page(callback, 'action_unavailable')
+        await callback.answer()
         return
 
     context = {
@@ -49,13 +53,17 @@ async def extension_callback_handler(callback: CallbackQuery) -> None:
     if result.get('page_key'):
         rendered, answered = await render_extension_page(callback, str(result['page_key']), render_context)
         if not answered:
-            await _answer_callback(callback, result, default_text=None if rendered else "⚠️ Страница недоступна")
+            if not rendered:
+                await render_page(callback, 'screen_unavailable')
+            await _answer_callback(callback, result, default_text=None)
         return
 
     if result.get('route_key'):
         rendered, answered = await render_extension_route(callback, str(result['route_key']), render_context)
         if not answered:
-            await _answer_callback(callback, result, default_text=None if rendered else "⚠️ Маршрут недоступен")
+            if not rendered:
+                await render_page(callback, 'screen_unavailable')
+            await _answer_callback(callback, result, default_text=None)
         return
 
     await _answer_callback(callback, result, default_text=None)

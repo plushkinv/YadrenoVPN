@@ -4,64 +4,86 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 from bot.utils.datetime_format import format_date_for_display
-from bot.utils.text import escape_html
+from bot.utils.placeholders import KEY_FIELDS_CONTEXT_KEY
+from bot.utils.user_ui_texts import render_ui_text
 
 
-KEY_INFO_PLACEHOLDER = '%ключ_информация%'
 KEY_HISTORY_PLACEHOLDER = '%ключ_история_операций%'
-SCREEN_DATA_PLACEHOLDER = '%экран_данные%'
-REPLACE_DATA_PLACEHOLDER = '%замена_ключа_данные%'
-KEY_DATA_PLACEHOLDER = '%ключ_переименование_данные%'
 
 
-def _safe(value: Any, fallback: str = '—') -> str:
-    """Escapes a dynamic value for HTML."""
-    if value is None or value == '':
-        return escape_html(fallback)
-    return escape_html(str(value))
+def _default_key_status(key: Mapping[str, Any]) -> str:
+    traffic_used = key.get('traffic_used', 0) or 0
+    traffic_limit = key.get('traffic_limit', 0) or 0
+    if traffic_limit > 0 and traffic_used >= traffic_limit:
+        return render_ui_text("key.status.traffic_exhausted")
+    if key.get('is_active'):
+        return render_ui_text("key.status.active")
+    if key.get('is_active') is not None:
+        return render_ui_text("key.status.expired")
+    return '—'
 
 
-def keyboard_rows(markup) -> list:
-    """Returns rows of buttons from a finished InlineKeyboardMarkup."""
-    if not markup:
-        return []
-    return list(getattr(markup, 'inline_keyboard', []) or [])
+def _default_key_traffic(key: Mapping[str, Any]) -> str:
+    if not key.get('server_id'):
+        return render_ui_text("key.traffic.needs_setup")
+
+    from bot.services.vpn_api import format_traffic
+
+    traffic_used = key.get('traffic_used', 0) or 0
+    traffic_limit = key.get('traffic_limit', 0) or 0
+    if traffic_limit > 0:
+        percent = traffic_used / traffic_limit * 100
+        return render_ui_text(
+            "key.traffic.limited",
+            used=format_traffic(traffic_used),
+            limit=format_traffic(traffic_limit),
+            percent=f"{percent:.1f}",
+        )
+    if traffic_used > 0:
+        return render_ui_text(
+            "key.traffic.used_unlimited",
+            used=format_traffic(traffic_used),
+        )
+    return render_ui_text("key.traffic.unlimited")
 
 
-def build_key_details_replacements(
+def build_key_page_context(
     key: Mapping[str, Any],
-    payments: Iterable[Mapping[str, Any]],
     *,
-    status: str,
-    traffic_info: str,
-    inbound_name: str,
-    protocol: str,
-    prepend_html: str = '',
-) -> dict[str, str]:
-    """Prepares key card placeholders."""
-    info_lines: list[str] = []
-    if prepend_html:
-        info_lines.extend([prepend_html, ''])
-
-    server = key.get('server_name') or 'Не выбран'
+    status: str | None = None,
+    traffic: str | None = None,
+    inbound: str | None = None,
+    protocol: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Builds the allowlisted display context for ``%key(field=...)%``."""
+    display_name = key.get('display_name') or f"#{key.get('id', '')}"
+    server = key.get('server_name') or '—'
     expires = format_date_for_display(key.get('expires_at'))
-    info_lines.extend([
-        f"🔑 <b>{_safe(key.get('display_name'), 'VPN-ключ')}</b>",
-        '',
-        f"<b>Статус:</b> {_safe(status)}",
-        f"<b>Сервер:</b> {_safe(server)}",
-        f"<b>Протокол:</b> {_safe(inbound_name)} ({_safe(protocol)})",
-        f"<b>Трафик:</b> {_safe(traffic_info)}",
-        f"<b>Действует до:</b> {_safe(expires)}",
-    ])
+    tariff = key.get('tariff_name') or '—'
+    device_limit = key.get('tariff_max_ips')
+    if device_limit is None:
+        device_limit = key.get('max_ips')
+    if device_limit is None:
+        device_limit = '—'
 
-    key_info = '\n'.join(info_lines)
-    key_history = build_key_history_block(payments)
+    if inbound is None:
+        inbound = render_ui_text("key.inbound.all_protocols") if key.get('sub_id') else '—'
+    if protocol is None:
+        protocol = 'SUBSCRIPTION' if key.get('sub_id') else '—'
+
     return {
-        '%key_info%': key_info,
-        '%key_history%': key_history,
-        KEY_INFO_PLACEHOLDER: key_info,
-        KEY_HISTORY_PLACEHOLDER: key_history,
+        KEY_FIELDS_CONTEXT_KEY: {
+            'id': key.get('id', ''),
+            'name': display_name,
+            'status': status if status is not None else _default_key_status(key),
+            'traffic': traffic if traffic is not None else _default_key_traffic(key),
+            'expires_at': expires,
+            'server': server,
+            'inbound': inbound,
+            'protocol': protocol,
+            'tariff': tariff,
+            'device_limit': device_limit,
+        },
     }
 
 
@@ -71,86 +93,63 @@ def build_key_history_block(payments: Iterable[Mapping[str, Any]]) -> str:
     if not payment_rows:
         return ''
 
-    lines = ['', '📜 <b>История операций:</b>']
+    lines: list[str] = []
     for payment in payment_rows:
         date = format_date_for_display(payment.get('paid_at'))
         if payment.get('history_type') == 'key_operation':
             delta_days = int(payment.get('delta_days') or 0)
-            reason = payment.get('reason') or 'Начисление дней'
+            reason = payment.get('reason') or '—'
             if delta_days > 0:
-                lines.append(f"   • {_safe(date)}: {_safe(reason)} (+{_safe(delta_days)} дн.)")
+                lines.append(render_ui_text(
+                    "key.history.operation_with_days",
+                    date=date,
+                    operation=reason,
+                    days=render_ui_text("format.days_short", days=f"+{delta_days}"),
+                ))
             else:
-                lines.append(f"   • {_safe(date)}: {_safe(reason)}")
+                lines.append(render_ui_text(
+                    "key.history.operation",
+                    date=date,
+                    operation=reason,
+                ))
             continue
-        tariff = payment.get('tariff_name') or 'Тариф'
+        tariff = payment.get('tariff_name') or '—'
         ptype = payment.get('payment_type')
-        if ptype == 'stars':
+        if int(payment.get('intent_version') or 0) == 1:
+            from bot.services.money import format_money_minor
+
+            amount = format_money_minor(
+                payment.get('payable_amount_minor')
+                or payment.get('payable_amount_cents')
+                or 0,
+                payment.get('base_currency') or 'RUB',
+            )
+        elif ptype == 'stars':
             stars = payment.get('final_amount_stars') if payment.get('final_amount_stars') is not None else payment.get('amount_stars') or 0
-            amount = f"{_safe(stars)} ⭐"
+            amount = f"{stars} ⭐"
         elif ptype == 'crypto':
             cents = payment.get('final_amount_cents') if payment.get('final_amount_cents') is not None else payment.get('amount_cents') or 0
             amount_val = cents / 100
             amount_str = f'{amount_val:g}'.replace('.', ',')
-            amount = f'${_safe(amount_str)}'
+            amount = f'${amount_str}'
         elif ptype in ('cards', 'yookassa_qr', 'wata', 'platega', 'cardlink', 'balance', 'promo_free'):
             rub = ((payment.get('final_amount_cents') or 0) / 100) if payment.get('final_amount_cents') is not None else payment.get('price_rub') or 0
             rub_str = f'{rub:g}'.replace('.', ',')
-            amount = f'{_safe(rub_str)} ₽'
+            amount = f'{rub_str} ₽'
         else:
-            amount = '?'
-        promo = f", 🎟 {_safe(payment.get('promo_code'))}" if payment.get('promo_code') else ""
-        lines.append(f"   • {_safe(date)}: {_safe(tariff)} ({amount}{promo})")
+            amount = '—'
+        promo = (
+            render_ui_text(
+                "key.history.promo_suffix",
+                promo_code=payment.get('promo_code'),
+            )
+            if payment.get('promo_code')
+            else ""
+        )
+        lines.append(render_ui_text(
+            "key.history.payment",
+            date=date,
+            payment_type=tariff,
+            amount=f"{amount}{promo}",
+        ))
     return '\n'.join(lines)
-
-
-def build_replace_server_select_data() -> str:
-    """Description of the key replacement start screen."""
-    return (
-        "Вы можете пересоздать ключ на другом или том же сервере.\n"
-        "Старый ключ будет удалён, но срок действия сохранится."
-    )
-
-
-def build_server_screen_data(server: Mapping[str, Any]) -> str:
-    """Prepares a block with the selected server."""
-    return f"<b>Сервер:</b> {_safe(server.get('name'), 'Не выбран')}"
-
-
-def build_replace_confirm_data(
-    key: Mapping[str, Any],
-    server: Mapping[str, Any],
-    *,
-    subscription_mode: bool,
-) -> str:
-    """Prepares a key replacement confirmation block."""
-    lines = [
-        f"Ключ: <b>{_safe(key.get('display_name'), 'VPN-ключ')}</b>",
-        f"Новый сервер: <b>{_safe(server.get('name'), 'Не выбран')}</b>",
-        '',
-    ]
-    if subscription_mode:
-        lines.extend([
-            "Подписка будет пересоздана на новом сервере (со всеми протоколами).",
-            "Старая ссылка перестанет работать — нужно будет обновить её в приложении.",
-        ])
-    else:
-        lines.extend([
-            "Старый ключ будет удалён и перестанет работать.",
-            "Вам нужно будет обновить настройки в приложении.",
-        ])
-    return '\n'.join(lines)
-
-
-def build_key_rename_data(key: Mapping[str, Any]) -> str:
-    """Prepares the current key name block for renaming."""
-    return f"Текущее имя: <b>{_safe(key.get('display_name'), 'VPN-ключ')}</b>"
-
-
-def build_new_key_server_select_data() -> str:
-    """Description of server selection after payment."""
-    return "🔑 Теперь выберите сервер для вашего нового ключа."
-
-
-def build_new_key_server_back_data() -> str:
-    """Description of server selection when returning from the next step."""
-    return "🔑 Выберите сервер для вашего нового ключа."

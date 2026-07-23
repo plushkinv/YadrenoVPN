@@ -30,11 +30,66 @@ async def grant_days_to_first_active_key(
 
     from bot.services.user_locks import user_locks
     from database.requests import (
+        apply_key_days_operation_once,
         get_first_active_key_for_user,
         record_key_operation,
     )
 
     async with user_locks[user_id]:
+        if (
+            reference_type in {'payment_referral', 'payment_promo_reward'}
+            and reference_id
+        ):
+            result = apply_key_days_operation_once(
+                user_id=user_id,
+                days=days,
+                source=source,
+                reason=reason,
+                reference_type=reference_type,
+                reference_id=reference_id,
+                metadata=metadata,
+            )
+            if not result.get('ok') or result.get('already_applied'):
+                return result
+
+            key_id = int(result['key_id'])
+            from bot.services.vpn_api import (
+                restore_traffic_limit_in_db,
+                sync_key_to_panel_state,
+            )
+
+            traffic_restored = restore_traffic_limit_in_db(key_id)
+            try:
+                sync_stats = await sync_key_to_panel_state(key_id, reset_traffic=False)
+            except Exception as error:
+                logger.warning('Payment reward panel sync failed key=%s: %s', key_id, error)
+                sync_stats = {'ok': 0, 'errors': 1}
+            result['renew_result'] = {
+                'db_updated': True,
+                'traffic_restored': bool(traffic_restored),
+                'panel_synced': bool(sync_stats.get('ok')) and not sync_stats.get('errors'),
+                'sync_stats': sync_stats,
+            }
+            try:
+                from bot.services.key_lifecycle import emit_key_lifecycle_event_safe
+
+                await emit_key_lifecycle_event_safe(
+                    'key_renewed',
+                    {
+                        'key_id': key_id,
+                        'user_id': user_id,
+                        'days': days,
+                        'reset_traffic': False,
+                        'source': source,
+                        'reference_type': reference_type,
+                        'reference_id': reference_id,
+                        'result': dict(result['renew_result']),
+                    },
+                )
+            except Exception as error:
+                logger.warning('Payment reward lifecycle hook failed key=%s: %s', key_id, error)
+            return result
+
         key = get_first_active_key_for_user(user_id)
         if not key:
             return {

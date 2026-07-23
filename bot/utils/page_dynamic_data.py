@@ -4,10 +4,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from aiogram.types import InlineKeyboardButton
-
 from bot.utils.datetime_format import format_date_for_display
+from bot.utils.tariff_prices import (
+    format_tariff_price_display,
+    load_tariff_price_display_config,
+)
 from bot.utils.text import escape_html
+from bot.utils.user_ui_texts import render_ui_text
 
 logger = logging.getLogger(__name__)
 
@@ -25,35 +28,18 @@ def _required_int(value: Any, field_name: str) -> int:
 
 
 def format_price_compact(cents: int) -> str:
-    """Formats kopecks into a compact ruble string."""
-    if cents >= 10000:
-        return f"{cents // 100} ₽"
-    return f"{cents / 100:.2f} ₽".replace(".", ",")
+    """Formats current base minor units compactly."""
+    from bot.services.money import format_money_minor
+
+    return format_money_minor(cents)
 
 
-def build_tariff_text(*, group_id: int | None = None, include_title: bool = True) -> str:
+def build_tariff_text(*, group_id: int | None = None, include_title: bool = False) -> str:
     """Generates an HTML block for the tariff list placeholder."""
     from database.requests import (
         get_all_tariffs,
         get_tariffs_by_group,
-        is_cardlink_configured,
-        is_cards_enabled,
-        is_crypto_configured,
-        is_demo_payment_enabled,
-        is_platega_configured,
-        is_stars_enabled,
-        is_wata_configured,
-        is_yookassa_qr_configured,
     )
-
-    crypto_enabled = is_crypto_configured()
-    stars_enabled = is_stars_enabled()
-    cards_enabled = is_cards_enabled()
-    yookassa_qr_enabled = is_yookassa_qr_configured()
-    wata_enabled = is_wata_configured()
-    platega_enabled = is_platega_configured()
-    cardlink_enabled = is_cardlink_configured()
-    demo_enabled = is_demo_payment_enabled()
 
     group_id = _optional_int(group_id)
     if group_id is not None:
@@ -65,25 +51,13 @@ def build_tariff_text(*, group_id: int | None = None, include_title: bool = True
     if not tariffs:
         return ''
 
-    lines = ['📋 <b>Тарифы:</b>'] if include_title else []
+    price_config = load_tariff_price_display_config()
+    lines: list[str] = []
     for tariff in tariffs:
-        prices = []
-        if crypto_enabled:
-            price_usd = tariff['price_cents'] / 100
-            price_str = f'{price_usd:g}'.replace('.', ',')
-            prices.append(f'${escape_html(price_str)}')
-        if stars_enabled:
-            prices.append(f"{tariff['price_stars']} ⭐")
-        if (
-            cards_enabled
-            or yookassa_qr_enabled
-            or wata_enabled
-            or platega_enabled
-            or cardlink_enabled
-            or demo_enabled
-        ) and tariff.get('price_rub', 0) > 0:
-            prices.append(f"{int(tariff['price_rub'])} ₽")
-        price_display = ' / '.join(prices) if prices else 'Цена не установлена'
+        price_display = format_tariff_price_display(
+            tariff,
+            config=price_config,
+        )
         lines.append(f"• {escape_html(tariff['name'])} — {price_display}")
 
     return '\n'.join(lines)
@@ -105,14 +79,14 @@ def build_referral_stats_text(user_internal_id: int) -> str:
 
     stats_by_level = {s['level']: s for s in stats} if stats else {}
 
-    lines = ["📊 <b>Ваша статистика:</b>", ""]
+    lines: list[str] = []
     visible_levels = [
         level for level in levels
         if bool(level.get('enabled')) and level.get('level_number') in (1, 2, 3)
     ]
 
     if not visible_levels:
-        lines.append("Пока нет активных уровней реферальной программы.")
+        lines.append(render_ui_text("referral.no_levels"))
     for level in visible_levels:
         level_num = level['level_number']
         percent = level['percent']
@@ -121,22 +95,34 @@ def build_referral_stats_text(user_internal_id: int) -> str:
 
         if reward_type == 'days':
             total_reward = level_stat['total_reward_days'] if level_stat else 0
-            reward_display = escape_html(f"{total_reward} дн.")
+            reward_display = render_ui_text("format.days_short", days=total_reward)
         else:
-            total_reward = level_stat['total_reward_cents'] if level_stat else 0
-            reward_display = escape_html(format_price_compact(total_reward))
+            total_reward = (
+                level_stat.get('total_reward_minor', level_stat.get('total_reward_cents', 0))
+                if level_stat else 0
+            )
+            reward_currency = level_stat.get('reward_currency') if level_stat else None
+            from bot.services.money import format_money_minor
+
+            reward_display = format_money_minor(total_reward, reward_currency)
 
         lines.append(
-            f"✅ Уровень {escape_html(str(level_num))} "
-            f"({escape_html(str(percent))}%): "
-            f"{escape_html(str(count))} чел. — {reward_display}"
+            render_ui_text(
+                "referral.level_row",
+                level=level_num,
+                percent=percent,
+                referrals_count=count,
+                earned=reward_display,
+            )
         )
-    lines.append("")
 
     if reward_type == 'balance':
-        lines.append("━━━━━━━━━━━━━━━")
-        lines.append(f"💰 <b>Ваш баланс:</b> {escape_html(format_price_compact(balance))}")
-        lines.append("")
+        if lines:
+            lines.append("")
+        lines.append(render_ui_text(
+            "referral.balance_line",
+            balance=format_price_compact(balance),
+        ))
 
     return "\n".join(lines)
 
@@ -174,16 +160,9 @@ def build_referral_context_values(
 
 
 def build_support_context_values(*, thread_id: int | None = None) -> dict[str, str]:
-    """Returns the context values of the underlying native support block."""
+    """Returns data-only context for the native support input pages."""
     thread_id = _optional_int(thread_id)
-    title = "Ответ в поддержку" if thread_id else "Поддержка"
-    return {
-        "support_title_html": f"💬 <b>{escape_html(title)}</b>",
-        "support_instruction_html": (
-            "Отправьте сообщение для администратора.\n\n"
-            "Можно отправить текст, фото, видео или GIF."
-        ),
-    }
+    return {"support_thread_id": thread_id} if thread_id else {}
 
 
 def _format_username(username: Any) -> str:
@@ -235,35 +214,11 @@ def build_user_profile_context_values(telegram_id: int | None) -> dict[str, Any]
     display_name = _format_user_display_name(user)
     created_at = format_date_for_display(user.get('created_at'))
 
-    profile_lines = [
-        "👤 <b>Профиль</b>",
-        f"Имя: <b>{escape_html(display_name)}</b>",
-        f"Telegram ID: <code>{escape_html(str(user.get('telegram_id') or telegram_id))}</code>",
-    ]
-    if username:
-        profile_lines.append(f"Username: {escape_html(username)}")
-    profile_lines.extend([
-        f"Дата регистрации: {escape_html(created_at)}",
-        f"Баланс: <b>{escape_html(balance_text)}</b>",
-    ])
-
-    if total_keys:
-        keys_summary_html = (
-            "🔑 <b>Ключи</b>\n"
-            f"Всего: <b>{escape_html(str(total_keys))}</b>\n"
-            f"Активных: <b>{escape_html(str(active_keys))}</b>\n"
-            f"Истёкших: <b>{escape_html(str(expired_keys))}</b>"
-        )
-    else:
-        keys_summary_html = "🔑 <b>Ключи</b>\nПока нет ключей."
-
     return {
-        'user_profile_html': '\n'.join(profile_lines),
         'user_display_name': display_name,
         'user_username': username,
         'user_registered_at': created_at,
         'user_balance_text': balance_text,
-        'keys_summary_html': keys_summary_html,
         'keys_total_count': total_keys,
         'keys_active_count': active_keys,
         'keys_expired_count': expired_keys,
@@ -276,40 +231,51 @@ async def build_my_keys_render_data(telegram_id: int):
     from database.requests import get_setting, get_user_keys_for_display, is_traffic_exhausted
     from bot.services.vpn_api import format_traffic, get_client
     from bot.utils.my_keys_page import (
-        DEFAULT_MY_KEYS_ITEM_TEMPLATE,
         MY_KEYS_ITEM_TEMPLATE_SETTING,
         build_my_keys_item_text,
         build_my_keys_list_text,
     )
+    from bot.utils.page_button_items import build_key_button_items
 
     keys = get_user_keys_for_display(telegram_id)
-    item_template = get_setting(
-        MY_KEYS_ITEM_TEMPLATE_SETTING,
-        DEFAULT_MY_KEYS_ITEM_TEMPLATE,
-    )
+    item_template = get_setting(MY_KEYS_ITEM_TEMPLATE_SETTING)
     if item_template is None:
-        item_template = DEFAULT_MY_KEYS_ITEM_TEMPLATE
+        raise RuntimeError(f"Missing required setting: {MY_KEYS_ITEM_TEMPLATE_SETTING}")
     items = []
-    key_buttons = []
 
     for key in keys:
         traffic_exhausted = is_traffic_exhausted(key)
-        if key['is_active'] and not traffic_exhausted:
-            status_emoji = '🟢'
+        if traffic_exhausted:
+            status_text = render_ui_text('key.status.traffic_exhausted')
+        elif key['is_active']:
+            status_text = render_ui_text('key.status.active')
         else:
-            status_emoji = '🔴'
+            status_text = render_ui_text('key.status.expired')
 
         traffic_used = key.get('traffic_used', 0) or 0
         traffic_limit = key.get('traffic_limit', 0) or 0
         used_str = format_traffic(traffic_used)
-        limit_str = format_traffic(traffic_limit) if traffic_limit > 0 else '∞'
-        traffic_text = f'{used_str} / {limit_str}'
+        if not key.get('server_id'):
+            traffic_text = render_ui_text('key.traffic.needs_setup')
+        elif traffic_limit > 0:
+            limit_str = format_traffic(traffic_limit)
+            percent = traffic_used / traffic_limit * 100
+            traffic_text = render_ui_text(
+                'key.traffic.limited',
+                used=used_str,
+                limit=limit_str,
+                percent=f'{percent:.1f}',
+            )
+        elif traffic_used > 0:
+            traffic_text = render_ui_text('key.traffic.used_unlimited', used=used_str)
+        else:
+            traffic_text = render_ui_text('key.traffic.unlimited')
 
         protocol = 'VLESS'
         inbound_name = 'VPN'
         if key.get('sub_id'):
             protocol = 'SUBSCRIPTION'
-            inbound_name = 'Все протоколы'
+            inbound_name = render_ui_text('key.inbound.all_protocols')
         elif key.get('server_id') and key.get('panel_email'):
             try:
                 client = await get_client(key['server_id'])
@@ -324,20 +290,13 @@ async def build_my_keys_render_data(telegram_id: int):
             build_my_keys_item_text(
                 key,
                 template=item_template,
-                status=status_emoji,
+                status=status_text,
                 traffic_text=traffic_text,
                 inbound_name=inbound_name,
                 protocol=protocol,
             )
         )
-        key_buttons.append([
-            InlineKeyboardButton(
-                text=f"{status_emoji} {key['display_name']}",
-                callback_data=f"key:{key['id']}",
-            )
-        ])
-
-    return keys, build_my_keys_list_text(items), key_buttons
+    return keys, build_my_keys_list_text(items), build_key_button_items(keys)
 
 
 async def build_my_keys_context_values(telegram_id: int | None) -> dict[str, Any]:

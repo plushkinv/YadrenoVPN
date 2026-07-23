@@ -20,13 +20,17 @@ router = Router()
 async def custom_page_handler(callback: CallbackQuery):
     """Opens a custom page from the pages table."""
     if is_user_banned(callback.from_user.id):
-        await callback.answer("⛔ Доступ заблокирован", show_alert=True)
+        from bot.utils.user_pages import render_access_blocked_page
+
+        await render_access_blocked_page(callback)
+        await callback.answer()
         return
 
     page_key = extract_custom_page_key(callback.data)
     page = get_page(page_key) if page_key else None
     if not page_key or not page:
-        await callback.answer("⚠️ Страница недоступна", show_alert=True)
+        await render_page(callback, 'screen_unavailable')
+        await callback.answer()
         return
 
     context = build_page_flow_context(
@@ -41,10 +45,11 @@ async def custom_page_handler(callback: CallbackQuery):
         context,
     )
     if not guard_result.allowed:
-        await callback.answer(
-            guard_result.message or "⚠️ Страница недоступна",
-            show_alert=guard_result.show_alert,
-        )
+        if guard_result.message:
+            await callback.answer(guard_result.message, show_alert=guard_result.show_alert)
+        else:
+            await render_page(callback, 'action_unavailable')
+            await callback.answer()
         return
 
     hook_result = await run_page_hooks(

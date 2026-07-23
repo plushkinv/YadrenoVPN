@@ -90,7 +90,6 @@ def _customization_default_settings() -> dict[str, str | None]:
         "custom_payment_webhooks_host": "127.0.0.1",
         "custom_payment_webhooks_port": "8088",
         "custom_payment_webhooks_path_prefix": "/custom-payment-webhook",
-        "yadreno_admin_customization_enabled": "0",
         "yadreno_admin_core_changes_enabled": "0",
     }
 
@@ -270,6 +269,23 @@ def _reset_settings(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
     return actions
 
 
+def _reset_user_ui_texts(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
+    """Clears only runtime UI overrides while preserving shipped defaults."""
+    if not _table_exists(conn, "user_ui_texts"):
+        return ["user_ui_texts table is missing; skipped"]
+    affected = _count_where(conn, "user_ui_texts", "text_custom IS NOT NULL")
+    actions = [f"user_ui_texts.text_custom to NULL: {affected} row(s)"]
+    if affected and not dry_run:
+        conn.execute(
+            """
+            UPDATE user_ui_texts
+            SET text_custom = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE text_custom IS NOT NULL
+            """
+        )
+    return actions
+
+
 def _reset_extension_tables(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
     actions: list[str] = []
 
@@ -312,6 +328,7 @@ def reset_customization_database(
     try:
         actions: list[str] = []
         actions.extend(_reset_pages(conn, dry_run))
+        actions.extend(_reset_user_ui_texts(conn, dry_run))
         actions.extend(_reset_page_routes(conn, dry_run))
         actions.extend(_delete_non_stock_custom_pages(conn, dry_run))
         actions.extend(_reset_settings(conn, dry_run))

@@ -38,19 +38,12 @@ _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
     'keys_total': ('%ключи_всего%',),
     'keys_active': ('%ключи_активных%',),
     'keys_expired': ('%ключи_истекших%',),
+    'selected_server': ('%выбранный_сервер%',),
     'key_copy': ('%ключ_для_копирования%',),
     'key_link': ('%ключ_ссылка%',),
     'key_link_url': ('%ключ_ссылка_url%',),
-    'key_name': ('%ключ_имя%',),
     'key_info': ('%ключ_информация%',),
     'key_history': ('%ключ_история_операций%',),
-    'key_status': ('%ключ_статус%',),
-    'key_traffic': ('%ключ_трафик%',),
-    'key_expires_at': ('%ключ_дата_окончания%',),
-    'key_server': ('%ключ_сервер%',),
-    'key_inbound': ('%ключ_инбаунд%',),
-    'key_protocol': ('%ключ_протокол%',),
-    'key_id': ('%ключ_id%',),
     'keys_list': ('%список_ключей%',),
     'screen_data': ('%экран_данные%',),
     'key_replace_data': ('%замена_ключа_данные%',),
@@ -59,6 +52,7 @@ _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
     'payment_key_line': ('%платеж_ключ_строка%',),
     'payment_tariff': ('%платеж_тариф%',),
     'payment_amount': ('%платеж_сумма%',),
+    'payment_nominal': ('%платеж_номинал%',),
     'payment_term_label': ('%платеж_срок_тип%',),
     'payment_term': ('%платеж_срок%',),
     'payment_link': ('%платеж_ссылка%',),
@@ -70,6 +64,12 @@ _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
     'payment_balance_deduct': ('%платеж_списание_баланса%',),
     'payment_remaining': ('%платеж_остаток_к_оплате%',),
     'payment_topup_hint': ('%платеж_доплата_подсказка%',),
+    'payment_base_currency': ('%платеж_базовая_валюта%',),
+    'payment_error': ('%платеж_ошибка%',),
+    'payment_wait_seconds': (),
+    'payment_minimum': (),
+    'promo_code': (),
+    'promo_discount': (),
     'support_title': ('%поддержка_заголовок%',),
     'support_instruction': ('%поддержка_инструкция%',),
     'support_status_title': ('%поддержка_статус_заголовок%',),
@@ -87,10 +87,23 @@ for _name, _aliases in _PAGE_PLACEHOLDER_ALIASES_BY_NAME.items():
     _PAGE_PLACEHOLDER_ALIASES[f'%{_name}%'.casefold()] = _name
     for _alias in _aliases:
         _PAGE_PLACEHOLDER_ALIASES[_alias.casefold()] = _name
-_PARAMETERIZED_PAGE_PLACEHOLDERS = frozenset({'tariffs'})
+_PARAMETERIZED_PAGE_PLACEHOLDERS = frozenset({'key', 'tariffs'})
 
 
 KEY_DELIVERY_RAW_CONTEXT_KEY = 'key_delivery_raw_value'
+KEY_FIELDS_CONTEXT_KEY = 'key_fields'
+KEY_PAGE_FIELDS = frozenset({
+    'id',
+    'name',
+    'status',
+    'traffic',
+    'expires_at',
+    'server',
+    'inbound',
+    'protocol',
+    'tariff',
+    'device_limit',
+})
 
 
 class _HtmlToTextParser(HTMLParser):
@@ -269,6 +282,25 @@ def _resolve_tariffs_placeholder(
     )
 
 
+def _resolve_key_placeholder(
+    context: Mapping[str, Any],
+    mode: PagePlaceholderMode,
+    params: Mapping[str, str],
+) -> str:
+    """Resolves one allowlisted display field of the current key."""
+    if set(params) != {'field'}:
+        return ''
+
+    field = params.get('field', '').casefold()
+    if field not in KEY_PAGE_FIELDS:
+        return ''
+
+    values = context.get(KEY_FIELDS_CONTEXT_KEY)
+    if not isinstance(values, Mapping):
+        return ''
+    return _format_value(values.get(field), mode)
+
+
 def _resolve_registered_placeholder(
     placeholder: str,
     context: Mapping[str, Any],
@@ -291,6 +323,8 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'page_key'), mode)
     if name == 'tariffs':
         return _resolve_tariffs_placeholder(context, mode, params)
+    if name == 'key':
+        return _resolve_key_placeholder(context, mode, params)
     if name == 'no_tariffs':
         return ''
     if name == 'referral_link':
@@ -321,31 +355,8 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'keys_active_count'), mode)
     if name == 'keys_expired':
         return _format_value(_context_value(context, 'keys_expired_count'), mode)
-    if name == 'key_name':
-        return _format_value(_context_value(context, 'key_name', 'key_display_name', 'display_name'), mode)
-    if name == 'key_status':
-        return _format_value(_context_value(context, 'key_status', 'key_status_text'), mode)
-    if name == 'key_traffic':
-        return _format_value(_context_value(context, 'key_traffic_text', 'key_traffic', 'traffic_info'), mode)
-    if name == 'key_expires_at':
-        return _format_value(
-            _context_value(
-                context,
-                'key_expires_text',
-                'key_expires_at',
-                'key_expiration_date',
-                'expires_at',
-            ),
-            mode,
-        )
-    if name == 'key_server':
-        return _format_value(_context_value(context, 'key_server_name', 'key_server', 'server_name'), mode)
-    if name == 'key_inbound':
-        return _format_value(_context_value(context, 'key_inbound_name', 'key_inbound', 'inbound_name'), mode)
-    if name == 'key_protocol':
-        return _format_value(_context_value(context, 'key_protocol', 'protocol'), mode)
-    if name == 'key_id':
-        return _format_value(_context_value(context, 'key_id'), mode)
+    if name == 'selected_server':
+        return _format_value(_context_value(context, 'selected_server_name'), mode)
     if name == 'keys_list':
         return _format_value(_context_value(context, 'keys_list_html'), mode, html_ready=True)
     if name == 'key_info':
@@ -373,6 +384,8 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'payment_tariff_name', 'tariff_name'), mode)
     if name == 'payment_amount':
         return _format_value(_context_value(context, 'payment_amount_text'), mode)
+    if name == 'payment_nominal':
+        return _format_value(_context_value(context, 'payment_nominal_text'), mode)
     if name == 'payment_term_label':
         return _format_value(_context_value(context, 'payment_term_label'), mode)
     if name == 'payment_term':
@@ -403,6 +416,18 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'payment_remaining_text'), mode)
     if name == 'payment_topup_hint':
         return _format_value(_context_value(context, 'payment_topup_hint_html'), mode, html_ready=True)
+    if name == 'payment_base_currency':
+        return _format_value(_context_value(context, 'payment_base_currency'), mode)
+    if name == 'payment_error':
+        return _format_value(_context_value(context, 'payment_error_html'), mode, html_ready=True)
+    if name == 'payment_wait_seconds':
+        return _format_value(_context_value(context, 'payment_wait_seconds'), mode)
+    if name == 'payment_minimum':
+        return _format_value(_context_value(context, 'payment_minimum_text'), mode)
+    if name == 'promo_code':
+        return _format_value(_context_value(context, 'promo_code'), mode)
+    if name == 'promo_discount':
+        return _format_value(_context_value(context, 'promo_discount'), mode)
     if name == 'support_title':
         value = _context_value(context, 'support_title_html')
         if value is not None:

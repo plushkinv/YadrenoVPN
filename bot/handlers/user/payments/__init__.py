@@ -10,8 +10,12 @@ from .crypto import router as crypto_router
 from .keys_config import router as keys_config_router
 from .demo import router as demo_router
 from .custom import router as custom_router
+from .intent import router as intent_router
+from .topup import router as topup_router
 
 router = Router()
+router.include_router(intent_router)
+router.include_router(topup_router)
 router.include_router(base_router)
 router.include_router(balance_router)
 router.include_router(yookassa_router)

@@ -4,6 +4,18 @@ from typing import List, Dict, Any, Optional
 
 from .admin_misc import back_button, home_button, cancel_button
 
+
+def _tariff_price_text(tariff: Dict[str, Any]) -> str:
+    from bot.services.money import format_money_minor
+
+    price_minor = tariff.get('price_minor')
+    if price_minor is None:
+        price_minor = int(float(tariff.get('price_rub') or 0) * 100)
+    return format_money_minor(
+        price_minor,
+        tariff.get('base_currency') or 'RUB',
+    )
+
 def tariffs_list_kb(tariffs: List[Dict[str, Any]], include_hidden: bool=True) -> InlineKeyboardMarkup:
     """
     Tariff list keyboard.
@@ -30,16 +42,12 @@ def tariffs_list_kb(tariffs: List[Dict[str, Any]], include_hidden: bool=True) ->
             builder.row(InlineKeyboardButton(text=f'📂⬇ {g_name}', callback_data='noop'))
             for tariff in t_list:
                 status_emoji = '🟢' if tariff.get('is_active') else '⚪'
-                price = tariff['price_cents'] / 100
-                price_str = f'{price:g}'.replace('.', ',')
-                text = f"  {status_emoji} {tariff['name']} — ${price_str}"
+                text = f"  {status_emoji} {tariff['name']} — {_tariff_price_text(tariff)}"
                 builder.row(InlineKeyboardButton(text=text, callback_data=f"admin_tariff_view:{tariff['id']}"))
     else:
         for tariff in tariffs:
             status_emoji = '🟢' if tariff.get('is_active') else '⚪'
-            price = tariff['price_cents'] / 100
-            price_str = f'{price:g}'.replace('.', ',')
-            text = f"{status_emoji} {tariff['name']} — ${price_str}"
+            text = f"{status_emoji} {tariff['name']} — {_tariff_price_text(tariff)}"
             builder.row(InlineKeyboardButton(text=text, callback_data=f"admin_tariff_view:{tariff['id']}"))
     builder.row(back_button('admin_payments'), home_button())
     return builder.as_markup()

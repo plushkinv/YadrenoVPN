@@ -45,9 +45,19 @@ def bot_mode_toggle_confirm_kb(target_mode: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def extensions_diagnostics_kb(setting_buttons: Optional[List[Dict[str, str]]] = None) -> InlineKeyboardMarkup:
+def extensions_diagnostics_kb(
+    enabled: bool,
+    setting_buttons: Optional[List[Dict[str, str]]] = None,
+) -> InlineKeyboardMarkup:
     """Custom extension diagnostic screen keyboard."""
     builder = InlineKeyboardBuilder()
+    builder.row(*state_pair_buttons(
+        enabled,
+        'Включено',
+        'admin_extensions_set:1',
+        'Выключено',
+        'admin_extensions_set:0',
+    ))
     for button in setting_buttons or []:
         text = str(button.get('text') or '').strip()
         callback_data = str(button.get('callback_data') or '').strip()

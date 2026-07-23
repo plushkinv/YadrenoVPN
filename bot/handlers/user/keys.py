@@ -10,9 +10,13 @@ from aiogram.exceptions import TelegramForbiddenError
 from config import ADMIN_IDS
 from database.requests import get_or_create_user, is_user_banned, get_all_servers, get_setting, is_referral_enabled, get_user_by_referral_code, set_user_referrer
 from bot.states.user_states import RenameKey, ReplaceKey
-from bot.utils.text import escape_html
-from bot.utils.key_status_page import render_key_status_page
+from bot.utils.action_dispatcher import (
+    CoreActionRequest,
+    dispatch_core_action,
+    register_core_action_executor,
+)
 from bot.utils.user_pages import render_access_blocked_page
+from bot.utils.user_ui_texts import render_ui_text
 from bot.services.panel_sync_coordinator import regular_panel_operation
 
 logger = logging.getLogger(__name__)
@@ -39,8 +43,12 @@ async def _render_my_keys_page(target, telegram_id: int, force_new: bool = False
     """Renders the “My Keys” page from the pages table."""
     from bot.utils.page_renderer import render_page
 
-    keys, keys_list_text, key_buttons = await _build_my_keys_render_data(telegram_id)
-    context = {'telegram_id': telegram_id}
+    keys, keys_list_text, key_button_items = await _build_my_keys_render_data(telegram_id)
+    context = {
+        'telegram_id': telegram_id,
+        'key_button_items': key_button_items,
+        'keys_list_html': keys_list_text,
+    }
 
     if not keys:
         await render_page(
@@ -55,11 +63,6 @@ async def _render_my_keys_page(target, telegram_id: int, force_new: bool = False
         target,
         page_key='my_keys',
         context=context,
-        text_replacements={
-            '%keys_list%': keys_list_text,
-            '%список_ключей%': keys_list_text,
-        },
-        prepend_buttons=key_buttons,
         force_new=force_new,
     )
 
@@ -101,50 +104,51 @@ async def my_keys_handler(callback: CallbackQuery):
     await show_my_keys(telegram_id, callback)
     await callback.answer()
 
-async def show_key_details(telegram_id: int, key_id: int, message, is_callback: bool = True, prepend_text: str=''):
+async def show_key_details(telegram_id: int, key_id: int, message, is_callback: bool = True):
     """General logic for displaying key details."""
     from database.requests import get_key_details_for_user, get_key_payments_history, is_key_active, is_traffic_exhausted
     from bot.services.vpn_api import format_traffic
-    from bot.utils.key_pages import build_key_details_replacements
+    from bot.utils.key_pages import build_key_history_block, build_key_page_context
     from bot.utils.page_renderer import render_page
-    import logging
-    logger = logging.getLogger(__name__)
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
-        await render_key_status_page(
-            message,
-            title_html='❌ <b>Ключ не найден</b>',
-            body_text='Ключ не найден или вы не являетесь его владельцем.',
-            force_new=not is_callback,
-        )
+        await _render_key_action_page(message, 'key_not_found', force_new=not is_callback)
         return
     traffic_exhausted = is_traffic_exhausted(key)
     key_active = is_key_active(key)
     if traffic_exhausted:
-        status = '🔴 Трафик исчерпан'
+        status = render_ui_text('key.status.traffic_exhausted')
     elif key_active:
-        status = '🟢 Активен'
+        status = render_ui_text('key.status.active')
     else:
-        status = '🔴 Истёк'
+        status = render_ui_text('key.status.expired')
     inbound_name = '—'
     protocol = '—'
     is_unconfigured = not key.get('server_id')
     traffic_used = key.get('traffic_used', 0) or 0
     traffic_limit = key.get('traffic_limit', 0) or 0
     if is_unconfigured:
-        traffic_info = '⚠️ Требует настройки'
+        traffic_info = render_ui_text('key.traffic.needs_setup')
     elif traffic_limit > 0:
         used_str = format_traffic(traffic_used)
         limit_str = format_traffic(traffic_limit)
         percent = traffic_used / traffic_limit * 100 if traffic_limit > 0 else 0
-        traffic_info = f'{used_str} из {limit_str} ({percent:.1f}%)'
+        traffic_info = render_ui_text(
+            'key.traffic.limited',
+            used=used_str,
+            limit=limit_str,
+            percent=f'{percent:.1f}',
+        )
     elif traffic_used > 0:
-        traffic_info = f'{format_traffic(traffic_used)} (безлимит)'
+        traffic_info = render_ui_text(
+            'key.traffic.used_unlimited',
+            used=format_traffic(traffic_used),
+        )
     else:
-        traffic_info = 'Безлимит'
+        traffic_info = render_ui_text('key.traffic.unlimited')
     if key.get('sub_id'):
         # Subscription: one key covers all inbound servers at once
-        inbound_name = 'Все протоколы'
+        inbound_name = render_ui_text('key.inbound.all_protocols')
         protocol = 'SUBSCRIPTION'
     elif key.get('server_active') and key.get('panel_email'):
         try:
@@ -157,14 +161,12 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
         except Exception as e:
             logger.warning(f'Ошибка получения протокола: {e}')
     payments = get_key_payments_history(key_id)
-    replacements = build_key_details_replacements(
+    key_page_context = build_key_page_context(
         key,
-        payments,
         status=status,
-        traffic_info=traffic_info,
-        inbound_name=inbound_name,
+        traffic=traffic_info,
+        inbound=inbound_name,
         protocol=protocol,
-        prepend_html=prepend_text,
     )
     await render_page(
         message,
@@ -176,27 +178,39 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
             'is_unconfigured': is_unconfigured,
             'traffic_exhausted': traffic_exhausted,
             'has_sub_id': bool(key.get('sub_id')),
+            'key_history_html': build_key_history_block(payments),
+            **key_page_context,
         },
-        text_replacements=replacements,
         force_new=not is_callback,
     )
 
 @router.callback_query(F.data.startswith('key_delete:'))
-@regular_panel_operation
-async def key_delete_handler(callback: CallbackQuery):
+async def key_delete_handler(callback: CallbackQuery, state: FSMContext):
     """Removing an expired key by the user."""
     key_id = int(callback.data.split(':')[1])
-    telegram_id = callback.fromuser.id if hasattr(callback, 'fromuser') else callback.from_user.id
+    await dispatch_core_action(
+        callback,
+        'key.delete',
+        {'key_id': key_id},
+        source='callback',
+        state=state,
+    )
+
+
+@regular_panel_operation
+async def _execute_key_delete(request: CoreActionRequest) -> None:
+    """Run the original key deletion after action policy resolution."""
+    target = request.target
+    key_id = request.params['key_id']
+    telegram_id = request.telegram_id
     from database.requests import get_key_details_for_user, delete_vpn_key
     from bot.services.vpn_api import get_client
-    import logging
-    logger = logging.getLogger(__name__)
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
-        await callback.answer('❌ Ключ не найден или вы не являетесь его владельцем.', show_alert=True)
+        await _render_key_action_page(target, 'key_not_found')
         return
     if key['is_active']:
-        await callback.answer('❌ Активные ключи нельзя удалить.', show_alert=True)
+        await _render_key_action_page(target, 'key_operation_unavailable', key=key)
         return
     if key.get('server_id') and key.get('panel_email'):
         try:
@@ -215,10 +229,10 @@ async def key_delete_handler(callback: CallbackQuery):
             logger.warning(f"Не удалось удалить клиента {key.get('panel_email', 'unknown')} с сервера 3X-UI: {e}")
     success = delete_vpn_key(key_id)
     if success:
-        await callback.answer(f"✅ Ключ {key['display_name']} успешно удален.", show_alert=True)
-        await show_my_keys(telegram_id, callback)
+        await _render_key_action_page(target, 'my_keys_key_deleted', key=key)
     else:
-        await callback.answer('❌ Ошибка при удалении ключа из БД.', show_alert=True)
+        logger.error('Failed to delete VPN key %s from the database', key_id)
+        await _render_key_action_page(target, 'key_operation_failed', key=key)
 
 @router.callback_query(F.data.startswith('key:'))
 async def key_details_handler(callback: CallbackQuery):
@@ -237,7 +251,7 @@ async def key_show_handler(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
-        await callback.answer('❌ Ключ не найден или вы не являетесь его владельцем.', show_alert=True)
+        await _render_key_action_page(callback, 'key_not_found')
         return
     if not key['client_uuid']:
         from bot.utils.page_renderer import render_page
@@ -247,11 +261,7 @@ async def key_show_handler(callback: CallbackQuery):
         return
     delivery_target = callback
     try:
-        status_message = await render_key_status_page(
-            callback,
-            title_html='⏳ <b>Получение данных ключа</b>',
-            body_html='',
-        )
+        status_message = await _render_key_action_page(callback, 'key_progress', key=key)
         delivery_target = build_key_delivery_target(callback, status_message)
     except Exception:
         pass
@@ -259,15 +269,25 @@ async def key_show_handler(callback: CallbackQuery):
     await callback.answer()
 
 
-async def show_renew_payment_page(callback: CallbackQuery, key: dict, key_id: int, force_new: bool = False):
-    """Shows the page for selecting a payment method for key renewal from pages."""
+async def show_renew_payment_page(target, key: dict, key_id: int, force_new: bool = False):
+    """Shows the tariff-first renewal shell from editable pages."""
     from bot.utils.action_registry import SYSTEM_BUTTONS
+    from bot.utils.key_pages import build_key_page_context
     from bot.utils.page_renderer import render_page
+    from bot.utils.page_button_items import build_tariff_button_items
+    from bot.utils.groups import get_tariffs_for_renewal
 
-    telegram_id = callback.from_user.id
+    telegram_id = target.from_user.id
     context = {
         'key_id': key_id,
         'telegram_id': telegram_id,
+        'tariff_button_items': build_tariff_button_items(
+            get_tariffs_for_renewal(int(key.get('tariff_id') or 0)),
+            'key_renewal',
+            key_id=key_id,
+        ),
+        'tariff_back_callback': f'key:{key_id}',
+        **build_key_page_context(key),
     }
     payment_button_ids = (
         'btn_renew_pay_crypto',
@@ -294,79 +314,134 @@ async def show_renew_payment_page(callback: CallbackQuery, key: dict, key_id: in
 
     if not has_payment_method:
         await render_page(
-            callback,
+            target,
             page_key='renew_payment_unavailable',
             context=context,
             force_new=force_new,
         )
         return
 
-    key_name = escape_html(key.get('display_name') or 'VPN-ключ')
-    text_replacements = {
-        '%key_name%': key_name,
-        '%ключ_имя%': key_name,
-    }
+    if not context['tariff_button_items']:
+        await render_page(
+            target,
+            page_key='renew_payment_unavailable',
+            context=context,
+            force_new=force_new,
+        )
+        return
 
     await render_page(
-        callback,
+        target,
         page_key='renew_payment',
         context=context,
-        text_replacements=text_replacements,
         force_new=force_new,
     )
 
 
 @router.callback_query(F.data.startswith('key_renew:'))
-async def key_renew_select_payment(callback: CallbackQuery):
+async def key_renew_select_payment(callback: CallbackQuery, state: FSMContext):
     """Selecting a payment method for renewal (immediately, without tariff)."""
-    from database.requests import get_key_details_for_user
     key_id = int(callback.data.split(':')[1])
-    telegram_id = callback.from_user.id
-    key = get_key_details_for_user(key_id, telegram_id)
+    await dispatch_core_action(
+        callback,
+        'key.renew.start',
+        {'key_id': key_id},
+        source='callback',
+        state=state,
+    )
+
+
+async def _execute_key_renew_start(request: CoreActionRequest) -> None:
+    """Run the original renewal-page flow after action policy resolution."""
+    from database.requests import get_key_details_for_user
+
+    key_id = request.params['key_id']
+    key = get_key_details_for_user(key_id, request.telegram_id)
     if not key:
-        await callback.answer('❌ Ключ не найден или вы не являетесь его владельцем.', show_alert=True)
+        await _render_key_action_page(request.target, 'key_not_found')
         return
-    await show_renew_payment_page(callback, key, key_id)
-    await callback.answer()
+    await show_renew_payment_page(
+        request.target,
+        key,
+        key_id,
+        force_new=isinstance(request.target, Message),
+    )
+    if isinstance(request.target, CallbackQuery):
+        await request.target.answer()
 
 @router.callback_query(F.data.startswith('key_replace:'))
 async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
     """Beginning of the key replacement procedure."""
+    from database.requests import get_key_details_for_user
+
+    key_id = int(callback.data.split(':')[1])
+    key = get_key_details_for_user(key_id, callback.from_user.id)
+    if not key:
+        await _render_key_action_page(callback, 'key_not_found')
+        return
+    action = 'key.configure.start' if not key.get('server_id') else 'key.replace.start'
+    await dispatch_core_action(
+        callback,
+        action,
+        {'key_id': key_id},
+        source='callback',
+        state=state,
+    )
+
+
+async def _execute_key_replace_or_configure(request: CoreActionRequest) -> None:
+    """Run the original configure/replace entry flow after policy resolution."""
     from database.requests import get_key_details_for_user, get_active_servers, is_traffic_exhausted
-    from bot.keyboards.user import replace_server_list_kb
-    from bot.utils.key_pages import build_replace_server_select_data, keyboard_rows
+    from bot.utils.page_button_items import build_server_button_items
     from bot.utils.groups import get_servers_for_key
     from bot.utils.page_renderer import render_page
-    key_id = int(callback.data.split(':')[1])
-    telegram_id = callback.from_user.id
+
+    callback = request.target
+    state = request.state
+    key_id = request.params['key_id']
+    telegram_id = request.telegram_id
+    if state is None:
+        await _render_key_action_page(callback, 'key_operation_unavailable')
+        return
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
-        await callback.answer('❌ Ключ не найден или вы не являетесь его владельцем.', show_alert=True)
+        await _render_key_action_page(callback, 'key_not_found')
+        return
+    is_unconfigured = not key.get('server_id')
+    if request.action == 'key.configure.start' and not is_unconfigured:
+        await _render_key_action_page(callback, 'key_operation_unavailable', key=key)
+        return
+    if request.action == 'key.replace.start' and is_unconfigured:
+        await _render_key_action_page(callback, 'key_operation_unavailable', key=key)
         return
     if not key['is_active']:
-        await callback.answer('⏳ Срок действия ключа истёк.\nПродлите его перед заменой.', show_alert=True)
+        await _render_key_action_page(callback, 'key_operation_unavailable', key=key)
         return
     if is_traffic_exhausted(key):
-        await callback.answer('📊 Трафик закончился.\nПродлите ключ перед заменой.', show_alert=True)
+        await _render_key_action_page(callback, 'key_operation_unavailable', key=key)
         return
     tariff_id = key.get('tariff_id')
     servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
     if not servers:
-        await callback.answer('❌ Нет доступных серверов', show_alert=True)
+        await _render_key_action_page(callback, 'key_operation_unavailable', key=key)
         return
     await state.set_state(ReplaceKey.users_server)
     await state.update_data(replace_key_id=key_id)
-    screen_data = build_replace_server_select_data()
     await render_page(
         callback,
         page_key='key_replace_server_select',
-        text_replacements={
-            '%screen_data%': screen_data,
-            '%экран_данные%': screen_data,
+        context={
+            'telegram_id': telegram_id,
+            'key_id': key_id,
+            'server_button_items': build_server_button_items(
+                servers,
+                callback_prefix='replace_server',
+            ),
+            'key_flow_back_callback': f'key:{key_id}',
         },
-        prepend_buttons=keyboard_rows(replace_server_list_kb(servers, key_id)),
     )
-    await callback.answer()
+    if isinstance(callback, CallbackQuery):
+        await callback.answer()
 
 @router.callback_query(ReplaceKey.users_server, F.data.startswith('replace_server:'))
 async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext):
@@ -378,13 +453,14 @@ async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext)
         VPNAPIError,
         is_subscription_mode,
     )
-    from bot.keyboards.user import replace_inbound_list_kb, replace_confirm_kb
-    from bot.utils.key_pages import build_replace_confirm_data, build_server_screen_data, keyboard_rows
+    from bot.utils.page_button_items import build_protocol_button_items
+    from bot.utils.key_pages import build_key_page_context
     from bot.utils.page_renderer import render_page
     server_id = int(callback.data.split(':')[1])
     server = get_server_by_id(server_id)
     if not server:
-        await callback.answer('Сервер не найден', show_alert=True)
+        logger.warning('Replacement target server %s was not found', server_id)
+        await _render_key_action_page(callback, 'key_operation_unavailable')
         return
     await state.update_data(replace_server_id=server_id)
 
@@ -394,33 +470,32 @@ async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext)
         key_id = data.get('replace_key_id')
         key = get_key_details_for_user(key_id, callback.from_user.id)
         if not key:
-            await callback.answer('❌ Ключ не найден', show_alert=True)
+            await _render_key_action_page(callback, 'key_not_found')
             return
         # Minimum server test (we will receive inbounds later during execution)
         try:
             client = await get_client(server_id)
             inbounds = await get_client_subscription_inbounds(client)
             if not inbounds:
-                await callback.answer('❌ На сервере нет доступных протоколов', show_alert=True)
+                await _render_key_action_page(callback, 'key_operation_unavailable', key=key)
                 return
         except VPNAPIError as e:
-            await callback.answer(f'❌ Ошибка подключения: {e}', show_alert=True)
+            logger.warning('Failed to inspect replacement server %s: %s', server_id, e)
+            await _render_key_action_page(callback, 'key_operation_failed', key=key)
             return
         await state.set_state(ReplaceKey.confirm)
         await state.update_data(replace_inbound_id=None)
-        replace_data = build_replace_confirm_data(
-            key,
-            server,
-            subscription_mode=True,
-        )
         await render_page(
             callback,
             page_key='key_replace_confirm',
-            text_replacements={
-                '%key_replace_data%': replace_data,
-                '%замена_ключа_данные%': replace_data,
+            context={
+                'telegram_id': callback.from_user.id,
+                'key_id': key_id,
+                'key_flow_confirm_callback': 'replace_confirm',
+                'key_flow_back_callback': f'key:{key_id}',
+                'selected_server_name': server.get('name'),
+                **build_key_page_context(key),
             },
-            prepend_buttons=keyboard_rows(replace_confirm_kb(key_id)),
         )
         await callback.answer()
         return
@@ -429,23 +504,28 @@ async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext)
         client = await get_client(server_id)
         inbounds = await client.get_inbounds()
         if not inbounds:
-            await callback.answer('❌ На сервере нет доступных протоколов', show_alert=True)
+            await _render_key_action_page(callback, 'key_operation_unavailable')
             return
         data = await state.get_data()
         key_id = data.get('replace_key_id')
         await state.set_state(ReplaceKey.users_inbound)
-        screen_data = build_server_screen_data(server)
         await render_page(
             callback,
             page_key='key_replace_inbound_select',
-            text_replacements={
-                '%screen_data%': screen_data,
-                '%экран_данные%': screen_data,
+            context={
+                'telegram_id': callback.from_user.id,
+                'key_id': key_id,
+                'protocol_button_items': build_protocol_button_items(
+                    inbounds,
+                    callback_prefix='replace_inbound',
+                ),
+                'key_flow_back_callback': f'key_replace:{key_id}',
+                'selected_server_name': server.get('name'),
             },
-            prepend_buttons=keyboard_rows(replace_inbound_list_kb(inbounds, key_id)),
         )
     except VPNAPIError as e:
-        await callback.answer(f'❌ Ошибка подключения: {e}', show_alert=True)
+        logger.warning('Failed to inspect replacement server %s: %s', server_id, e)
+        await _render_key_action_page(callback, 'key_operation_failed')
         return
     await callback.answer()
 
@@ -453,8 +533,7 @@ async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext)
 async def key_replace_inbound_handler(callback: CallbackQuery, state: FSMContext):
     """Select inbound and confirm."""
     from database.requests import get_server_by_id, get_key_details_for_user
-    from bot.keyboards.user import replace_confirm_kb
-    from bot.utils.key_pages import build_replace_confirm_data, keyboard_rows
+    from bot.utils.key_pages import build_key_page_context
     from bot.utils.page_renderer import render_page
     inbound_id = int(callback.data.split(':')[1])
     await state.update_data(replace_inbound_id=inbound_id)
@@ -464,19 +543,21 @@ async def key_replace_inbound_handler(callback: CallbackQuery, state: FSMContext
     key = get_key_details_for_user(key_id, callback.from_user.id)
     server = get_server_by_id(server_id)
     await state.set_state(ReplaceKey.confirm)
-    replace_data = build_replace_confirm_data(
-        key,
-        server,
-        subscription_mode=False,
-    )
+    if not key or not server:
+        logger.warning('Replacement confirmation lost key or server state')
+        await _render_key_action_page(callback, 'key_operation_unavailable')
+        return
     await render_page(
         callback,
         page_key='key_replace_confirm',
-        text_replacements={
-            '%key_replace_data%': replace_data,
-            '%замена_ключа_данные%': replace_data,
+        context={
+            'telegram_id': callback.from_user.id,
+            'key_id': key_id,
+            'key_flow_confirm_callback': 'replace_confirm',
+            'key_flow_back_callback': f'key:{key_id}',
+            'selected_server_name': server.get('name'),
+            **build_key_page_context(key),
         },
-        prepend_buttons=keyboard_rows(replace_confirm_kb(key_id)),
     )
     await callback.answer()
 
@@ -504,14 +585,16 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
     current_key = get_key_details_for_user(key_id, telegram_id)
     new_server_data = get_server_by_id(new_server_id)
     if not current_key or not new_server_data:
-        await callback.answer('❌ Ошибка данных', show_alert=True)
+        logger.warning(
+            'Replacement state is stale (user=%s, key=%s, server=%s)',
+            telegram_id,
+            key_id,
+            new_server_id,
+        )
+        await _render_key_action_page(callback, 'key_operation_unavailable')
         return
     delivery_target = callback
-    status_message = await render_key_status_page(
-        callback,
-        title_html='⏳ <b>Выполняется замена ключа</b>',
-        body_html='',
-    )
+    status_message = await _render_key_action_page(callback, 'key_progress', key=current_key)
     delivery_target = build_key_delivery_target(callback, status_message)
 
     subscription_mode = is_subscription_mode()
@@ -548,10 +631,10 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
                     )
 
         if traffic_limit > 0 and traffic_used >= traffic_limit:
-            await render_key_status_page(
+            await _render_key_action_page(
                 delivery_target,
-                title_html='📊 <b>Трафик закончился</b>',
-                body_text='Продлите ключ, чтобы снова получить доступ к замене.',
+                'key_operation_unavailable',
+                key=current_key,
             )
             return
 
@@ -692,38 +775,52 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
         await send_key_with_qr(delivery_target, updated_key, is_new=True)
     except Exception as e:
         logger.error(f'Ошибка при замене ключа (user={callback.from_user.id}, key={key_id}): {e}')
-        await render_key_status_page(
-            delivery_target,
-            title_html='❌ <b>Произошла ошибка при замене ключа</b>',
-            body_text='Попробуйте позже или обратитесь в поддержку.',
-        )
+        await _render_key_action_page(delivery_target, 'key_operation_failed', key=current_key)
 
 @router.callback_query(F.data.startswith('key_rename:'))
 async def key_rename_start_handler(callback: CallbackQuery, state: FSMContext):
     """Start renaming the key."""
-    from database.requests import get_key_details_for_user
-    from bot.keyboards.user import cancel_kb
-    from bot.utils.key_pages import build_key_rename_data, keyboard_rows
-    from bot.utils.page_renderer import render_page
     key_id = int(callback.data.split(':')[1])
-    telegram_id = callback.from_user.id
+    await dispatch_core_action(
+        callback,
+        'key.rename.start',
+        {'key_id': key_id},
+        source='callback',
+        state=state,
+    )
+
+
+async def _execute_key_rename_start(request: CoreActionRequest) -> None:
+    """Run the original rename entry flow after action policy resolution."""
+    from database.requests import get_key_details_for_user
+    from bot.utils.key_pages import build_key_page_context
+    from bot.utils.page_renderer import render_page
+
+    callback = request.target
+    state = request.state
+    key_id = request.params['key_id']
+    telegram_id = request.telegram_id
+    if state is None:
+        await _render_key_action_page(callback, 'key_operation_unavailable')
+        return
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
-        await callback.answer('❌ Ключ не найден или вы не являетесь его владельцем.', show_alert=True)
+        await _render_key_action_page(callback, 'key_not_found')
         return
     await state.set_state(RenameKey.waiting_for_name)
     await state.update_data(key_id=key_id)
-    key_rename_data = build_key_rename_data(key)
     await render_page(
         callback,
         page_key='key_rename_prompt',
-        text_replacements={
-            '%key_rename_data%': key_rename_data,
-            '%ключ_переименование_данные%': key_rename_data,
+        context={
+            'telegram_id': telegram_id,
+            'key_id': key_id,
+            'key_flow_back_callback': f'key:{key_id}',
+            **build_key_page_context(key),
         },
-        prepend_buttons=keyboard_rows(cancel_kb(cancel_callback=f'key:{key_id}')),
     )
-    await callback.answer()
+    if isinstance(callback, CallbackQuery):
+        await callback.answer()
 
 @router.message(RenameKey.waiting_for_name)
 async def key_rename_submit_handler(message: Message, state: FSMContext):
@@ -735,25 +832,50 @@ async def key_rename_submit_handler(message: Message, state: FSMContext):
     new_name = get_message_text_for_storage(message, 'plain')
     if not key_id:
         await state.clear()
-        await render_key_status_page(
-            message,
-            title_html='❌ <b>Ошибка состояния</b>',
-            body_text='Попробуйте снова.',
-            force_new=True,
-        )
+        await _render_key_action_page(message, 'key_operation_unavailable', force_new=True)
         return
-    if len(new_name) > 30:
-        await render_key_status_page(
-            message,
-            title_html='⚠️ <b>Имя слишком длинное</b>',
-            body_text='Максимум 30 символов. Попробуйте короче.',
-            force_new=True,
-        )
+    if not new_name or len(new_name) > 30:
+        await _render_key_action_page(message, 'key_rename_invalid', force_new=True)
         return
     success = update_key_custom_name(key_id, message.from_user.id, new_name)
-    if success:
-        prepend = f'✅ Ключ переименован в <b>{escape_html(new_name)}</b>'
-    else:
-        prepend = '❌ Не удалось переименовать ключ.'
     await state.clear()
-    await show_key_details(message.from_user.id, key_id, message, is_callback=False, prepend_text=prepend)
+    if not success:
+        logger.warning('Failed to rename key %s for user %s', key_id, message.from_user.id)
+        await _render_key_action_page(message, 'key_operation_failed', force_new=True)
+        return
+    await show_key_details(message.from_user.id, key_id, message, is_callback=False)
+
+
+async def _render_key_action_page(
+    target,
+    page_key: str,
+    *,
+    key: dict | None = None,
+    force_new: bool = False,
+):
+    """Render a database-backed key state and keep callback alerts empty."""
+    from bot.utils.key_pages import build_key_page_context
+    from bot.utils.page_renderer import render_page
+
+    context = {
+        'telegram_id': getattr(getattr(target, 'from_user', None), 'id', None),
+    }
+    if key:
+        context.update(build_key_page_context(key))
+        context['key_id'] = key.get('id')
+    rendered = await render_page(
+        target,
+        page_key=page_key,
+        context=context,
+        force_new=force_new,
+    )
+    if isinstance(target, CallbackQuery):
+        await target.answer()
+    return rendered
+
+
+register_core_action_executor('key.renew.start', _execute_key_renew_start, replace=True)
+register_core_action_executor('key.configure.start', _execute_key_replace_or_configure, replace=True)
+register_core_action_executor('key.replace.start', _execute_key_replace_or_configure, replace=True)
+register_core_action_executor('key.rename.start', _execute_key_rename_start, replace=True)
+register_core_action_executor('key.delete', _execute_key_delete, replace=True)

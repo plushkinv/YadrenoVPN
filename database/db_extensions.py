@@ -134,6 +134,7 @@ class ExtensionStorage:
         return self._with_conn(op)
 
     def set(self, key: str, value: Any) -> None:
+        _ensure_extension_mutation_allowed('extension_storage.set')
         storage_key = _normalize_storage_key(key)
         payload = _json_dumps_storage_value(value)
 
@@ -152,6 +153,7 @@ class ExtensionStorage:
         self._with_conn(op)
 
     def delete(self, key: str) -> bool:
+        _ensure_extension_mutation_allowed('extension_storage.delete')
         storage_key = _normalize_storage_key(key)
 
         def op(conn: sqlite3.Connection) -> bool:
@@ -209,6 +211,7 @@ class ExtensionTable:
         self.physical_name = extension_table_name(storage.extension_id, self.local_name)
 
     def insert(self, values: Mapping[str, Any]) -> int:
+        _ensure_extension_mutation_allowed('extension_table.insert')
         payload = _normalize_values(values)
         columns = list(payload.keys())
         placeholders = ', '.join('?' for _ in columns)
@@ -252,6 +255,7 @@ class ExtensionTable:
         return self._storage._with_conn(op)
 
     def update(self, filters: Mapping[str, Any], values: Mapping[str, Any]) -> int:
+        _ensure_extension_mutation_allowed('extension_table.update')
         where_sql, where_params = _build_where(filters)
         if not where_sql:
             raise ValueError("update требует filters")
@@ -271,6 +275,7 @@ class ExtensionTable:
         return self._storage._with_conn(op)
 
     def delete(self, filters: Mapping[str, Any]) -> int:
+        _ensure_extension_mutation_allowed('extension_table.delete')
         where_sql, params = _build_where(filters)
         if not where_sql:
             raise ValueError("delete требует filters")
@@ -281,6 +286,13 @@ class ExtensionTable:
             return cursor.rowcount
 
         return self._storage._with_conn(op)
+
+
+def _ensure_extension_mutation_allowed(operation: str) -> None:
+    """Reject storage writes made from declarative semantic policies."""
+    from bot.utils.action_policy import ensure_action_policy_read_only
+
+    ensure_action_policy_read_only(operation)
 
 
 def _normalize_schema_migrations(migrations: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

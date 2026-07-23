@@ -24,6 +24,9 @@ def create_payment_provider_support_tables(conn: sqlite3.Connection) -> None:
             payment_url TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             metadata_json TEXT,
+            purpose TEXT,
+            charge_amount TEXT,
+            charge_currency TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (order_id) REFERENCES payments(order_id) ON DELETE CASCADE
@@ -36,6 +39,19 @@ def create_payment_provider_support_tables(conn: sqlite3.Connection) -> None:
         ON payment_provider_orders(provider_id, status)
         """
     )
+    existing_columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(payment_provider_orders)").fetchall()
+    }
+    for name, column_type in (
+        ('purpose', 'TEXT'),
+        ('charge_amount', 'TEXT'),
+        ('charge_currency', 'TEXT'),
+    ):
+        if name not in existing_columns:
+            conn.execute(
+                f"ALTER TABLE payment_provider_orders ADD COLUMN {name} {column_type}"
+            )
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_payment_provider_orders_external
@@ -53,8 +69,11 @@ def save_payment_provider_order(
     payment_url: str | None = None,
     status: str = 'pending',
     metadata: Mapping[str, Any] | None = None,
+    purpose: str | None = None,
+    charge_amount: str | None = None,
+    charge_currency: str | None = None,
 ) -> bool:
-    """Saves or updates the external payment of a custom provider."""
+    """Saves or updates the external order of any payment provider."""
     normalized_status = _normalize_status(status)
     metadata_json = json.dumps(dict(metadata or {}), ensure_ascii=False)
     with get_db() as conn:
@@ -63,9 +82,10 @@ def save_payment_provider_order(
             """
             INSERT INTO payment_provider_orders (
                 order_id, provider_id, payment_type, provider_payment_id,
-                payment_url, status, metadata_json, updated_at
+                payment_url, status, metadata_json, purpose,
+                charge_amount, charge_currency, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(order_id) DO UPDATE SET
                 provider_id = excluded.provider_id,
                 payment_type = excluded.payment_type,
@@ -73,6 +93,9 @@ def save_payment_provider_order(
                 payment_url = excluded.payment_url,
                 status = excluded.status,
                 metadata_json = excluded.metadata_json,
+                purpose = excluded.purpose,
+                charge_amount = excluded.charge_amount,
+                charge_currency = excluded.charge_currency,
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
@@ -83,6 +106,9 @@ def save_payment_provider_order(
                 payment_url,
                 normalized_status,
                 metadata_json,
+                purpose,
+                charge_amount,
+                charge_currency.upper() if charge_currency else None,
             ),
         )
         return cursor.rowcount > 0
@@ -149,6 +175,35 @@ def get_open_payment_provider_orders(limit: int = 50) -> list[dict[str, Any]]:
         return [_row_to_dict(row) for row in rows]
 
 
+def get_retryable_confirmed_payment_provider_orders(limit: int = 10) -> list[dict[str, Any]]:
+    """Returns settled v1 provider orders whose core fulfillment is incomplete."""
+    try:
+        normalized_limit = int(limit)
+    except (TypeError, ValueError):
+        normalized_limit = 10
+    normalized_limit = max(1, min(normalized_limit, 100))
+
+    with get_db() as conn:
+        create_payment_provider_support_tables(conn)
+        rows = conn.execute(
+            """
+            SELECT ppo.*, p.fulfillment_status, p.fulfillment_started_at,
+                   p.fulfillment_attempts
+            FROM payment_provider_orders ppo
+            JOIN payments p ON p.order_id = ppo.order_id
+            WHERE p.intent_version = 1
+              AND p.status = 'pending'
+              AND p.provider_confirmed_at IS NOT NULL
+              AND ppo.status = 'succeeded'
+              AND p.fulfillment_status IN ('provider_succeeded', 'failed', 'processing')
+            ORDER BY ppo.updated_at ASC, ppo.id ASC
+            LIMIT ?
+            """,
+            (normalized_limit,),
+        ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
+
 def update_payment_provider_order_status(
     order_id: str,
     status: str,
@@ -174,6 +229,38 @@ def update_payment_provider_order_status(
             """,
             (normalized_status, provider_payment_id, payment_url, metadata_json, order_id),
         )
+        payment_columns = {
+            str(row['name'])
+            for row in conn.execute("PRAGMA table_info(payments)").fetchall()
+        }
+        if normalized_status == 'succeeded' and {
+            'intent_version',
+            'provider_confirmed_at',
+            'fulfillment_status',
+            'fulfillment_last_error',
+        }.issubset(payment_columns):
+            conn.execute(
+                """
+                UPDATE payments
+                SET provider_confirmed_at = COALESCE(provider_confirmed_at, CURRENT_TIMESTAMP),
+                    fulfillment_status = CASE
+                        WHEN intent_version = 1
+                         AND status = 'pending'
+                         AND fulfillment_status IN ('pending', 'failed', 'provider_succeeded')
+                            THEN 'provider_succeeded'
+                        ELSE fulfillment_status
+                    END,
+                    fulfillment_last_error = CASE
+                        WHEN intent_version = 1
+                         AND status = 'pending'
+                         AND fulfillment_status IN ('pending', 'failed', 'provider_succeeded')
+                            THEN NULL
+                        ELSE fulfillment_last_error
+                    END
+                WHERE order_id = ?
+                """,
+                (order_id,),
+            )
         return cursor.rowcount > 0
 
 
@@ -201,6 +288,7 @@ __all__ = [
     'find_payment_provider_order_by_external_id',
     'get_payment_provider_order',
     'get_open_payment_provider_orders',
+    'get_retryable_confirmed_payment_provider_orders',
     'save_payment_provider_order',
     'update_payment_provider_order_status',
 ]

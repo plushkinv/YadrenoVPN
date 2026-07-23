@@ -105,6 +105,96 @@ def _normalize_context(context: Mapping[str, Any] | None) -> dict[str, Any]:
     return dict(context)
 
 
+def _render_legacy_fragment(template: str, context: Mapping[str, Any]) -> str:
+    """Renders a compatibility fragment whose wording still comes from pages."""
+    from bot.utils.placeholders import apply_page_placeholders
+
+    return apply_page_placeholders(template, context=context, mode='html')
+
+
+def _without_separator_line(value: str) -> str:
+    lines = value.splitlines()
+    if lines and lines[0] and set(lines[0]) <= {'━', '─', '-', ' '}:
+        lines = lines[1:]
+    return '\n'.join(lines).lstrip('\n')
+
+
+def _add_legacy_composite_page_context(
+    page_key: str,
+    page_data: Mapping[str, Any],
+    context: dict[str, Any],
+) -> None:
+    """Keeps pre-v81 custom placeholders working without changing stored custom text."""
+    custom = page_data.get('_text_custom')
+    default = page_data.get('_text_default')
+    if not isinstance(custom, str) or not isinstance(default, str):
+        return
+
+    custom_folded = custom.casefold()
+    blocks = default.split('\n\n')
+    if page_key == 'main' and '%тарифы%' in custom_folded:
+        tariff_lines = default.splitlines()
+        for index, line in enumerate(tariff_lines):
+            if '%tariffs%' not in line.casefold():
+                continue
+            heading = tariff_lines[index - 1] if index > 0 else ''
+            rows = build_tariff_text()
+            context['tariffs_html'] = '\n'.join(
+                part for part in (heading, rows) if part
+            )
+            break
+        return
+
+    if page_key == 'custom_profile':
+        if '%profile%' in custom_folded or '%профиль%' in custom_folded:
+            profile_template = blocks[1] if len(blocks) > 1 else default
+            context['user_profile_html'] = _render_legacy_fragment(profile_template, context)
+        if '%keys_summary%' in custom_folded or '%ключи_сводка%' in custom_folded:
+            summary_template = '\n\n'.join(blocks[2:]) if len(blocks) > 2 else ''
+            context['keys_summary_html'] = _render_legacy_fragment(
+                _without_separator_line(summary_template),
+                context,
+            )
+        return
+
+    if page_key == 'key_details' and (
+        '%key_info%' in custom_folded or '%ключ_информация%' in custom_folded
+    ):
+        history_rows = context.get('key_history_html', '')
+        context['key_info_html'] = _render_legacy_fragment(
+            blocks[0] if blocks else default,
+            context,
+        )
+        context['key_history_html'] = history_rows
+        context['key_history_html'] = _render_legacy_fragment(
+            '\n\n'.join(blocks[1:]),
+            context,
+        )
+        return
+
+    fragment_specs = {
+        'key_replace_server_select': ('screen_data_html', 1, -1),
+        'key_replace_inbound_select': ('screen_data_html', 1, -1),
+        'new_key_server_select': ('screen_data_html', 1, None),
+        'new_key_inbound_select': ('screen_data_html', 1, -1),
+        'key_replace_confirm': ('key_replace_data_html', 1, -1),
+        'key_rename_prompt': ('key_rename_data_html', 1, 2),
+    }
+    spec = fragment_specs.get(page_key)
+    if not spec:
+        return
+    context_key, start, stop = spec
+    marker_names = {
+        'screen_data_html': ('%screen_data%', '%экран_данные%'),
+        'key_replace_data_html': ('%key_replace_data%', '%замена_ключа_данные%'),
+        'key_rename_data_html': ('%key_rename_data%', '%ключ_переименование_данные%'),
+    }[context_key]
+    if not any(marker in custom_folded for marker in marker_names):
+        return
+    template = '\n\n'.join(blocks[start:stop])
+    context[context_key] = _render_legacy_fragment(template, context)
+
+
 async def enrich_page_placeholder_context(
     page_key: str,
     page_data: Mapping[str, Any],
@@ -168,5 +258,7 @@ def enrich_page_placeholder_context_sync(
     if (USER_PROFILE_PLACEHOLDERS & placeholders) - explicit:
         for key, value in build_user_profile_context_values(_context_int(enriched, 'telegram_id')).items():
             enriched.setdefault(key, value)
+
+    _add_legacy_composite_page_context(page_key, page_data, enriched)
 
     return enriched

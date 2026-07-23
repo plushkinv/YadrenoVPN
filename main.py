@@ -59,6 +59,16 @@ async def on_startup(bot: Bot):
     # Applying database migrations
     run_migrations()
 
+    from bot.utils.user_ui_texts import load_user_ui_text_cache
+
+    loaded_ui_texts = load_user_ui_text_cache()
+    logger.info("User UI text cache loaded: %s entries", loaded_ui_texts)
+
+    from bot.utils.page_renderer import validate_required_user_pages
+
+    required_pages = validate_required_user_pages()
+    logger.info("Required user pages validated: %s entries", required_pages)
+
     from bot.utils.telegram_links import load_telegram_link_domain
 
     load_telegram_link_domain()

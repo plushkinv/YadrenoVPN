@@ -5,6 +5,7 @@ import string
 import datetime
 from typing import Optional, List, Dict, Any, Tuple
 from .connection import get_db
+from .db_tariffs import _base_currency_and_rub_rate, normalize_tariff_money
 
 logger = logging.getLogger(__name__)
 
@@ -200,13 +201,17 @@ def get_tariffs_by_group(group_id: int) -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, duration_days, price_cents, price_stars, price_rub, 
+            SELECT id, name, duration_days, price_rub, price_minor,
                    display_order, is_active, traffic_limit_gb, group_id
             FROM tariffs
             WHERE group_id = ? AND is_active = 1
             ORDER BY display_order, id
         """, (group_id,))
-        return [dict(row) for row in cursor.fetchall()]
+        base, rub_rate = _base_currency_and_rub_rate(conn)
+        return [
+            normalize_tariff_money(dict(row), base_currency=base, rub_rate=rub_rate)
+            for row in cursor.fetchall()
+        ]
 
 def get_active_servers_by_group(group_id: int) -> List[Dict[str, Any]]:
     """

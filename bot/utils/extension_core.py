@@ -63,6 +63,7 @@ class ExtensionCoreAPI:
         telegram_id: int | None = None,
     ) -> dict[str, Any]:
         """Accrues days to the user's first active key via core-log."""
+        _ensure_mutation_allowed('grant_days_to_first_active_key')
         target_user_id = _resolve_user_id(user_id=user_id, telegram_id=telegram_id)
         return await _apply_core_operation(
             extension_id=self.extension_id,
@@ -83,6 +84,7 @@ class ExtensionCoreAPI:
         telegram_id: int | None = None,
     ) -> dict[str, Any]:
         """Credits a bonus to the user's balance via core-log."""
+        _ensure_mutation_allowed('add_balance_bonus')
         target_user_id = _resolve_user_id(user_id=user_id, telegram_id=telegram_id)
         return await _apply_core_operation(
             extension_id=self.extension_id,
@@ -135,6 +137,12 @@ async def _apply_core_operation(**kwargs: Any) -> dict[str, Any]:
     from bot.services.extension_core_ops import apply_extension_core_operation
 
     return await apply_extension_core_operation(**kwargs)
+
+
+def _ensure_mutation_allowed(operation: str) -> None:
+    from bot.utils.action_policy import ensure_action_policy_read_only
+
+    ensure_action_policy_read_only(operation)
 
 
 def _normalize_positive_int(value: Any, field: str) -> int:

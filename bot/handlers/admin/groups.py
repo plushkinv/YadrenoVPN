@@ -225,9 +225,12 @@ async def group_view_handler(callback: CallbackQuery, state: FSMContext):
     if tariffs:
         text += "\n<b>Тарифы:</b>\n"
         for t in tariffs:
-            price = t['price_cents'] / 100
-            price_str = f"{price:g}".replace('.', ',')
-            text += f"  • {t['name']} — ${price_str}\n"
+            from bot.services.money import format_money_minor
+
+            text += (
+                f"  • {t['name']} — "
+                f"{format_money_minor(t.get('price_minor', 0), t.get('base_currency', 'RUB'))}\n"
+            )
     
     if servers:
         text += "\n<b>Серверы:</b>\n"

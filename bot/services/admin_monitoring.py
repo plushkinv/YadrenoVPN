@@ -58,7 +58,16 @@ def _format_percent(value: Any) -> str:
 
 
 def _format_payments_sum(payments: Dict[str, Any]) -> str:
+    base_totals = payments.get('paid_base') or {}
     parts: List[str] = []
+    if base_totals:
+        from bot.services.money import format_money_minor
+
+        parts.extend(
+            format_money_minor(amount, currency)
+            for currency, amount in sorted(base_totals.items())
+            if int(amount or 0) > 0
+        )
     cents = _safe_int(payments.get("paid_cents"))
     rub = _safe_float(payments.get("paid_rub"), 0) or 0
     stars = _safe_int(payments.get("paid_stars"))

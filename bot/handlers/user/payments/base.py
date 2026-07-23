@@ -1,13 +1,11 @@
 import logging
 from typing import Optional
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, PreCheckoutQuery, LabeledPrice, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import Message, CallbackQuery, PreCheckoutQuery
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from bot.utils.page_flow import build_page_flow_context
 from bot.utils.page_renderer import render_page
-from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.callbacks import safe_answer_callback
 
 logger = logging.getLogger(__name__)
@@ -53,31 +51,63 @@ async def handle_payment_deeplink(
     if not start_param:
         return False
 
-    async def _show_deeplink_status(title_html: str, body_text: str, provider_title: str = '') -> None:
-        from bot.handlers.user.payments.status_page import show_payment_status_message
-        from bot.keyboards.admin import home_only_kb
-
-        await show_payment_status_message(
-            message,
-            title_html=title_html,
-            body_text=body_text,
-            payment_provider_title=provider_title,
-            reply_markup=home_only_kb(),
-            force_new=True,
-        )
+    async def _show_deeplink_status(page_key: str, *, order_id: str | None = None) -> None:
+        context = {'telegram_id': telegram_id}
+        if order_id:
+            context['order_id'] = order_id
+        await render_page(message, page_key, context=context, force_new=True)
 
     if start_param.startswith(PAYMENT_DEEPLINK_PREFIX):
         parsed = parse_payment_deeplink(start_param)
         if not parsed:
-            await _show_deeplink_status(
-                '⚠️ <b>Платёжная ссылка устарела или повреждена</b>',
-                'Откройте оплату заново из бота и попробуйте ещё раз.',
-                'Платёжная ссылка',
-            )
+            await _show_deeplink_status('payment_order_unavailable')
             return True
 
         provider = parsed['provider']
         order_id = parsed['order_id']
+
+        from bot.services.payment_intents import load_payment_intent
+
+        intent = load_payment_intent(order_id)
+        if intent:
+            from bot.services.billing import complete_payment_flow
+            from bot.services.payment_provider_adapters import check_provider_invoice
+            from database.requests import get_payment_provider_order
+
+            provider_alias = {
+                'yookassa': 'yookassa_qr',
+                'wata': 'wata',
+                'platega': 'platega',
+                'cardlink': 'cardlink',
+            }
+            provider_order = get_payment_provider_order(order_id)
+            if (
+                intent.user_id != user_internal_id
+                or not provider_order
+                or provider_order.get('provider_id') != provider_alias.get(provider)
+            ):
+                await _show_deeplink_status('payment_order_unavailable')
+                return True
+            try:
+                status = await check_provider_invoice(intent)
+            except Exception as error:
+                logger.warning('Intent deep-link check failed order=%s: %s', order_id, error)
+                await _show_deeplink_status('payment_failed', order_id=order_id)
+                return True
+            if status == 'succeeded':
+                await complete_payment_flow(
+                    order_id=order_id,
+                    message=message,
+                    state=state,
+                    telegram_id=telegram_id,
+                    payment_type=intent.payment_type or '',
+                    referral_amount=0,
+                )
+            elif status == 'canceled':
+                await _show_deeplink_status('payment_canceled', order_id=order_id)
+            else:
+                await _show_deeplink_status('payment_pending', order_id=order_id)
+            return True
 
         if provider == 'yookassa':
             from bot.handlers.user.payments.yookassa import _run_yookassa_check
@@ -112,14 +142,7 @@ async def handle_payment_deeplink(
 
         order = find_latest_pending_cardlink_order_for_user(user_internal_id)
         if not order:
-            await _show_deeplink_status(
-                '⚠️ <b>Активная оплата Cardlink не найдена</b>',
-                (
-                    'Возможно, платёж уже обработан или ещё не создан.\n'
-                    'Откройте «Купить ключ» и попробуйте снова.'
-                ),
-                'Cardlink',
-            )
+            await _show_deeplink_status('payment_order_unavailable')
             return True
 
         await _run_cardlink_check(
@@ -132,11 +155,10 @@ async def handle_payment_deeplink(
 
 
 def _format_price_compact(cents: int) -> str:
-    """Formatting prices in a compact form."""
-    if cents >= 10000:
-        return f'{cents // 100} ₽'
-    else:
-        return f'{cents / 100:.2f} ₽'.replace('.', ',')
+    """Formats current base minor units compactly."""
+    from bot.services.money import format_money_minor
+
+    return format_money_minor(cents)
 
 def _is_cards_via_yookassa_direct() -> bool:
     """
@@ -172,7 +194,34 @@ async def complete_promo_free_payment(
 
 @router.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout: PreCheckoutQuery):
-    """Pre-checkout confirmation for Telegram Stars."""
+    """Confirms legacy invoices and validates ownership/amount for v1 intents."""
+    from database.requests import get_or_create_user
+    from bot.services.payment_intents import load_payment_intent
+    from bot.utils.user_ui_texts import get_ui_text
+
+    order_id = _invoice_order_id(pre_checkout.invoice_payload)
+    intent = load_payment_intent(order_id)
+    if intent:
+        owner, _ = get_or_create_user(
+            pre_checkout.from_user.id,
+            pre_checkout.from_user.username,
+            pre_checkout.from_user.first_name,
+            pre_checkout.from_user.last_name,
+        )
+        owner_id = int(owner["id"])
+        expected_amount = _native_invoice_amount(intent)
+        if (
+            not owner_id
+            or owner_id != intent.user_id
+            or intent.status != 'pending'
+            or pre_checkout.currency != intent.charge_currency
+            or int(pre_checkout.total_amount) != expected_amount
+        ):
+            await pre_checkout.answer(
+                ok=False,
+                error_message=get_ui_text("payment.invoice.stale_error"),
+            )
+            return
     await pre_checkout.answer(ok=True)
 
 @router.message(F.successful_payment)
@@ -189,12 +238,27 @@ async def successful_payment_handler(message: Message, state: FSMContext):
     payment_type = 'stars' if currency == 'XTR' else 'cards'
     logger.info(f'Успешная оплата {payment_type}: {payload}, charge_id={payment.telegram_payment_charge_id}')
     
-    if payload.startswith('renew:'):
-        order_id = payload.split(':')[1]
-    elif payload.startswith('vpn_key:'):
-        order_id = payload.split(':')[1]
-    else:
-        order_id = payload
+    order_id = _invoice_order_id(payload)
+
+    from bot.services.payment_intents import load_payment_intent
+    intent = load_payment_intent(order_id)
+    if intent:
+        from database.requests import get_user_internal_id, update_payment_provider_order_status
+
+        owner_id = get_user_internal_id(message.from_user.id)
+        if (
+            not owner_id
+            or owner_id != intent.user_id
+            or payment.currency != intent.charge_currency
+            or int(payment.total_amount) != _native_invoice_amount(intent)
+        ):
+            logger.error('Rejected mismatched successful intent payment order=%s', order_id)
+            return
+        update_payment_provider_order_status(
+            order_id,
+            'succeeded',
+            provider_payment_id=payment.telegram_payment_charge_id,
+        )
     
     await complete_payment_flow(
         order_id=order_id,
@@ -205,16 +269,70 @@ async def successful_payment_handler(message: Message, state: FSMContext):
         referral_amount=payment.total_amount
     )
 
+
+def _invoice_order_id(payload: str) -> str:
+    """Extracts a core order id from legacy and v1 Telegram invoice payloads."""
+    value = str(payload or '')
+    if value.startswith('renew:') or value.startswith('vpn_key:'):
+        return value.split(':', 1)[1]
+    return value
+
+
+def _native_invoice_amount(intent) -> int:
+    """Returns Telegram's minor-unit amount for a persisted native invoice."""
+    if intent.charge_amount is None:
+        return 0
+    if intent.charge_currency == 'XTR':
+        return int(intent.charge_amount)
+    return int(intent.charge_amount * 100)
+
 async def finalize_payment_ui(message: Message, state: FSMContext, text: str, order: dict, user_id: int):
     """
     Completes the UI after successful payment.
     Shows a message and either transfers to the settings (draft) or to the main one.
     """
-    from bot.keyboards.admin import home_only_kb
     from database.requests import get_key_details_for_user, get_user_by_id
     import logging
     logger = logging.getLogger(__name__)
     from bot.handlers.user.payments.keys_config import start_new_key_config
+    if order.get('purpose') == 'balance_topup':
+        from bot.services.payment_intents import format_base_minor, load_payment_intent
+        from bot.utils.extension_rendering import render_extension_page, render_extension_route
+
+        intent = load_payment_intent(str(order.get('order_id') or ''))
+        target = intent.navigation.success_target if intent else None
+        base_currency = str(
+            (intent.base_currency if intent else order.get('base_currency')) or 'RUB'
+        )
+        extra_context = {
+            'telegram_id': user_id,
+            'order_id': order.get('order_id'),
+            'payment_purpose': order.get('purpose'),
+            'payment_nominal_text': format_base_minor(
+                int(order.get('nominal_amount_minor') or order.get('nominal_amount_cents') or 0),
+                base_currency,
+            ),
+            'payment_amount_text': format_base_minor(
+                int(order.get('payable_amount_minor') or order.get('payable_amount_cents') or 0),
+                base_currency,
+            ),
+        }
+        if target and target.kind == 'page':
+            await render_extension_page(
+                message,
+                target.value,
+                extra_context,
+                force_new_for_message=True,
+            )
+        else:
+            await render_extension_route(
+                message,
+                target.value if target else 'balance_topup_result',
+                extra_context,
+                force_new_for_message=True,
+            )
+        await state.clear()
+        return
     key_id = order.get('vpn_key_id')
     logger.info(f"finalize_payment_ui: Order={order.get('order_id')}, Key={key_id}, User={user_id}")
     is_draft = False
@@ -230,16 +348,6 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
         logger.info('No key_id in order object.')
     logger.info(f'Result: is_draft={is_draft}')
     if is_draft:
-        from bot.handlers.user.payments.status_page import show_payment_status_message
-
-        title_html, body_html = _parse_success_payment_status_text(text)
-        await show_payment_status_message(
-            message,
-            title_html=title_html,
-            body_html=body_html,
-            payment_provider_title='Оплата',
-            force_new=True,
-        )
         owner_internal_id = order.get('user_id')
         if not owner_internal_id:
             raise RuntimeError(f"У заказа {order.get('order_id')} не указан владелец")
@@ -260,30 +368,28 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
             owner_username=owner_username,
         )
     else:
-        from bot.handlers.user.keys import show_key_details
-        await show_key_details(telegram_id=user_id, key_id=key_id, message=message, is_callback=False, prepend_text=text)
+        from bot.utils.key_pages import build_key_page_context
+        from bot.utils.user_ui_texts import render_ui_text
 
-
-def _parse_success_payment_status_text(text: str) -> tuple[str, str]:
-    """Converts legacy payment success text to title/body for payment_status."""
-    body_html = str(text or '').strip()
-    title_html = '✅ <b>Оплата принята</b>'
-
-    success_prefix = '✅ Оплата прошла успешно!'
-    accepted_prefix = '✅ Оплата принята'
-    duplicate_prefix = '✅ Этот платёж уже был обработан ранее.'
-
-    if body_html.startswith(success_prefix):
-        title_html = '✅ <b>Оплата прошла успешно</b>'
-        body_html = body_html[len(success_prefix):].lstrip()
-    elif body_html.startswith(duplicate_prefix):
-        title_html = '✅ <b>Платёж уже обработан</b>'
-        body_html = ''
-    elif body_html.startswith(accepted_prefix):
-        title_html = '✅ <b>Оплата принята</b>'
-        body_html = body_html[len(accepted_prefix):].lstrip(' .\n')
-
-    return title_html, body_html
+        key = get_key_details_for_user(key_id, user_id)
+        if not key:
+            logger.warning('Paid order %s references a missing key %s', order.get('order_id'), key_id)
+            await render_page(message, 'payment_failed', force_new=True)
+            await state.clear()
+            return
+        period = order.get('period_days') or order.get('duration_days') or 0
+        await render_page(
+            message,
+            'key_renewed',
+            context={
+                'telegram_id': user_id,
+                'key_id': key_id,
+                'payment_term_text': render_ui_text('format.days_short', days=period),
+                **build_key_page_context(key),
+            },
+            force_new=True,
+        )
+        await state.clear()
 
 
 async def send_telegram_invoice_or_status(
@@ -299,16 +405,13 @@ async def send_telegram_invoice_or_status(
     """
     message = getattr(callback, 'message', None)
     if message is None:
-        await callback.answer('❌ Не удалось создать счёт', show_alert=True)
+        await callback.answer()
         return False
 
     try:
         await message.answer_invoice(**invoice_kwargs)
         return True
     except Exception as e:
-        from bot.handlers.user.payments.status_page import show_payment_status_message
-        from bot.keyboards.admin import home_only_kb
-
         error_text = str(e)
         if (
             'CURRENCY_TOTAL_AMOUNT_INVALID' in error_text
@@ -319,24 +422,12 @@ async def send_telegram_invoice_or_status(
                 log_context,
                 e,
             )
-            body_html = (
-                'Сумма тарифа меньше допустимого лимита платёжной системы.\n'
-                'Выберите другой тариф или способ оплаты.'
-            )
+            page_key = 'payment_unavailable'
         else:
             logger.exception("Не удалось создать Telegram invoice (%s).", log_context)
-            body_html = (
-                'Платёжная система не приняла запрос на создание счёта.\n'
-                'Попробуйте другой способ оплаты или обратитесь в поддержку.'
-            )
+            page_key = 'payment_failed'
 
-        await show_payment_status_message(
-            message,
-            title_html='❌ <b>Не удалось создать счёт</b>',
-            body_html=body_html,
-            payment_provider_title=provider_title,
-            reply_markup=home_only_kb(),
-        )
+        await render_page(message, page_key)
         await callback.answer()
         return False
 
@@ -351,7 +442,8 @@ async def renew_invoice_cancel_handler(callback: CallbackQuery):
 
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
-        await callback.answer('❌ Ключ не найден', show_alert=True)
+        await render_page(callback, 'key_not_found')
+        await callback.answer()
         return
 
     await show_renew_payment_page(callback, key, key_id, force_new=True)
@@ -361,24 +453,6 @@ async def renew_invoice_cancel_handler(callback: CallbackQuery):
 # ============================================================================
 # COMMON FUNCTIONS FOR QR PAYMENT PROVIDERS (wata, platega, cardlink, yookassa)
 # ============================================================================
-
-
-def default_qr_payment_page_text() -> str:
-    """Default text of the QR payment technical page."""
-    return (
-        "%платеж_провайдер%\n\n"
-        "%платеж_ключ_строка%"
-        "💳 <b>Тариф:</b> %платеж_тариф%\n"
-        "💰 <b>Сумма:</b> %платеж_сумма%\n"
-        "⏳ <b>%платеж_срок_тип%:</b> %платеж_срок%\n"
-        "%платеж_скидка_строка%"
-        "\n%платеж_инструкция%\n\n"
-        "<i>%платеж_подсказка%</i>"
-    )
-
-
-def _format_payment_link(qr_url: str) -> str:
-    return f'<a href="{escape_html(str(qr_url))}">ссылке на оплату</a>'
 
 
 def _format_payment_discount_line(promo_lines: str | None) -> str:
@@ -400,28 +474,24 @@ def build_qr_payment_page_context(
     telegram_id: int | None = None,
     bot_username: str | None = None,
 ) -> dict:
-    payment_link = _format_payment_link(qr_url)
-    if instruction_text is None:
-        instruction_html = f"Отсканируйте QR код для перехода по {payment_link}."
-    else:
-        instruction_html = instruction_text.format(payment_link=payment_link)
+    from bot.utils.text import escape_html
+    from bot.utils.user_ui_texts import render_ui_text
 
-    if hint_text is None:
-        hint_text = 'После оплаты нажмите «✅ Я оплатил».'
-
+    safe_url = escape_html(str(qr_url))
     context = {
-        'payment_provider_title_html': title,
-        'payment_key_line_html': f"🔑 <b>Ключ:</b> {key_name}\n" if key_name else '',
-        'payment_tariff_html': tariff_name,
+        'payment_provider_title': title,
+        'payment_tariff_name': tariff_name,
         'payment_amount_text': price_str,
-        'payment_term_label': 'Продление' if key_name else 'Срок',
-        'payment_term_text': f'+{days} дней' if key_name else f'{days} дней',
+        'payment_term_text': render_ui_text('format.days_short', days=days),
         'payment_url': str(qr_url),
-        'payment_link_html': payment_link,
-        'payment_instruction_html': instruction_html,
-        'payment_hint_text': hint_text,
+        'payment_link_html': f'<a href="{safe_url}">{safe_url}</a>',
+        'payment_instruction_html': safe_url,
         'payment_discount_line_html': _format_payment_discount_line(promo_lines),
     }
+    if key_name:
+        from bot.utils.placeholders import KEY_FIELDS_CONTEXT_KEY
+
+        context[KEY_FIELDS_CONTEXT_KEY] = {'name': key_name}
     if telegram_id:
         context['telegram_id'] = telegram_id
     if bot_username:
@@ -449,7 +519,6 @@ async def rerender_qr_payment_page_context(page_context, viewer_id: int) -> bool
         page_key=QR_PAYMENT_PAGE_KEY,
         context=context,
         append_buttons=page_context.append_buttons,
-        fallback_text=default_qr_payment_page_text(),
         media_policy='runtime',
         runtime_media=photo_file_id,
         runtime_media_type='photo',
@@ -470,7 +539,7 @@ async def create_qr_payment_flow(
     error_name: str,
     qr_filename: str,
     back_callback: str,
-    loading_text: str = '⏳ Создаём ссылку на оплату...',
+    loading_text: str | None = None,
     key: dict = None,
     vpn_key_id: int = None,
     hint_text: str = None,
@@ -503,22 +572,20 @@ async def create_qr_payment_flow(
     """
     from database.requests import (
         create_pending_order,
-        get_user_internal_id,
+        get_or_create_user,
         schedule_payment_auto_check,
     )
-    from bot.keyboards.user import qr_payment_kb
-    from bot.keyboards.admin import home_only_kb
     from bot.services.promotions import describe_quote_lines, format_amount, prepare_order_pricing
-    from bot.handlers.user.payments.status_page import (
-        show_payment_status_message,
-        show_payment_unavailable_status,
-    )
+    from bot.handlers.user.payments.status_page import show_payment_unavailable_status
+    from bot.utils.payment_invoice import purchase_invoice_description, renewal_invoice_description
 
-    # User Validation
-    user_id = get_user_internal_id(callback.from_user.id)
-    if not user_id:
-        await safe_answer_callback(callback, '❌ Пользователь не найден', show_alert=True)
-        return
+    user, _ = get_or_create_user(
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.first_name,
+        callback.from_user.last_name,
+    )
+    user_id = int(user['id'])
 
     # Creating an order
     (_, order_id) = create_pending_order(
@@ -548,17 +615,8 @@ async def create_qr_payment_flow(
 
     price_rub = quote['final_amount'] / 100
 
-    await safe_answer_callback(
-        callback,
-        '⏳ Создаём платёж, пожалуйста, подождите...',
-    )
-
-    await show_payment_status_message(
-        callback.message,
-        title_html=escape_html(loading_text),
-        body_html='',
-        payment_provider_title=error_name,
-    )
+    await safe_answer_callback(callback)
+    await render_page(callback, 'payment_creating')
 
     try:
         bot_info = await callback.bot.get_me()
@@ -566,12 +624,9 @@ async def create_qr_payment_flow(
 
         # Description for the provider
         if key:
-            description = (
-                f"Продление Ключа «{key['display_name']}»: "
-                f"«{tariff['name']}» ({tariff['duration_days']} дн.)"
-            )
+            description = renewal_invoice_description(key['display_name'], tariff['name'])
         else:
-            description = f"Покупка «{tariff['name']}» — {tariff['duration_days']} дней"
+            description = purchase_invoice_description(tariff['name'], tariff['duration_days'])
 
         # Provider API call
         create_kwargs = {
@@ -612,59 +667,48 @@ async def create_qr_payment_flow(
         qr_url = result.get('qr_url', '')
 
         if not qr_image_data or not qr_url:
-            await show_payment_status_message(
-                callback.message,
-                title_html=f'❌ <b>{escape_html(error_name)} не вернул данные для оплаты</b>',
-                body_text='Попробуйте позже.',
-                payment_provider_title=error_name,
-                reply_markup=home_only_kb()
-            )
+            logger.warning('Provider %s returned incomplete payment data for order %s', error_name, order_id)
+            await render_page(callback, 'payment_failed')
             return
 
         # Formation of text
         promo_lines = describe_quote_lines(quote)
         payment_context = build_qr_payment_page_context(
             title=title,
-            tariff_name=escape_html(tariff['name']),
+            tariff_name=tariff['name'],
             price_str=format_amount(quote['final_amount'], payment_type),
             days=tariff['duration_days'],
             qr_url=qr_url,
-            key_name=escape_html(key['display_name']) if key else None,
+            key_name=key['display_name'] if key else None,
             hint_text=hint_text,
             instruction_text=instruction_text,
             promo_lines=promo_lines,
         )
         payment_context.setdefault('bot_username', bot_name)
+        payment_context.update({
+            'order_id': order_id,
+            'payment_check_callback': f'{check_prefix}:{order_id}',
+            'payment_methods_callback': back_callback,
+            'payment_cancel_callback': back_callback,
+            'payment_can_check': True,
+        })
         payment_context = build_page_flow_context(callback, **payment_context)
 
         # Sending a QR photo
         from aiogram.types import BufferedInputFile
         photo = BufferedInputFile(qr_image_data, filename=qr_filename)
-        runtime_markup = qr_payment_kb(order_id, check_prefix, back_callback, qr_url)
-        runtime_rows = getattr(runtime_markup, 'inline_keyboard', None)
         await render_page(
             callback,
-            page_key=QR_PAYMENT_PAGE_KEY,
+            page_key='payment_link_renewal' if key else QR_PAYMENT_PAGE_KEY,
             context=payment_context,
-            append_buttons=runtime_rows,
             force_new=True,
-            fallback_text=default_qr_payment_page_text(),
             media_policy='runtime',
             runtime_media=photo,
             runtime_media_type='photo',
         )
     except Exception as e:
         logger.warning('Не удалось создать платёж %s order=%s: %s', error_name, order_id, e)
-        await show_payment_status_message(
-            callback.message,
-            title_html='❌ <b>Ошибка создания платежа</b>',
-            body_html=(
-                f'<i>{escape_html(str(e))}</i>\n\n'
-                'Попробуйте другой способ оплаты.'
-            ),
-            payment_provider_title=error_name,
-            reply_markup=home_only_kb()
-        )
+        await render_page(callback, 'payment_failed')
 async def check_qr_payment_flow(
     message,
     state: FSMContext,
@@ -704,25 +748,16 @@ async def check_qr_payment_flow(
     """
     import time
     from database.requests import (
-        find_order_by_order_id, get_user_internal_id,
+        find_order_by_order_id, get_or_create_user,
         cancel_pending_order, is_order_already_paid, update_payment_auto_check,
         update_payment_type,
     )
-    from bot.handlers.user.payments.status_page import show_payment_status_message
     from bot.services.billing import complete_payment_flow
-    from bot.keyboards.admin import home_only_kb
 
     async def _show_order_not_found() -> None:
+        await render_page(callback or message, 'payment_order_unavailable', force_new=callback is None)
         if callback:
-            await safe_answer_callback(callback, '❌ Ордер не найден', show_alert=True)
-        else:
-            await show_payment_status_message(
-                message,
-                title_html='❌ <b>Ордер не найден</b>',
-                body_text='Откройте оплату заново из бота и попробуйте ещё раз.',
-                reply_markup=home_only_kb(),
-                send_func=safe_edit_or_send,
-            )
+            await safe_answer_callback(callback)
 
     # 1. Order search
     order = find_order_by_order_id(order_id)
@@ -731,8 +766,9 @@ async def check_qr_payment_flow(
         return
 
     # 2. Verification of the order owner
-    owner_user_id = get_user_internal_id(telegram_id)
-    if not owner_user_id or int(order.get('user_id') or 0) != int(owner_user_id):
+    current_user, _ = get_or_create_user(telegram_id)
+    owner_user_id = int(current_user['id'])
+    if int(order.get('user_id') or 0) != owner_user_id:
         logger.warning(
             'Попытка проверить чужой QR-платёж: order=%s, telegram_id=%s, owner=%s',
             order_id, telegram_id, order.get('user_id')
@@ -744,7 +780,7 @@ async def check_qr_payment_flow(
     if order.get('status') == 'paid' or is_order_already_paid(order_id):
         await finalize_payment_ui(
             message, state,
-            '✅ Оплата уже была обработана ранее.',
+            'already_paid',
             order, user_id=telegram_id
         )
         if callback:
@@ -754,20 +790,9 @@ async def check_qr_payment_flow(
     # 4. Payment_id validation
     payment_id = order.get(payment_id_field)
     if not payment_id:
+        await render_page(callback or message, 'payment_order_unavailable', force_new=callback is None)
         if callback:
-            await safe_answer_callback(
-                callback,
-                '⚠️ Нет данных о платеже. Попробуйте чуть позже.',
-                show_alert=True,
-            )
-        else:
-            await show_payment_status_message(
-                message,
-                title_html='⚠️ <b>Нет данных о платеже</b>',
-                body_text='Попробуйте чуть позже или откройте оплату заново.',
-                reply_markup=home_only_kb(),
-                send_func=safe_edit_or_send,
-            )
+            await safe_answer_callback(callback)
         return
 
     # 5. Rate-limiting
@@ -779,18 +804,20 @@ async def check_qr_payment_flow(
         elapsed = now - last_check
         if last_check and elapsed < rate_limit_seconds:
             wait = int(rate_limit_seconds - elapsed)
+            await render_page(
+                callback or message,
+                'payment_check_wait',
+                context={'payment_wait_seconds': wait},
+                force_new=callback is None,
+            )
             if callback:
-                await safe_answer_callback(
-                    callback,
-                    f'⏳ Подождите {wait} сек. перед повторной проверкой.',
-                    show_alert=True
-                )
+                await safe_answer_callback(callback)
             return
         await state.update_data({last_check_key: now})
 
     # 6. Notification of inspection
     if callback:
-        await safe_answer_callback(callback, '🔍 Сейчас проверим платёж...')
+        await safe_answer_callback(callback)
 
     # 7. Call the verification API
     try:
@@ -810,14 +837,7 @@ async def check_qr_payment_flow(
         status = await check_func(check_arg, **check_kwargs)
     except Exception as e:
         logger.error(f'Ошибка проверки статуса {payment_type} {order_id}: {e}')
-        await show_payment_status_message(
-            message,
-            title_html='❌ <b>Не удалось проверить статус платежа</b>',
-            body_text='Попробуйте позже.',
-            reply_markup=home_only_kb(),
-            force_new=True,
-            send_func=safe_edit_or_send,
-        )
+        await render_page(callback or message, 'payment_failed', force_new=True)
         return
 
     # 8. Processing the result
@@ -862,22 +882,6 @@ async def check_qr_payment_flow(
     elif status == 'canceled':
         cancel_pending_order(order_id)
         update_payment_auto_check(order_id, state='canceled')
-        await show_payment_status_message(
-            message,
-            title_html='❌ <b>Платёж отменён</b>',
-            body_text='Похоже, платёж был отменён.\nПопробуйте снова выбрать тариф.',
-            reply_markup=home_only_kb(),
-            force_new=True,
-            send_func=safe_edit_or_send,
-        )
+        await render_page(callback or message, 'payment_canceled', force_new=True)
     else:
-        pending_body = 'Оплатите по ссылке и нажмите «✅ Я оплатил» снова.'
-        if pending_hint:
-            pending_body += f'\n\n<i>{escape_html(pending_hint)}</i>'
-        await show_payment_status_message(
-            message,
-            title_html='⏳ <b>Платёж ещё не поступил</b>',
-            body_html=pending_body,
-            force_new=True,
-            send_func=safe_edit_or_send,
-        )
+        await render_page(callback or message, 'payment_pending', force_new=True)

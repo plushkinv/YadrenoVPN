@@ -26,24 +26,30 @@ async def page_route_handler(callback: CallbackQuery):
     """Opens a page via a named route from the database."""
     telegram_id = callback.from_user.id
     if is_user_banned(telegram_id):
-        await callback.answer("⛔ Доступ заблокирован", show_alert=True)
+        from bot.utils.user_pages import render_access_blocked_page
+
+        await render_access_blocked_page(callback)
+        await callback.answer()
         return
 
     route_key = extract_page_route_key(callback.data)
     if not route_key:
-        await callback.answer("⚠️ Маршрут недоступен", show_alert=True)
+        await render_page(callback, 'screen_unavailable')
+        await callback.answer()
         return
 
     route = get_page_route(route_key)
     if not route or not route.get('is_enabled'):
-        await callback.answer("⚠️ Маршрут недоступен", show_alert=True)
+        await render_page(callback, 'screen_unavailable')
+        await callback.answer()
         return
 
     page_key = route.get('page_key')
     page = get_page(page_key) if page_key else None
     if not page_key or not page:
         logger.warning("Route '%s' указывает на отсутствующую страницу '%s'", route_key, page_key)
-        await callback.answer("⚠️ Страница недоступна", show_alert=True)
+        await render_page(callback, 'screen_unavailable')
+        await callback.answer()
         return
 
     context = build_page_flow_context(
@@ -59,10 +65,11 @@ async def page_route_handler(callback: CallbackQuery):
         context,
     )
     if not guard_result.allowed:
-        await callback.answer(
-            guard_result.message or "⚠️ Страница недоступна",
-            show_alert=guard_result.show_alert,
-        )
+        if guard_result.message:
+            await callback.answer(guard_result.message, show_alert=guard_result.show_alert)
+        else:
+            await render_page(callback, 'action_unavailable')
+            await callback.answer()
         return
 
     page_guard_result = await run_page_guards(
@@ -71,10 +78,14 @@ async def page_route_handler(callback: CallbackQuery):
         context,
     )
     if not page_guard_result.allowed:
-        await callback.answer(
-            page_guard_result.message or "⚠️ Страница недоступна",
-            show_alert=page_guard_result.show_alert,
-        )
+        if page_guard_result.message:
+            await callback.answer(
+                page_guard_result.message,
+                show_alert=page_guard_result.show_alert,
+            )
+        else:
+            await render_page(callback, 'action_unavailable')
+            await callback.answer()
         return
 
     page_hook_result = await run_page_hooks(

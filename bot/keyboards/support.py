@@ -11,7 +11,7 @@ def support_contact_kb(support_link: str) -> InlineKeyboardMarkup:
 
 
 def user_support_reply_kb(thread_id: int) -> InlineKeyboardMarkup:
-    """User reply button in the support chain."""
+    """Fallback keyboard for a user reply in the support chain."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="💬 Ответить", callback_data=f"support_reply:{thread_id}"))
     builder.row(InlineKeyboardButton(text="🈴 На главную", callback_data="start"))

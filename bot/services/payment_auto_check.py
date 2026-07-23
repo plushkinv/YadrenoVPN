@@ -12,6 +12,7 @@ from database.requests import (
     find_order_by_order_id,
     get_due_payment_auto_checks,
     get_payment_auto_check,
+    get_retryable_confirmed_payment_provider_orders,
     record_payment_auto_check_attempt,
     record_payment_completion_attempt,
     update_payment_auto_check,
@@ -60,6 +61,54 @@ async def auto_check_payment_orders(
                 summary['checked'] += 1
             outcome = await _process_due_row(bot, row)
             summary[outcome] = summary.get(outcome, 0) + 1
+
+    await asyncio.gather(*(_run(row) for row in rows))
+    return summary
+
+
+async def retry_confirmed_payment_intents(
+    *,
+    bot: Any,
+    limit: int = AUTO_CHECK_BATCH_LIMIT,
+    concurrency: int = AUTO_CHECK_CONCURRENCY,
+) -> dict[str, int]:
+    """Retries settled v1 intents that are not owned by an active polling row."""
+    rows = get_retryable_confirmed_payment_provider_orders(
+        limit=min(max(1, int(limit)), AUTO_CHECK_BATCH_LIMIT)
+    )
+    summary = {'queued': 0, 'completed': 0, 'pending': 0, 'errors': 0}
+    semaphore = asyncio.Semaphore(min(max(1, int(concurrency)), AUTO_CHECK_CONCURRENCY))
+
+    async def _run(row: Mapping[str, Any]) -> None:
+        order_id = str(row.get('order_id') or '')
+        queue_row = get_payment_auto_check(order_id)
+        if queue_row and str(queue_row.get('state') or '') in {'active', 'provider_succeeded'}:
+            return
+        summary['queued'] += 1
+        async with semaphore:
+            try:
+                from bot.services.billing import complete_payment_order_background
+
+                result = await complete_payment_order_background(
+                    order_id,
+                    bot=bot,
+                    notify_user=True,
+                    retry_post_actions=True,
+                )
+                if result.get('ok'):
+                    summary['completed'] += 1
+                elif str(row.get('fulfillment_status') or '') == 'processing':
+                    summary['pending'] += 1
+                else:
+                    summary['errors'] += 1
+            except Exception as error:
+                summary['errors'] += 1
+                logger.warning(
+                    'Confirmed payment intent retry failed provider=%s order=%s error=%s',
+                    row.get('provider_id'),
+                    order_id,
+                    error,
+                )
 
     await asyncio.gather(*(_run(row) for row in rows))
     return summary
@@ -135,7 +184,13 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
         return await _complete_confirmed_payment(bot, current)
 
     if status == 'canceled':
-        cancel_pending_order(order_id)
+        order = find_order_by_order_id(order_id)
+        if not order or int(order.get('intent_version') or 0) != 1:
+            cancel_pending_order(order_id)
+        else:
+            from database.requests import update_payment_provider_order_status
+
+            update_payment_provider_order_status(order_id, 'canceled')
         update_payment_auto_check(order_id, state='canceled')
         return 'canceled'
 
@@ -164,6 +219,15 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
 async def _check_provider_status(row: Mapping[str, Any]) -> str:
     payment_type = str(row.get('payment_type') or '')
     order_id = str(row.get('order_id') or '')
+    if int(row.get('intent_version') or 0) == 1:
+        from bot.services.payment_intents import load_payment_intent
+        from bot.services.payment_provider_adapters import check_provider_invoice
+
+        intent = load_payment_intent(order_id)
+        if intent is None:
+            raise ValueError('Payment intent not found')
+        return await check_provider_invoice(intent)
+
     builtin = _BUILTIN_CHECKS.get(payment_type)
     if builtin:
         from bot.services import billing
@@ -243,7 +307,7 @@ async def _complete_confirmed_payment(bot: Any, row: Mapping[str, Any]) -> str:
             ),
         )
         if not result.get('ok'):
-            raise RuntimeError(str(result.get('text') or 'Платёж не завершён'))
+            raise RuntimeError(str(result.get('text') or 'payment_not_completed'))
     except Exception as error:
         if attempt_no >= COMPLETION_MAX_ATTEMPTS:
             logger.error(
@@ -334,6 +398,9 @@ async def run_payment_auto_check_scheduler(bot: Any) -> None:
             summary = await auto_check_payment_orders(bot=bot)
             if summary['queued']:
                 logger.info("Автопроверка API-платежей: %s", summary)
+            retry_summary = await retry_confirmed_payment_intents(bot=bot)
+            if retry_summary['queued']:
+                logger.info('Confirmed Payment Intent retries: %s', retry_summary)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -347,5 +414,6 @@ __all__ = [
     'AUTO_CHECK_MAX_ATTEMPTS',
     'AUTO_CHECK_OFFSETS_SECONDS',
     'auto_check_payment_orders',
+    'retry_confirmed_payment_intents',
     'run_payment_auto_check_scheduler',
 ]

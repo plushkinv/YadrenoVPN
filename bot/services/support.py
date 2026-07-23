@@ -12,11 +12,13 @@ from database.requests import (
     mark_support_admin_notifications_inactive,
 )
 from bot.keyboards.support import admin_support_reply_kb, user_support_reply_kb
+from bot.utils.page_renderer import build_page_keyboard
 from bot.utils.text import escape_html, get_message_text_for_storage, send_media_or_text
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_SUPPORT_MEDIA_TYPES = {"text", "photo", "video", "animation"}
+SUPPORT_REPLY_PAGE_KEY = "support_reply"
 
 
 def extract_support_payload(message: Message) -> Optional[Dict[str, Any]]:
@@ -183,11 +185,23 @@ async def send_admin_message_to_user(
     source_message: Message,
 ) -> Optional[int]:
     """Sends a copy of the admin message to the user with a reply button."""
+    thread_id = int(thread["id"])
+    user_telegram_id = int(thread["user_telegram_id"])
+    reply_markup = build_page_keyboard(
+        SUPPORT_REPLY_PAGE_KEY,
+        context={
+            "support_thread_id": thread_id,
+            "telegram_id": user_telegram_id,
+        },
+    )
+    if reply_markup is None:
+        reply_markup = user_support_reply_kb(thread_id)
+
     return await copy_support_message(
         bot,
-        chat_id=int(thread["user_telegram_id"]),
+        chat_id=user_telegram_id,
         source_message=source_message,
-        reply_markup=user_support_reply_kb(thread["id"]),
+        reply_markup=reply_markup,
     )
 
 

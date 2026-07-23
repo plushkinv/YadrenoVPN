@@ -32,6 +32,7 @@ _BLOCKED_IMPORT_PREFIXES = {
     'bot.keyboards',
     'bot.middlewares',
     'bot.services',
+    'bot.utils.action_policy',
     'bot.states',
     'bot.utils.action_registry',
     'bot.utils.lifecycle_registry',
@@ -56,6 +57,7 @@ _PUBLIC_CUSTOM_EXTENSIONS_API = {
     'get_extension_storage',
     'is_custom_extensions_enabled',
     'load_custom_extensions',
+    'register_action_policy',
     'register_action_handler',
     'register_access_guard',
     'register_callback_handler',
@@ -87,6 +89,7 @@ class CustomExtensionsLoadResult:
 
 _REGISTRATION_KINDS = (
     'actions',
+    'action_policies',
     'guards',
     'page_hooks',
     'pricing_policies',
@@ -110,6 +113,7 @@ _EXTENSION_REGISTRATIONS: dict[str, dict[str, set[str]]] = {}
 
 def register_guard(name: str, func: Callable) -> None:
     """Registers page/route guard extensions."""
+    _ensure_extension_mutation_allowed('register_guard')
     guard_name = _require_extension_registry_name(name, 'guard')
     _register_page_guard(guard_name, _bind_extension_callable(func))
     _record_registration('guards', guard_name)
@@ -122,6 +126,7 @@ def register_access_guard(name: str, func: Callable) -> None:
 
 def register_user_access_guard(name: str, func: Callable, *, replace: bool = False) -> None:
     """Registers a global user-area access guard."""
+    _ensure_extension_mutation_allowed('register_user_access_guard')
     from bot.utils.user_access import register_user_access_guard as _register_user_access_guard
 
     guard_name = _require_extension_registry_name(name, 'user access guard')
@@ -132,6 +137,7 @@ def register_user_access_guard(name: str, func: Callable, *, replace: bool = Fal
 
 def register_page_hook(name: str, func: Callable) -> None:
     """Registers the extension's before-render hook."""
+    _ensure_extension_mutation_allowed('register_page_hook')
     hook_name = _require_extension_registry_name(name, 'page hook')
     _register_page_hook(hook_name, _bind_extension_callable(func))
     _record_registration('page_hooks', hook_name)
@@ -139,6 +145,7 @@ def register_page_hook(name: str, func: Callable) -> None:
 
 def register_action_handler(action_value: str, callback_data: str, *, replace: bool = False) -> None:
     """Registers the extension's internal action as action_value -> callback_data."""
+    _ensure_extension_mutation_allowed('register_action_handler')
     action_key = _require_text(action_value, 'action_value').strip()
     callback = _require_text(callback_data, 'callback_data').strip()
     _require_bool_option(replace, 'replace')
@@ -156,6 +163,7 @@ def register_callback_handler(
     bypass_user_access_guard: bool = False,
 ) -> str:
     """Registers the extension's declarative callback handler."""
+    _ensure_extension_mutation_allowed('register_callback_handler')
     from bot.utils.extension_callbacks import register_extension_callback_handler
 
     extension_id = _require_current_extension()
@@ -187,6 +195,7 @@ def register_command_handler(
     replace: bool = False,
 ) -> str:
     """Registers the extension's Telegram bot command handler."""
+    _ensure_extension_mutation_allowed('register_command_handler')
     from bot.utils.extension_commands import register_extension_command_handler
 
     extension_id = _require_current_extension()
@@ -202,8 +211,37 @@ def register_command_handler(
     return action_key
 
 
+def register_action_policy(
+    name: str,
+    *,
+    actions: list[str] | tuple[str, ...] | set[str],
+    handler: Callable,
+    replace: bool = False,
+) -> None:
+    """Register an extension-owned semantic action policy."""
+    _ensure_extension_mutation_allowed('register_action_policy')
+    from bot.utils.action_policy import register_action_policy as _register_action_policy
+
+    extension_id = _require_current_extension()
+    raw_name = _require_text(name, 'action policy name').strip()
+    if raw_name.casefold().startswith(f'{extension_id}.'):
+        policy_name = raw_name
+    else:
+        policy_name = f'{extension_id}.{raw_name}'
+    _require_bool_option(replace, 'replace')
+    _register_action_policy(
+        extension_id,
+        policy_name,
+        actions=tuple(actions) if isinstance(actions, set) else actions,
+        handler=_bind_extension_callable(handler),
+        replace=replace,
+    )
+    _record_registration('action_policies', policy_name)
+
+
 def register_pricing_policy(name: str, func: Callable, *, replace: bool = False) -> None:
     """Registers the pricing policy of the extension."""
+    _ensure_extension_mutation_allowed('register_pricing_policy')
     from bot.utils.policy_registry import register_pricing_policy as _register_pricing_policy
 
     policy_name = _require_extension_owned_registry_name(name, 'pricing policy')
@@ -214,6 +252,7 @@ def register_pricing_policy(name: str, func: Callable, *, replace: bool = False)
 
 def register_promo_reward_policy(name: str, func: Callable, *, replace: bool = False) -> None:
     """Registers the promo reward policy of the extension."""
+    _ensure_extension_mutation_allowed('register_promo_reward_policy')
     from bot.utils.policy_registry import register_promo_reward_policy as _register_promo_reward_policy
 
     policy_name = _require_extension_owned_registry_name(name, 'promo reward policy')
@@ -224,6 +263,7 @@ def register_promo_reward_policy(name: str, func: Callable, *, replace: bool = F
 
 def register_referral_reward_policy(name: str, func: Callable, *, replace: bool = False) -> None:
     """Registers the extension's referral reward policy."""
+    _ensure_extension_mutation_allowed('register_referral_reward_policy')
     from bot.utils.policy_registry import register_referral_reward_policy as _register_referral_reward_policy
 
     policy_name = _require_extension_owned_registry_name(name, 'referral reward policy')
@@ -240,6 +280,7 @@ def register_key_lifecycle_hook(
     replace: bool = False,
 ) -> None:
     """Registers the extension's key lifecycle hook."""
+    _ensure_extension_mutation_allowed('register_key_lifecycle_hook')
     from bot.utils.lifecycle_registry import register_key_lifecycle_hook as _register_key_lifecycle_hook
 
     hook_name = _require_extension_owned_registry_name(name, 'key lifecycle hook')
@@ -257,13 +298,17 @@ def register_payment_provider(
     webhook_secret: str | None = None,
     title: str | None = None,
     label: str | None = None,
+    currency: str = 'RUB',
+    minimum_amount_minor: int | None = None,
     minimum_amount_cents: int = 0,
     is_enabled=True,
     auto_check_interval_seconds: int | None = 300,
+    supported_purposes: list[str] | tuple[str, ...] | set[str] | frozenset[str] | None = None,
     metadata: dict | None = None,
     replace: bool = False,
 ) -> None:
     """Registers a custom payment provider extension."""
+    _ensure_extension_mutation_allowed('register_payment_provider')
     from bot.utils.payment_provider_registry import register_payment_provider as _register_payment_provider
 
     provider_key = _require_extension_payment_provider_id(provider_id)
@@ -276,9 +321,12 @@ def register_payment_provider(
         webhook_secret=webhook_secret,
         title=title,
         label=label,
+        currency=currency,
+        minimum_amount_minor=minimum_amount_minor,
         minimum_amount_cents=minimum_amount_cents,
         is_enabled=_bind_extension_callable(is_enabled) if callable(is_enabled) else is_enabled,
         auto_check_interval_seconds=auto_check_interval_seconds,
+        supported_purposes=supported_purposes,
         metadata=metadata,
         replace=replace,
     )
@@ -287,6 +335,7 @@ def register_payment_provider(
 
 def register_extension_schema(extension_id: str, migrations: list[dict]) -> None:
     """Registers and applies the declarative schema of extension tables."""
+    _ensure_extension_mutation_allowed('register_extension_schema')
     from database.requests import register_extension_schema as db_register_extension_schema
 
     ext_id = _require_current_extension_namespace(extension_id)
@@ -303,6 +352,7 @@ def get_extension_storage(extension_id: str):
 
 def register_extension_settings(fields: list[dict]) -> list[dict]:
     """Registers admin-editable settings for the current extension."""
+    _ensure_extension_mutation_allowed('register_extension_settings')
     from bot.utils.extension_settings import register_extension_settings as _register_extension_settings
 
     extension_id = _require_current_extension()
@@ -338,6 +388,7 @@ def load_custom_extensions(
     enabled: bool | None = None,
 ) -> CustomExtensionsLoadResult:
     """Loads extensions from the gitignored folder if they are explicitly enabled."""
+    _ensure_extension_mutation_allowed('load_custom_extensions')
     global _LAST_LOAD_RESULT
 
     result = CustomExtensionsLoadResult()
@@ -622,6 +673,7 @@ def _validate_extension_source(path: Path) -> None:
 def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) -> None:
     """Checks obvious static public API calls without executing extension code."""
     from bot.utils.action_registry import normalize_callback_data
+    from bot.utils.action_policy import normalize_action_policy_actions
     from bot.utils.extension_callbacks import normalize_extension_action_name
     from bot.utils.extension_commands import normalize_extension_command, normalize_extension_command_description
     from bot.utils.extension_settings import normalize_extension_settings_fields
@@ -636,6 +688,14 @@ def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) ->
             action_name = _literal_string_arg(node.args[0])
             if action_name is not None:
                 normalize_extension_action_name(action_name)
+        elif func_name == 'register_action_policy':
+            for keyword in node.keywords:
+                if keyword.arg != 'actions':
+                    continue
+                actions = _literal_value_arg(keyword.value)
+                if actions is not None:
+                    normalize_action_policy_actions(actions)
+                break
         elif func_name == 'register_command_handler':
             command = _literal_string_arg(node.args[0]) if node.args else None
             if command is None:
@@ -1143,6 +1203,13 @@ def _resolve_static_string(node: ast.AST, names: dict[str, str]) -> str | None:
     return None
 
 
+def _ensure_extension_mutation_allowed(operation: str) -> None:
+    """Keep semantic action policies declarative and side-effect free."""
+    from bot.utils.action_policy import ensure_action_policy_read_only
+
+    ensure_action_policy_read_only(operation)
+
+
 def _record_registration(kind: str, name: object) -> None:
     current_extension = _CURRENT_EXTENSION.get()
     if current_extension is None or kind not in _REGISTRATION_KINDS:
@@ -1423,6 +1490,7 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
         return
 
     from bot.utils import page_flow
+    from bot.utils.action_policy import remove_action_policies
     from bot.utils.action_registry import ACTION_REGISTRY
     from bot.utils.extension_callbacks import remove_extension_callback_handlers
     from bot.utils.extension_commands import remove_extension_command_handlers
@@ -1438,6 +1506,7 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
 
     for name in registrations.get('actions', set()):
         ACTION_REGISTRY.pop(name, None)
+    remove_action_policies(registrations.get('action_policies', set()))
     for name in registrations.get('guards', set()):
         page_flow.PAGE_GUARDS.pop(name, None)
     for name in registrations.get('page_hooks', set()):
@@ -1461,6 +1530,7 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
 
 def _snapshot_runtime_registries() -> dict[str, Any]:
     from bot.utils import page_flow
+    from bot.utils.action_policy import ACTION_POLICIES
     from bot.utils.action_registry import ACTION_REGISTRY
     from bot.utils.extension_callbacks import EXTENSION_ACCESS_CHECK_CALLBACKS, EXTENSION_CALLBACK_HANDLERS
     from bot.utils.extension_commands import EXTENSION_COMMAND_DEFINITIONS, EXTENSION_COMMAND_HANDLERS
@@ -1476,6 +1546,10 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
 
     return {
         'actions': dict(ACTION_REGISTRY),
+        'action_policies': {
+            name: dict(registration)
+            for name, registration in ACTION_POLICIES.items()
+        },
         'guards': dict(page_flow.PAGE_GUARDS),
         'page_hooks': dict(page_flow.PAGE_HOOKS),
         'pricing_policies': dict(PRICING_POLICIES),
@@ -1497,6 +1571,7 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
 
 def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
     from bot.utils import page_flow
+    from bot.utils.action_policy import ACTION_POLICIES
     from bot.utils.action_registry import ACTION_REGISTRY
     from bot.utils.extension_callbacks import EXTENSION_ACCESS_CHECK_CALLBACKS, EXTENSION_CALLBACK_HANDLERS
     from bot.utils.extension_commands import EXTENSION_COMMAND_DEFINITIONS, EXTENSION_COMMAND_HANDLERS
@@ -1512,6 +1587,8 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
 
     ACTION_REGISTRY.clear()
     ACTION_REGISTRY.update(snapshot['actions'])
+    ACTION_POLICIES.clear()
+    ACTION_POLICIES.update(snapshot.get('action_policies', {}))
     page_flow.PAGE_GUARDS.clear()
     page_flow.PAGE_GUARDS.update(snapshot['guards'])
     page_flow.PAGE_HOOKS.clear()
@@ -1542,6 +1619,7 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
 
 def _registry_totals() -> dict[str, int]:
     from bot.utils import page_flow
+    from bot.utils.action_policy import ACTION_POLICIES
     from bot.utils.action_registry import ACTION_REGISTRY
     from bot.utils.extension_callbacks import EXTENSION_CALLBACK_HANDLERS
     from bot.utils.extension_commands import EXTENSION_COMMAND_DEFINITIONS
@@ -1557,6 +1635,7 @@ def _registry_totals() -> dict[str, int]:
 
     return {
         'actions': len(ACTION_REGISTRY),
+        'action_policies': len(ACTION_POLICIES),
         'guards': len(page_flow.PAGE_GUARDS),
         'page_hooks': len(page_flow.PAGE_HOOKS),
         'pricing_policies': len(PRICING_POLICIES),
@@ -1602,6 +1681,7 @@ __all__ = [
     'get_extension_storage',
     'is_custom_extensions_enabled',
     'load_custom_extensions',
+    'register_action_policy',
     'register_action_handler',
     'register_access_guard',
     'register_callback_handler',

@@ -52,7 +52,7 @@ from bot.services.yadreno_admin import (
 )
 from bot.services.panel_sync_coordinator import regular_panel_operation
 from bot.states.admin_states import AdminStates
-from database.requests import get_yadreno_admin_api_key
+from database.requests import get_yadreno_admin_api_key, set_setting
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,7 @@ _EXTENSION_LOAD_REASON_LABELS = {
 
 _EXTENSION_REGISTRATION_LABELS = {
     'actions': 'actions',
+    'action_policies': 'action policies',
     'guards': 'guards',
     'page_hooks': 'hooks',
     'pricing_policies': 'pricing',
@@ -174,20 +175,48 @@ async def _show_bot_mode_confirm(callback: CallbackQuery, target: str):
 
 @router.callback_query(F.data == "admin_extensions_diagnostics")
 async def show_extensions_diagnostics(callback: CallbackQuery, state: FSMContext):
-    """Shows read-only diagnostics for custom extensions."""
+    """Shows diagnostics and loader controls for custom extensions."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
+    await _render_extensions_diagnostics_screen(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(F.data.in_({"admin_extensions_set:0", "admin_extensions_set:1"}))
+async def set_extensions_loading(callback: CallbackQuery, state: FSMContext):
+    """Persists the custom extension loader state for the next bot start."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    target_enabled = callback.data.rsplit(':', 1)[1] == '1'
+    from bot.utils.custom_extensions import CUSTOM_EXTENSIONS_ENABLED_SETTING
+
+    set_setting(CUSTOM_EXTENSIONS_ENABLED_SETTING, '1' if target_enabled else '0')
+    logger.info(
+        "Custom extension loading %s by admin %s; applies on next bot start",
+        'enabled' if target_enabled else 'disabled',
+        callback.from_user.id,
+    )
+    await _render_extensions_diagnostics_screen(callback.message)
+    await callback.answer("Настройка сохранена. Применится после перезапуска бота.")
+
+
+async def _render_extensions_diagnostics_screen(message: Message) -> None:
+    """Renders the current custom extension diagnostics in one message."""
     from bot.utils.custom_extensions import get_custom_extensions_diagnostics
 
     diagnostics = get_custom_extensions_diagnostics()
     await safe_edit_or_send(
-        callback.message,
+        message,
         _format_extensions_diagnostics(diagnostics),
-        reply_markup=extensions_diagnostics_kb(_extension_settings_menu_buttons(diagnostics)),
+        reply_markup=extensions_diagnostics_kb(
+            bool(diagnostics.get('enabled')),
+            _extension_settings_menu_buttons(diagnostics),
+        ),
     )
-    await callback.answer()
 
 
 def _format_extensions_diagnostics(diagnostics: dict) -> str:

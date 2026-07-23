@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     'apply_balance_operation',
+    'apply_key_days_operation_once',
     'create_business_operation_tables',
     'get_first_active_key_for_user',
     'has_balance_operation_reference',
@@ -95,6 +96,8 @@ def create_business_operation_tables(conn: sqlite3.Connection) -> None:
             user_id INTEGER NOT NULL,
             operation_type TEXT NOT NULL,
             delta_cents INTEGER NOT NULL,
+            delta_minor INTEGER NOT NULL DEFAULT 0,
+            currency TEXT NOT NULL DEFAULT 'RUB',
             balance_before INTEGER NOT NULL,
             balance_after INTEGER NOT NULL,
             source TEXT NOT NULL,
@@ -107,6 +110,14 @@ def create_business_operation_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    balance_columns = {
+        str(row['name']) for row in conn.execute('PRAGMA table_info(balance_operations)').fetchall()
+    }
+    if 'currency' not in balance_columns:
+        conn.execute("ALTER TABLE balance_operations ADD COLUMN currency TEXT NOT NULL DEFAULT 'RUB'")
+    if 'delta_minor' not in balance_columns:
+        conn.execute("ALTER TABLE balance_operations ADD COLUMN delta_minor INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE balance_operations SET delta_minor = delta_cents")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_balance_operations_user_created
@@ -136,6 +147,124 @@ def get_first_active_key_for_user(user_id: int) -> dict[str, Any] | None:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def apply_key_days_operation_once(
+    *,
+    user_id: int,
+    days: int,
+    source: str,
+    reason: str,
+    reference_type: str,
+    reference_id: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Atomically extends one active key and records an idempotent payment reward."""
+    normalized_user_id = _positive_int(user_id, 'user_id')
+    normalized_days = _positive_int(days, 'days')
+    normalized_source = _text(source, 'source')
+    normalized_reference_type = _text(reference_type, 'reference_type')
+    normalized_reference_id = _text(reference_id, 'reference_id')
+    with get_db() as conn:
+        create_business_operation_tables(conn)
+        existing = conn.execute(
+            """
+            SELECT * FROM key_operation_log
+            WHERE user_id = ? AND source = ?
+              AND reference_type = ? AND reference_id = ?
+            LIMIT 1
+            """,
+            (
+                normalized_user_id,
+                normalized_source,
+                normalized_reference_type,
+                normalized_reference_id,
+            ),
+        ).fetchone()
+        if existing:
+            return {
+                'ok': True,
+                'status': 'already_applied',
+                'already_applied': True,
+                'key_id': int(existing['vpn_key_id']),
+                'operation_id': int(existing['id']),
+                'days': int(existing['delta_days'] or normalized_days),
+            }
+
+        key = conn.execute(
+            """
+            SELECT id, expires_at FROM vpn_keys
+            WHERE user_id = ? AND expires_at > datetime('now')
+            ORDER BY expires_at DESC
+            LIMIT 1
+            """,
+            (normalized_user_id,),
+        ).fetchone()
+        if not key:
+            return {
+                'ok': False,
+                'status': 'no_op',
+                'reason': 'no_active_key',
+                'user_id': normalized_user_id,
+                'days': normalized_days,
+            }
+
+        key_id = int(key['id'])
+        expires_before = str(key['expires_at'])
+        modifier = f'{normalized_days:+} days'
+        conn.execute(
+            """
+            UPDATE vpn_keys
+            SET expires_at = MAX(
+                datetime('now'),
+                datetime(
+                    CASE WHEN expires_at > datetime('now')
+                         THEN expires_at ELSE datetime('now') END,
+                    ?
+                )
+            )
+            WHERE id = ? AND user_id = ?
+            """,
+            (modifier, key_id, normalized_user_id),
+        )
+        expires_after_row = conn.execute(
+            "SELECT expires_at FROM vpn_keys WHERE id = ?",
+            (key_id,),
+        ).fetchone()
+        expires_after = str(expires_after_row['expires_at'])
+        operation = conn.execute(
+            """
+            INSERT INTO key_operation_log (
+                vpn_key_id, user_id, operation_type, delta_days, source,
+                reason, reference_type, reference_id,
+                expires_before, expires_after, metadata
+            )
+            VALUES (?, ?, 'grant_days', ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                key_id,
+                normalized_user_id,
+                normalized_days,
+                normalized_source,
+                _optional_text(reason),
+                normalized_reference_type,
+                normalized_reference_id,
+                expires_before,
+                expires_after,
+                _json_metadata(metadata or {}),
+            ),
+        )
+        return {
+            'ok': True,
+            'status': 'applied',
+            'already_applied': False,
+            'key_id': key_id,
+            'user_id': normalized_user_id,
+            'days': normalized_days,
+            'operation_id': int(operation.lastrowid),
+            'expires_before': expires_before,
+            'expires_after': expires_after,
+        }
 
 
 def record_key_operation(
@@ -228,6 +357,7 @@ def apply_balance_operation(
     reference_id: str | None = None,
     performed_by: int | None = None,
     metadata: dict[str, Any] | None = None,
+    currency: str | None = None,
 ) -> dict[str, Any]:
     """Atomically changes the user's balance and writes a regular history."""
     user_id = _positive_int(user_id, 'user_id')
@@ -238,6 +368,48 @@ def apply_balance_operation(
 
     with get_db() as conn:
         create_business_operation_tables(conn)
+        if currency is None:
+            try:
+                currency_row = conn.execute(
+                    "SELECT value FROM settings WHERE key = 'base_currency'"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                currency_row = None
+            operation_currency = str(currency_row['value'] if currency_row else 'RUB').upper()
+        else:
+            operation_currency = str(currency).upper()
+        if operation_currency not in {'RUB', 'USD'}:
+            raise ValueError('currency должен быть RUB или USD')
+        if reference_type and reference_id:
+            existing = conn.execute(
+                """
+                SELECT * FROM balance_operations
+                WHERE user_id = ? AND operation_type = ? AND source = ?
+                  AND reference_type = ? AND reference_id = ?
+                LIMIT 1
+                """,
+                (
+                    user_id,
+                    operation,
+                    source_text,
+                    str(reference_type),
+                    str(reference_id),
+                ),
+            ).fetchone()
+            if existing:
+                return {
+                    'ok': True,
+                    'status': 'already_applied',
+                    'already_applied': True,
+                    'operation_id': int(existing['id']),
+                    'user_id': user_id,
+                    'operation_type': operation,
+                    'delta_cents': int(existing['delta_cents']),
+                    'delta_minor': int(existing['delta_minor']),
+                    'currency': str(existing['currency']),
+                    'balance_before': int(existing['balance_before']),
+                    'balance_after': int(existing['balance_after']),
+                }
         row = conn.execute(
             "SELECT personal_balance FROM users WHERE id = ?",
             (user_id,),
@@ -267,16 +439,18 @@ def apply_balance_operation(
         history = conn.execute(
             """
             INSERT INTO balance_operations (
-                user_id, operation_type, delta_cents,
+                user_id, operation_type, delta_cents, delta_minor, currency,
                 balance_before, balance_after, source, reason,
                 reference_type, reference_id, performed_by, metadata
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
                 operation,
                 delta,
+                delta,
+                operation_currency,
                 before,
                 after,
                 source_text,
@@ -302,6 +476,8 @@ def apply_balance_operation(
             'user_id': user_id,
             'operation_type': operation,
             'delta_cents': delta,
+            'delta_minor': delta,
+            'currency': operation_currency,
             'balance_before': before,
             'balance_after': after,
         }

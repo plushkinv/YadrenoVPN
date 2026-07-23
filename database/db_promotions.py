@@ -26,6 +26,7 @@ __all__ = [
     "create_auto_coupon_for_user",
     "get_promo_code_by_id",
     "get_promo_code_by_code",
+    "get_promo_code_by_source",
     "get_promo_codes",
     "get_promo_code_availability",
     "has_available_promo_codes",
@@ -205,7 +206,11 @@ def create_coupon_batch(
     return created
 
 
-def create_auto_coupon_for_user(user_id: int) -> Optional[Dict[str, Any]]:
+def create_auto_coupon_for_user(
+    user_id: int,
+    *,
+    source: str = "auto",
+) -> Optional[Dict[str, Any]]:
     """Creates one automatic coupon based on the current auto-issuance settings."""
     if not get_coupon_auto_enabled():
         return None
@@ -213,7 +218,7 @@ def create_auto_coupon_for_user(user_id: int) -> Optional[Dict[str, Any]]:
         discount_percent=get_coupon_auto_discount_percent(),
         lifetime_days=get_coupon_auto_lifetime_days(),
         count=1,
-        source="auto",
+        source=source,
         issued_to_user_id=user_id,
     )
     return coupons[0] if coupons else None
@@ -234,6 +239,23 @@ def get_promo_code_by_code(code: str) -> Optional[Dict[str, Any]]:
             "SELECT * FROM promo_codes WHERE code = ?",
             ((code or "").strip(),),
         ).fetchone()
+        return _row_to_dict(row)
+
+
+def get_promo_code_by_source(
+    source: str,
+    *,
+    issued_to_user_id: int | None = None,
+) -> Optional[Dict[str, Any]]:
+    """Returns the newest coupon created for one idempotency source."""
+    sql = "SELECT * FROM promo_codes WHERE source = ?"
+    params: list[Any] = [str(source)]
+    if issued_to_user_id is not None:
+        sql += " AND issued_to_user_id = ?"
+        params.append(int(issued_to_user_id))
+    sql += " ORDER BY id DESC LIMIT 1"
+    with get_db() as conn:
+        row = conn.execute(sql, tuple(params)).fetchone()
         return _row_to_dict(row)
 
 

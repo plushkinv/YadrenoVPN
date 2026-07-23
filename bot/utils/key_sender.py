@@ -9,7 +9,10 @@ from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
 
 from bot.services.vpn_api import get_client
 from bot.utils.key_generator import generate_link, generate_json, generate_qr_code
-from bot.utils.placeholders import apply_page_placeholders
+from bot.utils.placeholders import (
+    KEY_FIELDS_CONTEXT_KEY,
+    apply_page_placeholders,
+)
 from bot.utils.text import escape_html
 
 logger = logging.getLogger(__name__)
@@ -22,18 +25,6 @@ KEY_DELIVERY_CONTEXT_RAW = 'key_delivery_raw_value'
 KEY_DELIVERY_CONTEXT_KIND = 'key_delivery_kind'
 KEY_DELIVERY_CONTEXT_IS_NEW = 'key_delivery_is_new'
 KEY_DELIVERY_CONTEXT_ATTACH_MARKUP = 'key_delivery_attach_markup'
-
-
-# Default key issuance text in HTML format
-DEFAULT_KEY_DELIVERY_TEXT = (
-    "✅ <b>Ваш VPN-ключ!</b>\n\n"
-    f"{KEY_COPY_PLACEHOLDER}\n"
-    "☝️ Нажмите, чтобы скопировать.\n\n"
-    "📱 <b>Инструкция:</b>\n"
-    "1. Скопируйте ссылку или отсканируйте QR-код.\n"
-    "2. Импортируйте в свой клиент. Какой именно клиент подходит, смотри в инструкции по кнопке ниже.\n"
-    "3. Нажмите подключиться!"
-)
 
 
 def format_key_copy_value(raw_value: str) -> str:
@@ -92,30 +83,15 @@ def build_key_delivery_replacements(raw_value: str) -> dict:
     }
 
 
-def build_compact_delivery_text(
-    title: str,
-    raw_value: str,
-    copy_label: str,
-    qr_hint: str,
-) -> str:
-    """Fallback for caption Telegram: first we try to leave both options for the link."""
-    compact = (
-        f"{title}\n\n"
-        f"👇 <b>{copy_label}:</b>\n"
-        f"{format_key_copy_value(raw_value)}\n\n"
-        "🔗 <b>Чистая ссылка:</b>\n"
-        f"{format_key_plain_link(raw_value)}\n\n"
-        f"{qr_hint}"
-    )
-    if len(compact) <= 1024:
-        return compact
-
-    return (
-        f"{title}\n\n"
-        f"👇 <b>{copy_label}:</b>\n"
-        f"{format_key_copy_value(raw_value)}\n\n"
-        f"{qr_hint}"
-    )
+def _add_key_fields(
+    context: Mapping[str, object],
+    key_fields: Optional[Mapping[str, object]],
+) -> dict[str, object]:
+    """Adds only allowlisted display fields to a key-delivery render context."""
+    result = dict(context)
+    if isinstance(key_fields, Mapping) and key_fields:
+        result[KEY_FIELDS_CONTEXT_KEY] = dict(key_fields)
+    return result
 
 
 def _get_target_message(messageable) -> Optional[Message]:
@@ -182,6 +158,7 @@ def _get_key_delivery_markup(
     raw_value: str,
     viewer_id: Optional[int] = None,
     bot_username: str = '',
+    key_fields: Optional[Mapping[str, object]] = None,
 ) -> Optional[InlineKeyboardMarkup]:
     """Takes the page keyboard from the database if it is available, otherwise uses fallback."""
     try:
@@ -195,16 +172,17 @@ def _get_key_delivery_markup(
             render_context['telegram_id'] = viewer_id
         if bot_username:
             render_context['bot_username'] = bot_username
+        render_context = _add_key_fields(render_context, key_fields)
 
         markup = build_page_keyboard(
             KEY_DELIVERY_PAGE,
             context=render_context,
             text_replacements=build_key_delivery_replacements(raw_value),
         )
-        return markup or fallback_markup
+        return markup
     except Exception as e:
         logger.warning("Не удалось собрать клавиатуру страницы выдачи ключа: %s", e)
-        return fallback_markup
+        return None
 
 
 def _get_json_document_markup(
@@ -212,6 +190,7 @@ def _get_json_document_markup(
     raw_value: str,
     viewer_id: Optional[int] = None,
     bot_username: str = '',
+    key_fields: Optional[Mapping[str, object]] = None,
 ) -> Optional[InlineKeyboardMarkup]:
     """Returns page-backed buttons for issuing a key for a JSON file."""
     return _get_key_delivery_markup(
@@ -219,6 +198,7 @@ def _get_json_document_markup(
         raw_value,
         viewer_id=viewer_id,
         bot_username=bot_username,
+        key_fields=key_fields,
     )
 
 
@@ -228,38 +208,35 @@ def _build_key_delivery_caption(
     kind: str,
     viewer_id: Optional[int] = None,
     bot_username: str = '',
+    key_fields: Optional[Mapping[str, object]] = None,
 ) -> str:
     """Collects caption for issuing a key/subscription taking into account the Telegram limit."""
-    from bot.utils.message_editor import get_message_data
+    from bot.utils.page_renderer import render_page_text
 
-    delivery_data = get_message_data(KEY_DELIVERY_PAGE, DEFAULT_KEY_DELIVERY_TEXT)
-    base_caption = delivery_data.get('text', DEFAULT_KEY_DELIVERY_TEXT)
     context = {}
     if viewer_id:
         context['telegram_id'] = viewer_id
     if bot_username:
         context['bot_username'] = bot_username
-    caption = build_key_delivery_text(base_caption, raw_value, context)
+    context = _add_key_fields(context, key_fields)
+    caption = render_page_text(
+        KEY_DELIVERY_PAGE,
+        context=context,
+        text_replacements=build_key_delivery_replacements(raw_value),
+    )
+    if caption is None:
+        raise RuntimeError(f"Missing required page: {KEY_DELIVERY_PAGE}")
 
     if len(caption) <= 1024:
         return caption
-
-    if kind == 'subscription':
-        title = "✅ <b>Ваша подписка!</b>" if is_new else "📋 <b>Ваша подписка</b>"
-        return build_compact_delivery_text(
-            title=title,
-            raw_value=raw_value,
-            copy_label="Ваша subscription-ссылка",
-            qr_hint="📸 Отсканируйте QR-код, чтобы импортировать подписку в клиент.",
-        )
-
-    title = "✅ <b>Ваш новый VPN-ключ!</b>" if is_new else "📋 <b>Ваш VPN-ключ</b>"
-    return build_compact_delivery_text(
-        title=title,
-        raw_value=raw_value,
-        copy_label="Ваша ссылка доступа",
-        qr_hint="📸 Отсканируйте QR-код для быстрого подключения.",
+    compact = render_page_text(
+        'key_delivery_partial',
+        context=context,
+        text_replacements=build_key_delivery_replacements(raw_value),
     )
+    if compact is None or len(compact) > 1024:
+        raise RuntimeError("key_delivery_partial must fit Telegram's caption limit")
+    return compact
 
 
 async def _render_key_delivery_photo(
@@ -270,6 +247,7 @@ async def _render_key_delivery_photo(
     kind: str,
     viewer_id: Optional[int] = None,
     bot_username: str = '',
+    key_fields: Optional[Mapping[str, object]] = None,
 ) -> Message:
     """Sends or edits a QR photo of the key issuance page."""
     from bot.utils.text import safe_edit_or_send
@@ -280,6 +258,7 @@ async def _render_key_delivery_photo(
         kind,
         viewer_id=viewer_id,
         bot_username=bot_username,
+        key_fields=key_fields,
     )
     filename = "subscription_qr.png" if kind == 'subscription' else "qrcode.png"
     photo = BufferedInputFile(generate_qr_code(raw_value), filename=filename)
@@ -300,6 +279,7 @@ def _remember_key_delivery_context(
     kind: str,
     attach_markup: bool,
     bot_username: str = '',
+    key_fields: Optional[Mapping[str, object]] = None,
 ) -> None:
     """Remembers the key issuing page for the /yaa context command."""
     if not viewer_id:
@@ -322,6 +302,7 @@ def _remember_key_delivery_context(
         }
         if bot_username:
             render_context['bot_username'] = bot_username
+        render_context = _add_key_fields(render_context, key_fields)
 
         remember_page_context(
             viewer_id,
@@ -342,6 +323,7 @@ async def render_key_delivery_page(
     kind: str = 'key',
     attach_markup: bool = True,
     viewer_id: Optional[int] = None,
+    key_fields: Optional[Mapping[str, object]] = None,
 ) -> Message:
     """Renders a special page for issuing a key with a QR and remembers it for /yaa."""
     target_message = _get_target_message(messageable)
@@ -356,6 +338,7 @@ async def render_key_delivery_page(
             raw_value,
             viewer_id=resolved_viewer_id,
             bot_username=bot_username,
+            key_fields=key_fields,
         )
         if attach_markup else None
     )
@@ -367,6 +350,7 @@ async def render_key_delivery_page(
         kind=kind,
         viewer_id=resolved_viewer_id,
         bot_username=bot_username,
+        key_fields=key_fields,
     )
     _remember_key_delivery_context(
         viewer_id=resolved_viewer_id,
@@ -376,6 +360,7 @@ async def render_key_delivery_page(
         kind=kind,
         attach_markup=attach_markup,
         bot_username=bot_username,
+        key_fields=key_fields,
     )
     return rendered_message
 
@@ -394,6 +379,7 @@ async def rerender_key_delivery_page_context(page_context, viewer_id: int) -> bo
         kind=context.get(KEY_DELIVERY_CONTEXT_KIND) or 'key',
         attach_markup=bool(context.get(KEY_DELIVERY_CONTEXT_ATTACH_MARKUP, True)),
         viewer_id=viewer_id,
+        key_fields=context.get(KEY_FIELDS_CONTEXT_KEY),
     )
     return True
 
@@ -419,28 +405,35 @@ async def send_key_with_qr(
         is_new: Whether the key is newly created
     """
     from bot.services.vpn_api import is_subscription_mode, get_subscription_url_for_key
+    from bot.utils.key_pages import build_key_page_context
 
     try:
         # We check the availability of the necessary data
         if not key_data:
-            await _send_error(messageable, "Ключ не найден или не принадлежит пользователю", key_manage_markup)
+            logger.warning('Key delivery requested without key data')
+            await _send_error(messageable)
             return
 
         if not key_data.get('server_id') or not key_data.get('panel_email'):
-            await _send_error(messageable, "Неполные данные ключа", key_manage_markup)
+            logger.warning('Key %s has incomplete delivery data', key_data.get('id'))
+            await _send_error(messageable)
             return
 
         # === Subscription mode: issue subscription URL + QR of this link ===
         if key_data.get('sub_id') and is_subscription_mode():
             sub_url = await get_subscription_url_for_key(key_data)
             if not sub_url:
-                await _send_error(messageable,
-                    "Не удалось получить subscription URL. "
-                    "Проверьте, что на панели 3X-UI включена подписка "
-                    "(Settings → Subscription → Enable).",
-                    key_manage_markup)
+                logger.error('Subscription URL is unavailable for key %s', key_data.get('id'))
+                await _send_error(messageable)
                 return
 
+            from bot.utils.user_ui_texts import render_ui_text
+
+            key_fields = build_key_page_context(
+                key_data,
+                inbound=render_ui_text('key.inbound.all_protocols'),
+                protocol='SUBSCRIPTION',
+            )[KEY_FIELDS_CONTEXT_KEY]
             await render_key_delivery_page(
                 messageable,
                 raw_value=sub_url,
@@ -448,6 +441,7 @@ async def send_key_with_qr(
                 is_new=is_new,
                 kind='subscription',
                 attach_markup=True,
+                key_fields=key_fields,
             )
             return
 
@@ -471,6 +465,11 @@ async def send_key_with_qr(
         # 2. Generate data
         logger.info(f"Generating key for {key_data.get('panel_email')} (protocol: {config.get('protocol', 'vless')})")
         link = generate_link(config)
+        key_fields = build_key_page_context(
+            key_data,
+            inbound=config.get('remark', 'VPN') or 'VPN',
+            protocol=str(config.get('protocol') or 'vless').upper(),
+        )[KEY_FIELDS_CONTEXT_KEY]
         viewer_id = _get_viewer_id(messageable)
         bot_username = _get_bot_username(messageable)
         json_document_markup = _get_json_document_markup(
@@ -478,6 +477,7 @@ async def send_key_with_qr(
             link,
             viewer_id=viewer_id,
             bot_username=bot_username,
+            key_fields=key_fields,
         )
             
         json_config = generate_json(config)
@@ -490,6 +490,7 @@ async def send_key_with_qr(
             is_new=is_new,
             kind='key',
             attach_markup=False,
+            key_fields=key_fields,
         )
 
         # 4. Send JSON config file
@@ -503,74 +504,33 @@ async def send_key_with_qr(
 
         await answer_func(
             document=config_file,
-            caption="📂 <b>Файл конфигурации</b> (для ручного импорта)",
             reply_markup=json_document_markup,
-            parse_mode="HTML"
         )
 
     except Exception as e:
         logger.error(f"Error sending key: {e}")
-        await _send_error(messageable, f"Ошибка отправки ключа: {e}", key_manage_markup)
+        await _send_error(messageable)
 
 
-async def _send_error(messageable, text, markup):
-    """Sends an error message."""
-    from bot.utils.key_status_page import render_key_status_page
+async def _send_error(messageable):
+    """Render the database-backed key delivery failure page."""
+    from bot.utils.page_renderer import render_page
 
-    append_buttons = getattr(markup, 'inline_keyboard', None) if markup else None
-    # Define Message for safe_edit_or_send
-    if hasattr(messageable, 'text') or hasattr(messageable, 'photo'):
-        # This is Message
-        await render_key_status_page(
-            messageable,
-            title_html='❌ <b>Ошибка выдачи ключа</b>',
-            body_text=text,
-            append_buttons=append_buttons,
-        )
-    elif hasattr(messageable, 'message'):
-        # This is CallbackQuery
-        await render_key_status_page(
-            messageable.message,
-            title_html='❌ <b>Ошибка выдачи ключа</b>',
-            body_text=text,
-            append_buttons=append_buttons,
-        )
-    else:
-        func = messageable.answer if hasattr(messageable, 'answer') else messageable.message.answer
-        await func(f"❌ {text}", reply_markup=markup)
+    target_message = _get_target_message(messageable)
+    if target_message is None:
+        raise ValueError("Key delivery target has no message")
+    await render_page(target_message, page_key='key_delivery_failed')
 
 
 async def _send_partial_key_config_fallback(messageable, raw_value: str, markup):
     """Shows the UUID of the key if the full config is temporarily unavailable."""
-    from bot.utils.key_status_page import render_key_status_page
+    from bot.utils.page_renderer import render_page
 
-    body_html = (
-        f"👇 <b>UUID ключа:</b>\n"
-        f"{format_key_copy_value(raw_value)}\n\n"
-        "☝️ Нажмите на ключ, чтобы скопировать.\n"
-        "⚠️ Не удалось получить полную конфигурацию (сервер недоступен).\n"
-        "Попробуйте позже."
+    target_message = _get_target_message(messageable)
+    if target_message is None:
+        raise ValueError("Key delivery target has no message")
+    await render_page(
+        target_message,
+        page_key='key_delivery_partial',
+        text_replacements=build_key_delivery_replacements(raw_value),
     )
-    append_buttons = getattr(markup, 'inline_keyboard', None) if markup else None
-
-    if hasattr(messageable, 'text') or hasattr(messageable, 'photo'):
-        await render_key_status_page(
-            messageable,
-            title_html='📋 <b>Ваш VPN-ключ</b>',
-            body_html=body_html,
-            append_buttons=append_buttons,
-        )
-    elif hasattr(messageable, 'message'):
-        await render_key_status_page(
-            messageable.message,
-            title_html='📋 <b>Ваш VPN-ключ</b>',
-            body_html=body_html,
-            append_buttons=append_buttons,
-        )
-    else:
-        func = messageable.answer if hasattr(messageable, 'answer') else messageable.message.answer
-        await func(
-            f"📋 <b>Ваш VPN-ключ</b>\n\n{body_html}",
-            reply_markup=markup,
-            parse_mode="HTML",
-        )

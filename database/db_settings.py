@@ -5,6 +5,7 @@ import secrets
 import string
 import datetime
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Optional, List, Dict, Any, Tuple
 from .connection import get_db
 
@@ -24,7 +25,6 @@ __all__ = [
     'get_yadreno_admin_server_ip',
     'set_yadreno_admin_server_ip',
     'delete_yadreno_admin_server_ip',
-    'is_yadreno_admin_customization_enabled',
     'is_yadreno_admin_core_changes_enabled',
     'get_yadreno_admin_active_request_id',
     'set_yadreno_admin_active_request_id',
@@ -107,6 +107,30 @@ def set_setting(key: str, value: str) -> None:
             VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
         """, (key, value))
+        if key in {'stablecoin_rub_rate', 'star_rub_rate'}:
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'currency_rates'"
+            ).fetchone()
+            if table_exists:
+                try:
+                    legacy_rate = Decimal(str(value).strip().replace(',', '.'))
+                except (InvalidOperation, TypeError, ValueError):
+                    legacy_rate = Decimal('0')
+                if legacy_rate.is_finite() and legacy_rate > 0:
+                    target = 'USDT' if key == 'stablecoin_rub_rate' else 'XTR'
+                    converted = Decimal('1') / legacy_rate
+                    rendered = format(converted, 'f').rstrip('0').rstrip('.')
+                    conn.execute(
+                        """
+                        INSERT INTO currency_rates (
+                            base_currency, target_currency, units_per_base, updated_at
+                        ) VALUES ('RUB', ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(base_currency, target_currency) DO UPDATE SET
+                            units_per_base = excluded.units_per_base,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (target, rendered or '0'),
+                    )
         logger.info(f"Настройка обновлена: {key}")
 
 def delete_setting(key: str) -> bool:
@@ -172,7 +196,6 @@ def set_display_timezone(value: str) -> str:
 
 YADRENO_ADMIN_API_KEY_SETTING = 'yadreno_admin_api_key'
 YADRENO_ADMIN_SERVER_IP_SETTING = 'yadreno_admin_server_ip'
-YADRENO_ADMIN_CUSTOMIZATION_ENABLED_SETTING = 'yadreno_admin_customization_enabled'
 YADRENO_ADMIN_CORE_CHANGES_ENABLED_SETTING = 'yadreno_admin_core_changes_enabled'
 YADRENO_ADMIN_REQUEST_SETTING_PREFIX = 'yadreno_admin_request'
 YADRENO_ADMIN_TOOL_CALL_SETTING_PREFIX = 'yadreno_admin_tool_call'
@@ -207,11 +230,6 @@ def set_yadreno_admin_server_ip(server_ip: str) -> None:
 def delete_yadreno_admin_server_ip() -> bool:
     """Removes the saved public IP of the Yadreno Admin server from settings."""
     return delete_setting(YADRENO_ADMIN_SERVER_IP_SETTING)
-
-
-def is_yadreno_admin_customization_enabled() -> bool:
-    """Return the hidden flag that shows the YadrenoVPN customization entry."""
-    return get_setting(YADRENO_ADMIN_CUSTOMIZATION_ENABLED_SETTING, '0') == '1'
 
 
 def is_yadreno_admin_core_changes_enabled() -> bool:

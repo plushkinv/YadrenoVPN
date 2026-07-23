@@ -47,6 +47,8 @@ _STATUS_ALIASES = {
     'cancelled': 'canceled',
     'expired': 'canceled',
 }
+_CORE_PAYMENT_PURPOSES = {'key_purchase', 'key_renewal', 'balance_topup'}
+_DEFAULT_SUPPORTED_PURPOSES = frozenset({'key_purchase', 'key_renewal'})
 
 ProviderCreate = Callable[[Mapping[str, Any]], Mapping[str, Any] | Awaitable[Mapping[str, Any]]]
 ProviderCheck = Callable[[Mapping[str, Any]], Mapping[str, Any] | str | Awaitable[Mapping[str, Any] | str]]
@@ -66,9 +68,12 @@ class PaymentProvider:
     check_payment: ProviderCheck
     webhook_handler: ProviderWebhook | None = None
     webhook_secret: str | None = None
+    currency: str = 'RUB'
+    minimum_amount_minor: int = 0
     minimum_amount_cents: int = 0
     is_enabled: ProviderEnabled = True
     auto_check_interval_seconds: int | None = 300
+    supported_purposes: frozenset[str] = _DEFAULT_SUPPORTED_PURPOSES
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -84,9 +89,12 @@ def register_payment_provider(
     webhook_secret: str | None = None,
     title: str | None = None,
     label: str | None = None,
+    currency: str = 'RUB',
+    minimum_amount_minor: int | None = None,
     minimum_amount_cents: int = 0,
     is_enabled: ProviderEnabled = True,
     auto_check_interval_seconds: int | None = 300,
+    supported_purposes: list[str] | tuple[str, ...] | set[str] | frozenset[str] | None = None,
     metadata: Mapping[str, Any] | None = None,
     replace: bool = False,
 ) -> PaymentProvider:
@@ -104,6 +112,13 @@ def register_payment_provider(
     if pid in PAYMENT_PROVIDERS and not replace:
         raise ValueError(f"payment provider '{pid}' уже зарегистрирован")
 
+    from bot.services.money import normalize_currency
+
+    normalized_currency = normalize_currency(currency)
+    resolved_minimum = _normalize_amount(
+        minimum_amount_minor if minimum_amount_minor is not None else minimum_amount_cents,
+        'minimum_amount_minor',
+    )
     provider = PaymentProvider(
         provider_id=pid,
         payment_type=provider_payment_type(pid),
@@ -113,9 +128,12 @@ def register_payment_provider(
         check_payment=check_payment,
         webhook_handler=webhook_handler,
         webhook_secret=_optional_config_text(webhook_secret, 'webhook_secret'),
-        minimum_amount_cents=_normalize_amount(minimum_amount_cents, 'minimum_amount_cents'),
+        currency=normalized_currency,
+        minimum_amount_minor=resolved_minimum,
+        minimum_amount_cents=resolved_minimum,
         is_enabled=is_enabled,
         auto_check_interval_seconds=_normalize_auto_check_interval(auto_check_interval_seconds),
+        supported_purposes=_normalize_supported_purposes(supported_purposes),
         metadata=_normalize_config_metadata(metadata),
     )
     if not provider.title:
@@ -199,6 +217,12 @@ def is_payment_provider_enabled(provider_id: str, context: Mapping[str, Any] | N
     except Exception as e:
         logger.warning("Payment provider '%s' скрыт из-за ошибки is_enabled: %s", provider.provider_id, e)
         return False
+
+
+def payment_provider_supports_purpose(provider_id: str, purpose: str) -> bool:
+    """Checks the extension's explicit access to a closed core purpose."""
+    provider = get_payment_provider(provider_id)
+    return bool(provider and str(purpose) in provider.supported_purposes)
 
 
 async def create_payment(provider_id: str, context: Mapping[str, Any]) -> dict[str, Any]:
@@ -392,6 +416,23 @@ def _normalize_auto_check_interval(value: Any) -> int | None:
     return seconds
 
 
+def _normalize_supported_purposes(value: Any) -> frozenset[str]:
+    if value is None:
+        return _DEFAULT_SUPPORTED_PURPOSES
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple, set, frozenset)):
+        raise ValueError('supported_purposes должен быть списком назначений платежа')
+    normalized = frozenset(str(item).strip().casefold() for item in value)
+    if not normalized:
+        raise ValueError('supported_purposes не может быть пустым')
+    unknown = normalized - _CORE_PAYMENT_PURPOSES
+    if unknown:
+        raise ValueError(
+            'supported_purposes содержит неизвестные назначения: '
+            + ', '.join(sorted(unknown))
+        )
+    return normalized
+
+
 def _normalize_display_text(value: Any, field: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f'{field} должен быть строкой')
@@ -488,6 +529,7 @@ __all__ = [
     'is_payment_provider_enabled',
     'list_payment_providers',
     'normalize_payment_provider_id',
+    'payment_provider_supports_purpose',
     'provider_payment_type',
     'register_payment_provider',
     'validate_payment_webhook_secret',

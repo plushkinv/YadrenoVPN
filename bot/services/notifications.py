@@ -13,6 +13,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import ADMIN_IDS
 from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
 from bot.utils.text import escape_html
+from bot.utils.user_ui_texts import render_ui_text
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,23 @@ def _format_payment_amount(order: Dict[str, Any]) -> str:
     """
     payment_type = order.get('payment_type', '')
 
+    if int(order.get('intent_version') or 0) == 1:
+        from bot.services.money import format_money_minor, parse_major_to_minor
+
+        charge_currency = str(order.get('charge_currency') or order.get('base_currency') or 'RUB')
+        if order.get('charge_amount') not in {None, ''}:
+            try:
+                return format_money_minor(
+                    parse_major_to_minor(order.get('charge_amount'), charge_currency),
+                    charge_currency,
+                )
+            except (TypeError, ValueError):
+                pass
+        return format_money_minor(
+            order.get('payable_amount_minor') or order.get('payable_amount_cents') or 0,
+            order.get('base_currency') or 'RUB',
+        )
+
     if payment_type == 'crypto':
         cents = order.get('final_amount_cents') if order.get('final_amount_cents') is not None else order.get('amount_cents', 0) or 0
         usd = cents / 100
@@ -97,6 +115,8 @@ def _get_payment_action(order: Dict[str, Any]) -> str:
     payment_type = order.get('payment_type', '')
     if payment_type == 'trial':
         return 'trial'
+    if order.get('purpose') == 'balance_topup':
+        return 'balance_topup'
 
     explicit_action = order.get('_payment_action')
     if explicit_action in ('new_key', 'renewal', 'trial'):
@@ -126,7 +146,7 @@ def _get_action_text(order: Dict[str, Any]) -> str:
 def _format_user_name(user: Optional[Dict[str, Any]]) -> str:
     """Generates a display name for the name placeholder."""
     if not user:
-        return 'пользователь'
+        return '—'
 
     parts = [
         (user.get('first_name') or '').strip(),
@@ -141,14 +161,14 @@ def _format_user_name(user: Optional[Dict[str, Any]]) -> str:
         return f"@{username}"
 
     telegram_id = user.get('telegram_id')
-    return f"ID {telegram_id}" if telegram_id else 'пользователь'
+    return f"ID {telegram_id}" if telegram_id else '—'
 
 
 def _format_user_login(user: Optional[Dict[str, Any]]) -> str:
     """Generates a user login for the login placeholder."""
     if user and user.get('username'):
         return f"@{user['username']}"
-    return 'не указан'
+    return '—'
 
 
 def _format_rub_cents(cents: int) -> str:
@@ -162,6 +182,14 @@ def _format_referral_purchase_amount(order: Dict[str, Any], event: Dict[str, Any
     """Formats the referral purchase amount by the actual payment type."""
     payment_type = event.get('payment_type') or order.get('payment_type', '')
     amount_raw = event.get('amount_raw') or 0
+
+    if event.get('amount_base_minor') is not None:
+        from bot.services.money import format_money_minor
+
+        return format_money_minor(
+            event.get('amount_base_minor') or 0,
+            event.get('base_currency') or order.get('base_currency') or 'RUB',
+        )
 
     if payment_type == 'crypto':
         usd = amount_raw / 100
@@ -181,8 +209,13 @@ def _format_referral_purchase_amount(order: Dict[str, Any], event: Dict[str, Any
 def _format_referral_reward(event: Dict[str, Any]) -> str:
     """Formats the accrued referral bonus."""
     if event.get('reward_type') == 'balance':
-        return _format_rub_cents(event.get('reward_cents', 0) or 0)
-    return f"{event.get('reward_days', 0) or 0} дн."
+        from bot.services.money import format_money_minor
+
+        return format_money_minor(
+            event.get('reward_minor', event.get('reward_cents', 0)) or 0,
+            event.get('reward_currency') or 'RUB',
+        )
+    return render_ui_text('format.days_short', days=event.get('reward_days', 0) or 0)
 
 
 async def notify_referrers_new_referral(bot: Bot, referral_id: int) -> None:
@@ -313,7 +346,10 @@ async def notify_referrers_purchase(
                 'referral_level': level,
                 'payment_tariff_name': str(tariff_name),
                 'payment_amount_text': _format_referral_purchase_amount(order, event),
-                'payment_period_text': f"{event.get('period_days', 0) or 0} дн.",
+                'payment_period_text': render_ui_text(
+                    'format.days_short',
+                    days=event.get('period_days', 0) or 0,
+                ),
                 'referral_reward_text': _format_referral_reward(event),
             })
             text = render_event_placeholders(
@@ -397,6 +433,8 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
             header = '🎁 <b>Пробная подписка</b>'
         elif action == 'renewal':
             header = '🔄 <b>Продление</b>'
+        elif action == 'balance_topup':
+            header = '💰 <b>Пополнение баланса</b>'
         else:
             header = '💰 <b>Новая покупка</b>'
 
@@ -415,7 +453,19 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
         # We show the host only for a real renewal of an existing key.
         if action == 'renewal' and server_name != 'Не выбран':
             lines.append(f'🌐 Хост: {escape_html(server_name)}')
-        lines.append(f'🎫 Тариф: {escape_html(tariff_name)}')
+        if action == 'balance_topup':
+            from bot.services.money import format_money_minor
+
+            nominal = int(
+                order.get('nominal_amount_minor')
+                or order.get('nominal_amount_cents')
+                or 0
+            )
+            lines.append(
+                f"💎 Зачислено: {format_money_minor(nominal, order.get('base_currency') or 'RUB')}"
+            )
+        else:
+            lines.append(f'🎫 Тариф: {escape_html(tariff_name)}')
         lines.append(f'💳 Метод: {payment_label}')
         lines.append(f'💵 Сумма: {amount_str}')
         if order.get('promo_code'):

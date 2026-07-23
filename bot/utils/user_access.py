@@ -64,7 +64,7 @@ async def run_user_access_guards(target: Any, context: Mapping[str, Any]) -> Use
             logger.exception("User access guard '%s' failed: %s", name, exc)
             return UserAccessGuardResult(
                 allowed=False,
-                message='⚠️ Доступ временно недоступен',
+                message='',
                 show_alert=True,
             )
         if not normalized.allowed:

@@ -26,6 +26,8 @@ from database.requests import (
     update_tariff
 )
 from bot.utils.admin import is_admin
+from bot.utils.tariff_prices import format_tariff_price_display
+from bot.services.money import format_money_minor
 from bot.states.admin_states import (
     AdminStates,
     TARIFF_PARAMS,
@@ -93,15 +95,12 @@ async def show_tariffs_list(callback: CallbackQuery, state: FSMContext):
         
         for tariff in tariffs:
             status = "🟢" if tariff['is_active'] else "⚪"
-            price_usd = tariff['price_cents'] / 100
-            price_str = f"{price_usd:g}".replace('.', ',')
-            
             traffic_gb = tariff.get('traffic_limit_gb', 0)
             traffic_text = f"{traffic_gb} ГБ" if traffic_gb > 0 else "Безлим"
             
             lines.append(
                 f"{status} <b>{tariff['name']}</b> — "
-                f"${price_str} / ⭐ {tariff['price_stars']} / ₽ {tariff.get('price_rub', 0)} / "
+                f"{format_money_minor(tariff.get('price_minor', 0), tariff.get('base_currency', 'RUB'))} / "
                 f"{tariff['duration_days']} дн. / {traffic_text}"
             )
             
@@ -127,14 +126,10 @@ async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext
     await state.update_data(tariff_id=tariff_id)
     
     status_emoji = "🟢 Активен" if tariff['is_active'] else "⚪ Скрыт"
-    price_usd = tariff['price_cents'] / 100
-    price_str = f"{price_usd:g}".replace('.', ',')
-    
+    price_display = format_tariff_price_display(tariff)
     lines = [
         f"📋 <b>{tariff['name']}</b>\n",
-        f"💰 Цена (USDT): <code>${price_str}</code>",
-        f"⭐ Цена (Stars): <code>{tariff['price_stars']}</code>",
-        f"💳 Цена (₽): <code>{tariff.get('price_rub', 0)}</code>",
+        f"💰 Цена: <code>{price_display}</code>",
         f"📅 Длительность: <code>{tariff['duration_days']} дней</code>",
     ]
     
@@ -222,8 +217,6 @@ async def toggle_tariff(callback: CallbackQuery, state: FSMContext):
 # Add states are ok
 ADD_TARIFF_STATES = [
     AdminStates.add_tariff_name,
-    AdminStates.add_tariff_price_cents,
-    AdminStates.add_tariff_price_stars,
     AdminStates.add_tariff_price_rub,
     AdminStates.add_tariff_duration,
     AdminStates.add_tariff_traffic_limit,
@@ -246,9 +239,7 @@ def get_add_step_state(step: int) -> AdminStates:
     
     state_map = {
         'name': AdminStates.add_tariff_name,
-        'price_cents': AdminStates.add_tariff_price_cents,
-        'price_stars': AdminStates.add_tariff_price_stars,
-        'price_rub': AdminStates.add_tariff_price_rub,
+        'price_minor': AdminStates.add_tariff_price_rub,
         'duration_days': AdminStates.add_tariff_duration,
         'traffic_limit_gb': AdminStates.add_tariff_traffic_limit,
         'max_ips': AdminStates.add_tariff_max_ips,
@@ -283,7 +274,7 @@ def get_add_step_text(step: int, data: dict) -> str:
         lines.append("")
     
     lines.append(f"Введите <b>{param['label'].lower()}</b>:")
-    lines.append(f"_({param['hint']})_")
+    lines.append(f"<i>({param['hint']})</i>")
     
     # If there is additional help
     if param.get('help'):
@@ -449,15 +440,10 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
         # All data has been entered - we show confirmation
         await state.set_state(AdminStates.add_tariff_confirm)
         
-        price_usd = tariff_data['price_cents'] / 100
-        price_str = f"{price_usd:g}".replace('.', ',')
-        
         lines = [
             "✅ <b>Все данные введены!</b>\n",
             f"📌 Название: <code>{tariff_data['name']}</code>",
-            f"💰 Цена (USDT): <code>${price_str}</code>",
-            f"⭐ Цена (Stars): <code>{tariff_data['price_stars']}</code>",
-            f"💳 Цена (₽): <code>{tariff_data.get('price_rub', 0)}</code>",
+            f"💰 Цена: <code>{format_money_minor(tariff_data.get('price_minor', 0))}</code>",
             f"📅 Длительность: <code>{tariff_data['duration_days']} дней</code>",
         ]
         
@@ -483,16 +469,6 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
 # Handlers for each add state
 @router.message(AdminStates.add_tariff_name)
 async def add_tariff_name_handler(message: Message, state: FSMContext):
-    await process_add_tariff_step(message, state)
-
-
-@router.message(AdminStates.add_tariff_price_cents)
-async def add_tariff_price_cents_handler(message: Message, state: FSMContext):
-    await process_add_tariff_step(message, state)
-
-
-@router.message(AdminStates.add_tariff_price_stars)
-async def add_tariff_price_stars_handler(message: Message, state: FSMContext):
     await process_add_tariff_step(message, state)
 
 
@@ -534,9 +510,7 @@ async def add_tariff_save(callback: CallbackQuery, state: FSMContext):
         tariff_id = add_tariff(
             name=tariff_data['name'],
             duration_days=tariff_data['duration_days'],
-            price_cents=tariff_data['price_cents'],
-            price_stars=tariff_data['price_stars'],
-            price_rub=tariff_data.get('price_rub', 0),
+            price_minor=tariff_data['price_minor'],
             display_order=0,
             traffic_limit_gb=tariff_data.get('traffic_limit_gb', 0),
             group_id=selected_group_id,
@@ -581,7 +555,7 @@ def get_edit_tariff_text(tariff: dict, current_param: int) -> str:
         f"📌 Параметр: <b>{param['label']}</b>",
         f"📝 Текущее значение: <code>{display_value}</code>\n",
         f"Введите новое значение или используйте кнопки навигации:",
-        f"_({param['hint']})_"
+        f"<i>({param['hint']})</i>"
     ]
     
     if param.get('help'):

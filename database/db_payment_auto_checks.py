@@ -93,9 +93,18 @@ def get_due_payment_auto_checks(limit: int = 10) -> list[dict[str, Any]]:
     normalized_limit = max(1, min(int(limit), 100))
     with get_db() as conn:
         create_payment_auto_check_tables(conn)
+        payment_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(payments)").fetchall()
+        }
+        intent_select = (
+            "p.intent_version, p.purpose,"
+            if {'intent_version', 'purpose'}.issubset(payment_columns)
+            else "0 AS intent_version, NULL AS purpose,"
+        )
         rows = conn.execute(
-            """
+            f"""
             SELECT pac.*, p.payment_type, p.status AS order_status,
+                   {intent_select}
                    p.user_id, p.vpn_key_id, p.final_amount_cents,
                    p.amount_cents, p.balance_deduct_cents,
                    p.yookassa_payment_id, p.wata_link_id,

@@ -6,15 +6,8 @@ from typing import Any
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 
 from bot.utils.page_renderer import render_page, render_page_text
-from bot.utils.placeholders import apply_page_placeholders
 
 KEY_STATUS_PAGE_KEY = "key_status"
-
-
-def default_key_status_page_text() -> str:
-    """Default text of the key operation status."""
-    return "%ключ_статус_заголовок%\n\n%ключ_статус_текст%"
-
 
 def build_key_status_page_context(title_html: str, body_html: str) -> dict[str, Any]:
     """Collects the runtime context of the status of an operation with a key."""
@@ -25,17 +18,14 @@ def build_key_status_page_context(title_html: str, body_html: str) -> dict[str, 
 
 
 def render_key_status_page_text(context: dict[str, Any]) -> str:
-    """Renders the key_status text from pages with fallback set to default."""
+    """Render the legacy extension status page without a code fallback."""
     text = render_page_text(KEY_STATUS_PAGE_KEY, context=context)
     if text is not None:
         return text
-
-    fallback_context = {"page_key": KEY_STATUS_PAGE_KEY}
-    fallback_context.update(context)
-    return apply_page_placeholders(
-        default_key_status_page_text(),
-        context=fallback_context,
-    )
+    fallback = render_page_text('screen_unavailable', context=context)
+    if fallback is None:
+        raise RuntimeError("Required page 'screen_unavailable' is missing")
+    return fallback
 
 
 async def render_key_status_page(
@@ -59,5 +49,4 @@ async def render_key_status_page(
         context=build_key_status_page_context(title_html, body_html),
         append_buttons=append_buttons,
         force_new=force_new,
-        fallback_text=default_key_status_page_text(),
     )

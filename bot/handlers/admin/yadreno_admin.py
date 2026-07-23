@@ -9,7 +9,6 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -25,6 +24,12 @@ from bot.keyboards.admin import (
     yadreno_admin_no_key_kb,
 )
 from bot.services.page_context import get_page_context
+from bot.services.yadreno_admin_page_binding import (
+    YaaPageBinding,
+    clear_yaa_page_binding,
+    get_yaa_page_binding,
+    remember_yaa_page_binding,
+)
 from bot.services.yadreno_admin import (
     UPLOAD_TMP_DIR,
     YADRENO_ADMIN_BROADCAST_TOPIC_ID,
@@ -49,11 +54,8 @@ from bot.services.yadreno_admin import (
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
 from bot.utils.page_renderer import (
-    build_visible_keyboard_snapshot,
     get_page_data,
-    get_page_stored_data,
     render_page,
-    serialize_inline_button_rows,
 )
 from bot.utils.text import (
     escape_html,
@@ -70,30 +72,14 @@ from database.requests import (
     get_display_timezone,
     get_setting,
     get_yadreno_admin_api_key,
+    get_user_ui_texts_fingerprint,
     set_yadreno_admin_server_ip,
     set_yadreno_admin_api_key,
-    get_page,
 )
 from bot.utils.telegram_links import build_telegram_link
-from bot.utils.page_flow import parse_registry_names
 
 router = Router()
 
-YAA_REDACTED_USER_KEY = "[redacted_user_key]"
-YAA_KEY_DELIVERY_PAGE = "key_delivery"
-YAA_KEY_DELIVERY_CONTEXT_RAW = "key_delivery_raw_value"
-YAA_KEY_DELIVERY_CONTEXT_KEYS = frozenset({
-    YAA_KEY_DELIVERY_CONTEXT_RAW,
-    "key_raw_value",
-})
-YAA_KEY_DELIVERY_PLACEHOLDERS = frozenset({
-    "%key_copy%".casefold(),
-    "%key_link%".casefold(),
-    "%key_link_url%".casefold(),
-    "%ключ_для_копирования%".casefold(),
-    "%ключ_ссылка%".casefold(),
-    "%ключ_ссылка_url%".casefold(),
-})
 YADRENO_ADMIN_FSM_TOPIC_KEY = "yadreno_topic_id"
 YADRENO_ADMIN_ALLOWED_TOPIC_IDS = frozenset({
     YADRENO_ADMIN_CHAT_TOPIC_ID,
@@ -479,11 +465,12 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
         await _show_yadreno_entry(callback, state)
         return
 
+    topic_id = _callback_topic_id(callback.data, "admin_yadreno_new_chat")
     try:
         result = await start_new_chat(
             callback.from_user.id,
             api_key,
-            topic_id=_callback_topic_id(callback.data, "admin_yadreno_new_chat"),
+            topic_id=topic_id,
         )
     except YadrenoAdminError as e:
         await callback.answer(yadreno_admin_error_alert(e), show_alert=True)
@@ -496,7 +483,8 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    topic_id = _callback_topic_id(callback.data, "admin_yadreno_new_chat")
+    if topic_id == YADRENO_ADMIN_YAA_TOPIC_ID:
+        clear_yaa_page_binding(callback.from_user.id, topic_id)
     await _activate_yadreno_chat_lane(state, topic_id)
     await safe_edit_or_send(
         callback.message,
@@ -854,6 +842,10 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
         thinking,
         topic_id=topic_id,
     )
+    bound_page, bound_page_before = _capture_bound_yaa_page_state(
+        message.from_user.id,
+        topic_id,
+    )
     try:
         final = await run_dialog(
             message.from_user.id,
@@ -862,7 +854,18 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
             topic_id=topic_id,
             progress_callback=progress.handle,
         )
-        await _deliver_final_response(progress.final_target, final, topic_id)
+        if await _rerender_bound_yaa_page_if_changed(
+            progress,
+            message.from_user.id,
+            bound_page,
+            bound_page_before,
+        ):
+            return
+        await _deliver_final_response(
+            progress.final_target,
+            final,
+            topic_id=topic_id,
+        )
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
@@ -881,18 +884,102 @@ def _get_yaa_editable_state(page_key: str) -> dict[str, Any]:
     state: dict[str, Any] = {
         'page': get_page_data(page_key),
         'display_timezone': get_display_timezone(),
+        'user_ui_texts_fingerprint': get_user_ui_texts_fingerprint(),
     }
     if page_key in {'my_keys', 'my_keys_empty'}:
         from bot.utils.my_keys_page import (
-            DEFAULT_MY_KEYS_ITEM_TEMPLATE,
             MY_KEYS_ITEM_TEMPLATE_SETTING,
         )
 
-        state['my_keys_item_template'] = get_setting(
-            MY_KEYS_ITEM_TEMPLATE_SETTING,
-            DEFAULT_MY_KEYS_ITEM_TEMPLATE,
-        )
+        item_template = get_setting(MY_KEYS_ITEM_TEMPLATE_SETTING)
+        if item_template is None:
+            raise RuntimeError(
+                f"Required setting {MY_KEYS_ITEM_TEMPLATE_SETTING!r} is missing"
+            )
+        state['my_keys_item_template'] = item_template
     return state
+
+
+def _capture_bound_yaa_page_state(
+    telegram_id: int,
+    topic_id: int,
+) -> tuple[YaaPageBinding | None, str | None]:
+    """Capture editable state only when this lane has an active /yaa binding."""
+    binding = get_yaa_page_binding(telegram_id, topic_id)
+    if binding is None and topic_id not in {
+        YADRENO_ADMIN_YAA_TOPIC_ID,
+        YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID,
+    }:
+        return None, None
+    if binding is None:
+        return (
+            None,
+            _serialize_for_compare({
+                'user_ui_texts_fingerprint': get_user_ui_texts_fingerprint(),
+            }),
+        )
+    return (
+        binding,
+        _serialize_for_compare(_get_yaa_editable_state(binding.page_key)),
+    )
+
+
+async def _rerender_bound_yaa_page_if_changed(
+    progress: _YadrenoProgressRenderer,
+    telegram_id: int,
+    binding: YaaPageBinding | None,
+    before: str | None,
+) -> bool:
+    """Rerender the pinned Telegram page once after a completed changed turn."""
+    if before is None:
+        return False
+    after_state = (
+        _get_yaa_editable_state(binding.page_key)
+        if binding is not None
+        else {'user_ui_texts_fingerprint': get_user_ui_texts_fingerprint()}
+    )
+    after = _serialize_for_compare(after_state)
+    if before == after:
+        return False
+
+    from bot.utils.user_ui_texts import reload_user_ui_text_cache
+
+    reload_user_ui_text_cache()
+    if binding is None:
+        return False
+
+    await progress.delete_progress_messages()
+    page_context = binding.page_context()
+    if page_context.page_key == "key_delivery":
+        from bot.utils.key_sender import rerender_key_delivery_page_context
+
+        if await rerender_key_delivery_page_context(page_context, telegram_id):
+            return True
+    if page_context.page_key == "qr_payment":
+        from bot.handlers.user.payments.base import rerender_qr_payment_page_context
+
+        if await rerender_qr_payment_page_context(page_context, telegram_id):
+            return True
+    if page_context.page_key in {"my_keys", "my_keys_empty"}:
+        from bot.handlers.user.keys import rerender_my_keys_page_context
+
+        if await rerender_my_keys_page_context(page_context, telegram_id):
+            return True
+    if page_context.page_key == "key_details":
+        from bot.handlers.user.keys import rerender_key_details_page_context
+
+        if await rerender_key_details_page_context(page_context, telegram_id):
+            return True
+    await render_page(
+        page_context.message,
+        page_key=page_context.page_key,
+        visibility=page_context.visibility,
+        context=page_context.context,
+        text_replacements=page_context.text_replacements,
+        prepend_buttons=page_context.prepend_buttons,
+        append_buttons=page_context.append_buttons,
+    )
+    return True
 
 
 def _safe_upload_filename(raw_name: str | None, fallback: str) -> str:
@@ -1263,6 +1350,10 @@ async def _flush_yadreno_album_after_delay(key: tuple[int, int, str]) -> None:
 async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
     """Download uploadable album files and run one Yadreno Admin request."""
     prompt = _build_yadreno_album_prompt(buffer.messages)
+    bound_page, bound_page_before = _capture_bound_yaa_page_state(
+        buffer.user_id,
+        buffer.topic_id,
+    )
     thinking = await safe_edit_or_send(
         buffer.first_message,
         "🤖 <b>Yadreno Admin</b>\n\n⏳ Загружаю файлы и запускаю агента...",
@@ -1328,6 +1419,13 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
                 user_message="В альбоме нет файлов, которые можно обработать.",
             )
 
+        if await _rerender_bound_yaa_page_if_changed(
+            progress,
+            buffer.user_id,
+            bound_page,
+            bound_page_before,
+        ):
+            return
         await _deliver_final_response(
             progress.final_target, final, buffer.topic_id,
         )
@@ -1351,149 +1449,6 @@ def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
     if formatted_message.startswith(command_text):
         return formatted_message[len(command_text):].strip()
     return (command.args or "").strip()
-
-
-def _redact_yaa_context(page_key: str, runtime_context: dict[str, Any] | None) -> dict[str, Any]:
-    """Returns the runtime context without user keys."""
-    result = dict(runtime_context or {})
-    if page_key == YAA_KEY_DELIVERY_PAGE:
-        for key in YAA_KEY_DELIVERY_CONTEXT_KEYS:
-            if key in result:
-                result[key] = YAA_REDACTED_USER_KEY
-    return result
-
-
-def _redact_yaa_text_replacements(
-    page_key: str,
-    text_replacements: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Returns wildcards without user keys for read-only snapshots."""
-    if not text_replacements:
-        return None
-    result = dict(text_replacements)
-    if page_key == YAA_KEY_DELIVERY_PAGE:
-        for placeholder in list(result.keys()):
-            if str(placeholder).casefold() in YAA_KEY_DELIVERY_PLACEHOLDERS:
-                result[placeholder] = YAA_REDACTED_USER_KEY
-    return result
-
-
-def _redact_yaa_visible_keyboard_urls(
-    page_key: str,
-    rows: list[list[dict[str, Any]]],
-) -> list[list[dict[str, Any]]]:
-    """Makes the redacted value in URL snapshots readable to the agent."""
-    if page_key != YAA_KEY_DELIVERY_PAGE or not rows:
-        return rows
-
-    encoded_redacted = quote(YAA_REDACTED_USER_KEY, safe='')
-    normalized_rows: list[list[dict[str, Any]]] = []
-    for row in rows:
-        normalized_row: list[dict[str, Any]] = []
-        for button in row:
-            item = dict(button)
-            url = item.get("url")
-            if isinstance(url, str):
-                item["url"] = url.replace(encoded_redacted, YAA_REDACTED_USER_KEY)
-            normalized_row.append(item)
-        normalized_rows.append(normalized_row)
-    return normalized_rows
-
-
-def _build_yaa_runtime_context(page_key: str, page_context: Any | None) -> dict[str, Any]:
-    """Collects the runtime part of the /yaa context in JSON-friendly format."""
-    if page_context is None:
-        return {}
-
-    runtime: dict[str, Any] = {}
-    visibility = dict(page_context.visibility or {})
-    context = _redact_yaa_context(page_key, page_context.context)
-    prepend_buttons = serialize_inline_button_rows(page_context.prepend_buttons)
-    append_buttons = serialize_inline_button_rows(page_context.append_buttons)
-
-    if visibility:
-        runtime["visibility"] = visibility
-    if context:
-        runtime["context"] = context
-    if prepend_buttons:
-        runtime["prepend_buttons"] = prepend_buttons
-    if append_buttons:
-        runtime["append_buttons"] = append_buttons
-
-    return runtime
-
-
-def _build_yaa_page_flow_context(page_key: str) -> dict[str, list[str]]:
-    """Collect page-level guard/hook names for the /yaa context."""
-    try:
-        page = get_page(page_key)
-    except Exception:
-        page = None
-    if not page:
-        return {"guard_names": [], "hook_names": []}
-    return {
-        "guard_names": parse_registry_names(page.get("guard_names")),
-        "hook_names": parse_registry_names(page.get("hook_names")),
-    }
-
-
-def _build_yaa_invocation_context(
-    page_key: str,
-    backup_path: str,
-    attachment: dict[str, str] | None = None,
-    page_context: Any | None = None,
-) -> dict[str, Any]:
-    """Build request metadata for the /yaa runtime-context invocation."""
-    stored_page = get_page_stored_data(page_key) or {
-        "text": {"source": "default", "value": "", "custom": None},
-        "image": {"source": "default", "value": "", "custom": None},
-        "buttons": [],
-    }
-    visibility = page_context.visibility if page_context else None
-    runtime_context = _redact_yaa_context(
-        page_key,
-        page_context.context if page_context else None,
-    )
-    prepend_buttons = page_context.prepend_buttons if page_context else None
-    append_buttons = page_context.append_buttons if page_context else None
-    visible_keyboard = build_visible_keyboard_snapshot(
-        buttons=stored_page.get("buttons") or [],
-        visibility=visibility,
-        context=runtime_context,
-        text_replacements=_redact_yaa_text_replacements(
-            page_key,
-            page_context.text_replacements if page_context else None,
-        ),
-        prepend_buttons=prepend_buttons,
-        append_buttons=append_buttons,
-    )
-    visible_keyboard = _redact_yaa_visible_keyboard_urls(page_key, visible_keyboard)
-
-    context: dict[str, Any] = {
-        "source": "yaa",
-        "page_key": page_key,
-        "page_flow": _build_yaa_page_flow_context(page_key),
-        "database_path": "database/vpn_bot.db",
-        "backup": {
-            "created": True,
-            "path": backup_path,
-        },
-        "stored_page": stored_page,
-        "visible_keyboard": visible_keyboard,
-        "runtime": _build_yaa_runtime_context(page_key, page_context),
-        "task_format": "telegram_html",
-    }
-    if attachment:
-        context["attachment"] = attachment
-
-    return json.loads(
-        json.dumps(
-            context,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        )
-    )
 
 
 async def _handle_broadcast_yaa(
@@ -1697,12 +1652,14 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
 
     before = _serialize_for_compare(_get_yaa_editable_state(page_context.page_key))
     attachment = _extract_yaa_attachment_data(message)
-    invocation_context = _build_yaa_invocation_context(
-        page_context.page_key,
-        backup_path,
-        attachment,
-        page_context=page_context,
+    binding = remember_yaa_page_binding(
+        message.from_user.id,
+        YADRENO_ADMIN_YAA_TOPIC_ID,
+        page_context,
+        backup_path=backup_path,
+        attachment=attachment,
     )
+    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_YAA_TOPIC_ID)
     status_message = await safe_edit_or_send(
         message,
         "🤖 <b>Yadreno Admin</b>\n\n"
@@ -1729,7 +1686,6 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
                 task_html,
                 uploads,
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
-                runtime_context={"invocation": invocation_context},
                 progress_callback=progress.handle,
             )
         else:
@@ -1738,7 +1694,6 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
                 api_key,
                 task_html,
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
-                runtime_context={"invocation": invocation_context},
                 progress_callback=progress.handle,
             )
     except YadrenoAdminError as e:
@@ -1751,41 +1706,14 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
     finally:
         _cleanup_yadreno_uploads(uploads)
 
-    after = _serialize_for_compare(_get_yaa_editable_state(page_context.page_key))
-    if before != after:
-        await progress.delete_progress_messages()
-        if page_context.page_key == 'key_delivery':
-            from bot.utils.key_sender import rerender_key_delivery_page_context
-
-            if await rerender_key_delivery_page_context(page_context, message.from_user.id):
-                return
-        if page_context.page_key == 'qr_payment':
-            from bot.handlers.user.payments.base import rerender_qr_payment_page_context
-
-            if await rerender_qr_payment_page_context(page_context, message.from_user.id):
-                return
-        if page_context.page_key in {'my_keys', 'my_keys_empty'}:
-            from bot.handlers.user.keys import rerender_my_keys_page_context
-
-            if await rerender_my_keys_page_context(page_context, message.from_user.id):
-                return
-        if page_context.page_key == 'key_details':
-            from bot.handlers.user.keys import rerender_key_details_page_context
-
-            if await rerender_key_details_page_context(page_context, message.from_user.id):
-                return
-        await render_page(
-            page_context.message,
-            page_key=page_context.page_key,
-            visibility=page_context.visibility,
-            context=page_context.context,
-            text_replacements=page_context.text_replacements,
-            prepend_buttons=page_context.prepend_buttons,
-            append_buttons=page_context.append_buttons,
-        )
+    if await _rerender_bound_yaa_page_if_changed(
+        progress,
+        message.from_user.id,
+        binding,
+        before,
+    ):
         return
 
-    await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_YAA_TOPIC_ID)
     await _deliver_final_response(
         progress.final_target,
         final,
@@ -1808,6 +1736,10 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
         return
 
     topic_id = await _current_yadreno_chat_topic_id(state)
+    bound_page, bound_page_before = _capture_bound_yaa_page_state(
+        message.from_user.id,
+        topic_id,
+    )
     if topic_id == YADRENO_ADMIN_BROADCAST_TOPIC_ID and message.photo:
         from bot.services.broadcast_editor import stage_local_broadcast_photo
 
@@ -1909,6 +1841,13 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
                 "В сообщении нет поддерживаемого файла",
                 user_message="В сообщении нет файла, который можно обработать.",
             )
+        if await _rerender_bound_yaa_page_if_changed(
+            progress,
+            message.from_user.id,
+            bound_page,
+            bound_page_before,
+        ):
+            return
         await _deliver_final_response(progress.final_target, final, topic_id)
     except YadrenoAdminError as e:
         await safe_edit_or_send(

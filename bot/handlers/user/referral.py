@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery
 
 from database.requests import (
     is_referral_enabled,
-    get_user_internal_id,
+    get_or_create_user,
 )
 from bot.utils.page_dynamic_data import build_referral_stats_text
 
@@ -47,13 +47,16 @@ async def show_referral_system(callback: CallbackQuery):
     telegram_id = callback.from_user.id
 
     if not is_referral_enabled():
-        await callback.answer("❌ Реферальная система недоступна", show_alert=True)
+        await render_page(callback, page_key='action_unavailable')
+        await callback.answer()
         return
 
-    user_internal_id = get_user_internal_id(telegram_id)
-    if not user_internal_id:
-        await callback.answer("❌ Ошибка пользователя", show_alert=True)
-        return
+    get_or_create_user(
+        telegram_id,
+        callback.from_user.username,
+        first_name=getattr(callback.from_user, 'first_name', None),
+        last_name=getattr(callback.from_user, 'last_name', None),
+    )
 
     await render_page(
         callback,

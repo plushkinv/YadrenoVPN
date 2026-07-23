@@ -21,3 +21,6 @@ class NewKeyConfig(StatesGroup):
 
 class PromoInput(StatesGroup):
     waiting_for_code = State()
+
+class PaymentTopup(StatesGroup):
+    waiting_for_amount = State()

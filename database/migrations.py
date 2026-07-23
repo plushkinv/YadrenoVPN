@@ -11,7 +11,11 @@ New incremental migrations are added to the MIGRATIONS dictionary.
 import sqlite3
 import logging
 import json
+import re
+from decimal import Decimal, InvalidOperation
 from .connection import get_db
+from .db_user_ui_texts import update_user_ui_text_defaults
+from .user_ui_text_catalog import USER_UI_TEXT_DEFINITIONS
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +38,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 73
 
 # Current version of the database schema (incremented when new migrations are added)
-LATEST_VERSION = 75
+LATEST_VERSION = 81
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
     "schema_version": 1,
@@ -53,8 +57,10 @@ DEFAULT_BROADCAST_STYLE_PROFILE = {
 def _my_keys_item_template() -> str:
     """Hidden default of one key format on the “My Keys” page."""
     return (
-        "%ключ_статус%<b>%ключ_имя%</b> - %ключ_трафик% - до %ключ_дата_окончания%\n"
-        "     📍%ключ_сервер% - %ключ_инбаунд% (%ключ_протокол%)"
+        "🔑 <b>%key(field=name)%</b>\n"
+        "%key(field=status)% · %key(field=traffic)%\n"
+        "📅 До %key(field=expires_at)%\n"
+        "📍 %key(field=server)% · %key(field=inbound)% (%key(field=protocol)%)"
     )
 
 
@@ -117,7 +123,7 @@ def _renew_payment_page_text() -> str:
     """Default text on the payment method selection page for renewal."""
     return (
         "💳 <b>Продление ключа</b>\n\n"
-        "🔑 Ключ: <b>%ключ_имя%</b>\n\n"
+        "🔑 Ключ: <b>%key(field=name)%</b>\n\n"
         "Выберите способ оплаты:"
     )
 
@@ -286,6 +292,14 @@ def _home_only_page_buttons() -> str:
     """Default button to return to home."""
     return json.dumps([
         {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
+    ], ensure_ascii=False)
+
+
+def _support_reply_page_buttons() -> str:
+    """Default keyboard attached to an administrator support reply."""
+    return json.dumps([
+        {"id": "btn_support_reply", "label": "💬 Ответить", "color": "secondary", "row": 0, "col": 0, "is_hidden": False, "action_type": "system", "action_value": None},
+        {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": False, "action_type": "internal", "action_value": "cmd_back_main"},
     ], ensure_ascii=False)
 
 
@@ -572,7 +586,6 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('coupon_auto_discount_percent', '10'),
         ('coupon_auto_lifetime_days', '90'),
         ('support_claim_cleanup_mode', 'remove_button'),
-        ('yadreno_admin_customization_enabled', '0'),
         ('yadreno_admin_core_changes_enabled', '0'),
         # The bot operating mode for new installations is Subscription
         # (the bot issues a subscription URL, keys in all inbound with a single subId).
@@ -1219,6 +1232,10 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             'text': _support_status_page_text(),
             'buttons': _home_only_page_buttons(),
         },
+        'support_reply': {
+            'text': '',
+            'buttons': _support_reply_page_buttons(),
+        },
         'promo_enter': {
             'text': _promo_enter_page_text(),
             'buttons': _empty_page_buttons(),
@@ -1351,9 +1368,1255 @@ def migration_75(conn: sqlite3.Connection) -> None:
     logger.info("Migration v75 applied: broadcast editor settings ready")
 
 
+_ATOMIC_KEY_PAGE_PLACEHOLDER_MAP = {
+    '%key_id%': '%key(field=id)%',
+    '%ключ_id%': '%key(field=id)%',
+    '%key_name%': '%key(field=name)%',
+    '%ключ_имя%': '%key(field=name)%',
+    '%key_status%': '%key(field=status)%',
+    '%ключ_статус%': '%key(field=status)%',
+    '%key_traffic%': '%key(field=traffic)%',
+    '%ключ_трафик%': '%key(field=traffic)%',
+    '%key_expires_at%': '%key(field=expires_at)%',
+    '%ключ_дата_окончания%': '%key(field=expires_at)%',
+    '%key_server%': '%key(field=server)%',
+    '%ключ_сервер%': '%key(field=server)%',
+    '%key_inbound%': '%key(field=inbound)%',
+    '%ключ_инбаунд%': '%key(field=inbound)%',
+    '%key_protocol%': '%key(field=protocol)%',
+    '%ключ_протокол%': '%key(field=protocol)%',
+}
+_ATOMIC_KEY_PAGE_PLACEHOLDER_RE = re.compile(r'%[^%\s]+%')
+
+
+def _upgrade_atomic_key_page_placeholders(value: str | None) -> str | None:
+    """Converts removed atomic key page placeholders to the parameterized form."""
+    if value is None:
+        return None
+
+    return _ATOMIC_KEY_PAGE_PLACEHOLDER_RE.sub(
+        lambda match: _ATOMIC_KEY_PAGE_PLACEHOLDER_MAP.get(
+            match.group(0).casefold(),
+            match.group(0),
+        ),
+        value,
+    )
+
+
+def _upgrade_atomic_key_button_placeholders(value: str | None) -> str | None:
+    """Converts placeholders inside button JSON, including Unicode escapes."""
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return _upgrade_atomic_key_page_placeholders(value)
+
+    def upgrade(item):
+        if isinstance(item, str):
+            return _upgrade_atomic_key_page_placeholders(item)
+        if isinstance(item, list):
+            return [upgrade(child) for child in item]
+        if isinstance(item, dict):
+            return {key: upgrade(child) for key, child in item.items()}
+        return item
+
+    upgraded = upgrade(parsed)
+    if upgraded == parsed:
+        return value
+    return json.dumps(upgraded, ensure_ascii=False)
+
+
+def migration_76(conn: sqlite3.Connection) -> None:
+    """Migration v76: parameterized key fields for editable pages."""
+    for column in ('text_default', 'text_custom', 'buttons_default', 'buttons_custom'):
+        rows = conn.execute(
+            f"SELECT page_key, {column} FROM pages WHERE {column} IS NOT NULL"
+        ).fetchall()
+        for page_key, value in rows:
+            if column.startswith('buttons_'):
+                upgraded = _upgrade_atomic_key_button_placeholders(value)
+            else:
+                upgraded = _upgrade_atomic_key_page_placeholders(value)
+            if upgraded != value:
+                conn.execute(
+                    f"UPDATE pages SET {column} = ? WHERE page_key = ?",
+                    (upgraded, page_key),
+                )
+
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'my_keys_item_template'"
+    ).fetchone()
+    if row:
+        upgraded = _upgrade_atomic_key_page_placeholders(row[0])
+        if upgraded != row[0]:
+            conn.execute(
+                "UPDATE settings SET value = ? WHERE key = 'my_keys_item_template'",
+                (upgraded,),
+            )
+
+    logger.info("Migration v76 applied: key page placeholders are parameterized")
+
+
+def _drop_column_if_exists(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+) -> None:
+    """Drops an obsolete column when the local SQLite version supports it."""
+    columns = {
+        str(row[1])
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column in columns:
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+
+def _decimal_setting(value: object, default: Decimal) -> Decimal:
+    """Returns a positive decimal setting value or its safe migration default."""
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _decimal_text(value: Decimal) -> str:
+    """Serializes a Decimal without exponent notation or insignificant zeroes."""
+    normalized = format(value, 'f')
+    if '.' in normalized:
+        normalized = normalized.rstrip('0').rstrip('.')
+    return normalized or '0'
+
+
+def migration_77(conn: sqlite3.Connection) -> None:
+    """Migration v77: persistent payment intents and RUB-only tariff prices."""
+    payment_columns = (
+        "intent_version INTEGER NOT NULL DEFAULT 0",
+        "purpose TEXT NOT NULL DEFAULT 'legacy_key_payment'",
+        "purpose_data_json TEXT NOT NULL DEFAULT '{}'",
+        "nominal_amount_cents INTEGER NOT NULL DEFAULT 0",
+        "payable_amount_cents INTEGER NOT NULL DEFAULT 0",
+        "charge_amount TEXT",
+        "charge_currency TEXT",
+        "rate_snapshot_json TEXT NOT NULL DEFAULT '{}'",
+        "description TEXT",
+        "success_target_json TEXT NOT NULL DEFAULT '{}'",
+        "cancel_target_json TEXT NOT NULL DEFAULT '{}'",
+        "fulfillment_status TEXT NOT NULL DEFAULT 'pending'",
+        "fulfillment_attempts INTEGER NOT NULL DEFAULT 0",
+        "fulfillment_started_at TIMESTAMP",
+        "fulfillment_last_error TEXT",
+        "provider_confirmed_at TIMESTAMP",
+        "fulfilled_at TIMESTAMP",
+        "created_at TIMESTAMP",
+    )
+    for column_def in payment_columns:
+        _add_column(conn, "payments", column_def)
+    conn.execute(
+        "UPDATE payments SET created_at = COALESCE(created_at, paid_at, CURRENT_TIMESTAMP)"
+    )
+
+    provider_order_columns = (
+        "purpose TEXT",
+        "charge_amount TEXT",
+        "charge_currency TEXT",
+    )
+    for column_def in provider_order_columns:
+        _add_column(conn, "payment_provider_orders", column_def)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS payment_effects (
+            order_id TEXT NOT NULL,
+            effect_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'started'
+                CHECK (status IN ('started', 'completed', 'failed')),
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            attempts INTEGER NOT NULL DEFAULT 1,
+            last_error TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP,
+            PRIMARY KEY (order_id, effect_name),
+            FOREIGN KEY (order_id) REFERENCES payments(order_id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_balance_operations_payment_topup
+        ON balance_operations(reference_type, reference_id)
+        WHERE reference_type = 'payment_topup' AND reference_id IS NOT NULL
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_payments_fulfillment "
+        "ON payments(fulfillment_status, provider_confirmed_at)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_codes_payment_coupon "
+        "ON promo_codes(source) WHERE source LIKE 'auto_payment:%'"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_balance_operations_payment_referral "
+        "ON balance_operations(user_id, operation_type, source, reference_type, reference_id) "
+        "WHERE reference_type = 'payment_referral' AND reference_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_key_operations_payment_reward "
+        "ON key_operation_log(user_id, source, reference_type, reference_id) "
+        "WHERE reference_type IN ('payment_referral', 'payment_promo_reward') "
+        "AND reference_id IS NOT NULL"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS payment_referral_effects (
+            order_id TEXT NOT NULL,
+            level INTEGER NOT NULL,
+            referrer_id INTEGER NOT NULL,
+            payer_id INTEGER NOT NULL,
+            reward_cents INTEGER NOT NULL DEFAULT 0,
+            reward_days INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (order_id, level),
+            FOREIGN KEY (order_id) REFERENCES payments(order_id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        UPDATE payments
+        SET purpose = CASE
+                WHEN status = 'pending' AND vpn_key_id IS NOT NULL THEN 'key_renewal'
+                WHEN status = 'pending' THEN 'key_purchase'
+                ELSE 'legacy_key_payment'
+            END,
+            purpose_data_json = CASE
+                WHEN status = 'pending' AND vpn_key_id IS NOT NULL
+                    THEN json_object('key_id', vpn_key_id, 'tariff_id', tariff_id)
+                WHEN status = 'pending'
+                    THEN json_object('tariff_id', tariff_id)
+                ELSE '{}'
+            END,
+            nominal_amount_cents = COALESCE(
+                (SELECT price_rub * 100 FROM tariffs WHERE tariffs.id = payments.tariff_id),
+                0
+            ),
+            payable_amount_cents = COALESCE(final_amount_cents, amount_cents, 0),
+            fulfillment_status = CASE
+                WHEN status = 'paid' THEN 'completed'
+                ELSE 'pending'
+            END,
+            fulfilled_at = CASE WHEN status = 'paid' THEN paid_at ELSE NULL END
+        WHERE intent_version = 0
+        """
+    )
+
+    usd_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'usd_rub_rate'"
+    ).fetchone()
+    usd_cents = _decimal_setting(usd_row[0] if usd_row else None, Decimal('9500'))
+    stablecoin_rate = usd_cents / Decimal('100')
+    star_rate = stablecoin_rate * Decimal('0.013')
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        ('stablecoin_rub_rate', _decimal_text(stablecoin_rate)),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        ('star_rub_rate', _decimal_text(star_rate)),
+    )
+
+    page_defaults = {
+        'payment_method_select': (
+            "💳 <b>Выбор способа оплаты</b>\n\n"
+            "%платеж_назначение%\n"
+            "💰 <b>Сумма:</b> %платеж_сумма%\n"
+            "%платеж_скидка_строка%\n"
+            "Выберите удобный способ оплаты:",
+            '[]',
+        ),
+        'balance_topup_amount': (
+            "💰 <b>Пополнение баланса</b>\n\n"
+            "Введите сумму в рублях, которую хотите зачислить на баланс.\n\n"
+            "Например: <code>500</code>"
+            "%платеж_ошибка%",
+            '[]',
+        ),
+        'balance_topup_result': (
+            "✅ <b>Баланс пополнен</b>\n\n"
+            "На баланс зачислено: <b>%платеж_номинал%</b>\n"
+            "Оплачено: <b>%платеж_сумма%</b>",
+            json.dumps([
+                {
+                    "id": "btn_back_main",
+                    "label": "🈴 На главную",
+                    "color": "secondary",
+                    "row": 0,
+                    "col": 0,
+                    "is_hidden": False,
+                    "action_type": "internal",
+                    "action_value": "cmd_back_main",
+                },
+            ], ensure_ascii=False),
+        ),
+    }
+    for page_key, (text_default, buttons_default) in page_defaults.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO pages
+                (page_key, text_default, buttons_default)
+            VALUES (?, ?, ?)
+            """,
+            (page_key, text_default, buttons_default),
+        )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO page_routes
+            (route_key, page_key, guard_names, hook_names, is_enabled)
+        VALUES ('balance_topup_result', 'balance_topup_result', '["not_banned"]', '[]', 1)
+        """
+    )
+
+    _drop_column_if_exists(conn, 'tariffs', 'price_cents')
+    _drop_column_if_exists(conn, 'tariffs', 'price_stars')
+    logger.info(
+        "Migration v77 applied: persistent payment intents and RUB-only tariffs ready"
+    )
+
+
+def migration_78(conn: sqlite3.Connection) -> None:
+    """Migration v78: editable keyboard for administrator support replies."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO pages
+            (page_key, text_default, buttons_default)
+        VALUES (?, '', ?)
+        """,
+        ('support_reply', _support_reply_page_buttons()),
+    )
+    logger.info("Migration v78 applied: support reply keyboard is editable")
+
+
+def migration_79(conn: sqlite3.Connection) -> None:
+    """Migration v79: configurable RUB/USD base currency and generic money fields."""
+    _add_column(conn, "tariffs", "price_minor INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        "UPDATE tariffs SET price_minor = COALESCE(price_rub, 0) * 100 "
+        "WHERE price_minor = 0"
+    )
+
+    for column_def in (
+        "base_currency TEXT NOT NULL DEFAULT 'RUB'",
+        "nominal_amount_minor INTEGER NOT NULL DEFAULT 0",
+        "payable_amount_minor INTEGER NOT NULL DEFAULT 0",
+        "balance_deduct_minor INTEGER NOT NULL DEFAULT 0",
+    ):
+        _add_column(conn, "payments", column_def)
+    conn.execute(
+        """
+        UPDATE payments
+        SET base_currency = COALESCE(NULLIF(UPPER(base_currency), ''), 'RUB'),
+            nominal_amount_minor = CASE
+                WHEN nominal_amount_minor = 0 THEN COALESCE(nominal_amount_cents, 0)
+                ELSE nominal_amount_minor
+            END,
+            payable_amount_minor = CASE
+                WHEN payable_amount_minor = 0 THEN COALESCE(payable_amount_cents, 0)
+                ELSE payable_amount_minor
+            END,
+            balance_deduct_minor = CASE
+                WHEN balance_deduct_minor = 0 THEN COALESCE(balance_deduct_cents, 0)
+                ELSE balance_deduct_minor
+            END
+        """
+    )
+
+    for column_def in (
+        "currency TEXT NOT NULL DEFAULT 'RUB'",
+        "delta_minor INTEGER NOT NULL DEFAULT 0",
+    ):
+        _add_column(conn, "balance_operations", column_def)
+    conn.execute(
+        "UPDATE balance_operations SET delta_minor = delta_cents "
+        "WHERE delta_minor = 0 AND delta_cents != 0"
+    )
+
+    for column_def in (
+        "reward_currency TEXT NOT NULL DEFAULT 'RUB'",
+        "total_reward_minor INTEGER NOT NULL DEFAULT 0",
+    ):
+        _add_column(conn, "referral_stats", column_def)
+    conn.execute(
+        "UPDATE referral_stats SET total_reward_minor = total_reward_cents "
+        "WHERE total_reward_minor = 0 AND total_reward_cents != 0"
+    )
+
+    for column_def in (
+        "reward_currency TEXT NOT NULL DEFAULT 'RUB'",
+        "reward_minor INTEGER NOT NULL DEFAULT 0",
+    ):
+        _add_column(conn, "payment_referral_effects", column_def)
+    conn.execute(
+        "UPDATE payment_referral_effects SET reward_minor = reward_cents "
+        "WHERE reward_minor = 0 AND reward_cents != 0"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS currency_rates (
+            base_currency TEXT NOT NULL,
+            target_currency TEXT NOT NULL,
+            units_per_base TEXT NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (base_currency, target_currency)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS base_currency_switches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_currency TEXT NOT NULL,
+            to_currency TEXT NOT NULL,
+            to_units_per_from TEXT NOT NULL,
+            admin_telegram_id INTEGER NOT NULL,
+            backup_path TEXT NOT NULL,
+            converted_tariffs INTEGER NOT NULL DEFAULT 0,
+            converted_balances INTEGER NOT NULL DEFAULT 0,
+            converted_referral_rows INTEGER NOT NULL DEFAULT 0,
+            canceled_intents INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('base_currency', 'RUB')"
+    )
+
+    stablecoin_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'stablecoin_rub_rate'"
+    ).fetchone()
+    star_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'star_rub_rate'"
+    ).fetchone()
+    stablecoin_rub = _decimal_setting(
+        stablecoin_row[0] if stablecoin_row else None,
+        Decimal('100'),
+    )
+    star_rub = _decimal_setting(
+        star_row[0] if star_row else None,
+        Decimal('1.3'),
+    )
+    for target, rate in (
+        ('USDT', Decimal('1') / stablecoin_rub),
+        ('XTR', Decimal('1') / star_rub),
+    ):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO currency_rates (
+                base_currency, target_currency, units_per_base
+            ) VALUES ('RUB', ?, ?)
+            """,
+            (target, _decimal_text(rate)),
+        )
+    conn.execute(
+        """
+        UPDATE pages
+        SET text_default = ?
+        WHERE page_key = 'balance_topup_amount'
+        """,
+        (
+            "💰 <b>Пополнение баланса</b>\n\n"
+            "Введите сумму в базовой валюте (%платеж_базовая_валюта%), "
+            "которую хотите зачислить на баланс.\n\n"
+            "Например: <code>500</code>%платеж_ошибка%",
+        ),
+    )
+    logger.info(
+        "Migration v79 applied: generic base money and RUB/USD switching are ready"
+    )
+
+
+def migration_80(conn: sqlite3.Connection) -> None:
+    """Migration v80: expose customization permanently and remove its obsolete flag."""
+    conn.execute(
+        "DELETE FROM settings WHERE key = 'yadreno_admin_customization_enabled'"
+    )
+    logger.info(
+        "Migration v80 applied: obsolete customization visibility setting removed"
+    )
+
+
+def _ui_page_buttons(*buttons: dict) -> str:
+    """Serializes stock page buttons used by migration v81."""
+    return json.dumps(list(buttons), ensure_ascii=False)
+
+
+def _ui_internal_button(
+    button_id: str,
+    label: str,
+    action_value: str,
+    row: int,
+    col: int = 0,
+) -> dict:
+    return {
+        "id": button_id,
+        "label": label,
+        "color": "secondary",
+        "row": row,
+        "col": col,
+        "is_hidden": False,
+        "action_type": "internal",
+        "action_value": action_value,
+    }
+
+
+def _ui_system_button(
+    button_id: str,
+    label: str,
+    row: int,
+    col: int = 0,
+) -> dict:
+    return {
+        "id": button_id,
+        "label": label,
+        "color": "secondary",
+        "row": row,
+        "col": col,
+        "is_hidden": False,
+        "action_type": "system",
+        "action_value": None,
+    }
+
+
+def _ui_collection_button(button_id: str, label: str, row: int = 0) -> dict:
+    return {
+        "id": button_id,
+        "label": label,
+        "color": "secondary",
+        "row": row,
+        "col": 0,
+        "is_hidden": False,
+        "action_type": "system_collection",
+        "action_value": None,
+    }
+
+
+def _ui_home_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 0),
+    )
+
+
+def _ui_cancel_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_internal_button("btn_back_main", "❌ Отмена", "cmd_back_main", 0),
+    )
+
+
+def _ui_key_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_internal_button("btn_my_keys", "🔑 Мои ключи", "cmd_my_keys", 0),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1),
+    )
+
+
+def _ui_payment_status_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_system_button("btn_intent_methods", "🔄 Сменить способ", 0),
+        _ui_system_button("btn_intent_cancel", "⬅️ Назад", 1, 0),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1, 1),
+    )
+
+
+def _ui_promo_buttons(primary_label: str) -> str:
+    return _ui_page_buttons(
+        _ui_system_button("btn_promo_return", primary_label, 0),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1),
+    )
+
+
+def _ui_intent_method_buttons() -> str:
+    provider_buttons = [
+        _ui_system_button("btn_intent_provider_crypto", "🪙 Оплатить USDT", 0),
+        _ui_system_button("btn_intent_provider_stars", "⭐ Оплатить звёздами", 1),
+        _ui_system_button("btn_intent_provider_cards", "💳 TG payments", 2),
+        _ui_system_button("btn_intent_provider_yookassa_qr", "📱 ЮКасса", 3),
+        _ui_system_button("btn_intent_provider_wata", "🌊 WATA", 4),
+        _ui_system_button("btn_intent_provider_platega", "💸 Platega", 5),
+        _ui_system_button("btn_intent_provider_cardlink", "🔗 Cardlink", 6),
+        _ui_system_button("btn_intent_provider_demo", "🏦 Демо оплата", 7),
+        _ui_system_button("btn_intent_balance", "💎 Использовать баланс", 8),
+        _ui_system_button("btn_intent_promo", "🎟 Ввести промокод", 9),
+        _ui_system_button("btn_intent_cancel", "⬅️ Назад", 10, 0),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 10, 1),
+    ]
+    return _ui_page_buttons(*provider_buttons)
+
+
+def _ui_intent_link_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_system_button("btn_intent_open", "💳 Перейти к оплате", 0),
+        _ui_system_button("btn_intent_check", "✅ Я оплатил", 1),
+        _ui_system_button("btn_intent_methods", "🔄 Сменить способ", 2),
+        _ui_system_button("btn_intent_cancel", "⬅️ Назад", 3, 0),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 3, 1),
+    )
+
+
+def _ui_balance_confirmation_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_system_button("btn_intent_balance", "💎 Использовать баланс", 0),
+        _ui_system_button("btn_intent_cancel", "⬅️ Назад", 1, 0),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1, 1),
+    )
+
+
+def _ui_tariff_collection_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_collection_button("btn_tariff_items", "💳 %item_name% — %item_price%"),
+        _ui_system_button("btn_tariff_back", "⬅️ Назад", 1000, 0),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1000, 1),
+    )
+
+
+def _ui_key_collection_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_collection_button("btn_key_items", "%item_status_indicator% %item_name%"),
+        _ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1000),
+    )
+
+
+def _ui_server_collection_buttons(*, with_back: bool) -> str:
+    buttons = [_ui_collection_button("btn_server_items", "🌐 %item_name%")]
+    if with_back:
+        buttons.append(_ui_system_button("btn_key_flow_back", "❌ Отмена", 1000))
+    else:
+        buttons.append(_ui_internal_button("btn_back_main", "🈴 На главную", "cmd_back_main", 1000))
+    return _ui_page_buttons(*buttons)
+
+
+def _ui_protocol_collection_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_collection_button("btn_protocol_items", "🔌 %item_name% (%item_protocol%)"),
+        _ui_system_button("btn_key_flow_back", "⬅️ Назад", 1000),
+    )
+
+
+def _ui_key_flow_confirm_buttons() -> str:
+    return _ui_page_buttons(
+        _ui_system_button("btn_key_flow_confirm", "✅ Да, заменить", 0),
+        _ui_system_button("btn_key_flow_back", "❌ Отмена", 1),
+    )
+
+
+def _user_ui_page_defaults_v81() -> dict[str, tuple[str, str]]:
+    """Concrete stock user screens introduced by the one-language customization layer."""
+    pages: dict[str, tuple[str, str]] = {
+        "action_unavailable": (
+            "⚠️ <b>Действие недоступно</b>\n\nОткройте нужный раздел заново и повторите попытку.",
+            _ui_home_buttons(),
+        ),
+        "screen_unavailable": (
+            "⚠️ <b>Экран недоступен</b>\n\nВернитесь на главную и попробуйте ещё раз.",
+            _ui_home_buttons(),
+        ),
+        "trial_already_used": (
+            "🎁 <b>Пробный период уже использован</b>\n\nПробный доступ предоставляется один раз.",
+            _ui_home_buttons(),
+        ),
+        "balance_insufficient": (
+            "💎 <b>Недостаточно средств</b>\n\nВаш баланс: <b>%payment_balance%</b>\nК оплате: <b>%payment_amount%</b>",
+            _ui_payment_status_buttons(),
+        ),
+        "balance_topup_amount_invalid": (
+            "⚠️ <b>Некорректная сумма</b>\n\nВведите положительное число без дополнительных символов.",
+            _ui_home_buttons(),
+        ),
+        "payment_method_select_renewal": (
+            "💳 <b>Продление ключа</b>\n\n🔑 <b>%key(field=name)%</b>\n💰 К оплате: <b>%payment_amount%</b>\n%payment_discount_line%\nВыберите способ оплаты:",
+            _ui_intent_method_buttons(),
+        ),
+        "payment_method_select_topup": (
+            "💰 <b>Пополнение баланса</b>\n\nНа баланс: <b>%payment_nominal%</b>\nК оплате: <b>%payment_amount%</b>\nВыберите способ оплаты:",
+            _ui_intent_method_buttons(),
+        ),
+        "payment_method_select_surcharge": (
+            "💎 <b>Доплата после списания баланса</b>\n\nС баланса: <b>%payment_balance_deduct%</b>\nОсталось оплатить: <b>%payment_remaining%</b>\nВыберите способ доплаты:",
+            _ui_intent_method_buttons(),
+        ),
+        "payment_link_renewal": (
+            "💳 <b>Оплата продления</b>\n\n🔑 <b>%key(field=name)%</b>\n💰 Сумма: <b>%payment_amount%</b>\n%payment_discount_line%\nПерейдите к оплате по кнопке ниже.\n\n<i>Статус обновится автоматически; если доступна ручная проверка, используйте кнопку ниже.</i>",
+            _ui_intent_link_buttons(),
+        ),
+        "payment_link_topup": (
+            "💰 <b>Пополнение баланса</b>\n\nНа баланс: <b>%payment_nominal%</b>\nК оплате: <b>%payment_amount%</b>\nПерейдите к оплате по кнопке ниже.\n\n<i>Статус обновится автоматически; если доступна ручная проверка, используйте кнопку ниже.</i>",
+            _ui_intent_link_buttons(),
+        ),
+        "payment_creating": (
+            "⏳ <b>Создаём платёж</b>\n\nПодождите немного.",
+            _ui_home_buttons(),
+        ),
+        "payment_pending": (
+            "⏳ <b>Платёж ещё не поступил</b>\n\nЗавершите оплату и повторите проверку немного позже.",
+            _ui_payment_status_buttons(),
+        ),
+        "payment_check_wait": (
+            "⏳ <b>Проверка пока недоступна</b>\n\nПовторите через %payment_wait_seconds% сек.",
+            _ui_payment_status_buttons(),
+        ),
+        "payment_canceled": (
+            "⚪ <b>Платёж отменён</b>\n\nВыберите другой способ оплаты или вернитесь позже.",
+            _ui_payment_status_buttons(),
+        ),
+        "payment_unavailable": (
+            "⚠️ <b>Оплата недоступна</b>\n\nВыберите другой способ оплаты или попробуйте позже.",
+            _ui_payment_status_buttons(),
+        ),
+        "payment_minimum_unavailable": (
+            "⚠️ <b>Сумма слишком мала</b>\n\nМинимальная сумма для выбранного способа: <b>%payment_minimum%</b>.",
+            _ui_payment_status_buttons(),
+        ),
+        "payment_order_unavailable": (
+            "⚠️ <b>Платёж не найден</b>\n\nОткройте оплату заново — прежний счёт мог устареть.",
+            _ui_home_buttons(),
+        ),
+        "payment_failed": (
+            "❌ <b>Не удалось обработать платёж</b>\n\nПопробуйте позже или выберите другой способ оплаты.",
+            _ui_payment_status_buttons(),
+        ),
+        "payment_auto_completed": (
+            "✅ <b>Платёж подтверждён</b>\n\nОперация завершена автоматически.",
+            _ui_key_buttons(),
+        ),
+        "promo_invalid": (
+            "⚠️ <b>Некорректный промокод</b>\n\nПроверьте введённое значение и попробуйте снова.",
+            _ui_promo_buttons("⬅️ Назад"),
+        ),
+        "promo_not_found": (
+            "❌ <b>Промокод не найден</b>\n\nПроверьте код или вернитесь к оплате.",
+            _ui_promo_buttons("⬅️ Назад"),
+        ),
+        "promo_inactive": (
+            "⚪ <b>Промокод неактивен</b>\n\nВернитесь к оплате и выберите другой вариант.",
+            _ui_promo_buttons("💳 К оплате"),
+        ),
+        "promo_expired": (
+            "⌛ <b>Срок промокода истёк</b>\n\nВернитесь к оплате и выберите другой вариант.",
+            _ui_promo_buttons("💳 К оплате"),
+        ),
+        "promo_exhausted": (
+            "⚪ <b>Промокод уже использован</b>\n\nВернитесь к оплате и выберите другой вариант.",
+            _ui_promo_buttons("💳 К оплате"),
+        ),
+        "promo_unavailable": (
+            "⚠️ <b>Промокоды недоступны</b>\n\nВернитесь к оплате и выберите другой вариант.",
+            _ui_promo_buttons("💳 К оплате"),
+        ),
+        "promo_applied": (
+            "✅ <b>Промокод применён</b>\n\nКод: <code>%promo_code%</code>\nСкидка: <b>%promo_discount%%</b>",
+            _ui_promo_buttons("💳 К оплате"),
+        ),
+        "promo_link_saved": (
+            "🎟 <b>Промокод сохранён</b>\n\nКод <code>%promo_code%</code> будет применён при оплате.",
+            _ui_promo_buttons("💳 Перейти к оплате"),
+        ),
+        "support_reply_start": (
+            "💬 <b>Ответ в поддержку</b>\n\nОтправьте текст, фото, видео или GIF одним сообщением.",
+            _ui_cancel_buttons(),
+        ),
+        "support_format_unsupported": (
+            "❌ <b>Формат не поддерживается</b>\n\nОтправьте текст, фото, видео или GIF.",
+            _ui_home_buttons(),
+        ),
+        "support_thread_unavailable": (
+            "❌ <b>Диалог не найден</b>\n\nНачните новое обращение в поддержку.",
+            _ui_home_buttons(),
+        ),
+        "support_failed": (
+            "⚠️ <b>Сообщение не отправлено</b>\n\nПопробуйте позже.",
+            _ui_home_buttons(),
+        ),
+        "support_sent": (
+            "✅ <b>Сообщение отправлено</b>\n\nОтвет придёт сюда, в бот.",
+            _ui_home_buttons(),
+        ),
+        "my_keys_key_deleted": (
+            "✅ <b>Ключ удалён</b>\n\nКлюч <b>%key(field=name)%</b> успешно удалён.",
+            _ui_key_buttons(),
+        ),
+        "key_not_found": (
+            "❌ <b>Ключ не найден</b>\n\nКлюч удалён, устарел или принадлежит другому пользователю.",
+            _ui_key_buttons(),
+        ),
+        "key_progress": (
+            "⏳ <b>Выполняем операцию с ключом</b>\n\nПодождите немного.",
+            _ui_key_buttons(),
+        ),
+        "key_operation_unavailable": (
+            "⚠️ <b>Действие с ключом недоступно</b>\n\nОткройте карточку ключа заново и повторите попытку.",
+            _ui_key_buttons(),
+        ),
+        "key_operation_failed": (
+            "❌ <b>Не удалось выполнить операцию</b>\n\nПопробуйте позже или обратитесь в поддержку.",
+            _ui_key_buttons(),
+        ),
+        "key_rename_invalid": (
+            "⚠️ <b>Некорректное имя</b>\n\nВведите непустое имя длиной не более 30 символов.",
+            _ui_key_buttons(),
+        ),
+        "key_delivery_partial": (
+            "📋 <b>Ваш VPN-ключ</b>\n\n"
+            "%ключ_для_копирования%\n\n"
+            "⚠️ Полную конфигурацию получить не удалось. Попробуйте позже.",
+            _ui_key_buttons(),
+        ),
+        "key_delivery_failed": (
+            "❌ <b>Ошибка выдачи ключа</b>\n\nПопробуйте позже или обратитесь в поддержку.",
+            _ui_key_buttons(),
+        ),
+        "key_renewed": (
+            "✅ <b>Ключ продлён</b>\n\n🔑 <b>%key(field=name)%</b>\nНовый срок: <b>%payment_term%</b>.",
+            _ui_key_buttons(),
+        ),
+        "expiry_notification_actions": (
+            "",
+            _ui_key_buttons(),
+        ),
+    }
+    return pages
+
+
+_UI_TEMPLATE_PLACEHOLDER_RE = re.compile(r"%[^%\s]+%")
+
+
+def _copy_compatible_page_customs_v81(
+    conn: sqlite3.Connection,
+    *,
+    source_page_key: str,
+    target_page_keys: tuple[str, ...],
+    text_placeholders: frozenset[str],
+) -> None:
+    """Copies only source custom values that the split target can still render."""
+    source = conn.execute(
+        """
+        SELECT text_custom, image_custom, media_type_custom, buttons_custom
+        FROM pages
+        WHERE page_key = ?
+        """,
+        (source_page_key,),
+    ).fetchone()
+    if not source:
+        return
+
+    text_custom = source[0]
+    copy_text = False
+    if text_custom is not None:
+        placeholders = {
+            match.group(0).casefold()
+            for match in _UI_TEMPLATE_PLACEHOLDER_RE.finditer(str(text_custom))
+        }
+        copy_text = placeholders <= {item.casefold() for item in text_placeholders}
+
+    for target_page_key in target_page_keys:
+        conn.execute(
+            """
+            UPDATE pages
+            SET text_custom = CASE
+                    WHEN text_custom IS NULL AND ? THEN ?
+                    ELSE text_custom
+                END,
+                image_custom = CASE
+                    WHEN image_custom IS NULL THEN ?
+                    ELSE image_custom
+                END,
+                media_type_custom = CASE
+                    WHEN media_type_custom IS NULL THEN ?
+                    ELSE media_type_custom
+                END,
+                buttons_custom = CASE
+                    WHEN buttons_custom IS NULL THEN ?
+                    ELSE buttons_custom
+                END
+            WHERE page_key = ?
+            """,
+            (
+                1 if copy_text else 0,
+                text_custom,
+                source[1],
+                source[2],
+                source[3],
+                target_page_key,
+            ),
+        )
+
+
+def migration_81(conn: sqlite3.Connection) -> None:
+    """Migration v81: database-backed stock user UI outside the admin interface."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_ui_texts (
+            text_key TEXT PRIMARY KEY,
+            text_default TEXT NOT NULL,
+            text_custom TEXT,
+            text_format TEXT NOT NULL CHECK (text_format IN ('html', 'plain', 'button')),
+            description TEXT NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    update_user_ui_text_defaults(USER_UI_TEXT_DEFINITIONS, conn=conn)
+
+    page_defaults = _user_ui_page_defaults_v81()
+    for page_key, (text_default, buttons_default) in page_defaults.items():
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO pages (page_key, text_default, buttons_default)
+            VALUES (?, ?, ?)
+            """,
+            (page_key, text_default, buttons_default),
+        )
+        conn.execute(
+            """
+            UPDATE pages
+            SET text_default = ?, buttons_default = ?
+            WHERE page_key = ?
+            """,
+            (text_default, buttons_default, page_key),
+        )
+
+    common_payment_placeholders = frozenset({
+        '%telegram_id%',
+        '%bot_username%',
+        '%payment_tariff%',
+        '%платеж_тариф%',
+        '%payment_amount%',
+        '%платеж_сумма%',
+        '%payment_discount_line%',
+        '%платеж_скидка_строка%',
+        '%key(field=name)%',
+    })
+    _copy_compatible_page_customs_v81(
+        conn,
+        source_page_key='payment_method_select',
+        target_page_keys=('payment_method_select_renewal',),
+        text_placeholders=common_payment_placeholders,
+    )
+    _copy_compatible_page_customs_v81(
+        conn,
+        source_page_key='payment_method_select',
+        target_page_keys=('payment_method_select_topup',),
+        text_placeholders=frozenset({
+            '%telegram_id%',
+            '%bot_username%',
+            '%payment_amount%',
+            '%платеж_сумма%',
+            '%payment_nominal%',
+            '%платеж_номинал%',
+            '%payment_discount_line%',
+            '%платеж_скидка_строка%',
+        }),
+    )
+    _copy_compatible_page_customs_v81(
+        conn,
+        source_page_key='payment_method_select',
+        target_page_keys=('payment_method_select_surcharge',),
+        text_placeholders=common_payment_placeholders | frozenset({
+            '%payment_nominal%',
+            '%платеж_номинал%',
+            '%payment_balance%',
+            '%платеж_баланс%',
+            '%payment_balance_deduct%',
+            '%платеж_списание_баланса%',
+            '%payment_remaining%',
+            '%платеж_остаток_к_оплате%',
+        }),
+    )
+    common_link_placeholders = common_payment_placeholders | frozenset({
+        '%payment_provider%',
+        '%платеж_провайдер%',
+        '%payment_term%',
+        '%платеж_срок%',
+        '%payment_link%',
+        '%платеж_ссылка%',
+        '%payment_link_url%',
+        '%платеж_ссылка_url%',
+    })
+    _copy_compatible_page_customs_v81(
+        conn,
+        source_page_key='qr_payment',
+        target_page_keys=('payment_link_renewal',),
+        text_placeholders=common_link_placeholders,
+    )
+    _copy_compatible_page_customs_v81(
+        conn,
+        source_page_key='qr_payment',
+        target_page_keys=('payment_link_topup',),
+        text_placeholders=frozenset({
+            '%telegram_id%',
+            '%bot_username%',
+            '%payment_provider%',
+            '%платеж_провайдер%',
+            '%payment_amount%',
+            '%платеж_сумма%',
+            '%payment_nominal%',
+            '%платеж_номинал%',
+            '%payment_link%',
+            '%платеж_ссылка%',
+            '%payment_link_url%',
+            '%платеж_ссылка_url%',
+            '%payment_discount_line%',
+            '%платеж_скидка_строка%',
+        }),
+    )
+
+    purchase_method_text = (
+        "💳 <b>Выбор способа оплаты</b>\n\n"
+        "%payment_tariff%\n"
+        "💰 К оплате: <b>%payment_amount%</b>\n"
+        "%payment_discount_line%\n"
+        "Выберите способ оплаты:"
+    )
+    conn.execute(
+        """
+        UPDATE pages
+        SET text_default = ?, buttons_default = ?
+        WHERE page_key = 'payment_method_select'
+        """,
+        (purchase_method_text, _ui_intent_method_buttons()),
+    )
+    conn.execute(
+        """
+        UPDATE pages
+        SET text_default = ?, buttons_default = ?
+        WHERE page_key = 'qr_payment'
+        """,
+        (
+            "💳 <b>Оплата</b>\n\n"
+            "%payment_tariff%\n"
+            "💰 Сумма: <b>%payment_amount%</b>\n"
+            "%payment_discount_line%\n"
+            "Перейдите по ссылке или отсканируйте QR-код.\n\n"
+            "<i>Статус обновится автоматически; если доступна ручная проверка, используйте кнопку ниже.</i>",
+            _ui_intent_link_buttons(),
+        ),
+    )
+    existing_page_defaults = {
+        "balance_payment": (
+            "💎 <b>Оплата с баланса</b>\n\n"
+            "Тариф: <b>%payment_tariff%</b>\n"
+            "Стоимость: <b>%payment_amount%</b>\n"
+            "%payment_discount_line%\n"
+            "Ваш баланс: <b>%payment_balance%</b>\n\n"
+            "С баланса будет списано: <b>%payment_balance_deduct%</b>\n"
+            "Останется оплатить: <b>%payment_remaining%</b>"
+        ),
+        "balance_topup_amount": (
+            "💰 <b>Пополнение баланса</b>\n\n"
+            "Введите сумму в базовой валюте (%payment_base_currency%), "
+            "которую хотите зачислить на баланс.\n\n"
+            "Например: <code>500</code>"
+        ),
+        "crypto_payment": (
+            "🪙 <b>Оплата криптовалютой</b>\n\n"
+            "🎫 Тариф: <b>%payment_tariff%</b>\n"
+            "💰 Сумма: <b>%payment_amount%</b>\n"
+            "%payment_discount_line%\n"
+            "Перейдите к оплате по кнопке ниже."
+        ),
+        "demo_payment": (
+            "🏦 <b>Демонстрационная оплата</b>\n\n"
+            "Это демо-режим. Реального списания не происходит.\n\n"
+            "🎫 Тариф: <b>%payment_tariff%</b>\n"
+            "📅 Срок: <b>%payment_term%</b>\n"
+            "💰 Сумма: <b>%payment_amount%</b>"
+        ),
+        "main": (
+            "🔐 <b>Добро пожаловать в VPN-бот!</b>\n\n"
+            "Быстрый, безопасный и анонимный доступ к интернету.\n"
+            "Без логов, без ограничений, без проблем! 🚀\n\n"
+            "📋 <b>Тарифы:</b>\n%tariffs%"
+        ),
+        "custom_profile": (
+            "👤 <b>Личный кабинет</b>\n\n"
+            "Имя: <b>%user_name%</b>\n"
+            "Telegram ID: <code>%telegram_id%</code>\n"
+            "Username: %user_username%\n"
+            "Дата регистрации: %user_registered_at%\n"
+            "Баланс: <b>%user_balance%</b>\n\n"
+            "━━━━━━━━━━━━━━━\n"
+            "🔑 <b>Ключи</b>\n"
+            "Всего: <b>%keys_total%</b>\n"
+            "Активных: <b>%keys_active%</b>\n"
+            "Истёкших: <b>%keys_expired%</b>"
+        ),
+        "key_details": (
+            "🔑 <b>%key(field=name)%</b>\n\n"
+            "<b>Статус:</b> %key(field=status)%\n"
+            "<b>Сервер:</b> %key(field=server)%\n"
+            "<b>Протокол:</b> %key(field=inbound)% (%key(field=protocol)%)\n"
+            "<b>Трафик:</b> %key(field=traffic)%\n"
+            "<b>Действует до:</b> %key(field=expires_at)%\n\n"
+            "📜 <b>История операций:</b>\n%key_history%"
+        ),
+        "key_replace_server_select": (
+            "🔄 <b>Замена ключа</b>\n\n"
+            "Вы можете пересоздать ключ на другом или том же сервере.\n"
+            "Старый ключ будет удалён, но срок действия сохранится.\n\n"
+            "Выберите сервер:"
+        ),
+        "key_replace_inbound_select": (
+            "🖥️ <b>Выбор протокола</b>\n\n"
+            "Сервер: <b>%selected_server%</b>\n\n"
+            "Выберите протокол:"
+        ),
+        "key_replace_confirm": (
+            "⚠️ <b>Подтверждение замены</b>\n\n"
+            "Ключ: <b>%key(field=name)%</b>\n"
+            "Новый сервер: <b>%selected_server%</b>\n\n"
+            "Старый ключ или ссылка перестанет работать. "
+            "Обновите настройки в приложении.\n\n"
+            "Вы уверены?"
+        ),
+        "key_rename_prompt": (
+            "✏️ <b>Переименование ключа</b>\n\n"
+            "Текущее имя: <b>%key(field=name)%</b>\n\n"
+            "Введите новое название для ключа (макс. 30 символов):\n"
+            "<i>(Отправьте любой текст)</i>"
+        ),
+        "new_key_server_select": (
+            "🎉 <b>Оплата прошла успешно!</b>\n\n"
+            "🔑 Выберите сервер для вашего нового ключа."
+        ),
+        "new_key_inbound_select": (
+            "🖥️ <b>Выбор протокола</b>\n\n"
+            "Сервер: <b>%selected_server%</b>\n\n"
+            "Выберите протокол:"
+        ),
+        "referral": (
+            "👥 <b>Реферальная система</b>\n\n"
+            "📎 Ваша реферальная ссылка:\n<code>%referral_link%</code>\n\n"
+            "━━━━━━━━━━━━━━━\n"
+            "📝 <b>Условия:</b>\n"
+            "Приглашённые пользователи регистрируются по вашей ссылке. "
+            "Когда они оплачивают подписку, вы получаете реферальное вознаграждение.\n\n"
+            "━━━━━━━━━━━━━━━\n"
+            "📊 <b>Ваша статистика:</b>\n\n%referral_stats%"
+        ),
+        "support_start": (
+            "💬 <b>Поддержка</b>\n\n"
+            "Отправьте текст, фото, видео или GIF одним сообщением."
+        ),
+        "payment_tariff_select": (
+            "💳 <b>Выбор тарифа</b>\n\n"
+            "Выберите подходящий тариф:"
+        ),
+    }
+    for page_key, text_default in existing_page_defaults.items():
+        conn.execute(
+            "UPDATE pages SET text_default = ? WHERE page_key = ?",
+            (text_default, page_key),
+        )
+    conn.execute(
+        "UPDATE pages SET buttons_default = ? WHERE page_key = 'support_start'",
+        (_ui_cancel_buttons(),),
+    )
+    conn.execute(
+        "UPDATE pages SET buttons_default = ? WHERE page_key = 'crypto_payment'",
+        (_ui_intent_link_buttons(),),
+    )
+    conn.execute(
+        "UPDATE pages SET buttons_default = ? WHERE page_key = 'demo_payment'",
+        (_ui_payment_status_buttons(),),
+    )
+    conn.execute(
+        "UPDATE pages SET buttons_default = ? WHERE page_key = 'balance_payment'",
+        (_ui_balance_confirmation_buttons(),),
+    )
+    conn.execute(
+        "UPDATE pages SET buttons_default = ? WHERE page_key = 'promo_enter'",
+        (_ui_promo_buttons("⬅️ Назад"),),
+    )
+    conn.execute(
+        "UPDATE pages SET buttons_default = ? WHERE page_key = 'balance_topup_amount'",
+        (_ui_cancel_buttons(),),
+    )
+    dynamic_page_buttons = {
+        "my_keys": _ui_key_collection_buttons(),
+        "prepayment": _ui_tariff_collection_buttons(),
+        "payment_tariff_select": _ui_tariff_collection_buttons(),
+        "renew_payment": _ui_tariff_collection_buttons(),
+        "key_replace_server_select": _ui_server_collection_buttons(with_back=True),
+        "key_replace_inbound_select": _ui_protocol_collection_buttons(),
+        "new_key_server_select": _ui_server_collection_buttons(with_back=False),
+        "new_key_inbound_select": _ui_protocol_collection_buttons(),
+        "key_replace_confirm": _ui_key_flow_confirm_buttons(),
+        "key_rename_prompt": _ui_page_buttons(
+            _ui_system_button("btn_key_flow_back", "❌ Отмена", 0),
+        ),
+    }
+    for page_key, buttons_default in dynamic_page_buttons.items():
+        conn.execute(
+            "UPDATE pages SET buttons_default = ? WHERE page_key = ?",
+            (buttons_default, page_key),
+        )
+    conn.execute(
+        """
+        UPDATE pages
+        SET text_default = ?
+        WHERE page_key = 'renew_payment'
+        """,
+        (
+            "💳 <b>Продление ключа</b>\n\n"
+            "🔑 <b>%key(field=name)%</b>\n"
+            "Выберите тариф:",
+        ),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('my_keys_item_template', ?)",
+        (_my_keys_item_template(),),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('notification_text', ?)",
+        (
+            "⚠️ <b>Ваш VPN-ключ %ключ_имя% скоро истекает!</b>\n\n"
+            "Через %ключ_дней_до_окончания% дней закончится срок действия вашего ключа.\n\n"
+            "Продлите подписку, чтобы сохранить доступ к VPN без перерывов!",
+        ),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('traffic_notification_text', ?)",
+        (
+            "⚠️ По ключу <b>%ключ_имя%</b> осталось "
+            "%ключ_трафик_процент_остатка%% трафика "
+            "(%ключ_трафик_использовано% из %ключ_трафик_лимит%)",
+        ),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('referral_new_ref_notification_text', ?)",
+        (_referral_new_ref_notification_text(),),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('referral_purchase_notification_text', ?)",
+        (_referral_purchase_notification_text(),),
+    )
+    logger.info(
+        "Migration v81 applied: cached user UI fragments and concrete stock pages are ready"
+    )
+
+
 MIGRATIONS = {
     74: migration_74,
     75: migration_75,
+    76: migration_76,
+    77: migration_77,
+    78: migration_78,
+    79: migration_79,
+    80: migration_80,
+    81: migration_81,
 }
 
 

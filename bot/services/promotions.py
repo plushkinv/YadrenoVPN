@@ -1,5 +1,13 @@
 import logging
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, Optional
+
+from bot.services.exchange_rate import (
+    get_payment_rate_snapshot,
+    provider_amount_from_base_minor,
+    provider_units_to_base_minor,
+)
+from bot.services.money import format_money_minor, payment_type_currency
 
 from database.requests import (
     apply_promo_for_order,
@@ -8,6 +16,7 @@ from database.requests import (
     create_auto_coupon_for_user,
     get_promo_code_availability,
     get_promo_code_by_id,
+    get_promo_code_by_source,
     get_user_active_promo_code,
     reserve_promo_for_order,
     save_order_pricing_snapshot,
@@ -41,59 +50,40 @@ PAYMENT_MINIMUM_LABELS = {
     "balance": "0 ₽",
 }
 
-PROMO_REASON_TEXT = {
-    "not_found": "Промокод не найден.",
-    "inactive": "Промокод выключен.",
-    "expired": "Срок действия промокода истёк.",
-    "exhausted": "Лимит применений промокода уже исчерпан.",
-}
-
-
 def _amount_unit(payment_type: str) -> str:
-    return "stars" if payment_type == "stars" else "cents"
+    return "stars" if payment_type_currency(payment_type) == 'XTR' else "cents"
 
 
 def _base_amount(tariff: Dict[str, Any], payment_type: str) -> int:
-    if payment_type == "stars":
-        return int(tariff.get("price_stars") or 0)
-    if payment_type == "crypto":
-        return int(tariff.get("price_cents") or 0)
-    if payment_type in RUB_PAYMENT_TYPES or _is_custom_rub_payment_type(payment_type):
-        return int(round(float(tariff.get("price_rub") or 0) * 100))
-    raise ValueError(f"Неизвестный тип оплаты: {payment_type}")
+    if payment_type not in {"stars", "crypto"} | RUB_PAYMENT_TYPES and not _is_custom_payment_type(payment_type):
+        raise ValueError(f"Неизвестный тип оплаты: {payment_type}")
+    if tariff.get('price_minor') is not None:
+        return max(0, int(tariff.get('price_minor') or 0))
+    try:
+        legacy_rubles = Decimal(str(tariff.get('price_rub') or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        legacy_rubles = Decimal('0')
+    return max(0, int((legacy_rubles * Decimal('100')).to_integral_value(rounding=ROUND_HALF_UP)))
 
 
 def format_amount(amount: int, payment_type: str) -> str:
-    if payment_type == "stars":
-        return f"{amount} ⭐"
-    if payment_type == "crypto":
-        value = amount / 100
-        value_str = f"{value:g}".replace(".", ",")
-        return f"${value_str} USDT"
-    value = amount / 100
-    if amount % 100 == 0:
-        return f"{amount // 100} ₽"
-    return f"{value:.2f} ₽".replace(".", ",")
+    return format_money_minor(amount, payment_type_currency(payment_type))
 
 
 def _discount_amount(original_amount: int, discount_percent: int) -> int:
     return max(0, min(original_amount, original_amount * int(discount_percent) // 100))
 
 
-def _unavailable_reason(payment_type: str, original_amount: int, final_amount: int) -> Optional[str]:
+def _unavailable_code(payment_type: str, original_amount: int, final_amount: int) -> Optional[str]:
     if original_amount <= 0:
-        return "Для этого тарифа не задана цена в валюте выбранного способа оплаты."
+        return "price_unset"
     minimum = _payment_minimum(payment_type)
     if final_amount > 0 and final_amount < minimum:
-        minimum_label = _payment_minimum_label(payment_type, minimum)
-        return (
-            f"После скидки сумма получается {format_amount(final_amount, payment_type)}, "
-            f"а минимальная сумма для этого способа оплаты — {minimum_label}."
-        )
+        return "below_minimum"
     return None
 
 
-def _is_custom_rub_payment_type(payment_type: str | None) -> bool:
+def _is_custom_payment_type(payment_type: str | None) -> bool:
     try:
         from bot.utils.payment_provider_registry import is_custom_payment_type
 
@@ -110,12 +100,12 @@ def _payment_minimum(payment_type: str) -> int:
     except Exception:
         provider = None
     if provider is not None:
-        return int(provider.minimum_amount_cents or 0)
+        return int(provider.minimum_amount_minor or 0)
     return PAYMENT_MINIMUMS.get(payment_type, 0)
 
 
 def _payment_minimum_label(payment_type: str, minimum: int) -> str:
-    if _is_custom_rub_payment_type(payment_type):
+    if _is_custom_payment_type(payment_type):
         return format_amount(minimum, payment_type)
     return PAYMENT_MINIMUM_LABELS.get(payment_type, str(minimum))
 
@@ -127,9 +117,19 @@ def build_quote(
     payment_type: str,
     order_id: Optional[str] = None,
     explicit_code: Optional[str] = None,
+    purpose: str = 'key_purchase',
+    nominal_amount_minor: int | None = None,
+    nominal_amount_cents: int | None = None,
+    rate_snapshot: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Returns the price calculation taking into account the active promotional code or coupon."""
-    original_amount = _base_amount(tariff, payment_type)
+    raw_nominal = nominal_amount_minor if nominal_amount_minor is not None else nominal_amount_cents
+    nominal_minor = (
+        _base_amount(tariff, payment_type)
+        if raw_nominal is None
+        else max(0, int(raw_nominal))
+    )
+    snapshot = dict(rate_snapshot or get_payment_rate_snapshot())
     amount_unit = _amount_unit(payment_type)
     promo = None
     promo_error = None
@@ -139,7 +139,7 @@ def build_quote(
         if availability.get("ok"):
             promo = availability.get("promo")
         else:
-            promo_error = PROMO_REASON_TEXT.get(availability.get("reason"), "Промокод недоступен.")
+            promo_error = str(availability.get("reason") or "unavailable")
     else:
         promo = get_user_active_promo_code(user_id, order_id=order_id)
         if promo:
@@ -148,8 +148,19 @@ def build_quote(
                 promo = None
 
     discount_percent = int(promo.get("discount_percent") or 0) if promo else 0
-    discount_amount = _discount_amount(original_amount, discount_percent) if promo else 0
-    final_amount = max(0, original_amount - discount_amount)
+    discount_minor = _discount_amount(nominal_minor, discount_percent) if promo else 0
+    payable_minor = max(0, nominal_minor - discount_minor)
+    original_amount, charge_currency = provider_amount_from_base_minor(
+        nominal_minor,
+        payment_type,
+        snapshot,
+    )
+    final_amount, _ = provider_amount_from_base_minor(
+        payable_minor,
+        payment_type,
+        snapshot,
+    )
+    discount_amount = max(0, original_amount - final_amount)
 
     quote = {
         "ok": promo_error is None,
@@ -161,8 +172,23 @@ def build_quote(
         "discount_percent": discount_percent,
         "discount_amount": discount_amount,
         "final_amount": final_amount,
+        "base_currency": snapshot.get('base_currency', 'RUB'),
+        "nominal_amount_minor": nominal_minor,
+        "payable_amount_minor": payable_minor,
+        "discount_amount_minor": discount_minor,
+        "nominal_amount_cents": nominal_minor,
+        "payable_amount_cents": payable_minor,
+        "discount_rub_cents": discount_minor,
+        "charge_currency": charge_currency,
+        "rate_snapshot": snapshot,
+        "purpose": purpose,
         "is_free": final_amount == 0 and promo is not None,
         "unavailable_reason": promo_error,
+        "unavailable_code": promo_error,
+        "minimum_amount_label": _payment_minimum_label(
+            payment_type,
+            _payment_minimum(payment_type),
+        ),
     }
 
     if promo_error is None:
@@ -176,13 +202,41 @@ def build_quote(
                 "payment_type": payment_type,
                 "order_id": order_id,
                 "explicit_code": explicit_code,
+                "purpose": purpose,
+                "base_currency": snapshot.get('base_currency', 'RUB'),
+                "nominal_amount_minor": nominal_minor,
+                "payable_amount_minor": payable_minor,
+                "nominal_amount_cents": nominal_minor,
+                "payable_amount_cents": payable_minor,
+                "rate_snapshot": dict(snapshot),
             },
         )
 
+        amount_policy_applied = any(
+            'final_amount' in policy or 'discount_amount' in policy
+            for policy in quote.get('pricing_policies') or []
+        )
+        if quote.get('ok') is not False and amount_policy_applied:
+            payable_minor = provider_units_to_base_minor(
+                int(quote.get('final_amount') or 0),
+                payment_type,
+                snapshot,
+            )
+            quote['payable_amount_minor'] = payable_minor
+            quote['payable_amount_cents'] = payable_minor
+            quote['discount_amount_minor'] = max(0, nominal_minor - payable_minor)
+            quote['discount_rub_cents'] = quote['discount_amount_minor']
+
     if quote.get("ok") is False:
+        if promo_error is None:
+            extension_reason = quote.get("unavailable_reason")
+            if extension_reason:
+                quote["extension_unavailable_reason"] = extension_reason
+            quote["unavailable_reason"] = "policy_rejected"
+            quote["unavailable_code"] = "policy_rejected"
         return quote
 
-    unavailable_reason = _unavailable_reason(
+    unavailable_reason = _unavailable_code(
         payment_type,
         int(quote["original_amount"]),
         int(quote["final_amount"]),
@@ -193,6 +247,7 @@ def build_quote(
         and (quote.get("promo") is not None or bool(quote.get("pricing_policies")))
     )
     quote["unavailable_reason"] = unavailable_reason
+    quote["unavailable_code"] = unavailable_reason
     return quote
 
 
@@ -203,6 +258,10 @@ def prepare_order_pricing(
     tariff: Dict[str, Any],
     payment_type: str,
     action: str,
+    purpose: str | None = None,
+    nominal_amount_minor: int | None = None,
+    nominal_amount_cents: int | None = None,
+    rate_snapshot: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Calculates the price, saves the snapshot in payments and reserves a promotional code for the order.
@@ -212,6 +271,10 @@ def prepare_order_pricing(
         tariff=tariff,
         payment_type=payment_type,
         order_id=order_id,
+        purpose=purpose or action,
+        nominal_amount_minor=nominal_amount_minor,
+        nominal_amount_cents=nominal_amount_cents,
+        rate_snapshot=rate_snapshot,
     )
 
     if not quote["ok"]:
@@ -242,10 +305,8 @@ def prepare_order_pricing(
         )
         if not reservation.get("ok"):
             quote["ok"] = False
-            quote["unavailable_reason"] = PROMO_REASON_TEXT.get(
-                reservation.get("reason"),
-                "Промокод недоступен.",
-            )
+            quote["unavailable_reason"] = str(reservation.get("reason") or "unavailable")
+            quote["unavailable_code"] = quote["unavailable_reason"]
             return quote
     else:
         cancel_promo_reservation_for_order(order_id)
@@ -259,18 +320,18 @@ def activate_promo_code_for_user(user_id: int, code: str, *, allow_coupons: bool
     if not availability.get("ok"):
         return {
             "ok": False,
-            "message": PROMO_REASON_TEXT.get(availability.get("reason"), "Промокод недоступен."),
+            "reason": str(availability.get("reason") or "unavailable"),
             "promo": availability.get("promo"),
         }
     promo = availability["promo"]
     if promo.get("type") == "coupon" and not allow_coupons:
         return {
             "ok": False,
-            "message": "Купоны нельзя использовать как промо-ссылки. Введите купон вручную при оплате.",
+            "reason": "coupon_link_disallowed",
             "promo": promo,
         }
     set_user_active_promo_code(user_id, promo["id"])
-    return {"ok": True, "message": "Промокод применён.", "promo": promo}
+    return {"ok": True, "reason": "applied", "promo": promo}
 
 
 def describe_quote_lines(quote: Dict[str, Any]) -> str:
@@ -280,17 +341,31 @@ def describe_quote_lines(quote: Dict[str, Any]) -> str:
     if not promo and not pricing_policies:
         return ""
     from bot.utils.text import escape_html
+    from bot.utils.user_ui_texts import render_ui_text
 
     original = format_amount(quote["original_amount"], quote["payment_type"])
     final = format_amount(quote["final_amount"], quote["payment_type"])
     lines = []
     if promo:
         discount = quote["discount_percent"]
-        lines.append(f"\n🎟 Промокод: <b>{escape_html(str(promo['code']))}</b> (-{discount}%)")
+        lines.append(
+            "\n" + render_ui_text(
+                "payment.quote.promo_line",
+                promo_code=str(promo["code"]),
+                discount=discount,
+            )
+        )
     for policy in pricing_policies:
-        label = policy.get("label") or policy.get("name") or "pricing policy"
-        lines.append(f"\n⚙️ Условие: <b>{escape_html(str(label))}</b>")
-    lines.append(f"\n💵 Цена: <s>{original}</s> → <b>{final}</b>")
+        label = policy.get("label") or policy.get("name")
+        if label:
+            lines.append(f"\n<b>{escape_html(str(label))}</b>")
+    lines.append(
+        "\n" + render_ui_text(
+            "payment.quote.price_line",
+            old_price=original,
+            new_price=final,
+        )
+    )
     return "".join(lines)
 
 
@@ -310,7 +385,7 @@ def _order_final_amount(order: Dict[str, Any]) -> int:
     payment_type = order.get("payment_type")
     if payment_type == "stars":
         return int(order.get("final_amount_stars") if order.get("final_amount_stars") is not None else order.get("amount_stars") or 0)
-    if payment_type in CENTS_PAYMENT_TYPES or _is_custom_rub_payment_type(payment_type):
+    if payment_type in CENTS_PAYMENT_TYPES or _is_custom_payment_type(payment_type):
         return int(order.get("final_amount_cents") if order.get("final_amount_cents") is not None else order.get("amount_cents") or 0)
     return 0
 
@@ -341,11 +416,22 @@ def _issue_auto_coupon_after_payment(order: Dict[str, Any]) -> Optional[Dict[str
         return None
     if _order_final_amount(order) <= 0:
         return None
-    coupon = None
+    order_id = str(order.get("order_id") or "").strip()
+    source = f"auto_payment:{order_id}" if order_id else "auto"
+    coupon = get_promo_code_by_source(
+        source,
+        issued_to_user_id=int(order["user_id"]),
+    )
+    if coupon:
+        return coupon
     try:
-        coupon = create_auto_coupon_for_user(order["user_id"])
+        coupon = create_auto_coupon_for_user(order["user_id"], source=source)
     except Exception as e:
         logger.warning("Не удалось автоматически выдать купон по заказу %s: %s", order.get("order_id"), e)
+        coupon = get_promo_code_by_source(
+            source,
+            issued_to_user_id=int(order["user_id"]),
+        )
 
     return coupon
 
@@ -370,7 +456,7 @@ async def _apply_promo_reward_policies_after_payment(order: Dict[str, Any]) -> l
         return []
 
     applied: list[Dict[str, Any]] = []
-    for reward in rewards:
+    for reward_index, reward in enumerate(rewards):
         if reward.get("type") != "days":
             continue
         reward_days = int(reward.get("reward_days") or 0)
@@ -385,8 +471,8 @@ async def _apply_promo_reward_policies_after_payment(order: Dict[str, Any]) -> l
                 reward_days,
                 source='promo_reward',
                 reason=str(reward.get('label') or reward.get('name') or 'Промо-награда'),
-                reference_type='payment_order',
-                reference_id=str(order.get('order_id') or ''),
+                reference_type='payment_promo_reward',
+                reference_id=f"{str(order.get('order_id') or '')}:{reward_index}",
                 metadata={
                     'reward_name': reward.get('name'),
                     'payment_type': order.get('payment_type'),
@@ -421,17 +507,17 @@ def format_auto_coupon_text(coupon: Optional[Dict[str, Any]]) -> str:
             reward_days = int(reward.get("reward_days") or 0)
             if reward_days <= 0:
                 continue
-            label = reward.get("label") or reward.get("name") or "Промо-награда"
+            label = reward.get("label") or reward.get("name")
+            if not label:
+                continue
             from bot.utils.text import escape_html
+            from bot.utils.user_ui_texts import render_ui_text
 
             parts.append(
-                "\n\n🎁 <b>Промо-награда</b>\n\n"
-                f"{escape_html(str(label))}: <b>{reward_days} дн.</b>"
+                f"\n\n{escape_html(str(label))}: "
+                f"<b>{escape_html(render_ui_text('format.days_short', days=reward_days))}</b>"
             )
         return "".join(parts)
-    return (
-        "\n\n🎫 <b>Купон на следующую покупку</b>\n\n"
-        f"Скидка: <b>{coupon['discount_percent']}%</b>\n"
-        f"Действует до: <b>{coupon['expires_at']}</b>\n\n"
-        f"<pre>{coupon['code']}</pre>"
-    )
+    from bot.utils.user_ui_texts import render_ui_text
+
+    return "\n\n" + render_ui_text("promo.auto_coupon", promo_code=coupon["code"])

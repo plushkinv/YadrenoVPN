@@ -12,25 +12,6 @@ BASE62_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 from .db_tariffs import get_tariff_by_id
 from .db_settings import get_setting, set_setting
 
-DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT = (
-    "👥 <b>Новый реферал</b>\n\n"
-    "По вашей ссылке зарегистрировался пользователь.\n\n"
-    "👤 Имя: <b>%реферал_имя%</b>\n"
-    "🔗 Логин: %реферал_логин%\n"
-    "📊 Уровень: <b>%реферальный_уровень%</b>"
-)
-
-DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT = (
-    "💳 <b>Покупка реферала</b>\n\n"
-    "Пользователь <b>%покупатель_имя%</b> (%покупатель_логин%) оплатил тариф.\n\n"
-    "🎫 Тариф: <b>%платеж_тариф%</b>\n"
-    "💵 Сумма: <b>%платеж_сумма%</b>\n"
-    "⏳ Срок: <b>%платеж_срок%</b>\n"
-    "🎁 Ваш бонус: <b>%реферальное_вознаграждение%</b>\n"
-    "📊 Уровень: <b>%реферальный_уровень%</b>"
-)
-
-
 __all__ = [
     'save_yookassa_payment_id',
     'find_order_by_yookassa_id',
@@ -277,15 +258,29 @@ def get_user_payments_stats(user_id: int) -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as total_payments,
-                COALESCE(SUM(CASE WHEN payment_type = 'crypto' THEN COALESCE(final_amount_cents, amount_cents, 0) ELSE 0 END), 0) as total_amount_cents,
-                COALESCE(SUM(CASE WHEN payment_type = 'stars' THEN COALESCE(final_amount_stars, amount_stars, 0) ELSE 0 END), 0) as total_amount_stars,
-                COALESCE(SUM(CASE WHEN payment_type IN ('cards', 'yookassa_qr', 'wata', 'platega', 'cardlink', 'balance') THEN COALESCE(final_amount_cents, t.price_rub * 100, 0) ELSE 0 END), 0) / 100.0 as total_amount_rub,
+                COALESCE(SUM(CASE WHEN COALESCE(intent_version, 0) != 1 AND payment_type = 'crypto' THEN COALESCE(final_amount_cents, amount_cents, 0) ELSE 0 END), 0) as total_amount_cents,
+                COALESCE(SUM(CASE WHEN COALESCE(intent_version, 0) != 1 AND payment_type = 'stars' THEN COALESCE(final_amount_stars, amount_stars, 0) ELSE 0 END), 0) as total_amount_stars,
+                COALESCE(SUM(CASE WHEN COALESCE(intent_version, 0) != 1 AND payment_type IN ('cards', 'yookassa_qr', 'wata', 'platega', 'cardlink', 'balance') THEN COALESCE(final_amount_cents, t.price_rub * 100, 0) ELSE 0 END), 0) / 100.0 as total_amount_rub,
                 MAX(paid_at) as last_payment_at
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.user_id = ? AND p.status = 'paid'
         """, (user_id,))
         stats = dict(cursor.fetchone())
+        base_rows = conn.execute(
+            """
+            SELECT COALESCE(NULLIF(UPPER(base_currency), ''), 'RUB') AS currency,
+                   COALESCE(SUM(COALESCE(payable_amount_minor, payable_amount_cents, 0)), 0) AS amount_minor
+            FROM payments
+            WHERE user_id = ? AND status = 'paid' AND intent_version = 1
+            GROUP BY COALESCE(NULLIF(UPPER(base_currency), ''), 'RUB')
+            """,
+            (user_id,),
+        ).fetchall()
+        stats['base_totals'] = {
+            str(row['currency']): int(row['amount_minor'] or 0)
+            for row in base_rows
+        }
         
         # Unique rates
         cursor = conn.execute("""
@@ -314,7 +309,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
-                COALESCE(SUM(COALESCE(final_amount_cents, amount_cents, 0)), 0) as total_cents
+                COALESCE(SUM(CASE WHEN COALESCE(intent_version, 0) != 1 THEN COALESCE(final_amount_cents, amount_cents, 0) ELSE 0 END), 0) as total_cents
             FROM payments
             WHERE status = 'paid' 
             AND payment_type = 'crypto'
@@ -326,7 +321,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
-                COALESCE(SUM(COALESCE(final_amount_stars, amount_stars, 0)), 0) as total_stars
+                COALESCE(SUM(CASE WHEN COALESCE(intent_version, 0) != 1 THEN COALESCE(final_amount_stars, amount_stars, 0) ELSE 0 END), 0) as total_stars
             FROM payments
             WHERE status = 'paid' 
             AND payment_type = 'stars'
@@ -338,7 +333,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT 
                 COUNT(*) as count,
-                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
+                COALESCE(SUM(CASE WHEN COALESCE(p.intent_version, 0) != 1 THEN COALESCE(p.final_amount_cents, t.price_rub * 100, 0) ELSE 0 END), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid' 
@@ -351,7 +346,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
-                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
+                COALESCE(SUM(CASE WHEN COALESCE(p.intent_version, 0) != 1 THEN COALESCE(p.final_amount_cents, t.price_rub * 100, 0) ELSE 0 END), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid'
@@ -364,7 +359,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
-                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
+                COALESCE(SUM(CASE WHEN COALESCE(p.intent_version, 0) != 1 THEN COALESCE(p.final_amount_cents, t.price_rub * 100, 0) ELSE 0 END), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid'
@@ -377,7 +372,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
-                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
+                COALESCE(SUM(CASE WHEN COALESCE(p.intent_version, 0) != 1 THEN COALESCE(p.final_amount_cents, t.price_rub * 100, 0) ELSE 0 END), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid'
@@ -390,7 +385,7 @@ def get_daily_payments_stats() -> Dict[str, Any]:
         cursor = conn.execute("""
             SELECT
                 COUNT(*) as count,
-                COALESCE(SUM(COALESCE(p.final_amount_cents, t.price_rub * 100, 0)), 0) / 100.0 as total_rub
+                COALESCE(SUM(CASE WHEN COALESCE(p.intent_version, 0) != 1 THEN COALESCE(p.final_amount_cents, t.price_rub * 100, 0) ELSE 0 END), 0) / 100.0 as total_rub
             FROM payments p
             LEFT JOIN tariffs t ON p.tariff_id = t.id
             WHERE p.status = 'paid'
@@ -414,12 +409,26 @@ def get_daily_payments_stats() -> Dict[str, Any]:
                     (platega_row['total_rub'] if platega_row else 0) + \
                     (cardlink_row['total_rub'] if cardlink_row else 0)
         
+        base_rows = conn.execute(
+            """
+            SELECT COALESCE(NULLIF(UPPER(base_currency), ''), 'RUB') AS currency,
+                   COALESCE(SUM(COALESCE(payable_amount_minor, payable_amount_cents, 0)), 0) AS amount_minor
+            FROM payments
+            WHERE status = 'paid' AND intent_version = 1
+              AND paid_at >= datetime('now', '-1 day')
+            GROUP BY COALESCE(NULLIF(UPPER(base_currency), ''), 'RUB')
+            """
+        ).fetchall()
         return {
             'paid_count': paid_count,
             'paid_cents': total_cents,
             'paid_stars': total_stars,
             'paid_rub': total_rub,
-            'pending_count': 0 
+            'pending_count': 0,
+            'paid_base': {
+                str(row['currency']): int(row['amount_minor'] or 0)
+                for row in base_rows
+            },
         }
 
 def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
@@ -440,6 +449,8 @@ def get_key_payments_history(key_id: int) -> List[Dict[str, Any]]:
             SELECT 
                 p.id, p.paid_at, p.payment_type, p.amount_cents, p.amount_stars,
                 p.final_amount_cents, p.final_amount_stars, p.promo_code,
+                p.intent_version, p.base_currency,
+                p.payable_amount_minor, p.payable_amount_cents,
                 t.name as tariff_name, t.price_rub,
                 'payment' AS history_type
             FROM payments p
@@ -500,13 +511,20 @@ def create_pending_order(
         cursor = conn.execute("""
             INSERT INTO payments 
             (user_id, tariff_id, order_id, payment_type, vpn_key_id, 
-             amount_cents, amount_stars, period_days, status, paid_at)
-            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, 'pending', NULL)
+             amount_cents, amount_stars, period_days, status, paid_at,
+             base_currency, nominal_amount_minor, payable_amount_minor,
+             nominal_amount_cents, payable_amount_cents)
+            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?)
         """, (
             user_id, tariff_id, payment_type, vpn_key_id,
-            tariff['price_cents'] if tariff else 0,
-            tariff['price_stars'] if tariff else 0,
-            tariff['duration_days'] if tariff else None
+            int(tariff['price_minor'] or 0) if tariff else 0,
+            0,
+            tariff['duration_days'] if tariff else None,
+            str(tariff.get('base_currency') or 'RUB') if tariff else 'RUB',
+            int(tariff['price_minor'] or 0) if tariff else 0,
+            int(tariff['price_minor'] or 0) if tariff else 0,
+            int(tariff['price_minor'] or 0) if tariff else 0,
+            int(tariff['price_minor'] or 0) if tariff else 0,
         ))
         payment_id = cursor.lastrowid
         
@@ -624,13 +642,23 @@ def reopen_paid_order(order_id: str) -> bool:
         return False
 
 
-def save_payment_balance_deduction(order_id: str, amount_cents: int) -> bool:
-    """Persists the internal-balance part that must be debited after settlement."""
-    amount = max(0, int(amount_cents or 0))
+def save_payment_balance_deduction(
+    order_id: str,
+    amount_minor: int | None = None,
+    *,
+    amount_cents: int | None = None,
+) -> bool:
+    """Persists the base-money part that must be debited after settlement."""
+    raw_amount = amount_minor if amount_minor is not None else amount_cents
+    amount = max(0, int(raw_amount or 0))
     with get_db() as conn:
         cursor = conn.execute(
-            "UPDATE payments SET balance_deduct_cents = ? WHERE order_id = ?",
-            (amount, str(order_id)),
+            """
+            UPDATE payments
+            SET balance_deduct_cents = ?, balance_deduct_minor = ?
+            WHERE order_id = ?
+            """,
+            (amount, amount, str(order_id)),
         )
         return cursor.rowcount > 0
 
@@ -679,14 +707,24 @@ def update_order_tariff(order_id: str, tariff_id: int, payment_type: Optional[st
             UPDATE payments 
             SET tariff_id = ?, 
                 amount_cents = ?, 
+                nominal_amount_minor = ?,
+                payable_amount_minor = ?,
+                nominal_amount_cents = ?,
+                payable_amount_cents = ?,
+                base_currency = ?,
                 amount_stars = ?, 
                 period_days = ?,
                 payment_type = COALESCE(?, payment_type)
             WHERE order_id = ?
         """, (
             tariff_id, 
-            tariff['price_cents'], 
-            tariff['price_stars'], 
+            int(tariff['price_minor'] or 0),
+            int(tariff['price_minor'] or 0),
+            int(tariff['price_minor'] or 0),
+            int(tariff['price_minor'] or 0),
+            int(tariff['price_minor'] or 0),
+            str(tariff.get('base_currency') or 'RUB'),
+            0,
             tariff['duration_days'], 
             payment_type,
             order_id
@@ -855,6 +893,8 @@ def get_referral_stats(user_id: int) -> List[Dict[str, Any]]:
                 level,
                 COUNT(*) as paying_count,
                 COALESCE(SUM(total_reward_cents), 0) as total_reward_cents,
+                COALESCE(SUM(total_reward_minor), 0) as total_reward_minor,
+                MAX(reward_currency) as reward_currency,
                 COALESCE(SUM(total_reward_days), 0) as total_reward_days
             FROM referral_stats
             WHERE referrer_id = ?
@@ -889,6 +929,8 @@ def get_referral_stats(user_id: int) -> List[Dict[str, Any]]:
                 'level': level,
                 'paying_count': 0,
                 'total_reward_cents': 0,
+                'total_reward_minor': 0,
+                'reward_currency': 'RUB',
                 'total_reward_days': 0
             })
             # Replace 'count' with 'total_count' to show all invitees
@@ -919,13 +961,21 @@ def update_referral_stat(
     """
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO referral_stats (referrer_id, referral_id, level, total_payments_count, total_reward_cents, total_reward_days)
-            VALUES (?, ?, ?, 1, ?, ?)
+            INSERT INTO referral_stats (
+                referrer_id, referral_id, level, total_payments_count,
+                total_reward_cents, total_reward_minor, reward_currency,
+                total_reward_days
+            )
+            VALUES (?, ?, ?, 1, ?, ?, COALESCE(
+                (SELECT value FROM settings WHERE key = 'base_currency'), 'RUB'
+            ), ?)
             ON CONFLICT(referrer_id, referral_id, level) DO UPDATE SET
                 total_payments_count = total_payments_count + 1,
                 total_reward_cents = total_reward_cents + excluded.total_reward_cents,
+                total_reward_minor = total_reward_minor + excluded.total_reward_minor,
+                reward_currency = excluded.reward_currency,
                 total_reward_days = total_reward_days + excluded.total_reward_days
-        """, (referrer_id, referral_id, level, reward_cents, reward_days))
+        """, (referrer_id, referral_id, level, reward_cents, reward_cents, reward_days))
         return True
 
 def is_referral_enabled() -> bool:
@@ -980,17 +1030,17 @@ def is_referral_purchase_notifications_enabled() -> bool:
 
 def get_referral_new_ref_notification_text() -> str:
     """The text of the hidden notification about a new referral."""
-    return get_setting(
-        'referral_new_ref_notification_text',
-        DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT,
-    ) or DEFAULT_REFERRAL_NEW_REF_NOTIFICATION_TEXT
+    value = get_setting('referral_new_ref_notification_text')
+    if not value:
+        raise RuntimeError("Required setting 'referral_new_ref_notification_text' is empty")
+    return value
 
 def get_referral_purchase_notification_text() -> str:
     """The text of the hidden referral purchase notification."""
-    return get_setting(
-        'referral_purchase_notification_text',
-        DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT,
-    ) or DEFAULT_REFERRAL_PURCHASE_NOTIFICATION_TEXT
+    value = get_setting('referral_purchase_notification_text')
+    if not value:
+        raise RuntimeError("Required setting 'referral_purchase_notification_text' is empty")
+    return value
 
 def get_referral_notification_settings() -> Dict[str, Any]:
     """Current state of hidden referral notifications for read-only output."""
