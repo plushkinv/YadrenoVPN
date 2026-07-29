@@ -85,17 +85,26 @@ def _owner_user_stub(telegram_id: int | None, username: str | None):
     return SimpleNamespace(id=telegram_id, username=username)
 
 
-async def _render_key_flow_page(target, page_key: str, *, force_new: bool = False):
+async def _render_key_flow_page(
+    target,
+    page_key: str,
+    *,
+    force_new: bool = False,
+    order_id: str | None = None,
+):
     """Render a concrete database-backed page for a key configuration state."""
     from bot.utils.page_renderer import render_page
 
     render_target = target if isinstance(target, (Message, CallbackQuery)) else _target_message(target)
+    context = {
+        'telegram_id': getattr(_target_user(target), 'id', None),
+    }
+    if order_id:
+        context['order_id'] = order_id
     return await render_page(
         render_target,
         page_key=page_key,
-        context={
-            'telegram_id': getattr(_target_user(target), 'id', None),
-        },
+        context=context,
         force_new=force_new or not _is_callback_target(target),
     )
 
@@ -105,7 +114,15 @@ async def _answer_callback_if_needed(target, *args, **kwargs) -> None:
         await target.answer(*args, **kwargs)
 
 
-async def _continue_new_key_config(target, state: FSMContext, server: dict, *, force_new: bool = False):
+async def _continue_new_key_config(
+    target,
+    state: FSMContext,
+    server: dict,
+    *,
+    force_new: bool = False,
+    order_id: str | None = None,
+    owner_telegram_id: int | None = None,
+):
     """Continues key configuration after manual or automatic server selection."""
     from bot.services.vpn_api import (
         VPNAPIError,
@@ -119,6 +136,13 @@ async def _continue_new_key_config(target, state: FSMContext, server: dict, *, f
 
     server_id = server['id']
     await state.update_data(new_key_server_id=server_id)
+    if not order_id or not owner_telegram_id:
+        state_data = await state.get_data()
+        order_id = order_id or state_data.get('new_key_order_id')
+        owner_telegram_id = (
+            owner_telegram_id
+            or state_data.get('new_key_owner_telegram_id')
+        )
 
     # Subscription mode: selecting inbound is not needed - we create a key in all inbounds at once.
     if is_subscription_mode():
@@ -133,7 +157,12 @@ async def _continue_new_key_config(target, state: FSMContext, server: dict, *, f
         )
         inbounds = [descriptor.as_inbound() for descriptor in descriptors]
         if not inbounds:
-            await _render_key_flow_page(target, 'key_operation_unavailable', force_new=force_new)
+            await _render_key_flow_page(
+                target,
+                'key_operation_unavailable',
+                force_new=force_new,
+                order_id=order_id,
+            )
             return
         if len(inbounds) == 1:
             await process_new_key_final(target, state, server_id, inbounds[0]['id'])
@@ -143,7 +172,8 @@ async def _continue_new_key_config(target, state: FSMContext, server: dict, *, f
             target,
             page_key='new_key_inbound_select',
             context={
-                'telegram_id': _target_user(target).id,
+                'telegram_id': owner_telegram_id or _target_user(target).id,
+                'order_id': order_id,
                 'protocol_button_items': build_protocol_button_items(
                     inbounds,
                     callback_prefix='new_key_inbound',
@@ -156,7 +186,12 @@ async def _continue_new_key_config(target, state: FSMContext, server: dict, *, f
         await _answer_callback_if_needed(target)
     except VPNAPIError as e:
         logger.warning('Failed to load inbounds from server %s: %s', server_id, e)
-        await _render_key_flow_page(target, 'key_operation_failed', force_new=force_new)
+        await _render_key_flow_page(
+            target,
+            'key_operation_failed',
+            force_new=force_new,
+            order_id=order_id,
+        )
 
 
 async def start_new_key_config(
@@ -190,7 +225,15 @@ async def start_new_key_config(
         servers = get_active_servers()
     if not servers:
         logger.error(f'Нет активных серверов для создания ключа (Order: {order_id})')
-        await render_page(message, page_key='new_key_no_servers', force_new=True)
+        await render_page(
+            message,
+            page_key='new_key_no_servers',
+            context={
+                'telegram_id': owner_telegram_id,
+                'order_id': order_id,
+            },
+            force_new=True,
+        )
         return
     await state.set_state(NewKeyConfig.waiting_for_server)
     await state.update_data(
@@ -204,13 +247,21 @@ async def start_new_key_config(
             f"Автовыбор единственного сервера {servers[0]['id']} "
             f"для нового ключа (Order: {order_id})"
         )
-        await _continue_new_key_config(message, state, servers[0], force_new=True)
+        await _continue_new_key_config(
+            message,
+            state,
+            servers[0],
+            force_new=True,
+            order_id=order_id,
+            owner_telegram_id=owner_telegram_id,
+        )
         return
     await render_page(
         message,
         page_key='new_key_server_select',
         context={
             'telegram_id': owner_telegram_id,
+            'order_id': order_id,
             'server_button_items': build_server_button_items(
                 servers,
                 callback_prefix='new_key_server',
@@ -227,7 +278,12 @@ async def process_new_key_server_selection(callback: CallbackQuery, state: FSMCo
     server = get_server_by_id(server_id)
     if not server:
         logger.warning('New-key server callback references missing server %s', server_id)
-        await _render_key_flow_page(callback, 'screen_unavailable')
+        data = await state.get_data()
+        await _render_key_flow_page(
+            callback,
+            'screen_unavailable',
+            order_id=data.get('new_key_order_id'),
+        )
         await callback.answer()
         return
     await _continue_new_key_config(callback, state, server)
@@ -263,7 +319,11 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
     order = find_order_by_order_id(order_id)
     if not order:
         logger.warning('New subscription configuration references missing order %s', order_id)
-        await _render_key_flow_page(target, 'payment_order_unavailable')
+        await _render_key_flow_page(
+            target,
+            'payment_order_unavailable',
+            order_id=order_id,
+        )
         await state.clear()
         return
     owner_telegram_id, owner_username = _resolve_new_key_owner(
@@ -273,7 +333,11 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
     )
     if not owner_telegram_id:
         logger.error('Unable to resolve key owner for order %s', order_id)
-        await _render_key_flow_page(target, 'key_operation_failed')
+        await _render_key_flow_page(
+            target,
+            'key_operation_failed',
+            order_id=order_id,
+        )
         await state.clear()
         return
     await state.update_data(
@@ -307,7 +371,11 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
                 },
             )
 
-    progress_message = await _render_key_flow_page(target, 'key_progress')
+    progress_message = await _render_key_flow_page(
+        target,
+        'key_progress',
+        order_id=order_id,
+    )
 
     try:
         telegram_id = owner_telegram_id
@@ -406,10 +474,15 @@ async def process_new_key_subscription_final(target, state: FSMContext, server_i
             ),
             new_key,
             is_new=True,
+            order_id=order_id,
         )
     except Exception as e:
         logger.error(f'Ошибка настройки subscription-ключа (id={key_id}): {e}')
-        await _render_key_flow_page(target, 'key_operation_failed')
+        await _render_key_flow_page(
+            target,
+            'key_operation_failed',
+            order_id=order_id,
+        )
 
 @router.callback_query(F.data.startswith('new_key_inbound:'))
 async def process_new_key_inbound_selection(callback: CallbackQuery, state: FSMContext):
@@ -437,7 +510,11 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
     order = find_order_by_order_id(order_id)
     if not order:
         logger.warning('New key configuration references missing order %s', order_id)
-        await _render_key_flow_page(target, 'payment_order_unavailable')
+        await _render_key_flow_page(
+            target,
+            'payment_order_unavailable',
+            order_id=order_id,
+        )
         await state.clear()
         return
     owner_telegram_id, owner_username = _resolve_new_key_owner(
@@ -447,7 +524,11 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
     )
     if not owner_telegram_id:
         logger.error('Unable to resolve key owner for order %s', order_id)
-        await _render_key_flow_page(target, 'key_operation_failed')
+        await _render_key_flow_page(
+            target,
+            'key_operation_failed',
+            order_id=order_id,
+        )
         await state.clear()
         return
     await state.update_data(
@@ -481,7 +562,11 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
                     'source': 'key_config_fallback',
                 },
             )
-    progress_message = await _render_key_flow_page(target, 'key_progress')
+    progress_message = await _render_key_flow_page(
+        target,
+        'key_progress',
+        order_id=order_id,
+    )
     try:
         telegram_id = owner_telegram_id
         username = owner_username
@@ -535,10 +620,15 @@ async def process_new_key_final(target, state: FSMContext, server_id: int, inbou
             ),
             new_key,
             is_new=True,
+            order_id=order_id,
         )
     except Exception as e:
         logger.error(f'Ошибка настройки ключа (id={key_id}): {e}')
-        await _render_key_flow_page(target, 'key_operation_failed')
+        await _render_key_flow_page(
+            target,
+            'key_operation_failed',
+            order_id=order_id,
+        )
 
 @router.callback_query(F.data == 'back_to_server_select')
 async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
@@ -561,6 +651,7 @@ async def back_to_server_select(callback: CallbackQuery, state: FSMContext):
         page_key='new_key_server_select',
         context={
             'telegram_id': callback.from_user.id,
+            'order_id': order_id,
             'server_button_items': build_server_button_items(
                 servers,
                 callback_prefix='new_key_server',

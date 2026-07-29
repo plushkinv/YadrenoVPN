@@ -383,6 +383,7 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
             'key_renewed',
             context={
                 'telegram_id': user_id,
+                'order_id': order.get('order_id'),
                 'key_id': key_id,
                 'payment_term_text': render_ui_text('format.days_short', days=period),
                 **build_key_page_context(key),

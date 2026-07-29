@@ -22,6 +22,7 @@ from bot.keyboards.admin import (
     yadreno_admin_cancel_key_kb,
     yadreno_admin_chat_kb,
     yadreno_admin_no_key_kb,
+    yadreno_admin_request_error_kb,
 )
 from bot.services.page_context import get_page_context
 from bot.services.yadreno_admin_page_binding import (
@@ -108,6 +109,16 @@ class _YadrenoAlbumBuffer:
 
 _yadreno_album_buffers: dict[tuple[int, int, str], _YadrenoAlbumBuffer] = {}
 _yadreno_album_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
+
+
+def _yadreno_request_error_keyboard(admin_id: int, topic_id: int):
+    """Return controls matching the persisted state after a failed turn."""
+    return yadreno_admin_request_error_kb(
+        topic_id,
+        active_request=(
+            get_active_request_id(admin_id, topic_id=topic_id) is not None
+        ),
+    )
 
 
 def _missing_key_text() -> str:
@@ -628,7 +639,10 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
                 await safe_edit_or_send(
                     progress.final_target,
                     format_yadreno_admin_error(e),
-                    reply_markup=yadreno_admin_agent_kb(topic_id),
+                    reply_markup=_yadreno_request_error_keyboard(
+                        callback.from_user.id,
+                        topic_id,
+                    ),
                 )
                 return
             if final is not None:
@@ -670,7 +684,10 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
             await safe_edit_or_send(
                 progress.final_target,
                 format_yadreno_admin_error(e),
-                reply_markup=yadreno_admin_agent_kb(topic_id),
+                reply_markup=_yadreno_request_error_keyboard(
+                    callback.from_user.id,
+                    topic_id,
+                ),
             )
             return
         if final is not None:
@@ -870,7 +887,10 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
         await safe_edit_or_send(
             progress.final_target,
             format_yadreno_admin_error(e),
-            reply_markup=yadreno_admin_agent_kb(topic_id),
+            reply_markup=_yadreno_request_error_keyboard(
+                message.from_user.id,
+                topic_id,
+            ),
         )
 
 
@@ -1433,7 +1453,10 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
         await safe_edit_or_send(
             progress.final_target,
             format_yadreno_admin_error(e),
-            reply_markup=yadreno_admin_agent_kb(buffer.topic_id),
+            reply_markup=_yadreno_request_error_keyboard(
+                buffer.user_id,
+                buffer.topic_id,
+            ),
         )
     finally:
         _cleanup_yadreno_uploads(uploads)
@@ -1716,7 +1739,10 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
         await safe_edit_or_send(
             progress.final_target,
             format_yadreno_admin_error(e),
-            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_YAA_TOPIC_ID),
+            reply_markup=_yadreno_request_error_keyboard(
+                message.from_user.id,
+                YADRENO_ADMIN_YAA_TOPIC_ID,
+            ),
         )
         return
     finally:
@@ -1869,7 +1895,10 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
         await safe_edit_or_send(
             progress.final_target,
             format_yadreno_admin_error(e),
-            reply_markup=yadreno_admin_agent_kb(topic_id),
+            reply_markup=_yadreno_request_error_keyboard(
+                message.from_user.id,
+                topic_id,
+            ),
         )
     finally:
         _cleanup_yadreno_uploads(uploads)

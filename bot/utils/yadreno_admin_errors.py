@@ -9,7 +9,11 @@ from bot.utils.text import escape_html
 def _is_api_key_error(error: YadrenoAdminError) -> bool:
     """Return True when the hub rejected the configured API key."""
     technical_message = str(error).casefold()
-    return error.status_code == 401 or "invalid api_key" in technical_message
+    return (
+        error.kind == "authentication"
+        or error.status_code in {401, 403}
+        or "invalid api_key" in technical_message
+    )
 
 
 def yadreno_admin_error_alert(error: YadrenoAdminError) -> str:
@@ -27,10 +31,12 @@ def yadreno_admin_error_alert(error: YadrenoAdminError) -> str:
 def format_yadreno_admin_error(
     error: YadrenoAdminError,
     *,
-    title: str = "Не удалось подключиться к Yadreno Admin",
+    title: str | None = None,
 ) -> str:
     """Build a safe, actionable Telegram HTML error without hub internals."""
     if _is_api_key_error(error):
+        default_title = "Ключ Yadreno Admin не принят"
+        icon = "❌"
         bot_link = build_telegram_link("YadrenoAdmin_Bot")
         body = (
             "Текущий ключ доступа больше не подходит.\n\n"
@@ -39,11 +45,15 @@ def format_yadreno_admin_error(
             "в настройках Yadreno Admin."
         )
     elif error.user_message:
+        default_title = "Запрос не выполнен"
+        icon = "⚠️"
         body = escape_html(error.user_message)
     else:
+        default_title = "Не удалось подключиться к Yadreno Admin"
+        icon = "❌"
         body = (
             "Сервис временно не отвечает. Проверьте подключение к интернету "
             "и попробуйте ещё раз чуть позже."
         )
 
-    return f"❌ <b>{escape_html(title)}</b>\n\n{body}"
+    return f"{icon} <b>{escape_html(title or default_title)}</b>\n\n{body}"

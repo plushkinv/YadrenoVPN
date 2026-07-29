@@ -46,11 +46,13 @@ from bot.keyboards.admin import (
     admin_logs_menu_kb,
     yadreno_admin_agent_kb,
     yadreno_admin_no_key_kb,
+    yadreno_admin_request_error_kb,
 )
 from bot.services.yadreno_admin import (
     YADRENO_ADMIN_CHAT_TOPIC_ID,
     YadrenoAdminError,
     YadrenoAdminUpload,
+    get_active_request_id,
     run_dialog_with_uploads,
 )
 from bot.services.panel_sync_coordinator import regular_panel_operation
@@ -1336,8 +1338,9 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
             "Переменные:\n"
             "• <code>%ключ_для_копирования%</code> — ссылка или ключ в моноширинном виде для копирования\n"
             "• <code>%ключ_ссылка%</code> — чистая ссылка без code/pre, кликабельная для HTTP/HTTPS подписки\n"
-            "• <code>%ключ_ссылка_url%</code> — URL-кодированная ссылка для URL-кнопок\n\n"
-            "Можно использовать один тег или оба сразу."
+            "• <code>%ключ_ссылка_url%</code> — URL-кодированная ссылка для URL-кнопок\n"
+            "• <code>%payment_coupon%</code> — купон за текущую оплату; вне платёжной выдачи остаётся пустым\n\n"
+            "Можно использовать любое сочетание переменных."
         ),
     }
     
@@ -1848,7 +1851,16 @@ async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
         await safe_edit_or_send(
             progress.final_target,
             format_yadreno_admin_error(e),
-            reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
+            reply_markup=yadreno_admin_request_error_kb(
+                YADRENO_ADMIN_CHAT_TOPIC_ID,
+                active_request=(
+                    get_active_request_id(
+                        callback.from_user.id,
+                        topic_id=YADRENO_ADMIN_CHAT_TOPIC_ID,
+                    )
+                    is not None
+                ),
+            ),
         )
 
 

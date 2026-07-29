@@ -101,6 +101,7 @@ __all__ = [
     'yadreno_admin_no_key_kb',
     'yadreno_admin_chat_kb',
     'yadreno_admin_agent_kb',
+    'yadreno_admin_request_error_kb',
     'yadreno_admin_cancel_key_kb',
     'promocodes_list_kb',
     'promocode_detail_kb',

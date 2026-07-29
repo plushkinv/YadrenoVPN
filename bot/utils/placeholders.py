@@ -69,6 +69,7 @@ _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
     'payment_topup_hint': ('%платеж_доплата_подсказка%',),
     'payment_base_currency': ('%платеж_базовая_валюта%',),
     'payment_error': ('%платеж_ошибка%',),
+    'payment_coupon': (),
     'payment_wait_seconds': (),
     'payment_minimum': (),
     'promo_code': (),
@@ -434,6 +435,8 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'payment_base_currency'), mode)
     if name == 'payment_error':
         return _format_value(_context_value(context, 'payment_error_html'), mode, html_ready=True)
+    if name == 'payment_coupon':
+        return _format_value(_context_value(context, 'payment_coupon_html'), mode, html_ready=True)
     if name == 'payment_wait_seconds':
         return _format_value(_context_value(context, 'payment_wait_seconds'), mode)
     if name == 'payment_minimum':

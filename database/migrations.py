@@ -43,7 +43,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 73
 
 # Current version of the database schema (incremented when new migrations are added)
-LATEST_VERSION = 88
+LATEST_VERSION = 89
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
     "schema_version": 1,
@@ -57,6 +57,32 @@ DEFAULT_BROADCAST_STYLE_PROFILE = {
     "use_lists": True,
     "custom_instructions": "",
 }
+
+
+PAYMENT_COUPON_PLACEHOLDER = '%payment_coupon%'
+PAYMENT_COUPON_PAGE_KEYS = (
+    'new_key_server_select',
+    'new_key_inbound_select',
+    'new_key_no_servers',
+    'key_progress',
+    'key_operation_unavailable',
+    'key_operation_failed',
+    'key_delivery',
+    'key_delivery_partial',
+    'key_delivery_failed',
+    'key_renewed',
+    'balance_topup_result',
+    'payment_auto_completed',
+)
+
+
+def _with_payment_coupon_placeholder(text: str) -> str:
+    """Appends the canonical payment-coupon slot once."""
+    normalized = str(text or '')
+    folded = normalized.casefold()
+    if PAYMENT_COUPON_PLACEHOLDER.casefold() in folded:
+        return normalized
+    return f"{normalized.rstrip()}\n\n{PAYMENT_COUPON_PLACEHOLDER}"
 
 
 def _my_keys_item_template() -> str:
@@ -468,7 +494,7 @@ def _key_rename_prompt_page_text() -> str:
 
 def _new_key_server_select_page_text() -> str:
     """Server selection default after payment."""
-    return (
+    return _with_payment_coupon_placeholder(
         "🎉 <b>Оплата прошла успешно!</b>\n\n"
         "%экран_данные%"
     )
@@ -476,7 +502,7 @@ def _new_key_server_select_page_text() -> str:
 
 def _new_key_inbound_select_page_text() -> str:
     """Protocol selection default after payment."""
-    return (
+    return _with_payment_coupon_placeholder(
         "🖥️ <b>Выбор протокола</b>\n\n"
         "%экран_данные%\n\n"
         "Выберите протокол:"
@@ -485,7 +511,7 @@ def _new_key_inbound_select_page_text() -> str:
 
 def _new_key_no_servers_page_text() -> str:
     """The page defaults to no servers after payment."""
-    return (
+    return _with_payment_coupon_placeholder(
         "🎉 <b>Оплата прошла успешно!</b>\n\n"
         "⚠️ К сожалению, сейчас нет доступных серверов.\n"
         "Пожалуйста, свяжитесь с поддержкой."
@@ -1211,7 +1237,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             ], ensure_ascii=False),
         },
         'key_delivery': {
-            'text': (
+            'text': _with_payment_coupon_placeholder(
                 "✅ <b>Ваш VPN-ключ!</b>\n\n"
                 "%ключ_для_копирования%\n"
                 "☝️ Нажмите, чтобы скопировать.\n\n"
@@ -1684,9 +1710,11 @@ def migration_77(conn: sqlite3.Connection) -> None:
             '[]',
         ),
         'balance_topup_result': (
-            "✅ <b>Баланс пополнен</b>\n\n"
-            "На баланс зачислено: <b>%платеж_номинал%</b>\n"
-            "Оплачено: <b>%платеж_сумма%</b>",
+            _with_payment_coupon_placeholder(
+                "✅ <b>Баланс пополнен</b>\n\n"
+                "На баланс зачислено: <b>%платеж_номинал%</b>\n"
+                "Оплачено: <b>%платеж_сумма%</b>"
+            ),
             json.dumps([
                 {
                     "id": "btn_back_main",
@@ -2169,7 +2197,10 @@ def _user_ui_page_defaults_v81() -> dict[str, tuple[str, str]]:
             _ui_payment_status_buttons(),
         ),
         "payment_auto_completed": (
-            "✅ <b>Платёж подтверждён</b>\n\nОперация завершена автоматически.",
+            _with_payment_coupon_placeholder(
+                "✅ <b>Платёж подтверждён</b>\n\n"
+                "Операция завершена автоматически."
+            ),
             _ui_key_buttons(),
         ),
         "promo_invalid": (
@@ -2233,15 +2264,24 @@ def _user_ui_page_defaults_v81() -> dict[str, tuple[str, str]]:
             _ui_key_buttons(),
         ),
         "key_progress": (
-            "⏳ <b>Выполняем операцию с ключом</b>\n\nПодождите немного.",
+            _with_payment_coupon_placeholder(
+                "⏳ <b>Выполняем операцию с ключом</b>\n\n"
+                "Подождите немного."
+            ),
             _ui_key_buttons(),
         ),
         "key_operation_unavailable": (
-            "⚠️ <b>Действие с ключом недоступно</b>\n\nОткройте карточку ключа заново и повторите попытку.",
+            _with_payment_coupon_placeholder(
+                "⚠️ <b>Действие с ключом недоступно</b>\n\n"
+                "Откройте карточку ключа заново и повторите попытку."
+            ),
             _ui_key_buttons(),
         ),
         "key_operation_failed": (
-            "❌ <b>Не удалось выполнить операцию</b>\n\nПопробуйте позже или обратитесь в поддержку.",
+            _with_payment_coupon_placeholder(
+                "❌ <b>Не удалось выполнить операцию</b>\n\n"
+                "Попробуйте позже или обратитесь в поддержку."
+            ),
             _ui_key_buttons(),
         ),
         "key_rename_invalid": (
@@ -2249,17 +2289,26 @@ def _user_ui_page_defaults_v81() -> dict[str, tuple[str, str]]:
             _ui_key_buttons(),
         ),
         "key_delivery_partial": (
-            "📋 <b>Ваш VPN-ключ</b>\n\n"
-            "%ключ_для_копирования%\n\n"
-            "⚠️ Полную конфигурацию получить не удалось. Попробуйте позже.",
+            _with_payment_coupon_placeholder(
+                "📋 <b>Ваш VPN-ключ</b>\n\n"
+                "%ключ_для_копирования%\n\n"
+                "⚠️ Полную конфигурацию получить не удалось. Попробуйте позже."
+            ),
             _ui_key_buttons(),
         ),
         "key_delivery_failed": (
-            "❌ <b>Ошибка выдачи ключа</b>\n\nПопробуйте позже или обратитесь в поддержку.",
+            _with_payment_coupon_placeholder(
+                "❌ <b>Ошибка выдачи ключа</b>\n\n"
+                "Попробуйте позже или обратитесь в поддержку."
+            ),
             _ui_key_buttons(),
         ),
         "key_renewed": (
-            "✅ <b>Ключ продлён</b>\n\n🔑 <b>%key(field=name)%</b>\nНовый срок: <b>%payment_term%</b>.",
+            _with_payment_coupon_placeholder(
+                "✅ <b>Ключ продлён</b>\n\n"
+                "🔑 <b>%key(field=name)%</b>\n"
+                "Новый срок: <b>%payment_term%</b>."
+            ),
             _ui_key_buttons(),
         ),
         "expiry_notification_actions": (
@@ -3508,6 +3557,49 @@ def migration_88(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_89(conn: sqlite3.Connection) -> None:
+    """Migration v89: expose payment coupons through editable page placeholders."""
+    migrated_custom_pages = 0
+    for page_key in PAYMENT_COUPON_PAGE_KEYS:
+        row = conn.execute(
+            """
+            SELECT text_default, text_custom
+            FROM pages
+            WHERE page_key = ?
+            """,
+            (page_key,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"Required payment-coupon page is missing: {page_key}"
+            )
+
+        text_default = _with_payment_coupon_placeholder(row[0] or '')
+        text_custom = row[1]
+        migrated_text_custom = text_custom
+        if isinstance(text_custom, str) and text_custom:
+            migrated_text_custom = _with_payment_coupon_placeholder(text_custom)
+            if migrated_text_custom != text_custom:
+                migrated_custom_pages += 1
+
+        conn.execute(
+            """
+            UPDATE pages
+            SET text_default = ?,
+                text_custom = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE page_key = ?
+            """,
+            (text_default, migrated_text_custom, page_key),
+        )
+
+    logger.info(
+        "Migration v89 applied: payment coupon placeholder added "
+        "(custom_pages_migrated=%s)",
+        migrated_custom_pages,
+    )
+
+
 MIGRATIONS = {
     74: migration_74,
     75: migration_75,
@@ -3524,6 +3616,7 @@ MIGRATIONS = {
     86: migration_86,
     87: migration_87,
     88: migration_88,
+    89: migration_89,
 }
 
 

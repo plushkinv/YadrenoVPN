@@ -17,7 +17,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Literal, Optional
 
 import aiohttp
 
@@ -249,6 +249,7 @@ _CUSTOMIZATION_KEY_TEXTS = frozenset({
     'key.history.operation',
     'key.history.payment',
     'key.history.promo_suffix',
+    'promo.auto_coupon',
 })
 _CUSTOMIZATION_PAYMENT_TEXTS = frozenset({
     'payment.invoice.purchase_description',
@@ -282,8 +283,11 @@ def _dependent_user_ui_text_keys(page_key: str | None) -> frozenset[str] | None:
     if page_key in {
         'my_keys', 'my_keys_empty', 'key_details', 'key_delivery',
         'key_delivery_partial', 'key_renewed', 'new_key_server_select',
-        'new_key_inbound_select', 'key_replace_server_select',
-        'key_replace_inbound_select', 'key_replace_confirm', 'key_rename_prompt',
+        'new_key_inbound_select', 'new_key_no_servers', 'key_progress',
+        'key_operation_unavailable', 'key_operation_failed',
+        'key_delivery_failed', 'key_replace_server_select',
+        'key_replace_inbound_select', 'key_replace_confirm',
+        'key_rename_prompt',
     }:
         return _CUSTOMIZATION_KEY_TEXTS
     if page_key == 'referral':
@@ -456,7 +460,7 @@ def _hub_headers(api_key: str) -> dict[str, str]:
 
 
 class YadrenoAdminError(RuntimeError):
-    """Error communicating with the Yadreno Admin hub."""
+    """Classified failure of a Yadreno Admin request."""
 
     def __init__(
         self,
@@ -464,10 +468,25 @@ class YadrenoAdminError(RuntimeError):
         *,
         status_code: int | None = None,
         user_message: str | None = None,
+        kind: Literal[
+            "transport",
+            "authentication",
+            "hub_rejection",
+            "protocol",
+            "local",
+        ] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.user_message = user_message
+        if kind is None:
+            if status_code in {401, 403}:
+                kind = "authentication"
+            elif user_message is not None:
+                kind = "local"
+            else:
+                kind = "transport"
+        self.kind = kind
 
 
 class DangerousShellCommandError(ValueError):
@@ -880,6 +899,20 @@ async def _get_server_ip(session: aiohttp.ClientSession) -> str:
     return detected_ip
 
 
+def _is_retryable_hub_error(error: Exception) -> bool:
+    """Return whether repeating the same HTTP operation may recover."""
+    if not isinstance(error, YadrenoAdminError):
+        return True
+    if error.kind in {"authentication", "hub_rejection", "protocol", "local"}:
+        return False
+    status_code = error.status_code
+    return (
+        status_code is None
+        or status_code in {408, 429}
+        or status_code >= 500
+    )
+
+
 async def _request_json(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -910,15 +943,28 @@ async def _request_json(
                 if allow_no_content and response.status == 204:
                     return response.status, None
                 if response.status >= 400:
-                    body = await response.text()
+                    await response.text()
                     raise YadrenoAdminError(
-                        f"Хаб вернул HTTP {response.status}: {body[:500]}",
+                        f"Hub returned HTTP {response.status}",
                         status_code=response.status,
                     )
-                data = await response.json()
+                try:
+                    data = await response.json()
+                except json.JSONDecodeError as exc:
+                    raise YadrenoAdminError(
+                        "Hub returned invalid JSON",
+                        kind="protocol",
+                    ) from exc
+                if not isinstance(data, dict):
+                    raise YadrenoAdminError(
+                        "Hub returned a non-object JSON response",
+                        kind="protocol",
+                    )
                 return response.status, data
         except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
             last_error = e
+            if not _is_retryable_hub_error(e):
+                raise
             if attempt >= max_attempts:
                 break
             delay = delays[min(attempt - 1, len(delays) - 1)]
@@ -932,13 +978,10 @@ async def _request_json(
             )
             await asyncio.sleep(delay)
 
+    if isinstance(last_error, YadrenoAdminError):
+        raise last_error
     raise YadrenoAdminError(
-        f"Не удалось связаться с хабом Yadreno Admin: {last_error}",
-        status_code=(
-            last_error.status_code
-            if isinstance(last_error, YadrenoAdminError)
-            else None
-        ),
+        f"Could not reach the Yadreno Admin hub: {last_error}",
     ) from last_error
 
 
@@ -991,6 +1034,8 @@ async def _ensure_broadcast_hub_support(
             "/api/v1/satellite/capabilities",
         )
     except YadrenoAdminError as error:
+        if error.kind == "authentication":
+            raise
         raise _incompatible_broadcast_hub(
             f"capability discovery failed ({error.status_code or 'network'})"
         ) from error
@@ -1027,6 +1072,8 @@ async def _negotiate_runtime_context_support(
             "/api/v1/satellite/capabilities",
         )
     except YadrenoAdminError as error:
+        if error.kind == "authentication":
+            raise
         if skill_id == YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID:
             raise _incompatible_customization_hub(
                 f"capability discovery failed ({error.status_code or 'network'})"
@@ -1072,6 +1119,44 @@ def _validate_specialized_hub_response(data: dict[str, Any], skill_id: str) -> N
         raise _incompatible_specialized_hub(skill_id, "response skill_id mismatch")
 
 
+def _raise_for_hub_rejection(data: dict[str, Any], operation: str) -> None:
+    """Expose a well-formed business rejection using the hub-owned text."""
+    status = data.get("status")
+    if status == "accepted":
+        return
+    if not isinstance(status, str) or not status:
+        raise YadrenoAdminError(
+            f"Hub returned an invalid {operation} status",
+            kind="protocol",
+        )
+    response_text = data.get("response_text")
+    if not isinstance(response_text, str) or not response_text.strip():
+        raise YadrenoAdminError(
+            f"Hub rejected {operation} without response_text (status={status})",
+            kind="protocol",
+        )
+    raise YadrenoAdminError(
+        f"Hub rejected {operation} (status={status})",
+        user_message=response_text.strip(),
+        kind="hub_rejection",
+    )
+
+
+def _accepted_request_id(data: dict[str, Any], operation: str) -> int:
+    """Validate the polling identifier of an accepted protocol response."""
+    request_id = data.get("request_id")
+    if (
+        isinstance(request_id, bool)
+        or not isinstance(request_id, int)
+        or request_id <= 0
+    ):
+        raise YadrenoAdminError(
+            f"Hub accepted {operation} without a valid request_id",
+            kind="protocol",
+        )
+    return request_id
+
+
 async def _request_multipart(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -1109,14 +1194,28 @@ async def _request_multipart(
                 data=form,
             ) as response:
                 if response.status >= 400:
-                    body = await response.text()
+                    await response.text()
                     raise YadrenoAdminError(
-                        f"Хаб вернул HTTP {response.status}: {body[:500]}",
+                        f"Hub returned HTTP {response.status}",
                         status_code=response.status,
                     )
-                return response.status, await response.json()
+                try:
+                    data = await response.json()
+                except json.JSONDecodeError as exc:
+                    raise YadrenoAdminError(
+                        "Hub returned invalid JSON",
+                        kind="protocol",
+                    ) from exc
+                if not isinstance(data, dict):
+                    raise YadrenoAdminError(
+                        "Hub returned a non-object JSON response",
+                        kind="protocol",
+                    )
+                return response.status, data
         except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
             last_error = e
+            if not _is_retryable_hub_error(e):
+                raise
             if attempt >= max_attempts:
                 break
             delay = delays[min(attempt - 1, len(delays) - 1)]
@@ -1135,13 +1234,10 @@ async def _request_multipart(
                 except Exception:
                     pass
 
+    if isinstance(last_error, YadrenoAdminError):
+        raise last_error
     raise YadrenoAdminError(
-        f"Не удалось загрузить файл в Yadreno Admin: {last_error}",
-        status_code=(
-            last_error.status_code
-            if isinstance(last_error, YadrenoAdminError)
-            else None
-        ),
+        f"Could not upload a file to the Yadreno Admin hub: {last_error}",
     ) from last_error
 
 
@@ -1794,12 +1890,9 @@ async def run_dialog(
                 raise YadrenoAdminError("Хаб вернул пустой ответ на /process")
 
             _validate_specialized_hub_response(process_data, effective_skill_id)
-            status = process_data.get("status")
-            if status != "accepted":
-                response_text = process_data.get("response_text") or f"Запрос отклонён: {status}"
-                raise YadrenoAdminError(response_text)
+            _raise_for_hub_rejection(process_data, "process request")
 
-            request_id = int(process_data["request_id"])
+            request_id = _accepted_request_id(process_data, "process request")
             return await _poll_until_final(
                 session,
                 api_key,
@@ -1917,12 +2010,9 @@ async def run_dialog_with_uploads(
                 raise YadrenoAdminError("Хаб вернул пустой ответ на upload")
 
             _validate_specialized_hub_response(upload_data, effective_skill_id)
-            status = upload_data.get("status")
-            if status != "accepted":
-                response_text = upload_data.get("response_text") or f"Загрузка отклонена: {status}"
-                raise YadrenoAdminError(response_text)
+            _raise_for_hub_rejection(upload_data, "upload request")
 
-            request_id = int(upload_data["request_id"])
+            request_id = _accepted_request_id(upload_data, "upload request")
             return await _poll_until_final(
                 session,
                 api_key,

@@ -165,6 +165,48 @@ def build_support_context_values(*, thread_id: int | None = None) -> dict[str, s
     return {"support_thread_id": thread_id} if thread_id else {}
 
 
+def build_payment_coupon_context_values(
+    order_id: str | None,
+    telegram_id: int | None,
+) -> dict[str, str]:
+    """Returns the stable coupon fragment issued by one completed payment."""
+    normalized_order_id = order_id.strip() if isinstance(order_id, str) else ''
+    viewer_telegram_id = int(telegram_id or 0)
+    if not normalized_order_id or not viewer_telegram_id:
+        return {}
+
+    try:
+        from database.requests import (
+            find_order_by_order_id,
+            get_promo_code_by_source,
+            get_user_by_id,
+        )
+
+        order = find_order_by_order_id(normalized_order_id)
+        user_id = int((order or {}).get('user_id') or 0)
+        if not user_id:
+            return {'payment_coupon_html': ''}
+        owner = get_user_by_id(user_id)
+        if int((owner or {}).get('telegram_id') or 0) != viewer_telegram_id:
+            return {'payment_coupon_html': ''}
+        coupon = get_promo_code_by_source(
+            f'auto_payment:{normalized_order_id}',
+            issued_to_user_id=user_id,
+        )
+        from bot.services.promotions import format_auto_coupon_fragment
+
+        return {
+            'payment_coupon_html': format_auto_coupon_fragment(coupon),
+        }
+    except Exception as error:
+        logger.warning(
+            "Failed to build automatic coupon context for order %s: %s",
+            normalized_order_id,
+            error,
+        )
+        return {'payment_coupon_html': ''}
+
+
 def _format_username(username: Any) -> str:
     if not username:
         return ''

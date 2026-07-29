@@ -25,6 +25,7 @@ KEY_DELIVERY_CONTEXT_RAW = 'key_delivery_raw_value'
 KEY_DELIVERY_CONTEXT_KIND = 'key_delivery_kind'
 KEY_DELIVERY_CONTEXT_IS_NEW = 'key_delivery_is_new'
 KEY_DELIVERY_CONTEXT_ATTACH_MARKUP = 'key_delivery_attach_markup'
+KEY_DELIVERY_CONTEXT_ORDER_ID = 'order_id'
 
 
 def format_key_copy_value(raw_value: str) -> str:
@@ -94,6 +95,18 @@ def _add_key_fields(
     return result
 
 
+def _add_payment_order(
+    context: Mapping[str, object],
+    order_id: str | None,
+) -> dict[str, object]:
+    """Adds a validated payment identifier to a key-delivery render context."""
+    result = dict(context)
+    normalized = order_id.strip() if isinstance(order_id, str) else ''
+    if normalized:
+        result[KEY_DELIVERY_CONTEXT_ORDER_ID] = normalized
+    return result
+
+
 def _get_target_message(messageable) -> Optional[Message]:
     """Returns the message to be edited via safe_edit_or_send."""
     if isinstance(messageable, Message):
@@ -159,6 +172,7 @@ def _get_key_delivery_markup(
     viewer_id: Optional[int] = None,
     bot_username: str = '',
     key_fields: Optional[Mapping[str, object]] = None,
+    order_id: str | None = None,
 ) -> Optional[InlineKeyboardMarkup]:
     """Takes the page keyboard from the database if it is available, otherwise uses fallback."""
     try:
@@ -173,6 +187,7 @@ def _get_key_delivery_markup(
         if bot_username:
             render_context['bot_username'] = bot_username
         render_context = _add_key_fields(render_context, key_fields)
+        render_context = _add_payment_order(render_context, order_id)
 
         markup = build_page_keyboard(
             KEY_DELIVERY_PAGE,
@@ -191,6 +206,7 @@ def _get_json_document_markup(
     viewer_id: Optional[int] = None,
     bot_username: str = '',
     key_fields: Optional[Mapping[str, object]] = None,
+    order_id: str | None = None,
 ) -> Optional[InlineKeyboardMarkup]:
     """Returns page-backed buttons for issuing a key for a JSON file."""
     return _get_key_delivery_markup(
@@ -199,6 +215,7 @@ def _get_json_document_markup(
         viewer_id=viewer_id,
         bot_username=bot_username,
         key_fields=key_fields,
+        order_id=order_id,
     )
 
 
@@ -209,6 +226,7 @@ def _build_key_delivery_caption(
     viewer_id: Optional[int] = None,
     bot_username: str = '',
     key_fields: Optional[Mapping[str, object]] = None,
+    order_id: str | None = None,
 ) -> str:
     """Collects caption for issuing a key/subscription taking into account the Telegram limit."""
     from bot.utils.page_renderer import render_page_text
@@ -219,6 +237,7 @@ def _build_key_delivery_caption(
     if bot_username:
         context['bot_username'] = bot_username
     context = _add_key_fields(context, key_fields)
+    context = _add_payment_order(context, order_id)
     caption = render_page_text(
         KEY_DELIVERY_PAGE,
         context=context,
@@ -248,6 +267,7 @@ async def _render_key_delivery_photo(
     viewer_id: Optional[int] = None,
     bot_username: str = '',
     key_fields: Optional[Mapping[str, object]] = None,
+    order_id: str | None = None,
 ) -> Message:
     """Sends or edits a QR photo of the key issuance page."""
     from bot.utils.text import safe_edit_or_send
@@ -259,6 +279,7 @@ async def _render_key_delivery_photo(
         viewer_id=viewer_id,
         bot_username=bot_username,
         key_fields=key_fields,
+        order_id=order_id,
     )
     filename = "subscription_qr.png" if kind == 'subscription' else "qrcode.png"
     photo = BufferedInputFile(generate_qr_code(raw_value), filename=filename)
@@ -280,6 +301,7 @@ def _remember_key_delivery_context(
     attach_markup: bool,
     bot_username: str = '',
     key_fields: Optional[Mapping[str, object]] = None,
+    order_id: str | None = None,
 ) -> None:
     """Remembers the key issuing page for the /yaa context command."""
     if not viewer_id:
@@ -303,6 +325,7 @@ def _remember_key_delivery_context(
         if bot_username:
             render_context['bot_username'] = bot_username
         render_context = _add_key_fields(render_context, key_fields)
+        render_context = _add_payment_order(render_context, order_id)
 
         remember_page_context(
             viewer_id,
@@ -324,6 +347,7 @@ async def render_key_delivery_page(
     attach_markup: bool = True,
     viewer_id: Optional[int] = None,
     key_fields: Optional[Mapping[str, object]] = None,
+    order_id: str | None = None,
 ) -> Message:
     """Renders a special page for issuing a key with a QR and remembers it for /yaa."""
     target_message = _get_target_message(messageable)
@@ -339,6 +363,7 @@ async def render_key_delivery_page(
             viewer_id=resolved_viewer_id,
             bot_username=bot_username,
             key_fields=key_fields,
+            order_id=order_id,
         )
         if attach_markup else None
     )
@@ -351,6 +376,7 @@ async def render_key_delivery_page(
         viewer_id=resolved_viewer_id,
         bot_username=bot_username,
         key_fields=key_fields,
+        order_id=order_id,
     )
     _remember_key_delivery_context(
         viewer_id=resolved_viewer_id,
@@ -361,6 +387,7 @@ async def render_key_delivery_page(
         attach_markup=attach_markup,
         bot_username=bot_username,
         key_fields=key_fields,
+        order_id=order_id,
     )
     return rendered_message
 
@@ -380,6 +407,7 @@ async def rerender_key_delivery_page_context(page_context, viewer_id: int) -> bo
         attach_markup=bool(context.get(KEY_DELIVERY_CONTEXT_ATTACH_MARKUP, True)),
         viewer_id=viewer_id,
         key_fields=context.get(KEY_FIELDS_CONTEXT_KEY),
+        order_id=context.get(KEY_DELIVERY_CONTEXT_ORDER_ID),
     )
     return True
 
@@ -388,7 +416,9 @@ async def send_key_with_qr(
     messageable,
     key_data: dict,
     key_manage_markup: InlineKeyboardMarkup = None,
-    is_new: bool = False
+    is_new: bool = False,
+    *,
+    order_id: str | None = None,
 ):
     """
     Sends the user a key with a QR code and a configuration file.
@@ -403,6 +433,7 @@ async def send_key_with_qr(
         key_data: Key data from the database (must contain server_id, panel_email, client_uuid)
         key_manage_markup: Key management keyboard
         is_new: Whether the key is newly created
+        order_id: Payment order that made this delivery available, if any
     """
     from bot.services.vpn_api import is_subscription_mode, get_subscription_url_for_key
     from bot.utils.key_pages import build_key_page_context
@@ -411,12 +442,12 @@ async def send_key_with_qr(
         # We check the availability of the necessary data
         if not key_data:
             logger.warning('Key delivery requested without key data')
-            await _send_error(messageable)
+            await _send_error(messageable, order_id=order_id)
             return
 
         if not key_data.get('server_id') or not key_data.get('panel_email'):
             logger.warning('Key %s has incomplete delivery data', key_data.get('id'))
-            await _send_error(messageable)
+            await _send_error(messageable, order_id=order_id)
             return
 
         # === Subscription mode: issue subscription URL + QR of this link ===
@@ -424,7 +455,7 @@ async def send_key_with_qr(
             sub_url = await get_subscription_url_for_key(key_data)
             if not sub_url:
                 logger.error('Subscription URL is unavailable for key %s', key_data.get('id'))
-                await _send_error(messageable)
+                await _send_error(messageable, order_id=order_id)
                 return
 
             from bot.utils.user_ui_texts import render_ui_text
@@ -442,6 +473,7 @@ async def send_key_with_qr(
                 kind='subscription',
                 attach_markup=True,
                 key_fields=key_fields,
+                order_id=order_id,
             )
             return
 
@@ -459,7 +491,12 @@ async def send_key_with_qr(
             # If it was not possible to obtain the config (for example, the server is unavailable),
             # We show the UUID through the page-backed status without generating an incorrect QR.
             uuid = key_data.get('client_uuid', 'Unknown')
-            await _send_partial_key_config_fallback(messageable, uuid, key_manage_markup)
+            await _send_partial_key_config_fallback(
+                messageable,
+                uuid,
+                key_manage_markup,
+                order_id=order_id,
+            )
             return
 
         # 2. Generate data
@@ -478,6 +515,7 @@ async def send_key_with_qr(
             viewer_id=viewer_id,
             bot_username=bot_username,
             key_fields=key_fields,
+            order_id=order_id,
         )
             
         json_config = generate_json(config)
@@ -491,6 +529,7 @@ async def send_key_with_qr(
             kind='key',
             attach_markup=False,
             key_fields=key_fields,
+            order_id=order_id,
         )
 
         # 4. Send JSON config file
@@ -509,28 +548,39 @@ async def send_key_with_qr(
 
     except Exception as e:
         logger.error(f"Error sending key: {e}")
-        await _send_error(messageable)
+        await _send_error(messageable, order_id=order_id)
 
 
-async def _send_error(messageable):
+async def _send_error(messageable, *, order_id: str | None = None):
     """Render the database-backed key delivery failure page."""
     from bot.utils.page_renderer import render_page
 
     target_message = _get_target_message(messageable)
     if target_message is None:
         raise ValueError("Key delivery target has no message")
-    await render_page(target_message, page_key='key_delivery_failed')
+    render_kwargs = {'page_key': 'key_delivery_failed'}
+    if order_id:
+        render_kwargs['context'] = {'order_id': order_id}
+    await render_page(target_message, **render_kwargs)
 
 
-async def _send_partial_key_config_fallback(messageable, raw_value: str, markup):
+async def _send_partial_key_config_fallback(
+    messageable,
+    raw_value: str,
+    markup,
+    *,
+    order_id: str | None = None,
+):
     """Shows the UUID of the key if the full config is temporarily unavailable."""
     from bot.utils.page_renderer import render_page
 
     target_message = _get_target_message(messageable)
     if target_message is None:
         raise ValueError("Key delivery target has no message")
-    await render_page(
-        target_message,
-        page_key='key_delivery_partial',
-        text_replacements=build_key_delivery_replacements(raw_value),
-    )
+    render_kwargs = {
+        'page_key': 'key_delivery_partial',
+        'text_replacements': build_key_delivery_replacements(raw_value),
+    }
+    if order_id:
+        render_kwargs['context'] = {'order_id': order_id}
+    await render_page(target_message, **render_kwargs)

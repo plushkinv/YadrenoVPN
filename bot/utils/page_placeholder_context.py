@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from bot.utils.page_dynamic_data import (
     build_my_keys_context_values,
+    build_payment_coupon_context_values,
     build_referral_context_values,
     build_support_context_values,
     build_tariff_text,
@@ -30,6 +31,7 @@ SUPPORT_PLACEHOLDERS = {
     '%поддержка_заголовок%',
     '%поддержка_инструкция%',
 }
+PAYMENT_COUPON_PLACEHOLDERS = {'%payment_coupon%'}
 MY_KEYS_PLACEHOLDERS = {'%keys_list%', '%список_ключей%'}
 USER_PROFILE_PLACEHOLDERS = {
     '%profile%',
@@ -253,6 +255,16 @@ def enrich_page_placeholder_context_sync(
     if (SUPPORT_PLACEHOLDERS & placeholders) - explicit:
         thread_id = _context_int(enriched, 'support_thread_id') or _context_int(enriched, 'thread_id')
         for key, value in build_support_context_values(thread_id=thread_id).items():
+            enriched.setdefault(key, value)
+
+    if (
+        (PAYMENT_COUPON_PLACEHOLDERS & placeholders) - explicit
+        and 'payment_coupon_html' not in enriched
+    ):
+        for key, value in build_payment_coupon_context_values(
+            _context_text(enriched, 'order_id'),
+            _context_int(enriched, 'telegram_id'),
+        ).items():
             enriched.setdefault(key, value)
 
     if (USER_PROFILE_PLACEHOLDERS & placeholders) - explicit:

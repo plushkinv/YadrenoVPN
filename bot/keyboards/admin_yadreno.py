@@ -81,6 +81,17 @@ def yadreno_admin_agent_kb(
     return builder.as_markup()
 
 
+def yadreno_admin_request_error_kb(
+    topic_id: int = 0,
+    *,
+    active_request: bool,
+) -> InlineKeyboardMarkup:
+    """Show task controls only when the rejected turn has an active request."""
+    if active_request:
+        return yadreno_admin_agent_kb(topic_id)
+    return yadreno_admin_chat_kb(topic_id)
+
+
 def yadreno_admin_cancel_key_kb() -> InlineKeyboardMarkup:
     """Keyboard to cancel input api_key."""
     builder = InlineKeyboardBuilder()

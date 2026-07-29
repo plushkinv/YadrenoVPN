@@ -522,13 +522,14 @@ async def _apply_promo_reward_policies_after_payment(order: Dict[str, Any]) -> l
     return applied
 
 
-def format_auto_coupon_text(coupon: Optional[Dict[str, Any]]) -> str:
+def format_auto_coupon_fragment(coupon: Optional[Dict[str, Any]]) -> str:
+    """Renders an automatic-coupon fragment without layout separators."""
     if not coupon:
         return ""
     if coupon.get("type") == "promo_rewards":
         parts = []
         if coupon.get("coupon"):
-            parts.append(format_auto_coupon_text(coupon["coupon"]))
+            parts.append(format_auto_coupon_fragment(coupon["coupon"]))
         for reward in coupon.get("rewards") or []:
             reward_days = int(reward.get("reward_days") or 0)
             if reward_days <= 0:
@@ -540,10 +541,16 @@ def format_auto_coupon_text(coupon: Optional[Dict[str, Any]]) -> str:
             from bot.utils.user_ui_texts import render_ui_text
 
             parts.append(
-                f"\n\n{escape_html(str(label))}: "
+                f"{escape_html(str(label))}: "
                 f"<b>{escape_html(render_ui_text('format.days_short', days=reward_days))}</b>"
             )
-        return "".join(parts)
+        return "\n\n".join(part for part in parts if part)
     from bot.utils.user_ui_texts import render_ui_text
 
-    return "\n\n" + render_ui_text("promo.auto_coupon", promo_code=coupon["code"])
+    return render_ui_text("promo.auto_coupon", promo_code=coupon["code"])
+
+
+def format_auto_coupon_text(coupon: Optional[Dict[str, Any]]) -> str:
+    """Renders a coupon fragment ready to append to an existing message."""
+    fragment = format_auto_coupon_fragment(coupon)
+    return f"\n\n{fragment}" if fragment else ""

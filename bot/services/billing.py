@@ -1735,12 +1735,17 @@ async def _notify_automatic_payment_user(bot: Any, order: Dict[str, Any]) -> boo
             paid = format_rub_cents(int(order.get('payable_amount_cents') or 0))
             page_key = 'balance_topup_result'
             context = {
+                'telegram_id': telegram_id,
+                'order_id': order.get('order_id'),
                 'payment_nominal_text': nominal,
                 'payment_amount_text': paid,
             }
         else:
             page_key = 'payment_auto_completed'
-            context = {}
+            context = {
+                'telegram_id': telegram_id,
+                'order_id': order.get('order_id'),
+            }
 
         page_data = get_page_data(page_key)
         if page_data is None:
