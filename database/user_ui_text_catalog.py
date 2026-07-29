@@ -13,6 +13,12 @@ class UserUITextDefinition:
     text_format: str
     description: str
     placeholders: frozenset[str] = frozenset()
+    optional_placeholders: frozenset[str] = frozenset()
+
+    @property
+    def render_placeholders(self) -> frozenset[str]:
+        """Returns every value accepted by the fragment renderer."""
+        return self.placeholders | self.optional_placeholders
 
 
 USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
@@ -197,10 +203,13 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
     ),
     UserUITextDefinition(
         "promo.auto_coupon",
-        "🎫 <b>Купон на следующую покупку</b>\n\n<pre>%promo_code%</pre>",
+        "🎫 <b>Купон на следующую покупку</b>\n\n"
+        "Скидка: <b>%discount_percent%%</b>\n"
+        "<pre>%promo_code%</pre>",
         "html",
         "Coupon fragment generated automatically after an eligible payment.",
         frozenset({"promo_code"}),
+        frozenset({"discount_percent"}),
     ),
 )
 

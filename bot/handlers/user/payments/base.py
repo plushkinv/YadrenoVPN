@@ -7,6 +7,9 @@ from aiogram.fsm.context import FSMContext
 from bot.utils.page_flow import build_page_flow_context
 from bot.utils.page_renderer import render_page
 from bot.utils.callbacks import safe_answer_callback
+from bot.handlers.user.payments.status_page import (
+    answer_payment_status_notification,
+)
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -295,6 +298,9 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
     import logging
     logger = logging.getLogger(__name__)
     from bot.handlers.user.payments.keys_config import start_new_key_config
+    from bot.services.payment_coupon_delivery import (
+        render_optional_payment_coupon_message,
+    )
     if order.get('purpose') == 'balance_topup':
         from bot.services.payment_intents import format_base_minor, load_payment_intent
         from bot.utils.extension_rendering import render_extension_page, render_extension_route
@@ -331,6 +337,11 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
                 extra_context,
                 force_new_for_message=True,
             )
+        await render_optional_payment_coupon_message(
+            message,
+            order_id=order.get('order_id'),
+            telegram_id=user_id,
+        )
         await state.clear()
         return
     key_id = order.get('vpn_key_id')
@@ -359,6 +370,20 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
                 f"Владелец заказа {order.get('order_id')} не совпадает с payment flow user_id={user_id}"
             )
         owner_username = owner.get('username')
+        await render_page(
+            message,
+            'payment_completed',
+            context={
+                'telegram_id': user_id,
+                'order_id': order.get('order_id'),
+            },
+            force_new=True,
+        )
+        await render_optional_payment_coupon_message(
+            message,
+            order_id=order.get('order_id'),
+            telegram_id=user_id,
+        )
         await start_new_key_config(
             message,
             state,
@@ -389,6 +414,11 @@ async def finalize_payment_ui(message: Message, state: FSMContext, text: str, or
                 **build_key_page_context(key),
             },
             force_new=True,
+        )
+        await render_optional_payment_coupon_message(
+            message,
+            order_id=order.get('order_id'),
+            telegram_id=user_id,
         )
         await state.clear()
 
@@ -805,22 +835,23 @@ async def check_qr_payment_flow(
         elapsed = now - last_check
         if last_check and elapsed < rate_limit_seconds:
             wait = int(rate_limit_seconds - elapsed)
-            await render_page(
-                callback or message,
-                'payment_check_wait',
-                context={'payment_wait_seconds': wait},
-                force_new=callback is None,
-            )
             if callback:
-                await safe_answer_callback(callback)
+                await answer_payment_status_notification(
+                    callback,
+                    'payment_check_wait',
+                    payment_wait_seconds=wait,
+                )
+            else:
+                await render_page(
+                    message,
+                    'payment_check_wait',
+                    context={'payment_wait_seconds': wait},
+                    force_new=True,
+                )
             return
         await state.update_data({last_check_key: now})
 
-    # 6. Notification of inspection
-    if callback:
-        await safe_answer_callback(callback)
-
-    # 7. Call the verification API
+    # 6. Call the verification API
     try:
         check_arg = order_id if check_arg_is_order_id else payment_id
         check_kwargs = {}
@@ -838,11 +869,15 @@ async def check_qr_payment_flow(
         status = await check_func(check_arg, **check_kwargs)
     except Exception as e:
         logger.error(f'Ошибка проверки статуса {payment_type} {order_id}: {e}')
+        if callback:
+            await safe_answer_callback(callback)
         await render_page(callback or message, 'payment_failed', force_new=True)
         return
 
-    # 8. Processing the result
+    # 7. Processing the result
     if status == 'succeeded':
+        if callback:
+            await safe_answer_callback(callback)
         update_payment_type(order_id, payment_type)
         update_payment_auto_check(
             order_id,
@@ -881,8 +916,17 @@ async def check_qr_payment_flow(
         if completed_order and completed_order.get('status') == 'paid':
             update_payment_auto_check(order_id, state='completed')
     elif status == 'canceled':
+        if callback:
+            await safe_answer_callback(callback)
         cancel_pending_order(order_id)
         update_payment_auto_check(order_id, state='canceled')
         await render_page(callback or message, 'payment_canceled', force_new=True)
     else:
-        await render_page(callback or message, 'payment_pending', force_new=True)
+        if callback:
+            await answer_payment_status_notification(
+                callback,
+                'payment_pending',
+                order_id=order_id,
+            )
+        else:
+            await render_page(message, 'payment_pending', force_new=True)

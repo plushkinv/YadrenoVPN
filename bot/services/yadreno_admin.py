@@ -302,7 +302,8 @@ def _dependent_user_ui_text_keys(page_key: str | None) -> frozenset[str] | None:
         'payment_link_renewal', 'payment_link_topup', 'payment_creating',
         'payment_pending', 'payment_check_wait', 'payment_canceled',
         'payment_unavailable', 'payment_minimum_unavailable',
-        'payment_order_unavailable', 'payment_failed', 'payment_auto_completed',
+        'payment_order_unavailable', 'payment_failed', 'payment_completed',
+        'payment_coupon_message', 'payment_auto_completed',
         'balance_insufficient', 'balance_topup_amount', 'balance_topup_result',
         'balance_topup_amount_invalid',
     }:
@@ -334,7 +335,9 @@ def build_customization_sources_context(page_key: str | None = None) -> dict[str
             "text_effective": row["text_effective"],
             "text_format": row["text_format"],
             "description": row["description"],
-            "placeholders": sorted(definition.placeholders),
+            "placeholders": sorted(definition.render_placeholders),
+            "required_placeholders": sorted(definition.placeholders),
+            "optional_placeholders": sorted(definition.optional_placeholders),
         })
     return {
         "pages": {

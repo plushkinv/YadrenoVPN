@@ -522,6 +522,44 @@ async def _apply_promo_reward_policies_after_payment(order: Dict[str, Any]) -> l
     return applied
 
 
+def build_auto_coupon_display_fields(
+    coupon: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Returns the bounded display fields of one automatically issued coupon."""
+    if not coupon:
+        return {}
+    if coupon.get("type") == "promo_rewards":
+        coupon = coupon.get("coupon")
+        if not isinstance(coupon, dict):
+            return {}
+
+    code = str(coupon.get("code") or "")
+    if not code:
+        return {}
+
+    def normalized_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    raw_discount = coupon.get("snapshot_discount_percent")
+    if raw_discount is None:
+        raw_discount = coupon.get("discount_percent")
+    discount_percent = max(0, min(100, normalized_int(raw_discount)))
+
+    raw_lifetime = coupon.get("snapshot_lifetime_days")
+    if raw_lifetime is None:
+        raw_lifetime = coupon.get("lifetime_days")
+    lifetime_days = normalized_int(raw_lifetime)
+
+    return {
+        "code": code,
+        "discount_percent": discount_percent,
+        "lifetime_days": lifetime_days if lifetime_days > 0 else "",
+    }
+
+
 def format_auto_coupon_fragment(coupon: Optional[Dict[str, Any]]) -> str:
     """Renders an automatic-coupon fragment without layout separators."""
     if not coupon:
@@ -547,7 +585,14 @@ def format_auto_coupon_fragment(coupon: Optional[Dict[str, Any]]) -> str:
         return "\n\n".join(part for part in parts if part)
     from bot.utils.user_ui_texts import render_ui_text
 
-    return render_ui_text("promo.auto_coupon", promo_code=coupon["code"])
+    fields = build_auto_coupon_display_fields(coupon)
+    if not fields:
+        return ""
+    return render_ui_text(
+        "promo.auto_coupon",
+        promo_code=fields["code"],
+        discount_percent=fields["discount_percent"],
+    )
 
 
 def format_auto_coupon_text(coupon: Optional[Dict[str, Any]]) -> str:

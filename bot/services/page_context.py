@@ -34,6 +34,8 @@ SUPPORTED_YAA_PAGE_KEYS = frozenset({
     'balance_topup_amount',
     'balance_topup_result',
     'payment_status',
+    'payment_completed',
+    'payment_coupon_message',
     'support_start',
     'support_status',
     'promo_enter',

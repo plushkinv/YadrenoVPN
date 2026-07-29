@@ -58,10 +58,15 @@ def _validate_row(row: Mapping[str, Any]) -> CachedUserUIText:
         raise RuntimeError(f"Button template {text_key!r} must be a non-empty single line")
 
     placeholders = _template_placeholders(text)
-    if placeholders != definition.placeholders:
+    if (
+        not definition.placeholders <= placeholders
+        or not placeholders <= definition.render_placeholders
+    ):
         raise RuntimeError(
-            f"Invalid placeholders for {text_key!r}: expected "
-            f"{sorted(definition.placeholders)}, got {sorted(placeholders)}"
+            f"Invalid placeholders for {text_key!r}: required "
+            f"{sorted(definition.placeholders)}, allowed "
+            f"{sorted(definition.render_placeholders)}, got "
+            f"{sorted(placeholders)}"
         )
 
     return CachedUserUIText(
@@ -123,10 +128,10 @@ def render_ui_text(text_key: str, /, **values: Any) -> str:
     if definition is None:
         raise KeyError(f"Unknown user UI text key: {text_key}")
     provided = set(values)
-    if provided != set(definition.placeholders):
+    if provided != set(definition.render_placeholders):
         raise ValueError(
-            f"Invalid values for {text_key!r}: expected {sorted(definition.placeholders)}, "
-            f"got {sorted(provided)}"
+            f"Invalid values for {text_key!r}: expected "
+            f"{sorted(definition.render_placeholders)}, got {sorted(provided)}"
         )
 
     with _CACHE_LOCK:

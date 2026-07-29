@@ -30,6 +30,9 @@ from bot.services.payment_provider_adapters import (
     get_payment_provider_adapter,
     list_payment_provider_adapters,
 )
+from bot.handlers.user.payments.status_page import (
+    answer_payment_status_notification,
+)
 from bot.utils.page_flow import build_page_flow_context
 from bot.utils.page_renderer import render_page
 from bot.utils.user_ui_texts import render_ui_text
@@ -431,7 +434,11 @@ async def payment_intent_check_handler(callback: CallbackQuery, state: FSMContex
     if status == 'canceled':
         await _render_callback_page(callback, "payment_canceled", order_id=intent.order_id)
         return
-    await _render_callback_page(callback, "payment_pending", order_id=intent.order_id)
+    await answer_payment_status_notification(
+        callback,
+        "payment_pending",
+        order_id=intent.order_id,
+    )
 
 
 @router.callback_query(F.data.startswith('payment_intent_balance:'))

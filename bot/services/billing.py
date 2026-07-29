@@ -1761,6 +1761,15 @@ async def _notify_automatic_payment_user(bot: Any, order: Dict[str, Any]) -> boo
             media_type=page_data.get('media_type'),
             reply_markup=build_page_keyboard(page_key, context=context),
         )
+        from bot.services.payment_coupon_delivery import (
+            send_optional_payment_coupon_message,
+        )
+
+        await send_optional_payment_coupon_message(
+            bot,
+            telegram_id=telegram_id,
+            order_id=order.get('order_id'),
+        )
         return True
     except Exception as error:
         if is_bot_blocked_error(error):

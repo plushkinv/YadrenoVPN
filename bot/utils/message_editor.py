@@ -55,6 +55,8 @@ PAGE_KEYS = (
     'payment_tariff_select',
     'payment_method_select',
     'payment_status',
+    'payment_completed',
+    'payment_coupon_message',
     'balance_topup_amount',
     'balance_topup_result',
     'support_start',

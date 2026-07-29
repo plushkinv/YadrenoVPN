@@ -92,7 +92,11 @@ for _name, _aliases in _PAGE_PLACEHOLDER_ALIASES_BY_NAME.items():
     _PAGE_PLACEHOLDER_ALIASES[f'%{_name}%'.casefold()] = _name
     for _alias in _aliases:
         _PAGE_PLACEHOLDER_ALIASES[_alias.casefold()] = _name
-_PARAMETERIZED_PAGE_PLACEHOLDERS = frozenset({'key', 'tariffs'})
+_PARAMETERIZED_PAGE_PLACEHOLDERS = frozenset({
+    'key',
+    'payment_coupon',
+    'tariffs',
+})
 
 
 KEY_DELIVERY_RAW_CONTEXT_KEY = 'key_delivery_raw_value'
@@ -108,6 +112,12 @@ KEY_PAGE_FIELDS = frozenset({
     'protocol',
     'tariff',
     'device_limit',
+})
+PAYMENT_COUPON_FIELDS_CONTEXT_KEY = 'payment_coupon_fields'
+PAYMENT_COUPON_PAGE_FIELDS = frozenset({
+    'code',
+    'discount_percent',
+    'lifetime_days',
 })
 
 
@@ -306,6 +316,31 @@ def _resolve_key_placeholder(
     return _format_value(values.get(field), mode)
 
 
+def _resolve_payment_coupon_placeholder(
+    context: Mapping[str, Any],
+    mode: PagePlaceholderMode,
+    params: Mapping[str, str],
+) -> str:
+    """Resolves either the composite coupon or one allowlisted display field."""
+    if not params:
+        return _format_value(
+            _context_value(context, 'payment_coupon_html'),
+            mode,
+            html_ready=True,
+        )
+    if set(params) != {'field'}:
+        return ''
+
+    field = params.get('field', '').casefold()
+    if field not in PAYMENT_COUPON_PAGE_FIELDS:
+        return ''
+
+    values = context.get(PAYMENT_COUPON_FIELDS_CONTEXT_KEY)
+    if not isinstance(values, Mapping):
+        return ''
+    return _format_value(values.get(field), mode)
+
+
 def _resolve_registered_placeholder(
     placeholder: str,
     context: Mapping[str, Any],
@@ -330,6 +365,8 @@ def _resolve_registered_placeholder(
         return _resolve_tariffs_placeholder(context, mode, params)
     if name == 'key':
         return _resolve_key_placeholder(context, mode, params)
+    if name == 'payment_coupon':
+        return _resolve_payment_coupon_placeholder(context, mode, params)
     if name == 'no_tariffs':
         return ''
     if name == 'referral_link':
@@ -435,8 +472,6 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'payment_base_currency'), mode)
     if name == 'payment_error':
         return _format_value(_context_value(context, 'payment_error_html'), mode, html_ready=True)
-    if name == 'payment_coupon':
-        return _format_value(_context_value(context, 'payment_coupon_html'), mode, html_ready=True)
     if name == 'payment_wait_seconds':
         return _format_value(_context_value(context, 'payment_wait_seconds'), mode)
     if name == 'payment_minimum':

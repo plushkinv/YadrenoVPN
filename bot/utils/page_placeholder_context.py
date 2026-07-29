@@ -12,6 +12,7 @@ from bot.utils.page_dynamic_data import (
     build_tariff_text,
     build_user_profile_context_values,
 )
+from bot.utils.placeholders import PAYMENT_COUPON_PAGE_FIELDS
 
 
 _PLACEHOLDER_RE = re.compile(r'%[^%\s]+%')
@@ -31,7 +32,13 @@ SUPPORT_PLACEHOLDERS = {
     '%поддержка_заголовок%',
     '%поддержка_инструкция%',
 }
-PAYMENT_COUPON_PLACEHOLDERS = {'%payment_coupon%'}
+PAYMENT_COUPON_PLACEHOLDERS = {
+    '%payment_coupon%',
+    *{
+        f'%payment_coupon(field={field})%'
+        for field in PAYMENT_COUPON_PAGE_FIELDS
+    },
+}
 MY_KEYS_PLACEHOLDERS = {'%keys_list%', '%список_ключей%'}
 USER_PROFILE_PLACEHOLDERS = {
     '%profile%',

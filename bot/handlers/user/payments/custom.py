@@ -7,6 +7,9 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
+from bot.handlers.user.payments.status_page import (
+    answer_payment_status_notification,
+)
 from bot.handlers.user.payments.tariff_select_page import show_provider_tariff_select_page
 from bot.utils.callbacks import safe_answer_callback
 from bot.utils.page_flow import build_page_flow_context
@@ -199,12 +202,10 @@ async def custom_payment_check(callback: CallbackQuery, state: FSMContext):
         update_payment_auto_check(order_id, state='canceled')
         await _render_callback_page(callback, 'payment_canceled', order_id=order_id)
         return
-    await _render_callback_page(
+    await answer_payment_status_notification(
         callback,
         'payment_pending',
         order_id=order_id,
-        payment_check_callback=f'check_ext:{order_id}',
-        payment_can_check=True,
     )
 
 

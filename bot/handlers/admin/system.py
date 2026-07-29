@@ -1339,7 +1339,11 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
             "• <code>%ключ_для_копирования%</code> — ссылка или ключ в моноширинном виде для копирования\n"
             "• <code>%ключ_ссылка%</code> — чистая ссылка без code/pre, кликабельная для HTTP/HTTPS подписки\n"
             "• <code>%ключ_ссылка_url%</code> — URL-кодированная ссылка для URL-кнопок\n"
-            "• <code>%payment_coupon%</code> — купон за текущую оплату; вне платёжной выдачи остаётся пустым\n\n"
+            "• <code>%payment_coupon%</code> — готовый блок купона за текущую оплату\n"
+            "• <code>%payment_coupon(field=code)%</code> — код купона\n"
+            "• <code>%payment_coupon(field=discount_percent)%</code> — размер скидки\n"
+            "• <code>%payment_coupon(field=lifetime_days)%</code> — срок действия в днях\n\n"
+            "Данные купона вне платёжной выдачи остаются пустыми.\n\n"
             "Можно использовать любое сочетание переменных."
         ),
     }

@@ -18,6 +18,31 @@ def escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+class _HtmlVisibleTextParser(HTMLParser):
+    """Collects visible text while discarding Telegram HTML markup."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        if data:
+            self.parts.append(data)
+
+    def get_text(self) -> str:
+        return ''.join(self.parts)
+
+
+def html_to_plain_text(text: Optional[str]) -> str:
+    """Returns compact visible text suitable for plain Telegram fields."""
+    if not text:
+        return ''
+    parser = _HtmlVisibleTextParser()
+    parser.feed(str(text))
+    parser.close()
+    return ' '.join(parser.get_text().split())
+
+
 class _TelegramHtmlTruncator(HTMLParser):
     """Trims HTML at visible characters and closes open tags."""
 
