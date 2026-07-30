@@ -15,6 +15,7 @@ from .panels.base import (
     PanelClientState,
     PanelInboundDescriptor,
     PanelProvisionResult,
+    PanelRejectedError,
     PanelServerSnapshot,
     build_inbound_descriptor,
 )
@@ -750,7 +751,7 @@ async def _delete_client_from_snapshot(
     if result and snapshot is not None and state is not None:
         state.inbound_ids.discard(int(inbound_id))
         state.placements.pop(int(inbound_id), None)
-        if not state.inbound_ids:
+        if not state.inbound_ids and not state.unavailable_inbound_ids:
             snapshot.clients.pop(str(email).strip().lower(), None)
     return bool(result)
 
@@ -778,6 +779,14 @@ async def _update_client_from_snapshot(
         panel_client = state.client
     if snapshot is not None and isinstance(client, XUIClient):
         call_kwargs['panel_client'] = panel_client
+    if _client_uses_clients_api(client):
+        if state is not None:
+            call_kwargs['target_inbound_ids'] = set(state.inbound_ids)
+        elif 'target_inbound_ids' not in call_kwargs:
+            inbound_id = int(kwargs.get('inbound_id', 0) or 0)
+            call_kwargs['target_inbound_ids'] = (
+                {inbound_id} if inbound_id > 0 else set()
+            )
     result = bool(await client.update_client_full(**call_kwargs))
     if not result:
         return False
@@ -1289,6 +1298,11 @@ async def _ensure_subscription_keys_on_server_impl(
 
         server_data = _build_server_data_from_key(key)
         mode = get_bot_mode()
+        unavailable_inbound_ids = (
+            set(panel_snapshot.unavailable_inbound_ids)
+            if panel_snapshot is not None
+            else set()
+        )
 
         try:
             client = get_client_from_server_data(server_data)
@@ -1298,11 +1312,77 @@ async def _ensure_subscription_keys_on_server_impl(
                 all_inbounds = await get_client_subscription_inbounds(client, include_ignored=True)
             else:
                 all_inbounds = await client.get_inbounds(include_ignored=True)
+            if panel_snapshot is None and isinstance(client, XUIClient):
+                if _client_uses_clients_api(client):
+                    descriptors = await get_client_inbound_descriptors(
+                        client,
+                        subscription_mode=(mode == 'subscription'),
+                        include_ignored=True,
+                    )
+                else:
+                    descriptors = [
+                        descriptor
+                        for descriptor in (
+                            build_inbound_descriptor(inbound)
+                            for inbound in all_inbounds
+                        )
+                        if descriptor is not None
+                    ]
+                full_descriptors = [
+                    descriptor
+                    for descriptor in (
+                        build_inbound_descriptor(inbound)
+                        for inbound in all_inbounds
+                    )
+                    if descriptor is not None
+                ]
+                unavailable_inbound_ids = {
+                    descriptor.id
+                    for descriptor in descriptors
+                    if not descriptor.available
+                }
+                unavailable_inbound_ids.update(
+                    descriptor.id
+                    for descriptor in full_descriptors
+                    if not descriptor.available
+                )
+                described_ids = {
+                    descriptor.id
+                    for descriptor in descriptors
+                }
+                unavailable_inbound_ids.update(
+                    descriptor.id
+                    for descriptor in full_descriptors
+                    if descriptor.id not in described_ids
+                )
+                if unavailable_inbound_ids:
+                    filtered_inbounds = []
+                    for inbound in all_inbounds:
+                        try:
+                            inbound_id = int(inbound.get('id'))
+                        except (AttributeError, TypeError, ValueError):
+                            continue
+                        if inbound_id not in unavailable_inbound_ids:
+                            filtered_inbounds.append(inbound)
+                    all_inbounds = filtered_inbounds
         except Exception as e:
             logger.warning(f"ensure_subscription_keys: сервер {server_id} недоступен: {e}")
             return stats
 
+        if mode == 'key':
+            try:
+                configured_inbound_id = int(key.get('panel_inbound_id'))
+            except (TypeError, ValueError):
+                configured_inbound_id = None
+            if configured_inbound_id in unavailable_inbound_ids:
+                stats['skipped'] = 1
+                stats['ok'] = 1
+                return stats
+
         if not all_inbounds:
+            if unavailable_inbound_ids:
+                stats['skipped'] = 1
+                stats['ok'] = 1
             return stats
 
         inbounds, ignored_inbounds = split_ignored_inbounds(all_inbounds)
@@ -1496,10 +1576,19 @@ async def _ensure_subscription_keys_on_server_impl(
                                 state = panel_snapshot.get_client(email)
                                 if state is not None:
                                     state.client = dict(canonical_client)
-                                    state.inbound_ids = set(confirmed_ids)
+                                    state.unavailable_inbound_ids = set(
+                                        confirmed_ids
+                                    ).intersection(
+                                        panel_snapshot.unavailable_inbound_ids
+                                    )
+                                    state.inbound_ids = set(
+                                        confirmed_ids
+                                    ).difference(
+                                        panel_snapshot.unavailable_inbound_ids
+                                    )
                                     state.placements = {
                                         inbound_id: dict(canonical_client)
-                                        for inbound_id in confirmed_ids
+                                        for inbound_id in state.inbound_ids
                                     }
                                     # A successful attach does not make a slim
                                     # paged row complete. Keep the flag so the
@@ -1678,6 +1767,7 @@ async def _ensure_subscription_keys_on_server_impl(
                                 sub_id=sub_id,
                                 limit_ip=limit_ip,
                                 flow=clients_api_flow,
+                                target_inbound_ids=set(presence),
                             )
                             stats['updated'] += 1
                             stats['skipped'] += len(sorted_presence) - len(needs_update)
@@ -2019,7 +2109,7 @@ async def get_subscription_url_for_key(key: Dict[str, Any]) -> Optional[str]:
 
 
 __all__ = [
-    "VPNAPIError", "get_client_from_server_data", "invalidate_client_cache",
+    "VPNAPIError", "PanelRejectedError", "get_client_from_server_data", "invalidate_client_cache",
     "calculate_panel_total_for_key",
     "format_traffic", "close_all_clients", "get_client", "test_server_connection",
     "reset_key_traffic_if_active", "extend_key_on_server", "restore_key_traffic_limit",

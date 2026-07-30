@@ -287,9 +287,12 @@ async def _apply_clients_api_bulk_prelude(
         if state is None:
             continue
         states_by_email[normalized_email] = state
+        has_unavailable_memberships = bool(
+            state.unavailable_inbound_ids
+        )
 
         if not active:
-            if bool(state.enable):
+            if bool(state.enable) and not has_unavailable_memberships:
                 disable_emails.append(email)
             continue
 
@@ -302,6 +305,8 @@ async def _apply_clients_api_bulk_prelude(
                 configured_id = int(key.get("panel_inbound_id"))
             except (TypeError, ValueError):
                 configured_id = None
+            if configured_id in snapshot.unavailable_inbound_ids:
+                continue
             current_visible = current_ids.intersection(visible_ids)
             if configured_id in visible_ids:
                 desired_ids = {configured_id}
@@ -311,7 +316,11 @@ async def _apply_clients_api_bulk_prelude(
                 desired_ids = set()
 
         if not desired_ids and current_ids:
-            delete_emails.append(email)
+            if has_unavailable_memberships:
+                inbound_ids = tuple(sorted(current_ids))
+                detach_groups.setdefault(inbound_ids, []).append(email)
+            else:
+                delete_emails.append(email)
             continue
 
         missing_ids = tuple(sorted(desired_ids - current_ids))
@@ -321,7 +330,10 @@ async def _apply_clients_api_bulk_prelude(
         if extra_ids:
             detach_groups.setdefault(extra_ids, []).append(email)
 
-        if bool(state.enable) != bool(active):
+        if (
+            not has_unavailable_memberships
+            and bool(state.enable) != bool(active)
+        ):
             (enable_emails if active else disable_emails).append(email)
 
     operation_metrics = client.operation_metrics("bulk_reconcile")

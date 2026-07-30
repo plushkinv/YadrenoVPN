@@ -12,6 +12,7 @@ import aiohttp
 import asyncio
 from contextlib import asynccontextmanager
 import contextvars
+from dataclasses import replace
 import logging
 import json
 import re
@@ -48,6 +49,7 @@ from .base import (
     PanelDatabaseBackup,
     PanelInboundDescriptor,
     PanelProvisionResult,
+    PanelRejectedError,
     PanelServerSnapshot,
     VPNAPIError,
     build_inbound_descriptor,
@@ -1135,19 +1137,22 @@ class XUIClient(BaseVPNClient):
                             if result.get("success"):
                                 return result
                             
-                            # Sometimes success=False but there is msg
-                            if "msg" in result and not result["success"]:
-                                msg = result["msg"].lower()
+                            if not result.get("success"):
+                                rejection_message = str(
+                                    result.get("msg")
+                                    or "Panel rejected the request"
+                                )
+                                msg = rejection_message.lower()
                                 # Checking for signs of session expiration
                                 if any(x in msg for x in ["login", "auth", "session", "token"]):
-                                    logger.warning(f"Сессия возможно истекла (msg='{result['msg']}'), пересоздаём...")
+                                    logger.warning(f"Сессия возможно истекла (msg='{rejection_message}'), пересоздаём...")
                                     await self._reset_session()
                                     if attempt < attempts - 1:
                                         # The session will be recreated on the next request
                                         continue
-                                        
-                                raise VPNAPIError(result["msg"])
-                            return result
+                                    raise VPNAPIError(rejection_message)
+
+                                raise PanelRejectedError(rejection_message)
                         except json.JSONDecodeError:
                             # Sometimes it returns HTML when redirecting to login
                             if "login" in text.lower():
@@ -1447,6 +1452,61 @@ class XUIClient(BaseVPNClient):
                 return None
             return await request_options()
 
+    @staticmethod
+    def _api_bool(value: Any, default: bool = True) -> bool:
+        """Normalize booleans returned by different panel generations."""
+        if value is None or value == "":
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    async def _enrich_node_availability(
+        self,
+        descriptors: List[PanelInboundDescriptor],
+    ) -> List[PanelInboundDescriptor]:
+        """Attach explicit node enable state without guessing on API failures."""
+        node_ids = {
+            descriptor.node_id
+            for descriptor in descriptors
+            if descriptor.node_id is not None and descriptor.node_id > 0
+        }
+        if not node_ids:
+            return descriptors
+
+        nodes = await self.get_nodes()
+        node_enabled: Dict[int, bool] = {}
+        for node in nodes:
+            try:
+                node_id = int(node.get("id"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if node_id <= 0:
+                continue
+            node_enabled[node_id] = self._api_bool(
+                node.get("enable"),
+                True,
+            )
+
+        if not node_enabled:
+            # Missing/unsupported Node API is an unknown state, not a reason to
+            # disable every node-backed inbound on an older panel.
+            return descriptors
+
+        return [
+            (
+                replace(
+                    descriptor,
+                    node_enabled=node_enabled[descriptor.node_id],
+                )
+                if descriptor.node_id in node_enabled
+                else descriptor
+            )
+            for descriptor in descriptors
+        ]
+
     async def get_inbound_descriptors(
         self,
         *,
@@ -1480,7 +1540,41 @@ class XUIClient(BaseVPNClient):
             descriptors = [
                 descriptor for descriptor in descriptors if not descriptor.ignored
             ]
+        if profile == API_PROFILE_CLIENTS:
+            descriptors = await self._enrich_node_availability(descriptors)
         return descriptors
+
+    @staticmethod
+    def _build_legacy_availability_snapshot(
+        descriptors: List[PanelInboundDescriptor],
+        *,
+        api_profile: str,
+    ) -> PanelServerSnapshot:
+        """Build a legacy snapshot while retaining unavailable memberships."""
+        unavailable_ids = {
+            descriptor.id
+            for descriptor in descriptors
+            if not descriptor.available
+        }
+        snapshot = build_legacy_panel_snapshot(
+            [descriptor.raw for descriptor in descriptors],
+            api_profile=api_profile,
+        )
+        snapshot.inbounds = [
+            descriptor.as_inbound()
+            for descriptor in descriptors
+            if descriptor.available
+        ]
+        snapshot.unavailable_inbound_ids = unavailable_ids
+        if unavailable_ids:
+            for state in snapshot.clients.values():
+                state.unavailable_inbound_ids = (
+                    state.inbound_ids.intersection(unavailable_ids)
+                )
+                state.inbound_ids.difference_update(unavailable_ids)
+                for inbound_id in state.unavailable_inbound_ids:
+                    state.placements.pop(inbound_id, None)
+        return snapshot
 
     async def get_sync_snapshot(
         self,
@@ -1498,10 +1592,21 @@ class XUIClient(BaseVPNClient):
         if profile != API_PROFILE_CLIENTS:
             all_inbounds = await self._get_all_inbounds()
             if subscription_mode and self._supports_mtproto_multi_client(profile):
-                inbounds = all_inbounds
+                topology_inbounds = all_inbounds
             else:
-                inbounds = filter_regular_inbounds(all_inbounds)
-            return build_legacy_panel_snapshot(inbounds, api_profile=profile)
+                topology_inbounds = filter_regular_inbounds(all_inbounds)
+            descriptors = [
+                descriptor
+                for descriptor in (
+                    build_inbound_descriptor(inbound)
+                    for inbound in topology_inbounds
+                )
+                if descriptor is not None
+            ]
+            return self._build_legacy_availability_snapshot(
+                descriptors,
+                api_profile=profile,
+            )
 
         options = await self._get_inbound_options()
         fallback_full_inbounds: Optional[List[Dict[str, Any]]] = None
@@ -1525,11 +1630,26 @@ class XUIClient(BaseVPNClient):
                 )
             )
         ]
-        inbounds = [descriptor.as_inbound() for descriptor in descriptors]
+        descriptors = await self._enrich_node_availability(descriptors)
+        unavailable_ids = {
+            descriptor.id
+            for descriptor in descriptors
+            if not descriptor.available
+        }
+        available_descriptors = [
+            descriptor
+            for descriptor in descriptors
+            if descriptor.available
+        ]
+        inbounds = [
+            descriptor.as_inbound()
+            for descriptor in available_descriptors
+        ]
         snapshot = PanelServerSnapshot(
             api_profile=profile,
             inbounds=inbounds,
             clients={},
+            unavailable_inbound_ids=unavailable_ids,
         )
 
         rows: List[Dict[str, Any]] = []
@@ -1581,8 +1701,16 @@ class XUIClient(BaseVPNClient):
                     if subscription_mode and self._supports_mtproto_multi_client()
                     else filter_regular_inbounds(all_inbounds)
                 )
-                return build_legacy_panel_snapshot(
-                    legacy_inbounds,
+                legacy_descriptors = [
+                    descriptor
+                    for descriptor in (
+                        build_inbound_descriptor(inbound)
+                        for inbound in legacy_inbounds
+                    )
+                    if descriptor is not None
+                ]
+                return self._build_legacy_availability_snapshot(
+                    legacy_descriptors,
                     api_profile=self.api_profile or API_PROFILE_LEGACY,
                 )
             raise
@@ -1599,11 +1727,20 @@ class XUIClient(BaseVPNClient):
                 continue
 
             raw_ids = row.get("inboundIds") or []
-            inbound_ids = {
+            normalized_raw_ids = {
                 int(value)
                 for value in raw_ids
-                if str(value).isdigit() and int(value) in eligible_ids
+                if str(value).isdigit()
             }
+            inbound_ids = {
+                inbound_id
+                for inbound_id in normalized_raw_ids
+                if inbound_id in eligible_ids
+            }
+            unavailable_attached_ids = normalized_raw_ids - inbound_ids
+            snapshot.unavailable_inbound_ids.update(
+                unavailable_attached_ids
+            )
             identity = dict(row)
 
             traffic_payload = row.get("traffic")
@@ -1624,6 +1761,7 @@ class XUIClient(BaseVPNClient):
                 email=email,
                 client=identity,
                 inbound_ids=inbound_ids,
+                unavailable_inbound_ids=unavailable_attached_ids,
                 placements={},
                 traffic_used=traffic_used,
                 traffic_known=traffic_known,
@@ -1827,7 +1965,10 @@ class XUIClient(BaseVPNClient):
         return (
             current_total == int(total_gb_bytes)
             and current_expiry == int(expiry_time)
-            and bool(client.get("enable", True)) == bool(enable)
+            and (
+                XUIClient._api_bool(client.get("enable"), True)
+                == bool(enable)
+            )
             and current_limit_ip == int(limit_ip)
             and str(client.get("subId") or "") == str(sub_id or "")
             and (not flow or str(client.get("flow") or "") == flow)
@@ -1843,6 +1984,21 @@ class XUIClient(BaseVPNClient):
     ) -> PanelServerSnapshot:
         """Build a reusable complete snapshot for the just-provisioned client."""
         normalized_ids = {int(value) for value in inbound_ids}
+        available_ids = {
+            descriptor.id
+            for descriptor in descriptors
+            if descriptor.available
+        }
+        unavailable_ids = {
+            descriptor.id
+            for descriptor in descriptors
+            if not descriptor.available
+        }
+        active_ids = normalized_ids.intersection(available_ids)
+        unavailable_attached_ids = normalized_ids - active_ids
+        snapshot_unavailable_ids = unavailable_ids.union(
+            unavailable_attached_ids
+        )
         traffic_payload = client.get("traffic")
         traffic_used = 0
         if isinstance(traffic_payload, dict):
@@ -1850,10 +2006,11 @@ class XUIClient(BaseVPNClient):
         state = PanelClientState(
             email=email,
             client=dict(client),
-            inbound_ids=normalized_ids,
+            inbound_ids=active_ids,
+            unavailable_inbound_ids=unavailable_attached_ids,
             placements={
                 inbound_id: dict(client)
-                for inbound_id in normalized_ids
+                for inbound_id in active_ids
             },
             traffic_used=traffic_used,
             traffic_known=isinstance(traffic_payload, dict),
@@ -1872,8 +2029,13 @@ class XUIClient(BaseVPNClient):
         )
         return PanelServerSnapshot(
             api_profile=profile,
-            inbounds=[descriptor.as_inbound() for descriptor in descriptors],
+            inbounds=[
+                descriptor.as_inbound()
+                for descriptor in descriptors
+                if descriptor.available
+            ],
             clients={email.strip().lower(): state},
+            unavailable_inbound_ids=snapshot_unavailable_ids,
         )
 
     async def _write_client_with_recovery(
@@ -1885,6 +2047,7 @@ class XUIClient(BaseVPNClient):
         expected_inbound_ids: set[int],
         accept_any_existing: bool = False,
         recovery_validator: Optional[Callable[[Dict[str, Any]], bool]] = None,
+        accept_rejected_recovery: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """Perform one idempotent write and re-read state before every retry."""
         try:
@@ -1893,6 +2056,25 @@ class XUIClient(BaseVPNClient):
             attempts = 3
         delays = RETRY_CONFIG.get("delays", [])
         last_error: Optional[Exception] = None
+
+        async def recover() -> Optional[Dict[str, Any]]:
+            recovered = await self._get_clients_api_record(
+                email,
+                log_error=False,
+            )
+            if not recovered:
+                return None
+            _, recovered_ids = self._split_clients_api_record(recovered)
+            recovered_matches = (
+                recovery_validator(recovered)
+                if recovery_validator is not None
+                else (
+                    accept_any_existing
+                    or expected_inbound_ids.issubset(set(recovered_ids))
+                )
+            )
+            return recovered if recovered_matches else None
+
         for attempt in range(attempts):
             try:
                 await self._request(
@@ -1902,24 +2084,35 @@ class XUIClient(BaseVPNClient):
                     retry=False,
                 )
                 return None
-            except VPNAPIError as exc:
-                last_error = exc
+            except PanelRejectedError as exc:
                 recovered = await self._get_clients_api_record(
                     email,
                     log_error=False,
+                    suppress_errors=False,
                 )
-                if recovered:
-                    _, recovered_ids = self._split_clients_api_record(recovered)
+                if recovered and accept_rejected_recovery:
+                    _, recovered_ids = self._split_clients_api_record(
+                        recovered
+                    )
                     recovered_matches = (
                         recovery_validator(recovered)
                         if recovery_validator is not None
                         else (
                             accept_any_existing
-                            or expected_inbound_ids.issubset(set(recovered_ids))
+                            or expected_inbound_ids.issubset(
+                                set(recovered_ids)
+                            )
                         )
                     )
                     if recovered_matches:
                         return recovered
+                exc.recovered_record = recovered
+                raise
+            except VPNAPIError as exc:
+                last_error = exc
+                recovered = await recover()
+                if recovered:
+                    return recovered
                 if attempt >= attempts - 1:
                     raise
                 self._record_operation_retry()
@@ -1929,6 +2122,191 @@ class XUIClient(BaseVPNClient):
         if last_error:
             raise last_error
         return None
+
+    @staticmethod
+    def _record_with_inbound_ids(
+        record: Dict[str, Any],
+        inbound_ids: Iterable[int],
+    ) -> Dict[str, Any]:
+        """Return a normalized logical record with an explicit membership set."""
+        client, _ = XUIClient._split_clients_api_record(record)
+        return {
+            "client": client,
+            "inboundIds": sorted({int(value) for value in inbound_ids}),
+        }
+
+    @staticmethod
+    def _clients_update_endpoint(
+        email: str,
+        inbound_ids: Iterable[int],
+    ) -> str:
+        """Build a Clients API update endpoint scoped to known-safe inbounds."""
+        encoded_email = urllib.parse.quote(email, safe="")
+        normalized_ids = sorted({int(value) for value in inbound_ids})
+        endpoint = f"/panel/api/clients/update/{encoded_email}"
+        if normalized_ids:
+            endpoint += "?inboundIds=" + ",".join(
+                str(value) for value in normalized_ids
+            )
+        return endpoint
+
+    async def _attach_client_inbounds_resilient(
+        self,
+        email: str,
+        target_ids: Iterable[int],
+        record: Dict[str, Any],
+        *,
+        verify: bool,
+        force_point: bool = False,
+    ) -> tuple[Dict[str, Any], Dict[int, str]]:
+        """Attach memberships, isolating only deterministic batch rejections."""
+        targets = {int(value) for value in target_ids}
+        current_record = dict(record)
+        _, current_list = self._split_clients_api_record(current_record)
+        current_ids = set(current_list)
+        missing = targets - current_ids
+        failed: Dict[int, str] = {}
+        if not missing:
+            return current_record, failed
+
+        endpoint = (
+            f"/panel/api/clients/"
+            f"{urllib.parse.quote(email, safe='')}/attach"
+        )
+
+        if not force_point:
+            batch_missing_count = len(missing)
+            try:
+                recovered = await self._write_client_with_recovery(
+                    endpoint,
+                    {"inboundIds": sorted(missing)},
+                    email=email,
+                    expected_inbound_ids=current_ids.union(missing),
+                )
+                if recovered:
+                    current_record = recovered
+                    _, recovered_ids = self._split_clients_api_record(
+                        recovered
+                    )
+                    current_ids = set(recovered_ids)
+                else:
+                    current_ids.update(missing)
+                    current_record = self._record_with_inbound_ids(
+                        current_record,
+                        current_ids,
+                    )
+                missing = targets - current_ids
+            except PanelRejectedError as exc:
+                if exc.recovered_record:
+                    current_record = exc.recovered_record
+                    _, recovered_ids = self._split_clients_api_record(
+                        current_record
+                    )
+                    current_ids = set(recovered_ids)
+                missing = targets - current_ids
+                if batch_missing_count <= 1:
+                    for inbound_id in missing:
+                        failed[inbound_id] = str(exc)
+                    missing = set()
+
+        for inbound_id in sorted(missing):
+            try:
+                recovered = await self._write_client_with_recovery(
+                    endpoint,
+                    {"inboundIds": [inbound_id]},
+                    email=email,
+                    expected_inbound_ids=current_ids.union({inbound_id}),
+                )
+                if recovered:
+                    current_record = recovered
+                    _, recovered_ids = self._split_clients_api_record(
+                        recovered
+                    )
+                    current_ids = set(recovered_ids)
+                else:
+                    current_ids.add(inbound_id)
+                    current_record = self._record_with_inbound_ids(
+                        current_record,
+                        current_ids,
+                    )
+            except PanelRejectedError as exc:
+                if exc.recovered_record:
+                    current_record = exc.recovered_record
+                    _, recovered_ids = self._split_clients_api_record(
+                        current_record
+                    )
+                    current_ids = set(recovered_ids)
+                if inbound_id not in current_ids:
+                    failed[inbound_id] = str(exc)
+
+        if verify:
+            verified = await self._get_clients_api_record(
+                email,
+                log_error=False,
+                suppress_errors=False,
+            )
+            if verified:
+                current_record = verified
+                _, verified_ids = self._split_clients_api_record(verified)
+                current_ids = set(verified_ids)
+
+        for inbound_id in sorted(targets - current_ids):
+            failed.setdefault(
+                inbound_id,
+                "Panel did not confirm the inbound attachment",
+            )
+        return current_record, failed
+
+    async def _update_clients_record_resilient(
+        self,
+        email: str,
+        payload: Dict[str, Any],
+        target_ids: Iterable[int],
+        *,
+        recovery_validator: Callable[[Dict[str, Any]], bool],
+    ) -> tuple[set[int], Dict[int, str], Optional[Dict[str, Any]]]:
+        """Update safe memberships with point isolation on business rejection."""
+        targets = {int(value) for value in target_ids}
+        if not targets:
+            return set(), {}, None
+
+        last_record: Optional[Dict[str, Any]] = None
+        failed: Dict[int, str] = {}
+        try:
+            recovered = await self._write_client_with_recovery(
+                self._clients_update_endpoint(email, targets),
+                payload,
+                email=email,
+                expected_inbound_ids=targets,
+                recovery_validator=recovery_validator,
+                accept_rejected_recovery=False,
+            )
+            return set(targets), failed, recovered
+        except PanelRejectedError as exc:
+            last_record = exc.recovered_record
+            if len(targets) == 1:
+                inbound_id = next(iter(targets))
+                return set(), {inbound_id: str(exc)}, last_record
+
+        confirmed: set[int] = set()
+        for inbound_id in sorted(targets):
+            try:
+                recovered = await self._write_client_with_recovery(
+                    self._clients_update_endpoint(email, {inbound_id}),
+                    payload,
+                    email=email,
+                    expected_inbound_ids={inbound_id},
+                    recovery_validator=recovery_validator,
+                    accept_rejected_recovery=False,
+                )
+                confirmed.add(inbound_id)
+                if recovered:
+                    last_record = recovered
+            except PanelRejectedError as exc:
+                if exc.recovered_record:
+                    last_record = exc.recovered_record
+                failed[inbound_id] = str(exc)
+        return confirmed, failed, last_record
 
     async def provision_client(
         self,
@@ -1988,7 +2366,7 @@ class XUIClient(BaseVPNClient):
 
         if profile != API_PROFILE_CLIENTS:
             all_inbounds = await self._get_all_inbounds()
-            descriptors = [
+            all_descriptors = [
                 descriptor
                 for descriptor in (
                     build_inbound_descriptor(inbound)
@@ -2003,19 +2381,32 @@ class XUIClient(BaseVPNClient):
                         and self._supports_mtproto_multi_client(profile)
                     )
                 )
+            ]
+            descriptors_by_id = {
+                descriptor.id: descriptor
+                for descriptor in all_descriptors
+            }
+            descriptors = [
+                descriptor
+                for descriptor in all_descriptors
+                if descriptor.available
                 and (requested is None or descriptor.id in requested)
             ]
-            snapshot = build_legacy_panel_snapshot(
-                [descriptor.raw for descriptor in descriptors],
+            snapshot = self._build_legacy_availability_snapshot(
+                all_descriptors,
                 api_profile=profile,
             )
             existing_before = snapshot.get_client(email) is not None
             attached: set[int] = set()
             descriptor_ids = {descriptor.id for descriptor in descriptors}
-            failed: Dict[int, str] = {
-                inbound_id: "Inbound is missing, ignored, or incompatible"
-                for inbound_id in sorted((requested or set()) - descriptor_ids)
-            }
+            failed: Dict[int, str] = {}
+            for inbound_id in sorted((requested or set()) - descriptor_ids):
+                descriptor = descriptors_by_id.get(inbound_id)
+                failed[inbound_id] = (
+                    descriptor.unavailable_reason
+                    if descriptor is not None and not descriptor.available
+                    else "Inbound is missing, ignored, or incompatible"
+                )
             results: Dict[int, Dict[str, Any]] = {}
             canonical_sub_id = str(sub_id or "")
             target_total_bytes = (
@@ -2089,19 +2480,31 @@ class XUIClient(BaseVPNClient):
                 snapshot=snapshot,
             )
 
-        descriptors = await self.get_inbound_descriptors(
+        all_descriptors = await self.get_inbound_descriptors(
             subscription_mode=subscription_mode,
             include_ignored=False,
         )
-        descriptors_by_id = {descriptor.id: descriptor for descriptor in descriptors}
-        if requested is None:
-            target_ids = set(descriptors_by_id)
-        else:
-            target_ids = requested.intersection(descriptors_by_id)
-        failed: Dict[int, str] = {
-            inbound_id: "Inbound is missing, ignored, or incompatible"
-            for inbound_id in sorted((requested or set()) - target_ids)
+        descriptors_by_id = {
+            descriptor.id: descriptor
+            for descriptor in all_descriptors
         }
+        available_descriptors_by_id = {
+            descriptor.id: descriptor
+            for descriptor in all_descriptors
+            if descriptor.available
+        }
+        if requested is None:
+            target_ids = set(available_descriptors_by_id)
+        else:
+            target_ids = requested.intersection(available_descriptors_by_id)
+        failed: Dict[int, str] = {}
+        for inbound_id in sorted((requested or set()) - target_ids):
+            descriptor = descriptors_by_id.get(inbound_id)
+            failed[inbound_id] = (
+                descriptor.unavailable_reason
+                if descriptor is not None and not descriptor.available
+                else "Inbound is missing, ignored, or incompatible"
+            )
         if not target_ids:
             return PanelProvisionResult(
                 email=email,
@@ -2127,9 +2530,9 @@ class XUIClient(BaseVPNClient):
         )
         common_flow = next(
             (
-                descriptors_by_id[inbound_id].flow
+                available_descriptors_by_id[inbound_id].flow
                 for inbound_id in sorted(target_ids)
-                if descriptors_by_id[inbound_id].flow
+                if available_descriptors_by_id[inbound_id].flow
             ),
             "",
         )
@@ -2138,7 +2541,6 @@ class XUIClient(BaseVPNClient):
             log_error=False,
             suppress_errors=False,
         )
-        encoded_email = urllib.parse.quote(email, safe="")
         needs_reread = False
 
         if record:
@@ -2146,6 +2548,23 @@ class XUIClient(BaseVPNClient):
             current_ids = set(current_ids_list)
             if sub_id is None and current_client.get("subId"):
                 canonical_sub_id = str(current_client["subId"])
+
+            missing_ids = target_ids - current_ids
+            if missing_ids:
+                record, attach_failed = (
+                    await self._attach_client_inbounds_resilient(
+                        email,
+                        missing_ids,
+                        record,
+                        verify=False,
+                    )
+                )
+                failed.update(attach_failed)
+                current_client, current_ids_list = (
+                    self._split_clients_api_record(record)
+                )
+                current_ids = set(current_ids_list)
+                needs_reread = True
 
             if not self._client_matches_provision_target(
                 current_client,
@@ -2174,42 +2593,39 @@ class XUIClient(BaseVPNClient):
                 )
                 if common_flow:
                     updated_client["flow"] = common_flow
-                recovered = await self._write_client_with_recovery(
-                    f"/panel/api/clients/update/{encoded_email}",
-                    updated_client,
-                    email=email,
-                    expected_inbound_ids=current_ids,
-                    recovery_validator=lambda recovered_record: (
-                        self._client_matches_provision_target(
-                            self._split_clients_api_record(
-                                recovered_record
-                            )[0],
-                            total_gb_bytes=target_total_gb_bytes,
-                            expiry_time=target_expiry_time,
-                            enable=enable,
-                            limit_ip=limit_ip,
-                            sub_id=canonical_sub_id,
-                            flow=common_flow,
+                safe_update_ids = current_ids.intersection(
+                    available_descriptors_by_id
+                )
+                if safe_update_ids:
+                    confirmed_updates, update_failed, recovered = (
+                        await self._update_clients_record_resilient(
+                            email,
+                            updated_client,
+                            safe_update_ids,
+                            recovery_validator=(
+                                lambda recovered_record: (
+                                    self._client_matches_provision_target(
+                                        self._split_clients_api_record(
+                                            recovered_record
+                                        )[0],
+                                        total_gb_bytes=target_total_gb_bytes,
+                                        expiry_time=target_expiry_time,
+                                        enable=enable,
+                                        limit_ip=limit_ip,
+                                        sub_id=canonical_sub_id,
+                                        flow=common_flow,
+                                    )
+                                )
+                            ),
                         )
-                    ),
-                )
-                if recovered:
-                    record = recovered
-                    current_client, current_ids_list = self._split_clients_api_record(record)
-                    current_ids = set(current_ids_list)
-                needs_reread = True
-
-            missing_ids = target_ids - current_ids
-            if missing_ids:
-                recovered = await self._write_client_with_recovery(
-                    f"/panel/api/clients/{encoded_email}/attach",
-                    {"inboundIds": sorted(missing_ids)},
-                    email=email,
-                    expected_inbound_ids=current_ids.union(missing_ids),
-                )
-                if recovered:
-                    record = recovered
-                needs_reread = True
+                    )
+                    for inbound_id, reason in update_failed.items():
+                        if inbound_id in target_ids:
+                            failed[inbound_id] = reason
+                    if recovered:
+                        record = recovered
+                    if confirmed_updates or update_failed:
+                        needs_reread = True
         else:
             client_payload: Dict[str, Any] = {
                 "email": email,
@@ -2223,30 +2639,63 @@ class XUIClient(BaseVPNClient):
             }
             if common_flow:
                 client_payload["flow"] = common_flow
-            recovered = await self._write_client_with_recovery(
-                "/panel/api/clients/add",
-                {
-                    "client": client_payload,
-                    "inboundIds": sorted(target_ids),
-                },
-                email=email,
-                expected_inbound_ids=target_ids,
-                accept_any_existing=True,
-            )
-            if recovered:
-                record = recovered
-                _, recovered_ids_list = self._split_clients_api_record(record)
-                recovered_ids = set(recovered_ids_list)
-                missing_after_recovery = target_ids - recovered_ids
-                if missing_after_recovery:
-                    attached_recovery = await self._write_client_with_recovery(
-                        f"/panel/api/clients/{encoded_email}/attach",
-                        {"inboundIds": sorted(missing_after_recovery)},
-                        email=email,
-                        expected_inbound_ids=target_ids,
+            try:
+                recovered = await self._write_client_with_recovery(
+                    "/panel/api/clients/add",
+                    {
+                        "client": client_payload,
+                        "inboundIds": sorted(target_ids),
+                    },
+                    email=email,
+                    expected_inbound_ids=target_ids,
+                )
+                if recovered:
+                    record = recovered
+            except PanelRejectedError as exc:
+                record = exc.recovered_record
+                if not record:
+                    for inbound_id in sorted(target_ids):
+                        try:
+                            recovered = await self._write_client_with_recovery(
+                                "/panel/api/clients/add",
+                                {
+                                    "client": client_payload,
+                                    "inboundIds": [inbound_id],
+                                },
+                                email=email,
+                                expected_inbound_ids={inbound_id},
+                            )
+                            record = recovered or {
+                                "client": dict(client_payload),
+                                "inboundIds": [inbound_id],
+                            }
+                            break
+                        except PanelRejectedError as point_exc:
+                            failed[inbound_id] = str(point_exc)
+                            if point_exc.recovered_record:
+                                record = point_exc.recovered_record
+                                break
+
+                if record:
+                    _, recovered_ids_list = (
+                        self._split_clients_api_record(record)
                     )
-                    if attached_recovery:
-                        record = attached_recovery
+                    remaining_ids = (
+                        target_ids
+                        - set(recovered_ids_list)
+                        - set(failed)
+                    )
+                    if remaining_ids:
+                        record, attach_failed = (
+                            await self._attach_client_inbounds_resilient(
+                                email,
+                                remaining_ids,
+                                record,
+                                verify=False,
+                                force_point=True,
+                            )
+                        )
+                        failed.update(attach_failed)
             needs_reread = True
 
         if needs_reread or not record:
@@ -2256,7 +2705,20 @@ class XUIClient(BaseVPNClient):
                 suppress_errors=False,
             )
         if not record:
-            raise VPNAPIError("Panel did not return the provisioned client")
+            for inbound_id in sorted(target_ids - set(failed)):
+                failed[inbound_id] = (
+                    "Panel did not return the provisioned client"
+                )
+            return PanelProvisionResult(
+                email=email,
+                sub_id=canonical_sub_id,
+                primary_inbound_id=None,
+                credential="",
+                attached_inbound_ids=set(),
+                failed_inbound_ids=failed,
+                complete=False,
+                api_profile=profile,
+            )
 
         canonical_client, attached_list = self._split_clients_api_record(record)
         if not self._client_matches_provision_target(
@@ -2268,18 +2730,26 @@ class XUIClient(BaseVPNClient):
             sub_id=canonical_sub_id,
             flow=common_flow,
         ):
-            raise VPNAPIError(
-                "Panel did not confirm the requested client fields"
-            )
-        attached = target_ids.intersection(attached_list)
+            for inbound_id in sorted(
+                target_ids.intersection(attached_list) - set(failed)
+            ):
+                failed[inbound_id] = (
+                    "Panel did not confirm the requested client fields"
+                )
+        attached = (
+            target_ids.intersection(attached_list) - set(failed)
+        )
         missing_after_write = target_ids - attached
         for inbound_id in sorted(missing_after_write):
-            failed[inbound_id] = "Panel did not confirm the inbound attachment"
+            failed.setdefault(
+                inbound_id,
+                "Panel did not confirm the inbound attachment",
+            )
 
         mtproto_ids = {
             inbound_id
             for inbound_id in attached
-            if descriptors_by_id[inbound_id].protocol == "mtproto"
+            if available_descriptors_by_id[inbound_id].protocol == "mtproto"
         }
         if mtproto_ids and not canonical_client.get("secret"):
             canonical_client = await self._get_verified_mtproto_client(
@@ -2289,7 +2759,7 @@ class XUIClient(BaseVPNClient):
 
         primary_id = min(attached) if attached else None
         primary_protocol = (
-            descriptors_by_id[primary_id].protocol
+            available_descriptors_by_id[primary_id].protocol
             if primary_id is not None
             else ""
         )
@@ -2297,7 +2767,7 @@ class XUIClient(BaseVPNClient):
             canonical_client.get("subId") or canonical_sub_id
         )
         snapshot = self._build_provision_snapshot(
-            descriptors,
+            all_descriptors,
             email,
             canonical_client,
             attached_list,
@@ -2318,7 +2788,11 @@ class XUIClient(BaseVPNClient):
             ),
             attached_inbound_ids=set(attached),
             failed_inbound_ids=failed,
-            complete=len(attached) == len(target_ids) and not failed,
+            complete=(
+                bool(target_ids)
+                and len(attached) == len(target_ids)
+                and not failed
+            ),
             api_profile=profile,
             snapshot=snapshot,
         )
@@ -2337,7 +2811,11 @@ class XUIClient(BaseVPNClient):
             if known_state is not None:
                 return {
                     "client": dict(known_state.client),
-                    "inboundIds": sorted(known_state.inbound_ids),
+                    "inboundIds": sorted(
+                        known_state.inbound_ids.union(
+                            known_state.unavailable_inbound_ids
+                        )
+                    ),
                 }
             return await self._get_clients_api_record(email, log_error=False)
         profile = await self._ensure_api_profile()
@@ -2346,7 +2824,11 @@ class XUIClient(BaseVPNClient):
         record = (
             {
                 "client": dict(known_state.client),
-                "inboundIds": sorted(known_state.inbound_ids),
+                "inboundIds": sorted(
+                    known_state.inbound_ids.union(
+                        known_state.unavailable_inbound_ids
+                    )
+                ),
             }
             if known_state is not None
             else await self._get_clients_api_record(
@@ -2357,29 +2839,21 @@ class XUIClient(BaseVPNClient):
         )
         if not record:
             return None
-        _, current_ids_list = self._split_clients_api_record(record)
-        current_ids = set(current_ids_list)
-        missing = target_ids - current_ids
-        if missing:
-            recovered = await self._write_client_with_recovery(
-                f"/panel/api/clients/{urllib.parse.quote(email, safe='')}/attach",
-                {"inboundIds": sorted(missing)},
-                email=email,
-                expected_inbound_ids=current_ids.union(missing),
+        result, failed = await self._attach_client_inbounds_resilient(
+            email,
+            target_ids,
+            record,
+            verify=verify,
+        )
+        if failed:
+            logger.warning(
+                "Clients API attach partially rejected on server %s: "
+                "%s of %s inbound targets failed",
+                self.server_id,
+                len(failed),
+                len(target_ids),
             )
-            if recovered:
-                return recovered
-            if verify:
-                return await self._get_clients_api_record(
-                    email,
-                    log_error=False,
-                    suppress_errors=False,
-                )
-            return {
-                "client": dict(known_state.client) if known_state else {},
-                "inboundIds": sorted(current_ids.union(missing)),
-            }
-        return record
+        return result
 
     async def hydrate_client_state(self, state: PanelClientState) -> PanelClientState:
         """Fill a slim paged snapshot row before a replacing update."""
@@ -2393,8 +2867,13 @@ class XUIClient(BaseVPNClient):
         if not record:
             raise VPNAPIError(f"Client {state.email} is missing from clients API")
         client, inbound_ids = self._split_clients_api_record(record)
+        known_available_ids = set(state.inbound_ids)
+        actual_ids = set(inbound_ids)
         state.client = client
-        state.inbound_ids = set(inbound_ids)
+        state.inbound_ids = actual_ids.intersection(known_available_ids)
+        state.unavailable_inbound_ids = actual_ids.difference(
+            state.inbound_ids
+        )
         state.placements = {
             inbound_id: dict(client)
             for inbound_id in state.inbound_ids
@@ -2612,13 +3091,20 @@ class XUIClient(BaseVPNClient):
             record = (
                 {
                     "client": dict(snapshot_state.client),
-                    "inboundIds": sorted(snapshot_state.inbound_ids),
+                    "inboundIds": sorted(
+                        snapshot_state.inbound_ids.union(
+                            snapshot_state.unavailable_inbound_ids
+                        )
+                    ),
                 }
                 if snapshot_state is not None
                 else None
             )
             if panel_snapshot is None:
-                record = await self._get_clients_api_record(email)
+                record = await self._get_clients_api_record(
+                    email,
+                    suppress_errors=False,
+                )
             if record:
                 existing_client, inbound_ids = self._split_clients_api_record(record)
                 existing_result = self._build_add_client_result(
@@ -2631,31 +3117,18 @@ class XUIClient(BaseVPNClient):
                     client_entry["subId"],
                 )
                 if inbound_id not in inbound_ids:
-                    encoded_email = urllib.parse.quote(email, safe="")
-                    for attempt in range(add_attempts):
-                        try:
-                            await self._request(
-                                "POST",
-                                f"/panel/api/clients/{encoded_email}/attach",
-                                data={"inboundIds": [inbound_id]},
-                                retry=False,
-                            )
-                            break
-                        except VPNAPIError:
-                            recovered = await self._recover_added_client(
-                                profile,
-                                inbound_id,
-                                email,
-                                client_uuid,
-                                expire_time,
-                                total_gb,
-                                client_entry["subId"],
-                            )
-                            if recovered:
-                                return await finalize_add_result(recovered)
-                            if attempt >= add_attempts - 1:
-                                raise
-                            await wait_before_next_attempt(attempt)
+                    record, attach_failed = (
+                        await self._attach_client_inbounds_resilient(
+                            email,
+                            {inbound_id},
+                            record,
+                            verify=False,
+                        )
+                    )
+                    if attach_failed:
+                        raise PanelRejectedError(
+                            next(iter(attach_failed.values()))
+                        )
                 if (
                     panel_snapshot is None
                     and flow
@@ -2668,60 +3141,59 @@ class XUIClient(BaseVPNClient):
                     )
                     updated_client["email"] = email
                     updated_client["flow"] = flow
-                    encoded_email = urllib.parse.quote(email, safe="")
-                    for attempt in range(add_attempts):
-                        try:
-                            await self._request(
-                                "POST",
-                                f"/panel/api/clients/update/{encoded_email}",
-                                data=updated_client,
-                                retry=False,
+                    confirmed_ids, failed_ids, _ = (
+                        await self._update_clients_record_resilient(
+                            email,
+                            updated_client,
+                            {inbound_id},
+                            recovery_validator=(
+                                lambda recovered_record: (
+                                    str(
+                                        self._split_clients_api_record(
+                                            recovered_record
+                                        )[0].get("flow")
+                                        or ""
+                                    )
+                                    == flow
+                                )
+                            ),
+                        )
+                    )
+                    if not confirmed_ids:
+                        raise PanelRejectedError(
+                            next(
+                                iter(failed_ids.values()),
+                                "Panel rejected the scoped flow update",
                             )
-                            break
-                        except VPNAPIError:
-                            recovered = await self._recover_added_client(
-                                profile,
-                                inbound_id,
-                                email,
-                                client_uuid,
-                                expire_time,
-                                total_gb,
-                                client_entry["subId"],
-                            )
-                            if recovered:
-                                return await finalize_add_result(recovered)
-                            if attempt >= add_attempts - 1:
-                                raise
-                            await wait_before_next_attempt(attempt)
+                        )
                     existing_client["flow"] = flow
                 return await finalize_add_result(existing_result)
 
             api_client_entry = dict(client_entry)
             api_client_entry["tgId"] = self._normalize_tg_id(tg_id)
-            for attempt in range(add_attempts):
-                try:
-                    await self._request(
-                        "POST",
-                        "/panel/api/clients/add",
-                        data={"client": api_client_entry, "inboundIds": [inbound_id]},
-                        retry=False,
-                    )
-                    break
-                except VPNAPIError:
-                    recovered = await self._recover_added_client(
-                        profile,
-                        inbound_id,
-                        email,
-                        client_uuid,
-                        expire_time,
-                        total_gb,
-                        client_entry["subId"],
-                    )
-                    if recovered:
-                        return await finalize_add_result(recovered)
-                    if attempt >= add_attempts - 1:
-                        raise
-                    await wait_before_next_attempt(attempt)
+            recovered = await self._write_client_with_recovery(
+                "/panel/api/clients/add",
+                {
+                    "client": api_client_entry,
+                    "inboundIds": [inbound_id],
+                },
+                email=email,
+                expected_inbound_ids={inbound_id},
+            )
+            if recovered:
+                recovered_client, _ = self._split_clients_api_record(
+                    recovered
+                )
+                recovered_result = self._build_add_client_result(
+                    recovered_client,
+                    inbound_id,
+                    email,
+                    client_uuid,
+                    expire_time,
+                    total_gb,
+                    client_entry["subId"],
+                )
+                return await finalize_add_result(recovered_result)
             created_record = None
             if panel_snapshot is None:
                 created_record = await self._get_clients_api_record(
@@ -2766,6 +3238,19 @@ class XUIClient(BaseVPNClient):
                         retry=False,
                     )
                     break
+                except PanelRejectedError:
+                    recovered = await self._recover_added_client(
+                        profile,
+                        inbound_id,
+                        email,
+                        client_uuid,
+                        expire_time,
+                        total_gb,
+                        client_entry["subId"],
+                    )
+                    if recovered:
+                        return recovered
+                    raise
                 except VPNAPIError:
                     recovered = await self._recover_added_client(
                         profile,
@@ -3022,7 +3507,9 @@ class XUIClient(BaseVPNClient):
         if profile == API_PROFILE_CLIENTS:
             if panel_state is not None:
                 email = panel_state.email or client_uuid
-                inbound_ids = set(panel_state.inbound_ids)
+                inbound_ids = set(panel_state.inbound_ids).union(
+                    panel_state.unavailable_inbound_ids
+                )
             else:
                 _, client = await self._find_panel_client(
                     inbound_id=inbound_id,
@@ -3377,14 +3864,49 @@ class XUIClient(BaseVPNClient):
             if not record:
                 return 0
             client, inbound_ids = self._split_clients_api_record(record)
-            if client.get("enable", True) == enable:
+            if self._api_bool(client.get("enable"), True) == enable:
                 return 0
             payload = self._build_client_payload_from_record(client, fallback_email=email)
             payload["enable"] = enable
             payload["reset"] = 0
-            encoded_email = urllib.parse.quote(email, safe="")
-            await self._request("POST", f"/panel/api/clients/update/{encoded_email}", data=payload)
-            return max(1, len(inbound_ids))
+            descriptors = await self.get_inbound_descriptors(
+                subscription_mode=True,
+                include_ignored=False,
+            )
+            available_ids = {
+                descriptor.id
+                for descriptor in descriptors
+                if descriptor.available
+            }
+            target_ids = set(inbound_ids).intersection(available_ids)
+            if not target_ids:
+                return 0
+            confirmed_ids, failed_ids, _ = (
+                await self._update_clients_record_resilient(
+                    email,
+                    payload,
+                    target_ids,
+                    recovery_validator=(
+                        lambda recovered_record: (
+                            self._api_bool(
+                                self._split_clients_api_record(
+                                    recovered_record
+                                )[0].get("enable", True),
+                                True,
+                            )
+                            == bool(enable)
+                        )
+                    ),
+                )
+            )
+            if not confirmed_ids:
+                raise PanelRejectedError(
+                    next(
+                        iter(failed_ids.values()),
+                        "Panel rejected the scoped enabled-state update",
+                    )
+                )
+            return len(confirmed_ids)
 
         inbounds = await self.get_inbounds()
         count = 0
@@ -3652,22 +4174,66 @@ class XUIClient(BaseVPNClient):
                 rows = []
             if not isinstance(rows, list):
                 return 0
+            descriptors = await self.get_inbound_descriptors(
+                subscription_mode=True,
+                include_ignored=False,
+            )
+            available_ids = {
+                descriptor.id
+                for descriptor in descriptors
+                if descriptor.available
+            }
             for row in rows:
                 if not isinstance(row, dict) or row.get("reset", 0) == 0:
                     continue
                 email = row.get("email")
                 if not email:
                     continue
-                payload = self._build_client_payload_from_record(row, fallback_email=email)
-                payload["reset"] = 0
                 try:
-                    encoded_email = urllib.parse.quote(email, safe="")
-                    await self._request(
-                        "POST",
-                        f"/panel/api/clients/update/{encoded_email}",
-                        data=payload,
+                    record = (
+                        row
+                        if isinstance(row.get("inboundIds"), list)
+                        else await self._get_clients_api_record(
+                            email,
+                            log_error=False,
+                            suppress_errors=False,
+                        )
                     )
-                    updated_count += 1
+                    if not record:
+                        continue
+                    client_data, inbound_ids = (
+                        self._split_clients_api_record(record)
+                    )
+                    target_ids = set(inbound_ids).intersection(
+                        available_ids
+                    )
+                    if not target_ids:
+                        continue
+                    payload = self._build_client_payload_from_record(
+                        client_data,
+                        fallback_email=email,
+                    )
+                    payload["reset"] = 0
+                    confirmed_ids, _, _ = (
+                        await self._update_clients_record_resilient(
+                            email,
+                            payload,
+                            target_ids,
+                            recovery_validator=(
+                                lambda recovered_record: (
+                                    int(
+                                        self._split_clients_api_record(
+                                            recovered_record
+                                        )[0].get("reset", 0)
+                                        or 0
+                                    )
+                                    == 0
+                                )
+                            ),
+                        )
+                    )
+                    if confirmed_ids:
+                        updated_count += 1
                 except Exception as e:
                     logger.error(f"Ошибка при отключении автопродления для клиента {email}: {e}")
             return updated_count
@@ -3740,6 +4306,7 @@ class XUIClient(BaseVPNClient):
         limit_ip: Optional[int] = None,
         flow: Optional[str] = None,
         panel_client: Optional[Dict[str, Any]] = None,
+        target_inbound_ids: Optional[Iterable[int]] = None,
     ) -> bool:
         return await self._run_with_stale_profile_retry(
             lambda: self._update_client_full_impl(
@@ -3753,6 +4320,7 @@ class XUIClient(BaseVPNClient):
                 limit_ip=limit_ip,
                 flow=flow,
                 panel_client=panel_client,
+                target_inbound_ids=target_inbound_ids,
             )
         )
 
@@ -3768,9 +4336,10 @@ class XUIClient(BaseVPNClient):
         limit_ip: Optional[int] = None,
         flow: Optional[str] = None,
         panel_client: Optional[Dict[str, Any]] = None,
+        target_inbound_ids: Optional[Iterable[int]] = None,
     ) -> bool:
         """
-        Updates ALL client parameters on the panel with data from our database.
+        Updates all controlled client parameters on the selected panel targets.
         The only recording function on the panel (except for creating/deleting).
         
         Protocol fields (flow, tgId) are read from the panel,
@@ -3787,12 +4356,21 @@ class XUIClient(BaseVPNClient):
             sub_id: Explicit subscription ID. None = save current panel value
             limit_ip: Explicit device limit. None = save current panel value
             flow: Explicit flow. None = save current panel value
+            target_inbound_ids: Safe Clients API memberships to update. None
+                scopes the request to inbound_id.
             
         Returns:
             True if update is successful
         """
         profile = await self._ensure_api_profile()
         if profile == API_PROFILE_CLIENTS:
+            scoped_inbound_ids = (
+                {int(value) for value in target_inbound_ids}
+                if target_inbound_ids is not None
+                else {int(inbound_id)}
+            )
+            if not scoped_inbound_ids:
+                return False
             target_client = dict(panel_client) if panel_client else None
             if target_client is None:
                 record = await self._get_clients_api_record(email, log_error=False)
@@ -3822,12 +4400,46 @@ class XUIClient(BaseVPNClient):
             if flow is not None:
                 updated_client["flow"] = flow
 
-            encoded_email = urllib.parse.quote(email, safe="")
-            await self._request(
-                "POST",
-                f"/panel/api/clients/update/{encoded_email}",
-                data=updated_client,
+            confirmed_ids, failed_ids, _ = (
+                await self._update_clients_record_resilient(
+                    email,
+                    updated_client,
+                    scoped_inbound_ids,
+                    recovery_validator=(
+                        lambda recovered_record: (
+                            self._client_matches_provision_target(
+                                self._split_clients_api_record(
+                                    recovered_record
+                                )[0],
+                                total_gb_bytes=total_gb_bytes,
+                                expiry_time=expiry_time_ms,
+                                enable=bool(updated_client.get("enable", True)),
+                                limit_ip=int(
+                                    updated_client.get("limitIp", 1) or 0
+                                ),
+                                sub_id=str(
+                                    updated_client.get("subId") or ""
+                                ),
+                                flow=str(updated_client.get("flow") or ""),
+                            )
+                        )
+                    ),
+                )
             )
+            if not confirmed_ids:
+                reason = next(
+                    iter(failed_ids.values()),
+                    "Panel rejected the scoped client update",
+                )
+                raise PanelRejectedError(reason)
+            if failed_ids:
+                logger.warning(
+                    "Clients API update partially rejected on server %s: "
+                    "%s of %s inbound targets failed",
+                    self.server_id,
+                    len(failed_ids),
+                    len(scoped_inbound_ids),
+                )
 
             from datetime import datetime
             expiry_str = datetime.fromtimestamp(expiry_time_ms / 1000).strftime('%Y-%m-%d %H:%M') if expiry_time_ms > 0 else '∞'

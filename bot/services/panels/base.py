@@ -8,6 +8,20 @@ class VPNAPIError(Exception):
     """Error when working with VPN API."""
     pass
 
+
+class PanelRejectedError(VPNAPIError):
+    """Deterministic business-level rejection returned by a panel API."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        recovered_record: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.recovered_record = recovered_record
+
+
 @dataclass(frozen=True)
 class PanelDatabaseBackup:
     """The downloaded backup file of the panel and its actual format."""
@@ -30,7 +44,24 @@ class PanelInboundDescriptor:
     flow: str = ""
     ss_method: str = ""
     ignored: bool = False
+    enabled: bool = True
+    node_id: Optional[int] = None
+    node_enabled: Optional[bool] = None
     raw: Dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
+
+    @property
+    def available(self) -> bool:
+        """Whether the inbound can participate in a panel mutation now."""
+        return self.enabled and self.node_enabled is not False
+
+    @property
+    def unavailable_reason(self) -> str:
+        """Return a stable reason for an explicitly unavailable inbound."""
+        if not self.enabled:
+            return "Inbound is disabled"
+        if self.node_enabled is False:
+            return "Inbound node is disabled"
+        return ""
 
     def as_inbound(self) -> Dict[str, Any]:
         """Return a legacy-compatible metadata-only inbound dictionary."""
@@ -44,8 +75,11 @@ class PanelInboundDescriptor:
                 "port": self.port,
                 "tlsFlowCapable": self.tls_flow_capable,
                 "ssMethod": self.ss_method,
+                "enable": self.enabled,
             }
         )
+        if self.node_id is not None:
+            result["nodeId"] = self.node_id
         return result
 
 
@@ -56,6 +90,7 @@ class PanelClientState:
     email: str
     client: Dict[str, Any] = field(default_factory=dict)
     inbound_ids: set[int] = field(default_factory=set)
+    unavailable_inbound_ids: set[int] = field(default_factory=set)
     placements: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     traffic_used: int = 0
     traffic_known: bool = False
@@ -76,6 +111,7 @@ class PanelServerSnapshot:
     api_profile: str
     inbounds: List[Dict[str, Any]]
     clients: Dict[str, PanelClientState]
+    unavailable_inbound_ids: set[int] = field(default_factory=set)
 
     def get_client(self, email: Any) -> Optional[PanelClientState]:
         normalized = str(email or "").strip().lower()
@@ -116,6 +152,22 @@ def _panel_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _panel_bool(value: Any, default: bool = True) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _optional_panel_bool(value: Any) -> Optional[bool]:
+    if value is None or value == "":
+        return None
+    return _panel_bool(value)
 
 
 def _load_settings(value: Any) -> Dict[str, Any]:
@@ -165,6 +217,14 @@ def build_inbound_descriptor(inbound: Dict[str, Any]) -> Optional[PanelInboundDe
         port = int(inbound.get("port")) if inbound.get("port") is not None else None
     except (TypeError, ValueError):
         port = None
+    try:
+        node_id = (
+            int(inbound.get("nodeId"))
+            if inbound.get("nodeId") not in (None, "")
+            else None
+        )
+    except (TypeError, ValueError):
+        node_id = None
     return PanelInboundDescriptor(
         id=inbound_id,
         protocol=protocol,
@@ -175,6 +235,9 @@ def build_inbound_descriptor(inbound: Dict[str, Any]) -> Optional[PanelInboundDe
         flow=flow,
         ss_method=ss_method,
         ignored=remark.lstrip().startswith("--!"),
+        enabled=_panel_bool(inbound.get("enable"), True),
+        node_id=node_id,
+        node_enabled=_optional_panel_bool(inbound.get("nodeEnabled")),
         raw=dict(inbound),
     )
 
@@ -308,20 +371,28 @@ class BaseVPNClient(abc.ABC):
         inbound_ids: Optional[Iterable[int]] = None,
     ) -> PanelProvisionResult:
         """Create a logical client through the adapter's compatible point API."""
-        descriptors = await self.get_inbound_descriptors(
+        all_descriptors = await self.get_inbound_descriptors(
             subscription_mode=subscription_mode,
             include_ignored=False,
         )
         requested = {int(value) for value in inbound_ids} if inbound_ids is not None else None
-        if requested is not None:
-            descriptors = [item for item in descriptors if item.id in requested]
+        known_by_id = {item.id: item for item in all_descriptors}
+        descriptors = [
+            item
+            for item in all_descriptors
+            if item.available and (requested is None or item.id in requested)
+        ]
 
         attached: set[int] = set()
         descriptor_ids = {item.id for item in descriptors}
-        failed: Dict[int, str] = {
-            inbound_id: "Inbound is missing, ignored, or incompatible"
-            for inbound_id in sorted((requested or set()) - descriptor_ids)
-        }
+        failed: Dict[int, str] = {}
+        for inbound_id in sorted((requested or set()) - descriptor_ids):
+            descriptor = known_by_id.get(inbound_id)
+            failed[inbound_id] = (
+                descriptor.unavailable_reason
+                if descriptor is not None and not descriptor.available
+                else "Inbound is missing, ignored, or incompatible"
+            )
         results: Dict[int, Dict[str, Any]] = {}
         for descriptor in descriptors:
             try:
