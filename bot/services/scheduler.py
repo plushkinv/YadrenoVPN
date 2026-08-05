@@ -707,7 +707,7 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
     logger.info("⏳ Запуск проверки истекающих ключей...")
     try:
         from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
-        from bot.utils.page_renderer import build_page_keyboard
+        from bot.utils.page_renderer import PreparedPageRender, prepare_page_render
         from bot.utils.text import send_media_or_text
         days = int(get_setting('notification_days', '3'))
         from bot.utils.message_editor import get_message_data
@@ -744,7 +744,22 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
                 mode='html',
             )
             
-            kb = build_page_keyboard('expiry_notification_actions')
+            prepared_actions = await prepare_page_render(
+                bot,
+                'expiry_notification_actions',
+                context={
+                    'telegram_id': user_telegram_id,
+                    'key_id': vpn_key_id,
+                    'key_name': keyname,
+                    'key_days_left': days_left,
+                },
+            )
+            kb = (
+                prepared_actions.reply_markup
+                if isinstance(prepared_actions, PreparedPageRender)
+                and prepared_actions.page_key == 'expiry_notification_actions'
+                else None
+            )
             
             try:
                 await send_media_or_text(
@@ -1035,7 +1050,7 @@ async def _monthly_traffic_reset_impl(bot: Bot) -> None:
     """
     Monthly tasks (1st day of each month):
     
-    1. Reset traffic (if monthly_traffic_reset_enabled = 1)
+    1. Reset traffic for keys whose tariff group enables monthly reset
     2. Reconciliation of the database and the panel (ALWAYS) - correction of discrepancies between expiryTime and totalGB
     
     Args:
@@ -1043,14 +1058,15 @@ async def _monthly_traffic_reset_impl(bot: Bot) -> None:
     """
     from database.requests import (
         get_all_active_keys_with_server,
+        get_active_keys_for_monthly_traffic_reset,
         reset_key_traffic_notification,
         update_key_traffic_limit,
-        get_tariff_by_id
     )
     from bot.services.vpn_api import sync_key_to_panel_state
     
-    reset_enabled = get_setting('monthly_traffic_reset_enabled', '0') == '1'
     all_keys = get_all_active_keys_with_server()
+    reset_keys = get_active_keys_for_monthly_traffic_reset()
+    reset_enabled = bool(reset_keys)
     all_servers = get_all_servers()
     initial_snapshots = await collect_server_snapshots(all_keys, all_servers)
     
@@ -1060,38 +1076,47 @@ async def _monthly_traffic_reset_impl(bot: Bot) -> None:
 
     if reset_enabled:
         logger.info("🔄 Запуск ежемесячного сброса трафика...")
-        keys = all_keys
-        keys_with_limit = [k for k in keys if (k.get('traffic_limit', 0) or 0) > 0] if keys else []
-
-        for key in keys_with_limit:
+        for key in reset_keys:
             try:
-                panel_snapshot = initial_snapshots.snapshots.get(int(key['server_id']))
-                if panel_snapshot is None:
-                    raise RuntimeError("Panel snapshot is unavailable")
+                if key.get('tariff_system_type') == 'admin_custom':
+                    override = key.get('traffic_limit_override')
+                    tariff_limit = (
+                        int(override)
+                        if override is not None
+                        else int(key.get('traffic_limit', 0) or 0)
+                    )
+                else:
+                    tariff_limit = int(
+                        key.get('tariff_traffic_limit_gb', 0) or 0
+                    ) * (1024 ** 3)
 
-                tariff_limit = key.get('traffic_limit', 0) or 0
-                tariff_id = key.get('tariff_id')
-                if tariff_id:
-                    tariff = get_tariff_by_id(tariff_id)
-                    if tariff and (tariff.get('traffic_limit_gb', 0) or 0) > 0:
-                        tariff_limit = tariff['traffic_limit_gb'] * (1024**3)
-
-                # Updating the database
+                # The database remains authoritative even when the panel is down.
                 update_key_traffic_limit(key['id'], tariff_limit)
                 reset_key_traffic_notification(key['id'])
 
-                # Push to the panel (up/down reset + correct data from the database)
-                await sync_key_to_panel_state(
+                panel_snapshot = initial_snapshots.snapshots.get(
+                    int(key['server_id'])
+                ) if key.get('server_id') is not None else None
+                sync_kwargs = (
+                    {'panel_snapshot': panel_snapshot}
+                    if panel_snapshot is not None
+                    else {}
+                )
+                sync_stats = await sync_key_to_panel_state(
                     key['id'],
                     reset_traffic=True,
-                    panel_snapshot=panel_snapshot,
+                    **sync_kwargs,
                 )
+                if not sync_stats.get('ok') or sync_stats.get('errors'):
+                    raise RuntimeError(
+                        f"Panel reset is incomplete: {sync_stats}"
+                    )
                 reset_success += 1
             except Exception as e:
                 reset_errors += 1
                 logger.error(f"Ошибка сброса трафика для ключа {key['id']}: {e}")
     else:
-        logger.info("🔄 Ежемесячный сброс трафика отключён")
+        logger.info("🔄 Нет активных ключей в группах с ежемесячным сбросом")
     
     # === PART 2: Database reconciliation↔panel (ALWAYS) ===
     logger.info("🔍 Запуск ежемесячной сверки БД↔панель...")

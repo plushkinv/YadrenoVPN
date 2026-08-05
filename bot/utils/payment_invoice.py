@@ -1,7 +1,7 @@
 """Database-backed Telegram Invoice text helpers."""
 from __future__ import annotations
 
-from bot.utils.user_ui_texts import render_ui_text
+from bot.utils.user_ui_texts import render_duration_days, render_ui_text
 
 
 def clamp_invoice_text(value: object, limit: int) -> str:
@@ -17,7 +17,7 @@ def purchase_invoice_description(tariff_name: object, days: object) -> str:
     return render_ui_text(
         'payment.invoice.purchase_description',
         tariff_name=tariff_name,
-        days=render_ui_text('format.days_short', days=days),
+        days=render_duration_days(days),
     )
 
 

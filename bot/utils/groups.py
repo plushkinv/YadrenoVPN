@@ -12,6 +12,24 @@ from database.requests import (
 )
 
 
+def is_tariff_available_for_payment(
+    tariff: dict | None,
+    key: dict | None = None,
+) -> bool:
+    """Validates an ordinary active tariff against an optional key group."""
+    if (
+        tariff is None
+        or tariff.get('system_type') is not None
+        or not bool(tariff.get('is_active', 1))
+    ):
+        return False
+    if key is None:
+        return True
+    return int(tariff.get('group_id') or 1) == int(
+        key.get('tariff_group_id') or 1
+    )
+
+
 def build_groups_data_for_tariffs():
     """
     Generates data for grouped display of tariffs.

@@ -22,7 +22,8 @@ from database.requests import (
     move_group_up,
     get_groups_count,
     get_tariffs_by_group,
-    get_active_servers_by_group
+    get_active_servers_by_group,
+    toggle_group_monthly_traffic_reset,
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
@@ -82,6 +83,8 @@ async def show_groups_list(callback: CallbackQuery, state: FSMContext):
         is_default = " _(по умолчанию)_" if g['id'] == 1 else ""
         text += f"\n📂 <b>{g['name']}</b>{is_default}\n"
         text += f"   Тарифов: {g['tariffs_count']} | Серверов: {g['servers_count']}\n"
+        reset_text = "включён" if g['monthly_traffic_reset_enabled'] else "выключен"
+        text += f"   Автосброс: {reset_text}\n"
     
     await safe_edit_or_send(callback.message, 
         text,
@@ -220,6 +223,8 @@ async def group_view_handler(callback: CallbackQuery, state: FSMContext):
         f"🔢 Порядок: {group['sort_order']}\n"
         f"📋 Активных тарифов: {len(tariffs)}\n"
         f"🖥️ Активных серверов: {len(servers)}\n"
+        f"🔄 Автосброс 1-го числа: "
+        f"{'включён' if group['monthly_traffic_reset_enabled'] else 'выключен'}\n"
     )
     
     if tariffs:
@@ -239,7 +244,10 @@ async def group_view_handler(callback: CallbackQuery, state: FSMContext):
     
     await safe_edit_or_send(callback.message, 
         text,
-        reply_markup=group_view_kb(group_id)
+        reply_markup=group_view_kb(
+            group_id,
+            bool(group['monthly_traffic_reset_enabled']),
+        )
     )
     await callback.answer()
 
@@ -324,10 +332,21 @@ async def group_edit_name_handler(message: Message, state: FSMContext):
                 text,
                 chat_id=message.chat.id,
                 message_id=edit_msg_id,
-                reply_markup=group_view_kb(group_id)
+                reply_markup=group_view_kb(
+                    group_id,
+                    bool(group['monthly_traffic_reset_enabled']),
+                )
             )
         except:
-            await safe_edit_or_send(message, text, reply_markup=group_view_kb(group_id), force_new=True)
+            await safe_edit_or_send(
+                message,
+                text,
+                reply_markup=group_view_kb(
+                    group_id,
+                    bool(group['monthly_traffic_reset_enabled']),
+                ),
+                force_new=True,
+            )
     else:
         await safe_edit_or_send(message, f"✅ Группа переименована в <b>{name}</b>")
 
@@ -413,3 +432,21 @@ async def group_move_up_handler(callback: CallbackQuery, state: FSMContext):
     
     # Updating the list
     await show_groups_list(callback, state)
+
+
+@router.callback_query(F.data.startswith("admin_group_monthly_reset:"))
+async def group_monthly_reset_toggle(callback: CallbackQuery, state: FSMContext):
+    """Toggles monthly traffic reset for one tariff group."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    group_id = int(callback.data.split(":", 1)[1])
+    enabled = toggle_group_monthly_traffic_reset(group_id)
+    if enabled is None:
+        await callback.answer("❌ Группа не найдена", show_alert=True)
+        return
+    forwarded = callback.model_copy(
+        update={'data': f'admin_group_view:{group_id}'},
+    )
+    await group_view_handler(forwarded, state)

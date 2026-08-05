@@ -105,7 +105,10 @@ def _broadcast_recipient_query_parts(
             EXISTS (
                 SELECT 1 FROM vpn_keys active_key
                 WHERE active_key.user_id = u.id
-                  AND active_key.expires_at > datetime('now')
+                  AND (
+                        active_key.expires_at > datetime('now')
+                        OR active_key.expires_at IS NULL
+                  )
             )
             """
         )
@@ -115,7 +118,10 @@ def _broadcast_recipient_query_parts(
             NOT EXISTS (
                 SELECT 1 FROM vpn_keys active_key
                 WHERE active_key.user_id = u.id
-                  AND active_key.expires_at > datetime('now')
+                  AND (
+                        active_key.expires_at > datetime('now')
+                        OR active_key.expires_at IS NULL
+                  )
             )
             """
         )
@@ -157,7 +163,10 @@ def _broadcast_recipient_query_parts(
                 NOT EXISTS (
                     SELECT 1 FROM vpn_keys active_key
                     WHERE active_key.user_id = u.id
-                      AND active_key.expires_at > datetime('now')
+                      AND (
+                            active_key.expires_at > datetime('now')
+                            OR active_key.expires_at IS NULL
+                      )
                 )
                 """,
             )
@@ -238,6 +247,7 @@ def get_expiring_keys(days: int) -> List[Dict[str, Any]]:
             JOIN users u ON vk.user_id = u.id
             WHERE u.is_banned = 0
             AND u.is_bot_blocked = 0
+            AND vk.expires_at IS NOT NULL
             AND vk.expires_at > datetime('now')
             AND vk.expires_at <= datetime('now', '+' || ? || ' days')
         """, (days,))
@@ -293,7 +303,7 @@ def get_keys_stats() -> Dict[str, int]:
         # Active (not expired)
         cursor = conn.execute("""
             SELECT COUNT(*) as cnt FROM vpn_keys 
-            WHERE expires_at > datetime('now')
+            WHERE expires_at > datetime('now') OR expires_at IS NULL
         """)
         active = cursor.fetchone()['cnt']
         

@@ -284,7 +284,7 @@ async def build_my_keys_render_data(telegram_id: int):
     """Prepares a list of keys and dynamic buttons for the `my_keys` page."""
     telegram_id = _required_int(telegram_id, 'telegram_id')
     from database.requests import get_setting, get_user_keys_for_display, is_traffic_exhausted
-    from bot.services.vpn_api import format_traffic, get_client
+    from bot.services.vpn_api import format_traffic
     from bot.utils.my_keys_page import (
         MY_KEYS_ITEM_TEMPLATE_SETTING,
         build_my_keys_item_text,
@@ -326,29 +326,12 @@ async def build_my_keys_render_data(telegram_id: int):
         else:
             traffic_text = render_ui_text('key.traffic.unlimited')
 
-        protocol = 'VLESS'
-        inbound_name = 'VPN'
-        if key.get('sub_id'):
-            protocol = 'SUBSCRIPTION'
-            inbound_name = render_ui_text('key.inbound.all_protocols')
-        elif key.get('server_id') and key.get('panel_email'):
-            try:
-                client = await get_client(key['server_id'])
-                stats = await client.get_client_stats(key['panel_email'])
-                if stats:
-                    protocol = stats['protocol'].upper()
-                    inbound_name = stats.get('remark', 'VPN') or 'VPN'
-            except Exception as e:
-                logger.warning("Не удалось получить протокол для ключа %s: %s", key['id'], e)
-
         items.append(
             build_my_keys_item_text(
                 key,
                 template=item_template,
                 status=status_text,
                 traffic_text=traffic_text,
-                inbound_name=inbound_name,
-                protocol=protocol,
             )
         )
     return keys, build_my_keys_list_text(items), build_key_button_items(keys)

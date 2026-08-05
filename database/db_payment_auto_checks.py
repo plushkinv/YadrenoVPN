@@ -151,11 +151,19 @@ def update_payment_auto_check(
     state: str,
     next_delay_seconds: int | None = None,
     last_error: str | None = None,
+    expected_state: str | None = None,
 ) -> bool:
-    """Updates polling state and optionally schedules its next run."""
+    """Update polling state, optionally as a compare-and-set transition."""
     normalized_state = str(state or '').strip().casefold()
     if normalized_state not in AUTO_CHECK_STATES:
         raise ValueError(f'Unsupported payment auto-check state: {state}')
+    normalized_expected = None
+    if expected_state is not None:
+        normalized_expected = str(expected_state or '').strip().casefold()
+        if normalized_expected not in AUTO_CHECK_STATES:
+            raise ValueError(
+                f'Unsupported expected payment auto-check state: {expected_state}'
+            )
     modifier = None
     if next_delay_seconds is not None:
         modifier = f'+{max(0, int(next_delay_seconds))} seconds'
@@ -172,8 +180,17 @@ def update_payment_auto_check(
                 last_error = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE order_id = ?
+              AND (? IS NULL OR state = ?)
             """,
-            (normalized_state, modifier, modifier, last_error, str(order_id)),
+            (
+                normalized_state,
+                modifier,
+                modifier,
+                last_error,
+                str(order_id),
+                normalized_expected,
+                normalized_expected,
+            ),
         )
         return cursor.rowcount > 0
 

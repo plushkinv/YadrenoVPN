@@ -2314,7 +2314,7 @@ class XUIClient(BaseVPNClient):
         email: str,
         total_gb: int = 0,
         total_gb_bytes: Optional[int] = None,
-        expire_days: int = 30,
+        expire_days: int = 0,
         expiry_time_ms: Optional[int] = None,
         limit_ip: int = 1,
         enable: bool = True,
@@ -2354,8 +2354,8 @@ class XUIClient(BaseVPNClient):
         subscription_mode: bool,
         inbound_ids: Optional[Iterable[int]],
     ) -> PanelProvisionResult:
-        if expiry_time_ms is None and expire_days <= 0:
-            raise ValueError("Key lifetime must be greater than zero days")
+        if expiry_time_ms is None and expire_days < 0:
+            raise ValueError("Key lifetime must not be negative")
 
         profile = await self._ensure_api_profile()
         requested = (
@@ -2521,7 +2521,11 @@ class XUIClient(BaseVPNClient):
         target_expiry_time = (
             max(0, int(expiry_time_ms))
             if expiry_time_ms is not None
-            else int((time.time() + expire_days * 86400) * 1000)
+            else (
+                0
+                if int(expire_days) == 0
+                else int((time.time() + expire_days * 86400) * 1000)
+            )
         )
         target_total_gb_bytes = (
             max(0, int(total_gb_bytes))
@@ -2886,7 +2890,7 @@ class XUIClient(BaseVPNClient):
         inbound_id: int,
         email: str,
         total_gb: int = 0,
-        expire_days: int = 30,
+        expire_days: int = 0,
         limit_ip: int = 1,
         enable: bool = True,
         tg_id: str = "",
@@ -2918,7 +2922,7 @@ class XUIClient(BaseVPNClient):
         inbound_id: int,
         email: str,
         total_gb: int = 0,
-        expire_days: int = 30,
+        expire_days: int = 0,
         limit_ip: int = 1,
         enable: bool = True,
         tg_id: str = "",
@@ -2948,10 +2952,10 @@ class XUIClient(BaseVPNClient):
             Dictionary with created client data
 
         Raises:
-            ValueError: If expire_days <= 0
+            ValueError: If expire_days is negative
         """
-        if expiry_time_ms is None and expire_days <= 0:
-            raise ValueError("Срок действия ключа должен быть больше 0 дней")
+        if expiry_time_ms is None and expire_days < 0:
+            raise ValueError("Срок действия ключа не может быть отрицательным")
         profile = await self._ensure_api_profile()
         try:
             add_attempts = max(1, int(RETRY_CONFIG.get("max_attempts", 3)))
@@ -3020,7 +3024,11 @@ class XUIClient(BaseVPNClient):
         expire_time = (
             max(0, int(expiry_time_ms))
             if expiry_time_ms is not None
-            else int((time.time() + expire_days * 86400) * 1000)
+            else (
+                0
+                if int(expire_days) == 0
+                else int((time.time() + expire_days * 86400) * 1000)
+            )
         )
 
         # Traffic limit (bytes)

@@ -52,6 +52,11 @@ from bot.utils.text import safe_edit_or_send
 router = Router()
 
 
+def _admin_duration_text(days: int) -> str:
+    """Formats a tariff duration for administrator screens."""
+    return 'Без срока' if int(days) == 0 else f'{int(days)} дн.'
+
+
 # ============================================================================
 # AUXILIARY FUNCTIONS
 # ============================================================================
@@ -101,7 +106,7 @@ async def show_tariffs_list(callback: CallbackQuery, state: FSMContext):
             lines.append(
                 f"{status} <b>{tariff['name']}</b> — "
                 f"{format_money_minor(tariff.get('price_minor', 0), tariff.get('base_currency', 'RUB'))} / "
-                f"{tariff['duration_days']} дн. / {traffic_text}"
+                f"{_admin_duration_text(tariff['duration_days'])} / {traffic_text}"
             )
             
 
@@ -130,7 +135,7 @@ async def render_tariff_view(message: Message, tariff_id: int, state: FSMContext
     lines = [
         f"📋 <b>{tariff['name']}</b>\n",
         f"💰 Цена: <code>{price_display}</code>",
-        f"📅 Длительность: <code>{tariff['duration_days']} дней</code>",
+        f"📅 Длительность: <code>{_admin_duration_text(tariff['duration_days'])}</code>",
     ]
     
     # Traffic limit
@@ -175,7 +180,7 @@ async def show_tariff_view(callback: CallbackQuery, state: FSMContext):
     tariff_id = int(callback.data.split(":")[1])
     tariff = get_tariff_by_id(tariff_id)
     
-    if not tariff:
+    if not tariff or tariff.get('system_type') is not None:
         await callback.answer("❌ Тариф не найден", show_alert=True)
         return
     
@@ -444,7 +449,7 @@ async def process_add_tariff_step(message: Message, state: FSMContext):
             "✅ <b>Все данные введены!</b>\n",
             f"📌 Название: <code>{tariff_data['name']}</code>",
             f"💰 Цена: <code>{format_money_minor(tariff_data.get('price_minor', 0))}</code>",
-            f"📅 Длительность: <code>{tariff_data['duration_days']} дней</code>",
+            f"📅 Длительность: <code>{_admin_duration_text(tariff_data['duration_days'])}</code>",
         ]
         
         # Traffic limit
@@ -574,7 +579,7 @@ async def start_edit_tariff(callback: CallbackQuery, state: FSMContext):
     tariff_id = int(callback.data.split(":")[1])
     tariff = get_tariff_by_id(tariff_id)
     
-    if not tariff:
+    if not tariff or tariff.get('system_type') is not None:
         await callback.answer("❌ Тариф не найден", show_alert=True)
         return
     
@@ -603,7 +608,7 @@ async def edit_tariff_prev(callback: CallbackQuery, state: FSMContext):
     current_param = data.get('edit_param', 0)
     
     tariff = get_tariff_by_id(tariff_id)
-    if not tariff:
+    if not tariff or tariff.get('system_type') is not None:
         await callback.answer("❌ Тариф не найден", show_alert=True)
         return
     
@@ -632,7 +637,7 @@ async def edit_tariff_next(callback: CallbackQuery, state: FSMContext):
     current_param = data.get('edit_param', 0)
     
     tariff = get_tariff_by_id(tariff_id)
-    if not tariff:
+    if not tariff or tariff.get('system_type') is not None:
         await callback.answer("❌ Тариф не найден", show_alert=True)
         return
     
@@ -732,7 +737,7 @@ async def tariff_change_group_start(callback: CallbackQuery, state: FSMContext):
     tariff_id = int(callback.data.split(":")[1])
     tariff = get_tariff_by_id(tariff_id)
     
-    if not tariff:
+    if not tariff or tariff.get('system_type') is not None:
         await callback.answer("❌ Тариф не найден", show_alert=True)
         return
     
@@ -761,7 +766,9 @@ async def tariff_change_group_execute(callback: CallbackQuery, state: FSMContext
         await callback.answer("❌ Ошибка состояния", show_alert=True)
         return
     
-    update_tariff(tariff_id, group_id=new_group_id)
+    if not update_tariff(tariff_id, group_id=new_group_id):
+        await callback.answer("❌ Системный тариф изменять нельзя", show_alert=True)
+        return
     
     group = get_group_by_id(new_group_id)
     group_name = group['name'] if group else 'Основная'

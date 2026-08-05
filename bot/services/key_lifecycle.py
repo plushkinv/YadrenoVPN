@@ -33,21 +33,46 @@ async def renew_key_access(
         'sync_stats': {},
     }
 
-    if not key_id or not days:
+    if not key_id or days is None:
         return result
 
     paid_traffic_limit: Optional[int] = None
     if tariff_id:
-        from database.requests import get_tariff_by_id
+        from database.requests import get_tariff_by_id, get_vpn_key_by_id
 
         tariff = get_tariff_by_id(tariff_id)
         if not tariff:
             logger.error(f"renew_key_access: тариф {tariff_id} не найден для ключа {key_id}")
             return result
+        if tariff.get('system_type') is not None:
+            logger.error(
+                "renew_key_access: системный тариф %s нельзя использовать для оплаты",
+                tariff_id,
+            )
+            return result
+        if tariff.get('group_id') is not None:
+            key = get_vpn_key_by_id(key_id)
+            if not key:
+                logger.error(f"renew_key_access: ключ {key_id} не найден")
+                return result
+            if int(tariff.get('group_id') or 1) != int(
+                key.get('tariff_group_id') or 1
+            ):
+                logger.error(
+                    "renew_key_access: тариф %s не принадлежит группе ключа %s",
+                    tariff_id,
+                    key_id,
+                )
+                return result
 
         paid_traffic_limit = (tariff.get('traffic_limit_gb', 0) or 0) * (1024 ** 3)
 
-    if not extend_vpn_key(key_id, days):
+    extend_kwargs = (
+        {'finite_from_now_if_unlimited': True}
+        if tariff_id
+        else {}
+    )
+    if not extend_vpn_key(key_id, days, **extend_kwargs):
         logger.error(f"renew_key_access: не удалось обновить срок ключа {key_id}")
         return result
 

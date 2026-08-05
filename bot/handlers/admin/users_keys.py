@@ -6,13 +6,13 @@ from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardB
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from config import ADMIN_IDS
-from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, create_vpn_key_admin, get_active_servers, get_all_tariffs, get_user_balance, get_user_referral_coefficient, add_to_balance, deduct_from_balance, set_user_referral_coefficient
+from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, create_vpn_key_admin, get_user_balance, get_user_referral_coefficient, add_to_balance, deduct_from_balance, set_user_referral_coefficient
 from bot.utils.admin import is_admin
 from bot.utils.datetime_format import format_datetime_for_display
 from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.panel_email import get_panel_email_prefix
 from bot.states.admin_states import AdminStates
-from bot.keyboards.admin import users_menu_kb, users_list_kb, user_view_kb, user_ban_confirm_kb, key_view_kb, add_key_server_kb, add_key_inbound_kb, add_key_step_kb, add_key_confirm_kb, users_input_cancel_kb, key_action_cancel_kb, back_and_home_kb, home_only_kb
+from bot.keyboards.admin import users_menu_kb, users_list_kb, user_view_kb, user_ban_confirm_kb, key_view_kb, add_key_group_kb, add_key_server_kb, add_key_inbound_kb, add_key_step_kb, add_key_confirm_kb, users_input_cancel_kb, key_action_cancel_kb, back_and_home_kb, home_only_kb
 from bot.services.vpn_api import (
     get_client_from_server_data,
     get_client_inbound_descriptors,
@@ -34,8 +34,27 @@ def generate_unique_email(user: dict) -> str:
     Generates a unique email for the 3X-UI panel.
     Format: user_{username/id}_{random_suffix}
     """
-    suffix = uuid.uuid4().hex[:5]
-    return f'{get_panel_email_prefix(user)}{suffix}'
+    from bot.utils.panel_email import generate_unique_panel_email
+
+    return generate_unique_panel_email(user)
+
+
+async def _admin_key_input_target(
+    message: Message,
+    state: FSMContext,
+) -> tuple[Message, dict]:
+    """Deletes administrator input and targets the original key dialog."""
+    data = await state.get_data()
+    message_id = data.get('add_key_dialog_message_id')
+    try:
+        target = message.model_copy(update={'message_id': int(message_id)})
+    except (TypeError, ValueError):
+        target = message
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    return target, data
 
 @router.callback_query(F.data.startswith('admin_key_view:'))
 async def show_key_view(callback: CallbackQuery, state: FSMContext):
@@ -58,16 +77,29 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
             key_name = f'{uuid[:4]}...{uuid[-4:]}'
         else:
             key_name = uuid or f'Ключ #{key_id}'
-    server_name = key.get('server_name', 'Неизвестный сервер')
-    tariff_name = key.get('tariff_name', 'Неизвестный тариф')
-    expires_at = format_datetime_for_display(key.get('expires_at'), fallback='?')
+    server_name = escape_html(key.get('server_name', 'Неизвестный сервер'))
+    tariff_name = (
+        'Произвольный тариф'
+        if key.get('tariff_system_type') == 'admin_custom'
+        else escape_html(key.get('tariff_name', 'Неизвестный тариф'))
+    )
+    expires_at = (
+        'Без срока'
+        if key.get('expires_at') is None
+        else format_datetime_for_display(key.get('expires_at'), fallback='?')
+    )
     created_at = format_datetime_for_display(key.get('created_at'), fallback='?')
     panel_email = key.get('panel_email')
     if panel_email:
         panel_email_line = f'📧 E-mail в панели: <code>{escape_html(panel_email)}</code>'
     else:
         panel_email_line = '📧 E-mail в панели: <i>не указан</i>'
-    text = f'🔑 <b>{key_name}</b>\n\n🖥️ Сервер: {server_name}\n📋 Тариф: {tariff_name}\n{panel_email_line}\n📅 Создан: {created_at}\n⏰ Истекает: {expires_at}\n'
+    max_ips = int(
+        key.get('max_ips_override')
+        if key.get('max_ips_override') is not None
+        else key.get('tariff_max_ips') or 1
+    )
+    text = f'🔑 <b>{escape_html(key_name)}</b>\n\n🖥️ Сервер: {server_name}\n📋 Тариф: {tariff_name}\n💻 Устройств: {max_ips}\n{panel_email_line}\n📅 Создан: {created_at}\n⏰ Истекает: {expires_at}\n'
     from database.requests import is_key_active, is_traffic_exhausted
     if not is_key_active(key):
         if is_traffic_exhausted(key):
@@ -132,7 +164,7 @@ async def start_key_extend(callback: CallbackQuery, state: FSMContext):
     key_id = int(callback.data.split(':')[1])
     await state.set_state(AdminStates.key_extend_days)
     await state.update_data(current_key_id=key_id)
-    await safe_edit_or_send(callback.message, '📅 <b>Изменение срока действия ключа</b>\n\nВведите количество дней (можно отрицательное, чтобы уменьшить срок):', reply_markup=key_action_cancel_kb(key_id, 0))
+    await safe_edit_or_send(callback.message, '📅 <b>Изменение срока действия ключа</b>\n\nВведите количество дней. Отрицательное число уменьшает конечный срок, 0 делает ключ бессрочным. Добавление дней к уже бессрочному ключу не снимает бессрочность.', reply_markup=key_action_cancel_kb(key_id, 0))
     await callback.answer()
 
 @router.message(AdminStates.key_extend_days, F.text, ~F.text.startswith('/'))
@@ -142,8 +174,8 @@ async def process_key_extend(message: Message, state: FSMContext):
         return
     from bot.utils.text import get_message_text_for_storage
     text = get_message_text_for_storage(message, 'plain')
-    if not text.lstrip('-').isdigit() or int(text) < -99999 or int(text) > 99999 or int(text) == 0:
-        await safe_edit_or_send(message, '❌ Введите число от -99999 до 99999 (кроме 0)')
+    if not text.lstrip('-').isdigit() or int(text) < -99999 or int(text) > 99999:
+        await safe_edit_or_send(message, '❌ Введите число от -99999 до 99999')
         return
     days = int(text)
     data = await state.get_data()
@@ -151,8 +183,14 @@ async def process_key_extend(message: Message, state: FSMContext):
     from bot.services.key_lifecycle import renew_key_access
     result = await renew_key_access(key_id, days, reset_traffic=True)
     if result['db_updated']:
-        action_text = f'уменьшен на {abs(days)}' if days < 0 else f'продлён на {days}'
-        result_text = f'✅ Срок действия ключа {action_text} дней!'
+        updated_key = get_vpn_key_by_id(key_id)
+        if days == 0:
+            result_text = '✅ Ключ переведён в режим «Без срока»!'
+        elif updated_key and updated_key.get('expires_at') is None:
+            result_text = '✅ Ключ уже бессрочный; начисление дней не ограничило его срок.'
+        else:
+            action_text = f'уменьшен на {abs(days)}' if days < 0 else f'продлён на {days}'
+            result_text = f'✅ Срок действия ключа {action_text} дней!'
         if not result['panel_synced']:
             result_text += '\n\n⚠️ БД обновлена, но панель синхронизирована не полностью. Повторная синхронизация сможет дожать состояние.'
         await safe_edit_or_send(message, result_text, force_new=True)
@@ -174,9 +212,6 @@ async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
     if not key:
         await callback.answer('Ключ не найден', show_alert=True)
         return
-    if not key.get('server_active'):
-        await callback.answer('❌ Сервер неактивен', show_alert=True)
-        return
     try:
         # Resetting traffic_used and notification thresholds in the database
         from database.requests import reset_key_traffic_notification
@@ -195,65 +230,6 @@ async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
         logger.error(f'Неожиданная ошибка при сбросе трафика: {e}')
         await callback.answer('❌ Ошибка при сбросе трафика', show_alert=True)
 
-@router.callback_query(F.data.startswith('admin_key_change_traffic:'))
-async def start_change_traffic_limit(callback: CallbackQuery, state: FSMContext):
-    """Start of changing the traffic limit."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
-        return
-    key_id = int(callback.data.split(':')[1])
-    key = get_vpn_key_by_id(key_id)
-    if not key:
-        await callback.answer('Ключ не найден', show_alert=True)
-        return
-    if not key.get('server_active'):
-        await callback.answer('❌ Сервер неактивен', show_alert=True)
-        return
-    await state.set_state(AdminStates.key_change_traffic)
-    await state.update_data(current_key_id=key_id)
-    user_telegram_id = key.get('telegram_id')
-    await state.update_data(current_user_telegram_id=user_telegram_id)
-    await safe_edit_or_send(callback.message, '📊 <b>Изменение лимита трафика</b>\n\nВведите новый лимит в ГБ (0 = без лимита):', reply_markup=key_action_cancel_kb(key_id, user_telegram_id))
-    await callback.answer()
-
-@router.message(AdminStates.key_change_traffic, F.text, ~F.text.startswith('/'))
-@regular_panel_operation
-async def process_change_traffic_limit(message: Message, state: FSMContext):
-    """Processing the entry of a new traffic limit."""
-    if not is_admin(message.from_user.id):
-        return
-    from bot.utils.text import get_message_text_for_storage
-    text = get_message_text_for_storage(message, 'plain')
-    if not text.isdigit():
-        await safe_edit_or_send(message, '❌ Введите число (0 = без лимита)')
-        return
-    traffic_gb = int(text)
-    data = await state.get_data()
-    key_id = data.get('current_key_id')
-    key = get_vpn_key_by_id(key_id)
-    if not key:
-        await safe_edit_or_send(message, '❌ Ключ не найден')
-        return
-    try:
-        # First we update the limit in the database
-        from database.requests import update_key_traffic_limit
-        update_key_traffic_limit(key_id, traffic_gb * (1024**3))
-        # Synchronize all key clients with the panel
-        from bot.services.vpn_api import sync_key_to_panel_state
-        stats = await sync_key_to_panel_state(key_id)
-        traffic_text = f'{traffic_gb} ГБ' if traffic_gb > 0 else 'без лимита'
-        result_text = f'✅ Лимит трафика успешно обновлён: {traffic_text}!'
-        if not stats.get('ok'):
-            result_text += '\n\n⚠️ БД обновлена, но панель синхронизирована не полностью.'
-        await safe_edit_or_send(message, result_text, force_new=True)
-        await state.set_state(AdminStates.key_view)
-    except VPNAPIError as e:
-        logger.error(f'Ошибка обновления лимита трафика: {e}')
-        await safe_edit_or_send(message, f'❌ Ошибка: {e}')
-    except Exception as e:
-        logger.error(f'Неожиданная ошибка при обновлении лимита трафика: {e}')
-        await safe_edit_or_send(message, '❌ Ошибка при обновлении лимита трафика')
-
 @router.callback_query(F.data.startswith('admin_user_add_key:'))
 async def start_add_key(callback: CallbackQuery, state: FSMContext):
     """Start adding a key."""
@@ -265,13 +241,65 @@ async def start_add_key(callback: CallbackQuery, state: FSMContext):
     if not user:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
-    servers = get_active_servers()
-    if not servers:
-        await callback.answer('❌ Нет активных серверов', show_alert=True)
+    from database.requests import get_all_groups
+
+    groups = get_all_groups()
+    if not groups:
+        await callback.answer('❌ Нет групп тарифов', show_alert=True)
         return
+    await state.set_state(AdminStates.add_key_group)
+    await state.update_data(
+        add_key_user_id=user['id'],
+        add_key_user_telegram_id=telegram_id,
+        add_key_dialog_message_id=callback.message.message_id,
+    )
+    rendered = await safe_edit_or_send(
+        callback.message,
+        f'➕ <b>Добавление ключа для {format_user_display(user)}</b>\n\n'
+        'Выберите группу тарифов:',
+        reply_markup=add_key_group_kb(groups),
+    )
+    await state.update_data(
+        add_key_dialog_message_id=getattr(
+            rendered,
+            'message_id',
+            callback.message.message_id,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('admin_add_key_group:'))
+async def select_add_key_group(callback: CallbackQuery, state: FSMContext):
+    """Selects the group that owns a new custom administrator key."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+    from database.requests import get_active_servers_by_group, get_group_by_id
+
+    group_id = int(callback.data.split(':', 1)[1])
+    group = get_group_by_id(group_id)
+    if group is None:
+        await callback.answer('❌ Группа не найдена', show_alert=True)
+        return
+    servers = get_active_servers_by_group(group_id)
+    if not servers:
+        await callback.answer('❌ В группе нет активных серверов', show_alert=True)
+        return
+    await state.update_data(add_key_group_id=group_id)
     await state.set_state(AdminStates.add_key_server)
-    await state.update_data(add_key_user_id=user['id'], add_key_user_telegram_id=telegram_id)
-    await safe_edit_or_send(callback.message, f'➕ <b>Добавление ключа для {format_user_display(user)}</b>\n\nВыберите сервер:', reply_markup=add_key_server_kb(servers))
+    rendered = await safe_edit_or_send(
+        callback.message,
+        f"🖥️ <b>Группа: {escape_html(group['name'])}</b>\n\nВыберите сервер:",
+        reply_markup=add_key_server_kb(servers),
+    )
+    await state.update_data(
+        add_key_dialog_message_id=getattr(
+            rendered,
+            'message_id',
+            callback.message.message_id,
+        ),
+    )
     await callback.answer()
 
 @router.callback_query(F.data.startswith('admin_add_key_server:'))
@@ -280,11 +308,16 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    from database.requests import get_server_by_id
+    from database.requests import get_active_servers_by_group, get_server_by_id
     from bot.services.vpn_api import is_subscription_mode
     server_id = int(callback.data.split(':')[1])
     server = get_server_by_id(server_id)
-    if not server:
+    data = await state.get_data()
+    group_id = data.get('add_key_group_id')
+    allowed_server_ids = {
+        int(item['id']) for item in get_active_servers_by_group(group_id)
+    } if group_id else set()
+    if not server or server_id not in allowed_server_ids:
         await callback.answer('Сервер не найден', show_alert=True)
         return
     await state.update_data(add_key_server_id=server_id)
@@ -303,11 +336,21 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
         except VPNAPIError as e:
             await callback.answer(f'❌ Ошибка: {e}', show_alert=True)
             return
-        await state.update_data(add_key_inbound_id=None)
+        await state.update_data(
+            add_key_inbound_id=None,
+            add_key_allowed_inbound_ids=[descriptor.id for descriptor in descriptors],
+        )
         await state.set_state(AdminStates.add_key_traffic)
-        await safe_edit_or_send(callback.message,
+        rendered = await safe_edit_or_send(callback.message,
             '📊 <b>Лимит трафика</b>\n\nВведите лимит в ГБ (0 = без лимита):',
-            reply_markup=add_key_step_kb(2))
+            reply_markup=add_key_step_kb(4))
+        await state.update_data(
+            add_key_dialog_message_id=getattr(
+                rendered,
+                'message_id',
+                callback.message.message_id,
+            ),
+        )
         await callback.answer()
         return
 
@@ -321,8 +364,18 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
         if not inbounds:
             await callback.answer('❌ На сервере нет inbound', show_alert=True)
             return
+        await state.update_data(
+            add_key_allowed_inbound_ids=[int(inbound['id']) for inbound in inbounds],
+        )
         await state.set_state(AdminStates.add_key_inbound)
-        await safe_edit_or_send(callback.message, f"🖥️ <b>Сервер:</b> <code>{server['name']}</code>\n\nВыберите протокол (inbound):", reply_markup=add_key_inbound_kb(inbounds))
+        rendered = await safe_edit_or_send(callback.message, f"🖥️ <b>Сервер:</b> <code>{server['name']}</code>\n\nВыберите протокол (inbound):", reply_markup=add_key_inbound_kb(inbounds))
+        await state.update_data(
+            add_key_dialog_message_id=getattr(
+                rendered,
+                'message_id',
+                callback.message.message_id,
+            ),
+        )
     except VPNAPIError as e:
         await callback.answer(f'❌ Ошибка: {e}', show_alert=True)
     await callback.answer()
@@ -334,9 +387,23 @@ async def select_add_key_inbound(callback: CallbackQuery, state: FSMContext):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
     inbound_id = int(callback.data.split(':')[1])
+    data = await state.get_data()
+    allowed_inbound_ids = {
+        int(value) for value in data.get('add_key_allowed_inbound_ids', [])
+    }
+    if inbound_id not in allowed_inbound_ids:
+        await callback.answer('❌ Inbound недоступен', show_alert=True)
+        return
     await state.update_data(add_key_inbound_id=inbound_id)
     await state.set_state(AdminStates.add_key_traffic)
-    await safe_edit_or_send(callback.message, '📊 <b>Лимит трафика</b>\n\nВведите лимит в ГБ (0 = без лимита):', reply_markup=add_key_step_kb(2))
+    rendered = await safe_edit_or_send(callback.message, '📊 <b>Лимит трафика</b>\n\nВведите лимит в ГБ (0 = без лимита):', reply_markup=add_key_step_kb(4))
+    await state.update_data(
+        add_key_dialog_message_id=getattr(
+            rendered,
+            'message_id',
+            callback.message.message_id,
+        ),
+    )
     await callback.answer()
 
 @router.message(AdminStates.add_key_traffic, F.text, ~F.text.startswith('/'))
@@ -345,14 +412,20 @@ async def process_add_key_traffic(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage
-    text = get_message_text_for_storage(message, 'plain')
-    if not text.isdigit():
-        await safe_edit_or_send(message, '❌ Введите число (0 = без лимита)')
+    text = get_message_text_for_storage(message, 'plain').strip()
+    target, data = await _admin_key_input_target(message, state)
+    if not text.isdigit() or not 0 <= int(text) <= 99999:
+        await safe_edit_or_send(
+            target,
+            '❌ <b>Некорректный лимит трафика</b>\n\n'
+            'Введите число от 0 до 99999. 0 — без лимита.',
+            reply_markup=add_key_step_kb(4),
+        )
         return
     traffic_gb = int(text)
     await state.update_data(add_key_traffic_gb=traffic_gb)
     await state.set_state(AdminStates.add_key_days)
-    await safe_edit_or_send(message, '📅 <b>Срок действия</b>\n\nВведите количество дней:', reply_markup=add_key_step_kb(3), force_new=True)
+    await safe_edit_or_send(target, '📅 <b>Срок действия</b>\n\nВведите количество дней (0 = без срока):', reply_markup=add_key_step_kb(5))
 
 @router.message(AdminStates.add_key_days, F.text, ~F.text.startswith('/'))
 async def process_add_key_days(message: Message, state: FSMContext):
@@ -360,18 +433,64 @@ async def process_add_key_days(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     from bot.utils.text import get_message_text_for_storage
-    text = get_message_text_for_storage(message, 'plain')
-    if not text.isdigit() or int(text) < 1 or int(text) > 99999:
-        await safe_edit_or_send(message, '❌ Введите число от 1 до 99999')
+    text = get_message_text_for_storage(message, 'plain').strip()
+    target, data = await _admin_key_input_target(message, state)
+    if not text.isdigit() or not 0 <= int(text) <= 99999:
+        await safe_edit_or_send(
+            target,
+            '❌ <b>Некорректный срок</b>\n\n'
+            'Введите число от 0 до 99999. 0 — без срока.',
+            reply_markup=add_key_step_kb(5),
+        )
         return
     days = int(text)
     await state.update_data(add_key_days=days)
+    await state.set_state(AdminStates.add_key_devices)
+    await safe_edit_or_send(
+        target,
+        '💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999:',
+        reply_markup=add_key_step_kb(6),
+    )
+
+
+@router.message(AdminStates.add_key_devices, F.text, ~F.text.startswith('/'))
+async def process_add_key_devices(message: Message, state: FSMContext):
+    """Processes the individual device limit for a custom key."""
+    if not is_admin(message.from_user.id):
+        return
+    from bot.utils.text import get_message_text_for_storage
+
+    text = get_message_text_for_storage(message, 'plain').strip()
+    target, data = await _admin_key_input_target(message, state)
+    if not text.isdigit() or not 1 <= int(text) <= 999:
+        await safe_edit_or_send(
+            target,
+            '❌ <b>Некорректный лимит устройств</b>\n\n'
+            'Введите число от 1 до 999.',
+            reply_markup=add_key_step_kb(6),
+        )
+        return
+    devices = int(text)
+    await state.update_data(add_key_devices=devices)
     await state.set_state(AdminStates.add_key_confirm)
     data = await state.get_data()
-    from database.requests import get_server_by_id
+    from database.requests import get_group_by_id, get_server_by_id
+
     server = get_server_by_id(data['add_key_server_id'])
+    group = get_group_by_id(data['add_key_group_id'])
     traffic_text = f"{data.get('add_key_traffic_gb', 0)} ГБ" if data.get('add_key_traffic_gb', 0) > 0 else 'без лимита'
-    await safe_edit_or_send(message, f"✅ <b>Подтверждение создания ключа</b>\n\n🖥️ Сервер: {(server['name'] if server else '?')}\n📊 Трафик: {traffic_text}\n📅 Срок: {days} дней\n", reply_markup=add_key_confirm_kb(), force_new=True)
+    days = int(data.get('add_key_days', 0))
+    duration_text = f'{days} дней' if days > 0 else 'без срока'
+    await safe_edit_or_send(
+        target,
+        '✅ <b>Подтверждение создания ключа</b>\n\n'
+        f"📂 Группа: {escape_html(group['name'] if group else '?')}\n"
+        f"🖥️ Сервер: {escape_html(server['name'] if server else '?')}\n"
+        f'📊 Трафик: {traffic_text}\n'
+        f'📅 Срок: {duration_text}\n'
+        f'💻 Устройств: {devices}\n',
+        reply_markup=add_key_confirm_kb(),
+    )
 
 @router.callback_query(F.data == 'admin_add_key_confirm')
 @regular_panel_operation
@@ -385,22 +504,66 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_telegram_id = data.get('add_key_user_telegram_id')
     server_id = data.get('add_key_server_id')
     inbound_id = data.get('add_key_inbound_id')
+    group_id = data.get('add_key_group_id')
     traffic_gb = data.get('add_key_traffic_gb', 0)
-    days = data.get('add_key_days', 30)
-    from database.requests import get_server_by_id, get_admin_tariff
+    days = data.get('add_key_days', 0)
+    devices = data.get('add_key_devices', 1)
+    try:
+        user_id = int(user_id)
+        user_telegram_id = int(user_telegram_id)
+        server_id = int(server_id)
+        group_id = int(group_id)
+        traffic_gb = int(traffic_gb)
+        days = int(days)
+        devices = int(devices)
+    except (TypeError, ValueError):
+        await callback.answer('❌ Данные формы устарели', show_alert=True)
+        return
+    if (
+        not 0 <= traffic_gb <= 99999
+        or not 0 <= days <= 99999
+        or not 1 <= devices <= 999
+    ):
+        await callback.answer('❌ Данные формы некорректны', show_alert=True)
+        return
+    from database.requests import (
+        get_active_servers_by_group,
+        get_admin_custom_tariff,
+        get_server_by_id,
+    )
     from database.db_keys import create_vpn_key_subscription_admin
     from bot.services.vpn_api import is_subscription_mode
     import uuid as _uuid
     server = get_server_by_id(server_id)
-    if not server:
+    allowed_server_ids = {
+        int(item['id']) for item in get_active_servers_by_group(group_id)
+    } if group_id else set()
+    if not server or server_id not in allowed_server_ids:
         await callback.answer('Сервер не найден', show_alert=True)
         return
     user = get_user_by_telegram_id(user_telegram_id)
-    email = generate_unique_email(user)
-    traffic_limit_bytes = (traffic_gb or 0) * 1024 ** 3
+    if user is None or int(user['id']) != user_id:
+        await callback.answer('Пользователь не найден', show_alert=True)
+        return
     subscription_mode = is_subscription_mode() and inbound_id is None
+    allowed_inbound_ids = {
+        int(value) for value in data.get('add_key_allowed_inbound_ids', [])
+    }
+    if not subscription_mode:
+        try:
+            inbound_id = int(inbound_id)
+        except (TypeError, ValueError):
+            await callback.answer('Inbound не выбран', show_alert=True)
+            return
+        if inbound_id not in allowed_inbound_ids:
+            await callback.answer('Inbound недоступен', show_alert=True)
+            return
+    email = generate_unique_email(user)
+    traffic_limit_bytes = traffic_gb * 1024 ** 3
     try:
-        admin_tariff = get_admin_tariff()
+        admin_tariff = get_admin_custom_tariff(group_id)
+        if admin_tariff is None:
+            raise RuntimeError('Системный тариф группы не найден')
         tariff_id = admin_tariff['id']
 
         if subscription_mode:
@@ -410,7 +573,7 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 email=email,
                 total_gb=traffic_gb,
                 expire_days=days,
-                limit_ip=admin_tariff.get('max_ips', 1),
+                limit_ip=devices,
                 tg_id=str(user_telegram_id),
                 sub_id=sub_id,
                 subscription_mode=True,
@@ -426,6 +589,8 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 panel_inbound_id=first_inbound_id, panel_email=email,
                 client_uuid=first_uuid, sub_id=sub_id,
                 days=days, traffic_limit=traffic_limit_bytes,
+                traffic_limit_override=traffic_limit_bytes,
+                max_ips_override=devices,
             )
             if not provisioned.complete:
                 from bot.services.vpn_api import sync_key_to_panel_state
@@ -446,7 +611,7 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 email=email,
                 total_gb=traffic_gb,
                 expire_days=days,
-                limit_ip=admin_tariff.get('max_ips', 1),
+                limit_ip=devices,
                 tg_id=str(user_telegram_id),
                 subscription_mode=False,
                 inbound_ids=[inbound_id],
@@ -459,6 +624,8 @@ async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 panel_inbound_id=inbound_id, panel_email=email,
                 client_uuid=client_uuid, days=days,
                 traffic_limit=traffic_limit_bytes,
+                traffic_limit_override=traffic_limit_bytes,
+                max_ips_override=devices,
             )
 
         await callback.answer('✅ Ключ успешно создан!', show_alert=True)
@@ -489,24 +656,55 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    from bot.services.vpn_api import is_subscription_mode
     current_state = await state.get_state()
     data = await state.get_data()
-    if current_state == AdminStates.add_key_inbound.state:
-        servers = get_active_servers()
+    from database.requests import get_active_servers_by_group, get_all_groups
+
+    group_id = data.get('add_key_group_id')
+    if current_state == AdminStates.add_key_server.state:
+        await state.set_state(AdminStates.add_key_group)
+        await safe_edit_or_send(
+            callback.message,
+            '📂 <b>Группа тарифа</b>\n\nВыберите группу:',
+            reply_markup=add_key_group_kb(get_all_groups()),
+        )
+    elif current_state in {
+        AdminStates.add_key_inbound.state,
+        AdminStates.add_key_traffic.state,
+    }:
+        servers = get_active_servers_by_group(group_id) if group_id else []
         await state.set_state(AdminStates.add_key_server)
         user = get_user_by_telegram_id(data.get('add_key_user_telegram_id'))
-        await safe_edit_or_send(callback.message, f"➕ *Добавление ключа для {(format_user_display(user) if user else '?')}*\n\nВыберите сервер:", reply_markup=add_key_server_kb(servers))
-    elif (current_state == AdminStates.add_key_traffic.state
-          and is_subscription_mode()
-          and data.get('add_key_inbound_id') is None):
-        # There is no inbound step in subscription - we go straight back to choosing a server
-        servers = get_active_servers()
-        await state.set_state(AdminStates.add_key_server)
-        user = get_user_by_telegram_id(data.get('add_key_user_telegram_id'))
-        await safe_edit_or_send(callback.message, f"➕ <b>Добавление ключа для {(format_user_display(user) if user else '?')}</b>\n\nВыберите сервер:", reply_markup=add_key_server_kb(servers))
+        await safe_edit_or_send(
+            callback.message,
+            f"➕ <b>Добавление ключа для {(format_user_display(user) if user else '?')}</b>\n\nВыберите сервер:",
+            reply_markup=add_key_server_kb(servers),
+        )
+    elif current_state == AdminStates.add_key_days.state:
+        await state.set_state(AdminStates.add_key_traffic)
+        await safe_edit_or_send(
+            callback.message,
+            '📊 <b>Лимит трафика</b>\n\nВведите лимит в ГБ (0 = без лимита):',
+            reply_markup=add_key_step_kb(4),
+        )
+    elif current_state == AdminStates.add_key_devices.state:
+        await state.set_state(AdminStates.add_key_days)
+        await safe_edit_or_send(
+            callback.message,
+            '📅 <b>Срок действия</b>\n\nВведите количество дней (0 = без срока):',
+            reply_markup=add_key_step_kb(5),
+        )
+    elif current_state == AdminStates.add_key_confirm.state:
+        await state.set_state(AdminStates.add_key_devices)
+        await safe_edit_or_send(
+            callback.message,
+            '💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999:',
+            reply_markup=add_key_step_kb(6),
+        )
     else:
         await cancel_add_key(callback, state)
+        return
+    await callback.answer()
 
 def _manual_sync_plan_text(plan, *, preview: bool) -> str:
     direction_title = (

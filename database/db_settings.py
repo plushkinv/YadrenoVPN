@@ -594,18 +594,24 @@ def get_cardlink_credentials() -> tuple[str, str]:
     return shop_id, token
 
 def is_trial_enabled() -> bool:
-    """Is the trial subscription feature enabled?"""
-    return get_setting('trial_enabled', '0') == '1'
+    """Returns whether the protected primary trial offer is enabled."""
+    from .db_trial import get_primary_trial_offer
+
+    offer = get_primary_trial_offer()
+    return bool(offer and offer.get('is_enabled'))
 
 def get_trial_tariff_id() -> Optional[int]:
     """
-    Returns the tariff ID for a trial subscription.
+    Returns the tariff ID of the protected primary trial offer.
     
     Returns:
         Rate ID or None if no rate is specified
     """
-    val = get_setting('trial_tariff_id', '')
-    return int(val) if val and val.isdigit() else None
+    from .db_trial import get_primary_trial_offer
+
+    offer = get_primary_trial_offer()
+    tariff_id = offer.get('tariff_id') if offer else None
+    return int(tariff_id) if tariff_id is not None else None
 
 def is_demo_payment_enabled() -> bool:
     """Is demo payment by RF card included?"""

@@ -15,16 +15,12 @@ def build_my_keys_item_text(
     template: str,
     status: str,
     traffic_text: str,
-    inbound_name: str,
-    protocol: str,
 ) -> str:
     """Substitutes the data of one key into a hidden list string template."""
     context = build_key_page_context(
         key,
         status=status,
         traffic=traffic_text,
-        inbound=inbound_name,
-        protocol=protocol,
     )
     return apply_page_placeholders(template, context=context)
 

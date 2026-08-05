@@ -17,7 +17,7 @@ from bot.utils.page_renderer import (
     get_page_stored_data,
     serialize_inline_button_rows,
 )
-from database.requests import get_page
+from database.requests import get_page, get_page_route
 
 YAA_REDACTED_USER_KEY = "[redacted_user_key]"
 YAA_KEY_DELIVERY_PAGE = "key_delivery"
@@ -47,11 +47,37 @@ class YaaPageBinding:
     message: Message
     visibility: dict[str, bool] | None
     context: dict[str, Any] | None
-    text_replacements: dict[str, str] | None
+    text_replacements: dict[str, Any] | None
     prepend_buttons: list[list[InlineKeyboardButton]] | None
     append_buttons: list[list[InlineKeyboardButton]] | None
     backup_path: str
     attachment: dict[str, str] | None
+    route_key: str | None = None
+    base_visibility: dict[str, bool] | None = None
+    base_context: dict[str, Any] | None = None
+    base_text_replacements: dict[str, Any] | None = None
+    base_prepend_buttons: list[list[InlineKeyboardButton]] | None = None
+    base_append_buttons: list[list[InlineKeyboardButton]] | None = None
+
+    @property
+    def effective_visibility(self) -> dict[str, bool] | None:
+        return self.visibility
+
+    @property
+    def effective_context(self) -> dict[str, Any] | None:
+        return self.context
+
+    @property
+    def effective_text_replacements(self) -> dict[str, Any] | None:
+        return self.text_replacements
+
+    @property
+    def effective_prepend_buttons(self) -> list[list[InlineKeyboardButton]] | None:
+        return self.prepend_buttons
+
+    @property
+    def effective_append_buttons(self) -> list[list[InlineKeyboardButton]] | None:
+        return self.append_buttons
 
     def page_context(self) -> PageContext:
         """Return an isolated PageContext suitable for the existing rerenderers."""
@@ -63,6 +89,12 @@ class YaaPageBinding:
             text_replacements=copy.deepcopy(self.text_replacements),
             prepend_buttons=_copy_button_rows(self.prepend_buttons),
             append_buttons=_copy_button_rows(self.append_buttons),
+            route_key=self.route_key,
+            base_visibility=copy.deepcopy(self.base_visibility),
+            base_context=copy.deepcopy(self.base_context),
+            base_text_replacements=copy.deepcopy(self.base_text_replacements),
+            base_prepend_buttons=_copy_button_rows(self.base_prepend_buttons),
+            base_append_buttons=_copy_button_rows(self.base_append_buttons),
         )
 
 
@@ -96,6 +128,34 @@ def remember_yaa_page_binding(
         append_buttons=_copy_button_rows(page_context.append_buttons),
         backup_path=str(backup_path),
         attachment=copy.deepcopy(attachment),
+        route_key=getattr(page_context, 'route_key', None),
+        base_visibility=copy.deepcopy(
+            getattr(page_context, 'base_visibility', page_context.visibility)
+        ),
+        base_context=copy.deepcopy(
+            getattr(page_context, 'base_context', page_context.context)
+        ),
+        base_text_replacements=copy.deepcopy(
+            getattr(
+                page_context,
+                'base_text_replacements',
+                page_context.text_replacements,
+            )
+        ),
+        base_prepend_buttons=_copy_button_rows(
+            getattr(
+                page_context,
+                'base_prepend_buttons',
+                page_context.prepend_buttons,
+            )
+        ),
+        base_append_buttons=_copy_button_rows(
+            getattr(
+                page_context,
+                'base_append_buttons',
+                page_context.append_buttons,
+            )
+        ),
     )
     _bindings[(int(telegram_id), int(topic_id))] = binding
     return binding
@@ -185,16 +245,29 @@ def _build_runtime(binding: YaaPageBinding) -> dict[str, Any]:
     return runtime
 
 
-def _build_page_flow(page_key: str) -> dict[str, list[str]]:
+def _build_page_flow(
+    page_key: str,
+    route_key: str | None,
+) -> dict[str, Any]:
     page = get_page(page_key)
     if not page:
         raise YaaPageBindingContextError(
             f"Pinned page {page_key!r} is no longer present in the database"
         )
-    return {
+    flow: dict[str, Any] = {
         "guard_names": parse_registry_names(page.get("guard_names")),
         "hook_names": parse_registry_names(page.get("hook_names")),
     }
+    if route_key:
+        route = get_page_route(route_key)
+        if route and str(route.get('page_key') or '') == page_key:
+            flow['route'] = {
+                'route_key': route_key,
+                'is_enabled': bool(route.get('is_enabled')),
+                'guard_names': parse_registry_names(route.get('guard_names')),
+                'hook_names': parse_registry_names(route.get('hook_names')),
+            }
+    return flow
 
 
 def build_yaa_binding_runtime_context(binding: YaaPageBinding) -> dict[str, Any]:
@@ -224,7 +297,7 @@ def build_yaa_binding_runtime_context(binding: YaaPageBinding) -> dict[str, Any]
         invocation: dict[str, Any] = {
             "source": "yaa",
             "page_key": binding.page_key,
-            "page_flow": _build_page_flow(binding.page_key),
+            "page_flow": _build_page_flow(binding.page_key, binding.route_key),
             "database_path": "database/vpn_bot.db",
             "backup": {"created": True, "path": binding.backup_path},
             "stored_page": stored_page,

@@ -44,8 +44,6 @@ class ExtensionCoreAPI:
             'traffic_used',
             'traffic_limit',
             'server_name',
-            'inbound_name',
-            'protocol',
             'tariff_name',
         }
         return [

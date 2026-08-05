@@ -72,13 +72,9 @@ _BUILTIN_ADAPTERS: Mapping[str, PaymentProviderAdapter] = MappingProxyType({
 })
 
 
-def list_payment_provider_adapters(
-    intent: PaymentIntent,
-    *,
-    telegram_id: int,
-) -> list[PaymentProviderAdapter]:
-    """Returns configured built-ins and purpose-opted-in extension providers."""
-    availability = {
+def _builtin_provider_availability() -> dict[str, bool]:
+    """Return current core-provider configuration without UI resolvers."""
+    return {
         'crypto': is_crypto_configured(),
         'stars': is_stars_enabled(),
         'cards': is_cards_configured(),
@@ -88,6 +84,64 @@ def list_payment_provider_adapters(
         'cardlink': is_cardlink_configured(),
         'demo': is_demo_payment_enabled(),
     }
+
+
+def has_available_payment_method(
+    purpose: str,
+    *,
+    telegram_id: int,
+    user_id: int | None = None,
+    key_id: int | None = None,
+) -> bool:
+    """Check v1 provider availability before an intent exists."""
+    normalized_purpose = str(purpose or '').strip()
+    availability = _builtin_provider_availability()
+    if any(
+        availability.get(provider_id)
+        and normalized_purpose in adapter.supported_purposes
+        for provider_id, adapter in _BUILTIN_ADAPTERS.items()
+    ):
+        return True
+
+    if normalized_purpose != 'balance_topup' and user_id:
+        from database.requests import (
+            get_referral_reward_type,
+            get_user_balance,
+            is_referral_enabled,
+        )
+
+        if (
+            is_referral_enabled()
+            and get_referral_reward_type() == 'balance'
+            and get_user_balance(int(user_id)) > 0
+        ):
+            return True
+
+    from bot.utils.payment_provider_registry import (
+        is_payment_provider_enabled,
+        list_payment_providers,
+    )
+
+    context = {
+        'user_id': user_id,
+        'telegram_id': int(telegram_id),
+        'purpose': normalized_purpose,
+        'key_id': key_id,
+    }
+    return any(
+        normalized_purpose in provider.supported_purposes
+        and is_payment_provider_enabled(provider.provider_id, context)
+        for provider in list_payment_providers()
+    )
+
+
+def list_payment_provider_adapters(
+    intent: PaymentIntent,
+    *,
+    telegram_id: int,
+) -> list[PaymentProviderAdapter]:
+    """Returns configured built-ins and purpose-opted-in extension providers."""
+    availability = _builtin_provider_availability()
     result = [
         adapter
         for provider_id, adapter in _BUILTIN_ADAPTERS.items()
@@ -443,5 +497,6 @@ __all__ = [
     'check_provider_invoice',
     'create_provider_invoice',
     'get_payment_provider_adapter',
+    'has_available_payment_method',
     'list_payment_provider_adapters',
 ]

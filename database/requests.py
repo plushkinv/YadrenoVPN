@@ -31,3 +31,4 @@ from database.db_support import *
 from database.db_promotions import *
 from database.db_lapsed_coupons import *
 from database.db_user_ui_texts import *
+from database.db_trial import *

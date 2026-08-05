@@ -27,6 +27,7 @@ _INTERNAL_BUTTON_ACTIONS = {
 }
 
 _SYSTEM_BUTTON_ACTIONS = {
+    'btn_activate_trial': 'trial.activate',
     'btn_key_renew': 'key.renew.start',
     'btn_key_configure': 'key.configure.start',
     'btn_key_replace': 'key.replace.start',
@@ -222,6 +223,10 @@ def _semantic_action_for_button(
         if isinstance(key_id, bool) or not isinstance(key_id, int) or key_id <= 0:
             return None
         params['key_id'] = key_id
+    elif action_name == 'trial.activate':
+        offer_id = context.get('trial_offer_id')
+        if isinstance(offer_id, int) and not isinstance(offer_id, bool) and offer_id > 0:
+            params['offer_id'] = offer_id
     return action_name, params
 
 

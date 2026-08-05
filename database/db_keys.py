@@ -8,6 +8,9 @@ from .connection import get_db
 
 logger = logging.getLogger(__name__)
 
+KEY_NAME_PREFIX_SETTING = 'key_name_prefix'
+MAX_KEY_CUSTOM_NAME_LENGTH = 30
+
 __all__ = [
     'get_user_vpn_keys',
     'get_vpn_key_by_id',
@@ -20,6 +23,7 @@ __all__ = [
     'is_key_active',
     'is_traffic_exhausted',
     'get_all_active_keys_with_server',
+    'get_active_keys_for_monthly_traffic_reset',
     'get_all_panel_sync_keys',
     'bulk_update_traffic',
     'apply_panel_import_batch',
@@ -28,6 +32,7 @@ __all__ = [
     'reset_key_traffic_notification',
     'update_key_traffic_limit',
     'update_vpn_key_tariff_and_traffic_limit',
+    'reissue_vpn_key_plan',
     'update_vpn_key_config',
     'update_vpn_key_sub_id',
     'delete_vpn_key',
@@ -79,6 +84,9 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
             SELECT 
                 vk.*,
                 t.name as tariff_name, t.duration_days, t.price_rub, t.price_minor,
+                t.traffic_limit_gb as tariff_traffic_limit_gb,
+                t.max_ips as tariff_max_ips, t.group_id as tariff_group_id,
+                t.system_type as tariff_system_type,
                 COALESCE((SELECT value FROM settings WHERE key = 'base_currency'), 'RUB') AS base_currency,
                 s.name as server_name, s.host, s.port, s.web_base_path,
                 s.login, s.password, s.protocol, s.api_token,
@@ -94,7 +102,12 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def extend_vpn_key(key_id: int, days: int) -> bool:
+def extend_vpn_key(
+    key_id: int,
+    days: int,
+    *,
+    finite_from_now_if_unlimited: bool = False,
+) -> bool:
     """
     Extends the VPN key for the specified number of days.
     
@@ -106,21 +119,31 @@ def extend_vpn_key(key_id: int, days: int) -> bool:
         True if successful
     """
     with get_db() as conn:
-        modifier = f"{days:+} days"
+        normalized_days = int(days)
+        modifier = f"{normalized_days:+} days"
         cursor = conn.execute("""
             UPDATE vpn_keys 
-            SET expires_at = MAX(
-                datetime('now'),
-                datetime(
-                    CASE 
-                        WHEN expires_at > datetime('now') THEN expires_at
-                        ELSE datetime('now')
-                    END, 
-                    ?
+            SET expires_at = CASE
+                WHEN ? = 0 THEN NULL
+                WHEN expires_at IS NULL AND ? = 0 THEN NULL
+                ELSE MAX(
+                    datetime('now'),
+                    datetime(
+                        CASE
+                            WHEN expires_at > datetime('now') THEN expires_at
+                            ELSE datetime('now')
+                        END,
+                        ?
+                    )
                 )
-            )
+            END
             WHERE id = ?
-        """, (modifier, key_id))
+        """, (
+            normalized_days,
+            int(bool(finite_from_now_if_unlimited)),
+            modifier,
+            key_id,
+        ))
         success = cursor.rowcount > 0
         if success:
             logger.info(f"Ключ ID {key_id} продлён на {days} дней")
@@ -134,7 +157,9 @@ def create_vpn_key_admin(
     panel_email: str,
     client_uuid: str,
     days: int,
-    traffic_limit: int = 0
+    traffic_limit: int = 0,
+    traffic_limit_override: Optional[int] = None,
+    max_ips_override: Optional[int] = None,
 ) -> int:
     """
     Creates a VPN key by the administrator (without payment).
@@ -153,13 +178,19 @@ def create_vpn_key_admin(
         Created key ID
     """
     with get_db() as conn:
+        custom_name = _allocate_key_custom_name_with_conn(conn, user_id)
         cursor = conn.execute("""
             INSERT INTO vpn_keys 
-            (user_id, server_id, tariff_id, panel_inbound_id, panel_email, client_uuid, 
-             expires_at, traffic_limit)
-            VALUES (?, ?, ?, ?, ?, ?, datetime('now', '+' || ? || ' days'), ?)
-        """, (user_id, server_id, tariff_id, panel_inbound_id, panel_email, client_uuid, 
-              days, traffic_limit))
+            (user_id, server_id, tariff_id, panel_inbound_id, panel_email,
+             client_uuid, custom_name, expires_at, traffic_limit,
+             traffic_limit_override, max_ips_override)
+            VALUES (?, ?, ?, ?, ?, ?, ?,
+                    CASE WHEN ? = 0 THEN NULL
+                         ELSE datetime('now', '+' || ? || ' days') END,
+                    ?, ?, ?)
+        """, (user_id, server_id, tariff_id, panel_inbound_id, panel_email,
+              client_uuid, custom_name, days, days, traffic_limit,
+              traffic_limit_override, max_ips_override))
         key_id = cursor.lastrowid
         logger.info(f"Администратор создал ключ ID {key_id} для user_id {user_id}")
         return key_id
@@ -233,6 +264,78 @@ def create_vpn_key(
         panel_email, client_uuid, days, traffic_limit
     )
 
+def _create_initial_vpn_key_with_conn(
+    conn: sqlite3.Connection,
+    user_id: int,
+    tariff_id: int,
+    days: int,
+    traffic_limit: int = 0
+) -> int:
+    """Creates one draft key inside an existing database transaction."""
+    custom_name = _allocate_key_custom_name_with_conn(conn, user_id)
+    cursor = conn.execute("""
+        INSERT INTO vpn_keys
+        (user_id, tariff_id, custom_name, expires_at, created_at, traffic_limit)
+        VALUES (?, ?, ?,
+                CASE WHEN ? = 0 THEN NULL
+                     ELSE datetime('now', '+' || ? || ' days') END,
+                CURRENT_TIMESTAMP, ?)
+    """, (user_id, tariff_id, custom_name, days, days, traffic_limit))
+    return int(cursor.lastrowid)
+
+
+def _allocate_key_custom_name_with_conn(
+    conn: sqlite3.Connection,
+    user_id: int,
+) -> Optional[str]:
+    """Allocates one per-user key number and builds its persisted display name."""
+    cursor = conn.execute(
+        """
+        UPDATE users
+        SET last_key_number = COALESCE(last_key_number, 0) + 1
+        WHERE id = ?
+        """,
+        (int(user_id),),
+    )
+    if cursor.rowcount != 1:
+        raise ValueError(f'User {user_id} does not exist')
+
+    user_row = conn.execute(
+        "SELECT last_key_number FROM users WHERE id = ?",
+        (int(user_id),),
+    ).fetchone()
+    key_number = int(user_row['last_key_number'])
+    setting_row = conn.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (KEY_NAME_PREFIX_SETTING,),
+    ).fetchone()
+    raw_prefix = setting_row['value'] if setting_row is not None else None
+    has_line_break = (
+        isinstance(raw_prefix, str)
+        and ('\n' in raw_prefix or '\r' in raw_prefix)
+    )
+    prefix = raw_prefix.strip() if isinstance(raw_prefix, str) else ''
+    if not prefix or has_line_break:
+        logger.error(
+            "New key %s for user %s has no generated name: invalid %s setting",
+            key_number,
+            user_id,
+            KEY_NAME_PREFIX_SETTING,
+        )
+        return None
+
+    custom_name = f'{prefix} {key_number}'
+    if len(custom_name) > MAX_KEY_CUSTOM_NAME_LENGTH:
+        logger.error(
+            "New key %s for user %s has no generated name: effective name exceeds %s characters",
+            key_number,
+            user_id,
+            MAX_KEY_CUSTOM_NAME_LENGTH,
+        )
+        return None
+    return custom_name
+
+
 def create_initial_vpn_key(
     user_id: int,
     tariff_id: int,
@@ -253,12 +356,13 @@ def create_initial_vpn_key(
         Created key ID
     """
     with get_db() as conn:
-        cursor = conn.execute("""
-            INSERT INTO vpn_keys 
-            (user_id, tariff_id, expires_at, created_at, traffic_limit)
-            VALUES (?, ?, datetime('now', '+' || ? || ' days'), CURRENT_TIMESTAMP, ?)
-        """, (user_id, tariff_id, days, traffic_limit))
-        return cursor.lastrowid
+        return _create_initial_vpn_key_with_conn(
+            conn,
+            user_id,
+            tariff_id,
+            days,
+            traffic_limit,
+        )
 
 def is_key_active(key: dict) -> bool:
     """
@@ -321,15 +425,47 @@ def get_all_active_keys_with_server() -> List[Dict[str, Any]]:
                 vk.id, vk.panel_email, vk.traffic_used, vk.traffic_limit,
                 vk.traffic_notified_pct, vk.custom_name, vk.client_uuid,
                 vk.panel_inbound_id, vk.tariff_id, vk.expires_at, vk.sub_id,
+                vk.traffic_limit_override, vk.max_ips_override,
+                t.traffic_limit_gb AS tariff_traffic_limit_gb,
+                t.max_ips AS tariff_max_ips, t.group_id AS tariff_group_id,
+                t.system_type AS tariff_system_type,
+                tg.monthly_traffic_reset_enabled,
                 s.id as server_id, s.name as server_name,
                 u.telegram_id, u.is_banned
             FROM vpn_keys vk
+            JOIN tariffs t ON vk.tariff_id = t.id
+            JOIN tariff_groups tg ON t.group_id = tg.id
             JOIN servers s ON vk.server_id = s.id
             JOIN users u ON vk.user_id = u.id
             WHERE (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
             AND vk.panel_email IS NOT NULL
             AND s.is_active = 1
         """)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_active_keys_for_monthly_traffic_reset() -> List[Dict[str, Any]]:
+    """Returns every active key whose tariff group enables monthly reset."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            SELECT
+                vk.id, vk.server_id, vk.panel_email, vk.tariff_id,
+                vk.expires_at, vk.traffic_limit, vk.traffic_used,
+                vk.traffic_limit_override, vk.max_ips_override,
+                t.traffic_limit_gb AS tariff_traffic_limit_gb,
+                t.max_ips AS tariff_max_ips,
+                t.group_id AS tariff_group_id,
+                t.system_type AS tariff_system_type,
+                tg.monthly_traffic_reset_enabled
+            FROM vpn_keys vk
+            JOIN tariffs t ON t.id = vk.tariff_id
+            JOIN tariff_groups tg ON tg.id = t.group_id
+            WHERE (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
+              AND tg.monthly_traffic_reset_enabled = 1
+            ORDER BY vk.id
+            """
+        )
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -341,9 +477,14 @@ def get_all_panel_sync_keys() -> List[Dict[str, Any]]:
                 vk.id, vk.panel_email, vk.traffic_used, vk.traffic_limit,
                 vk.traffic_notified_pct, vk.custom_name, vk.client_uuid,
                 vk.panel_inbound_id, vk.tariff_id, vk.expires_at, vk.sub_id,
+                vk.traffic_limit_override, vk.max_ips_override,
+                t.traffic_limit_gb AS tariff_traffic_limit_gb,
+                t.max_ips AS tariff_max_ips, t.group_id AS tariff_group_id,
+                t.system_type AS tariff_system_type,
                 s.id AS server_id, s.name AS server_name,
                 u.telegram_id, u.is_banned
             FROM vpn_keys vk
+            JOIN tariffs t ON vk.tariff_id = t.id
             JOIN servers s ON vk.server_id = s.id
             JOIN users u ON vk.user_id = u.id
             WHERE vk.panel_email IS NOT NULL
@@ -512,6 +653,8 @@ def update_vpn_key_tariff_and_traffic_limit(
             UPDATE vpn_keys
             SET tariff_id = ?,
                 traffic_limit = ?,
+                traffic_limit_override = NULL,
+                max_ips_override = NULL,
                 traffic_notified_pct = 100
             WHERE id = ?
         """, (tariff_id, new_limit, key_id))
@@ -525,6 +668,93 @@ def update_vpn_key_tariff_and_traffic_limit(
                 f"добавлено: {added_gb:.1f} ГБ, накопительный лимит: {limit_text}"
             )
         return success
+
+
+def reissue_vpn_key_plan(
+    key_id: int,
+    tariff_id: int,
+    duration_days: int,
+    traffic_limit_bytes: int,
+    *,
+    traffic_limit_override: Optional[int] = None,
+    max_ips_override: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Atomically replaces a key plan and resets its billing counters."""
+    duration = int(duration_days)
+    traffic_limit = int(traffic_limit_bytes)
+    if not 0 <= duration <= 99999:
+        raise ValueError("duration_days must be between 0 and 99999")
+    if traffic_limit < 0:
+        raise ValueError("traffic_limit_bytes must not be negative")
+    if traffic_limit_override is not None and int(traffic_limit_override) < 0:
+        raise ValueError("traffic_limit_override must not be negative")
+    if max_ips_override is not None and not 1 <= int(max_ips_override) <= 999:
+        raise ValueError("max_ips_override must be between 1 and 999")
+
+    with get_db() as conn:
+        before = conn.execute(
+            """
+            SELECT vk.user_id, vk.tariff_id, vk.expires_at,
+                   t.group_id AS tariff_group_id
+            FROM vpn_keys vk
+            JOIN tariffs t ON t.id = vk.tariff_id
+            WHERE vk.id = ?
+            """,
+            (int(key_id),),
+        ).fetchone()
+        target = conn.execute(
+            "SELECT id, group_id FROM tariffs WHERE id = ?",
+            (int(tariff_id),),
+        ).fetchone()
+        if before is None or target is None:
+            return None
+        if int(before['tariff_group_id']) != int(target['group_id']):
+            raise ValueError("Target tariff must belong to the key tariff group")
+
+        cursor = conn.execute(
+            """
+            UPDATE vpn_keys
+            SET tariff_id = ?,
+                expires_at = CASE
+                    WHEN ? = 0 THEN NULL
+                    ELSE datetime('now', '+' || ? || ' days')
+                END,
+                traffic_used = 0,
+                traffic_limit = ?,
+                traffic_updated_at = NULL,
+                traffic_notified_pct = 100,
+                traffic_limit_override = ?,
+                max_ips_override = ?
+            WHERE id = ?
+            """,
+            (
+                int(tariff_id),
+                duration,
+                duration,
+                traffic_limit,
+                traffic_limit_override,
+                max_ips_override,
+                int(key_id),
+            ),
+        )
+        if cursor.rowcount <= 0:
+            return None
+        after = conn.execute(
+            "SELECT expires_at FROM vpn_keys WHERE id = ?",
+            (int(key_id),),
+        ).fetchone()
+        return {
+            'key_id': int(key_id),
+            'user_id': int(before['user_id']),
+            'tariff_id_before': int(before['tariff_id']),
+            'tariff_id_after': int(tariff_id),
+            'expires_before': before['expires_at'],
+            'expires_after': after['expires_at'] if after else None,
+            'duration_days': duration,
+            'traffic_limit': traffic_limit,
+            'traffic_limit_override': traffic_limit_override,
+            'max_ips_override': max_ips_override,
+        }
 
 def update_vpn_key_config(
     key_id: int,
@@ -602,6 +832,8 @@ def create_vpn_key_subscription_admin(
     sub_id: str,
     days: int,
     traffic_limit: int = 0,
+    traffic_limit_override: Optional[int] = None,
+    max_ips_override: Optional[int] = None,
 ) -> int:
     """
     Creates a VPN key by the administrator in subscription mode.
@@ -623,13 +855,19 @@ def create_vpn_key_subscription_admin(
         Created key ID
     """
     with get_db() as conn:
+        custom_name = _allocate_key_custom_name_with_conn(conn, user_id)
         cursor = conn.execute("""
             INSERT INTO vpn_keys
             (user_id, server_id, tariff_id, panel_inbound_id, panel_email,
-             client_uuid, sub_id, expires_at, traffic_limit)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '+' || ? || ' days'), ?)
+             client_uuid, sub_id, custom_name, expires_at, traffic_limit,
+             traffic_limit_override, max_ips_override)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                    CASE WHEN ? = 0 THEN NULL
+                         ELSE datetime('now', '+' || ? || ' days') END,
+                    ?, ?, ?)
         """, (user_id, server_id, tariff_id, panel_inbound_id, panel_email,
-              client_uuid, sub_id, days, traffic_limit))
+              client_uuid, sub_id, custom_name, days, days, traffic_limit,
+              traffic_limit_override, max_ips_override))
         key_id = cursor.lastrowid
         logger.info(
             f"Администратор создал subscription-ключ ID {key_id} для user_id {user_id} "
@@ -669,8 +907,7 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
         telegram_id: Telegram user ID
     
     Returns:
-        List of keys with fields: id, display_name, server_name, protocol,
-        expires_at, is_active (not expired), is_enabled, traffic_info
+        List of keys with safe display and business-state fields.
     """
     with get_db() as conn:
         cursor = conn.execute("""
@@ -679,9 +916,13 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
                 s.name as server_name, s.id as server_id, vk.panel_email,
                 vk.sub_id,
                 vk.traffic_used, vk.traffic_limit,
-                t.name as tariff_name, t.max_ips as tariff_max_ips,
+                t.name as tariff_name,
+                COALESCE(vk.max_ips_override, t.max_ips) as tariff_max_ips,
+                t.system_type as tariff_system_type,
+                t.group_id as tariff_group_id,
                 CASE
-                    WHEN vk.expires_at > datetime('now') THEN 1
+                    WHEN vk.expires_at IS NULL
+                      OR vk.expires_at > datetime('now') THEN 1
                     ELSE 0
                 END as is_active
             FROM vpn_keys vk
@@ -728,11 +969,14 @@ def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str
                 s.name as server_name, s.id as server_id,
                 t.name as tariff_name, t.duration_days, t.price_rub, t.price_minor,
                 COALESCE((SELECT value FROM settings WHERE key = 'base_currency'), 'RUB') AS base_currency,
-                t.max_ips as tariff_max_ips,
+                COALESCE(vk.max_ips_override, t.max_ips) as tariff_max_ips,
+                t.group_id as tariff_group_id,
+                t.system_type as tariff_system_type,
                 u.telegram_id, u.username,
                 s.is_active as server_active,
                 CASE 
-                    WHEN vk.expires_at > datetime('now') THEN 1 
+                    WHEN vk.expires_at IS NULL
+                      OR vk.expires_at > datetime('now') THEN 1
                     ELSE 0 
                 END as is_active
             FROM vpn_keys vk
@@ -772,7 +1016,7 @@ def update_key_custom_name(key_id: int, telegram_id: int, new_name: str) -> bool
     Returns:
         True if successful
     """
-    if new_name and len(new_name) > 30:
+    if new_name and len(new_name) > MAX_KEY_CUSTOM_NAME_LENGTH:
         logger.warning(f"Попытка установить слишком длинное имя ключа {key_id}: {new_name}")
         return False
 
@@ -801,8 +1045,9 @@ def add_days_to_first_active_key(user_id: int, days: int) -> bool:
     with get_db() as conn:
         cursor = conn.execute("""
             SELECT id FROM vpn_keys 
-            WHERE user_id = ? AND expires_at > datetime('now')
-            ORDER BY expires_at DESC
+            WHERE user_id = ?
+              AND (expires_at > datetime('now') OR expires_at IS NULL)
+            ORDER BY expires_at IS NULL, expires_at DESC
             LIMIT 1
         """, (user_id,))
         row = cursor.fetchone()

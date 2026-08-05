@@ -27,8 +27,10 @@ __all__ = [
     'get_key_payments_history',
     '_int_to_base62',
     'create_pending_order',
+    'is_tariff_payment_target_allowed',
     'create_paid_order_external',
     'find_order_by_order_id',
+    'find_latest_paid_order_for_key',
     'complete_order',
     'reopen_paid_order',
     'update_order_tariff',
@@ -55,6 +57,65 @@ __all__ = [
     'get_referral_notification_settings',
     'update_referral_setting',
 ]
+
+
+def _tariff_payment_target_allowed(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    tariff_id: int,
+    vpn_key_id: Optional[int] = None,
+    require_active: bool = True,
+) -> bool:
+    """Validates a user payment target without trusting callback data."""
+    tariff = conn.execute(
+        """
+        SELECT id, group_id, is_active, system_type
+        FROM tariffs
+        WHERE id = ?
+        """,
+        (int(tariff_id),),
+    ).fetchone()
+    if (
+        tariff is None
+        or (require_active and not bool(tariff['is_active']))
+        or tariff['system_type'] is not None
+    ):
+        return False
+    if vpn_key_id is None:
+        return True
+    key = conn.execute(
+        """
+        SELECT vk.user_id, t.group_id
+        FROM vpn_keys vk
+        JOIN tariffs t ON t.id = vk.tariff_id
+        WHERE vk.id = ?
+        """,
+        (int(vpn_key_id),),
+    ).fetchone()
+    return bool(
+        key is not None
+        and int(key['user_id']) == int(user_id)
+        and int(key['group_id']) == int(tariff['group_id'])
+    )
+
+
+def is_tariff_payment_target_allowed(
+    *,
+    user_id: int,
+    tariff_id: int,
+    vpn_key_id: Optional[int] = None,
+    require_active: bool = True,
+) -> bool:
+    """Returns whether an active ordinary tariff can be bought for a key."""
+    with get_db() as conn:
+        return _tariff_payment_target_allowed(
+            conn,
+            user_id=int(user_id),
+            tariff_id=int(tariff_id),
+            vpn_key_id=vpn_key_id,
+            require_active=bool(require_active),
+        )
 
 def save_yookassa_payment_id(order_id: str, yookassa_payment_id: str) -> bool:
     """
@@ -482,6 +543,77 @@ def _int_to_base62(num: int) -> str:
     
     return ''.join(reversed(result))
 
+def _create_pending_order_with_conn(
+    conn: sqlite3.Connection,
+    user_id: int,
+    tariff_id: Optional[int],
+    payment_type: Optional[str],
+    vpn_key_id: Optional[int] = None
+) -> tuple[int, str]:
+    """Creates one pending order inside an existing database transaction."""
+    if tariff_id and not _tariff_payment_target_allowed(
+        conn,
+        user_id=int(user_id),
+        tariff_id=int(tariff_id),
+        vpn_key_id=vpn_key_id,
+        require_active=str(payment_type or '') != 'trial',
+    ):
+        raise ValueError('Tariff is not available for this payment target')
+
+    tariff = None
+    if tariff_id:
+        tariff_row = conn.execute(
+            """
+            SELECT duration_days, price_minor
+            FROM tariffs
+            WHERE id = ?
+            """,
+            (int(tariff_id),),
+        ).fetchone()
+        if tariff_row is not None:
+            base_row = conn.execute(
+                "SELECT value FROM settings WHERE key = 'base_currency'"
+            ).fetchone()
+            tariff = {
+                'duration_days': int(tariff_row['duration_days'] or 0),
+                'price_minor': int(tariff_row['price_minor'] or 0),
+                'base_currency': str(base_row['value'] if base_row else 'RUB'),
+            }
+
+    cursor = conn.execute("""
+        INSERT INTO payments
+        (user_id, tariff_id, order_id, payment_type, vpn_key_id,
+         amount_cents, amount_stars, period_days, status, paid_at,
+         base_currency, nominal_amount_minor, payable_amount_minor,
+         nominal_amount_cents, payable_amount_cents)
+        VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?)
+    """, (
+        user_id, tariff_id, payment_type, vpn_key_id,
+        int(tariff['price_minor'] or 0) if tariff else 0,
+        0,
+        tariff['duration_days'] if tariff else None,
+        str(tariff.get('base_currency') or 'RUB') if tariff else 'RUB',
+        int(tariff['price_minor'] or 0) if tariff else 0,
+        int(tariff['price_minor'] or 0) if tariff else 0,
+        int(tariff['price_minor'] or 0) if tariff else 0,
+        int(tariff['price_minor'] or 0) if tariff else 0,
+    ))
+    payment_id = int(cursor.lastrowid)
+    order_id = "00" + _int_to_base62(payment_id)
+    conn.execute(
+        "UPDATE payments SET order_id = ? WHERE id = ?",
+        (order_id, payment_id),
+    )
+    logger.info(
+        "Создан pending order: %s (id=%s, user=%s, type=%s)",
+        order_id,
+        payment_id,
+        user_id,
+        payment_type,
+    )
+    return payment_id, order_id
+
+
 def create_pending_order(
     user_id: int,
     tariff_id: Optional[int],
@@ -504,41 +636,14 @@ def create_pending_order(
     Returns:
         Tuple (payment_id, order_id)
     """
-    tariff = get_tariff_by_id(tariff_id) if tariff_id else None
-    
     with get_db() as conn:
-        # Step 1: create a record with a temporary order_id
-        cursor = conn.execute("""
-            INSERT INTO payments 
-            (user_id, tariff_id, order_id, payment_type, vpn_key_id, 
-             amount_cents, amount_stars, period_days, status, paid_at,
-             base_currency, nominal_amount_minor, payable_amount_minor,
-             nominal_amount_cents, payable_amount_cents)
-            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?)
-        """, (
-            user_id, tariff_id, payment_type, vpn_key_id,
-            int(tariff['price_minor'] or 0) if tariff else 0,
-            0,
-            tariff['duration_days'] if tariff else None,
-            str(tariff.get('base_currency') or 'RUB') if tariff else 'RUB',
-            int(tariff['price_minor'] or 0) if tariff else 0,
-            int(tariff['price_minor'] or 0) if tariff else 0,
-            int(tariff['price_minor'] or 0) if tariff else 0,
-            int(tariff['price_minor'] or 0) if tariff else 0,
-        ))
-        payment_id = cursor.lastrowid
-        
-        # Step 2: generate order_id from post ID (base62)
-        # Add the prefix '00' to avoid conflicts with external IDs
-        order_id = "00" + _int_to_base62(payment_id)
-        
-        # Step 3: update order_id
-        conn.execute("""
-            UPDATE payments SET order_id = ? WHERE id = ?
-        """, (order_id, payment_id))
-        
-        logger.info(f"Создан pending order: {order_id} (id={payment_id}, user={user_id}, type={payment_type})")
-        return payment_id, order_id
+        return _create_pending_order_with_conn(
+            conn,
+            user_id,
+            tariff_id,
+            payment_type,
+            vpn_key_id,
+        )
 
 def create_paid_order_external(
     order_id: str,
@@ -568,6 +673,12 @@ def create_paid_order_external(
     """
     try:
         with get_db() as conn:
+            if not _tariff_payment_target_allowed(
+                conn,
+                user_id=int(user_id),
+                tariff_id=int(tariff_id),
+            ):
+                return False
             conn.execute("""
                 INSERT INTO payments 
                 (user_id, tariff_id, order_id, payment_type, vpn_key_id, 
@@ -603,6 +714,36 @@ def find_order_by_order_id(order_id: str) -> Optional[Dict[str, Any]]:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+
+def find_latest_paid_order_for_key(key_id: int) -> Optional[Dict[str, Any]]:
+    """Return the latest paid order linked to one key."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT p.*, t.duration_days, t.name AS tariff_name
+            FROM payments p
+            LEFT JOIN tariffs t ON p.tariff_id = t.id
+            WHERE p.vpn_key_id = ? AND p.status = 'paid'
+            ORDER BY p.paid_at DESC, p.id DESC
+            LIMIT 1
+            """,
+            (int(key_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+def _complete_order_with_conn(conn: sqlite3.Connection, order_id: str) -> bool:
+    """Marks one pending order paid inside an existing database transaction."""
+    cursor = conn.execute("""
+        UPDATE payments
+        SET status = 'paid', paid_at = CURRENT_TIMESTAMP
+        WHERE order_id = ? AND status = 'pending'
+    """, (order_id,))
+    success = cursor.rowcount > 0
+    if success:
+        logger.info("Order %s завершён (paid)", order_id)
+    return success
+
+
 def complete_order(order_id: str) -> bool:
     """
     Completes the payment: changes the status to 'paid'.
@@ -614,15 +755,7 @@ def complete_order(order_id: str) -> bool:
         True if successful
     """
     with get_db() as conn:
-        cursor = conn.execute("""
-            UPDATE payments 
-            SET status = 'paid', paid_at = CURRENT_TIMESTAMP
-            WHERE order_id = ? AND status = 'pending'
-        """, (order_id,))
-        success = cursor.rowcount > 0
-        if success:
-            logger.info(f"Order {order_id} завершён (paid)")
-        return success
+        return _complete_order_with_conn(conn, order_id)
 
 
 def reopen_paid_order(order_id: str) -> bool:
@@ -698,11 +831,25 @@ def update_order_tariff(order_id: str, tariff_id: int, payment_type: Optional[st
     Returns:
         True if successful
     """
-    tariff = get_tariff_by_id(tariff_id)
-    if not tariff:
-        return False
-        
     with get_db() as conn:
+        order = conn.execute(
+            """
+            SELECT user_id, vpn_key_id
+            FROM payments
+            WHERE order_id = ? AND status = 'pending'
+            """,
+            (str(order_id),),
+        ).fetchone()
+        if order is None or not _tariff_payment_target_allowed(
+            conn,
+            user_id=int(order['user_id']),
+            tariff_id=int(tariff_id),
+            vpn_key_id=order['vpn_key_id'],
+        ):
+            return False
+        tariff = get_tariff_by_id(tariff_id)
+        if not tariff:
+            return False
         cursor = conn.execute("""
             UPDATE payments 
             SET tariff_id = ?, 
@@ -715,7 +862,7 @@ def update_order_tariff(order_id: str, tariff_id: int, payment_type: Optional[st
                 amount_stars = ?, 
                 period_days = ?,
                 payment_type = COALESCE(?, payment_type)
-            WHERE order_id = ?
+            WHERE order_id = ? AND status = 'pending'
         """, (
             tariff_id, 
             int(tariff['price_minor'] or 0),

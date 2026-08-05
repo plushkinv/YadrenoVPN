@@ -33,9 +33,10 @@ from bot.services.payment_provider_adapters import (
 from bot.handlers.user.payments.status_page import (
     answer_payment_status_notification,
 )
+from bot.utils.groups import is_tariff_available_for_payment
 from bot.utils.page_flow import build_page_flow_context
 from bot.utils.page_renderer import render_page
-from bot.utils.user_ui_texts import render_ui_text
+from bot.utils.user_ui_texts import render_duration_days, render_ui_text
 from database.requests import (
     get_key_details_for_user,
     get_setting,
@@ -113,8 +114,8 @@ async def start_payment_intent_method_selection(
     intent,
     *,
     telegram_id: int,
-) -> None:
-    """Reserves the active promotion in base money before showing providers."""
+) -> bool:
+    """Show providers and report whether the callback was already answered."""
     preview = quote_payment_intent(intent.order_id, 'balance')
     message = target.message if isinstance(target, CallbackQuery) else target
     if preview.unavailable_reason or not preview.raw.get('ok', True):
@@ -124,30 +125,40 @@ async def start_payment_intent_method_selection(
             preview.unavailable_reason,
         )
         await render_page(message, page_key="payment_unavailable")
-        return
+        return False
     if preview.is_free:
         update_payment_type(intent.order_id, 'promo_free')
-        from bot.services.billing import complete_payment_flow
+        from bot.services.payment_completion import complete_confirmed_payment
 
-        await complete_payment_flow(
-            order_id=intent.order_id,
-            message=message,
+        await complete_confirmed_payment(
+            intent.order_id,
+            bot=message.bot,
+            target=message,
             state=state,
             telegram_id=telegram_id,
             payment_type='promo_free',
             referral_amount=0,
         )
-        return
+        return False
     prepared = load_payment_intent(intent.order_id)
     if prepared is None:
         logger.error("Prepared Payment Intent cannot be loaded: %s", intent.order_id)
         await render_page(message, page_key="payment_order_unavailable")
-        return
+        return False
     await show_payment_method_select(
         target,
         prepared,
         telegram_id=telegram_id,
     )
+    if (
+        isinstance(target, CallbackQuery)
+        and preview.raw.get("promo_skipped_reason") == "already_reserved"
+    ):
+        return await answer_payment_status_notification(
+            target,
+            "promo_exhausted",
+        )
+    return False
 
 
 @router.callback_query(F.data.startswith('payment_intent_tariff:'))
@@ -166,7 +177,7 @@ async def payment_intent_tariff_handler(callback: CallbackQuery, state: FSMConte
 
     tariff = get_tariff_by_id(tariff_id)
     user_id = _get_or_create_internal_user_id(callback)
-    if not tariff or not tariff.get('is_active'):
+    if not is_tariff_available_for_payment(tariff):
         await _render_callback_page(callback, "action_unavailable")
         return
     purpose_data = {'tariff_id': tariff_id}
@@ -175,6 +186,9 @@ async def payment_intent_tariff_handler(callback: CallbackQuery, state: FSMConte
         if not key:
             await _render_callback_page(callback, "key_not_found")
             return
+        if not is_tariff_available_for_payment(tariff, key):
+            await _render_callback_page(callback, "action_unavailable")
+            return
         purpose_data['key_id'] = key_id
 
     intent = create_payment_intent(
@@ -182,13 +196,14 @@ async def payment_intent_tariff_handler(callback: CallbackQuery, state: FSMConte
         purpose=purpose,
         purpose_data=purpose_data,
     )
-    await start_payment_intent_method_selection(
+    callback_answered = await start_payment_intent_method_selection(
         callback,
         state,
         intent,
         telegram_id=callback.from_user.id,
     )
-    await callback.answer()
+    if not callback_answered:
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith('payment_intent_methods:'))
@@ -208,39 +223,14 @@ async def payment_intent_methods_handler(
     if replacement is None:
         await _render_callback_page(callback, "payment_order_unavailable")
         return
-    await start_payment_intent_method_selection(
+    callback_answered = await start_payment_intent_method_selection(
         callback,
         state,
         replacement,
         telegram_id=callback.from_user.id,
     )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith('payment_legacy_methods:'))
-async def payment_legacy_methods_handler(
-    callback: CallbackQuery,
-    state: FSMContext,
-):
-    """Moves a compatibility invoice into the provider-first intent flow."""
-    try:
-        order_id = callback.data.split(':', 1)[1]
-    except (AttributeError, IndexError):
-        order_id = ''
-    replacement = restart_payment_intent_for_method_change(
-        order_id,
-        user_id=_get_or_create_internal_user_id(callback),
-    )
-    if replacement is None:
-        await _render_callback_page(callback, "payment_order_unavailable")
-        return
-    await start_payment_intent_method_selection(
-        callback,
-        state,
-        replacement,
-        telegram_id=callback.from_user.id,
-    )
-    await callback.answer()
+    if not callback_answered:
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith('payment_intent_cancel:'))
@@ -338,9 +328,8 @@ async def payment_intent_provider_handler(
                 payment_purpose=intent.purpose,
                 payment_tariff_name=str((tariff or {}).get('name') or f'#{intent.tariff_id or 0}'),
                 payment_amount_text=format_base_minor(intent.payable_amount_minor, intent.base_currency),
-                payment_term_text=render_ui_text(
-                    'format.days_short',
-                    days=int((tariff or {}).get('duration_days') or 0),
+                payment_term_text=render_duration_days(
+                    (tariff or {}).get('duration_days'),
                 ),
             ),
         )
@@ -606,11 +595,12 @@ async def _complete_intent(
     payment_type: str,
     referral_amount: int,
 ) -> None:
-    from bot.services.billing import complete_payment_flow
+    from bot.services.payment_completion import complete_confirmed_payment
 
-    await complete_payment_flow(
-        order_id=order_id,
-        message=callback.message,
+    await complete_confirmed_payment(
+        order_id,
+        bot=callback.bot,
+        target=callback.message,
         state=state,
         telegram_id=callback.from_user.id,
         payment_type=payment_type,

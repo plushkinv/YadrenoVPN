@@ -43,7 +43,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column_def: str) -> None:
 INITIAL_VERSION = 73
 
 # Current version of the database schema (incremented when new migrations are added)
-LATEST_VERSION = 91
+LATEST_VERSION = 97
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
     "schema_version": 1,
@@ -126,7 +126,7 @@ def _my_keys_item_template() -> str:
         "🔑 <b>%key(field=name)%</b>\n"
         "%key(field=status)% · %key(field=traffic)%\n"
         "📅 До %key(field=expires_at)%\n"
-        "📍 %key(field=server)% · %key(field=inbound)% (%key(field=protocol)%)"
+        "📍 %key(field=server)%"
     )
 
 
@@ -472,6 +472,20 @@ def _key_details_page_text() -> str:
     return "%ключ_информация%\n%ключ_история_операций%"
 
 
+def _key_details_page_text_v96() -> str:
+    """Current stock key card with tariff and effective device limit."""
+    return (
+        "🔑 <b>%key(field=name)%</b>\n\n"
+        "<b>Статус:</b> %key(field=status)%\n"
+        "<b>Сервер:</b> %key(field=server)%\n"
+        "<b>Тариф:</b> %key(field=tariff)%\n"
+        "<b>Устройств:</b> %key(field=device_limit)%\n"
+        "<b>Трафик:</b> %key(field=traffic)%\n"
+        "<b>Действует до:</b> %key(field=expires_at)%\n\n"
+        "📜 <b>История операций:</b>\n%key_history%"
+    )
+
+
 def _key_show_unconfigured_page_text() -> str:
     """Default of the page showing a key that has not yet been configured."""
     return (
@@ -648,8 +662,7 @@ def migration_initial(conn: sqlite3.Connection) -> None:
          '⚠️ <b>Ваш VPN-ключ %ключ_имя% скоро истекает!</b>\n\n'
          'Через %ключ_дней_до_окончания% дней закончится срок действия вашего ключа.\n\n'
          'Продлите подписку, чтобы сохранить доступ к VPN без перерыва!'),
-        ('trial_enabled', '0'),
-        ('trial_tariff_id', ''),
+        ('trial_usage_scope', 'once_per_user'),
         ('cards_enabled', '0'),
         ('cards_provider_token', ''),
         ('yookassa_qr_enabled', '0'),
@@ -670,7 +683,6 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         ('demo_payment_enabled', '0'),
         ('traffic_notification_text',
          '⚠️ По ключу <b>%ключ_имя%</b> осталось %ключ_трафик_процент_остатка%% трафика (%ключ_трафик_использовано% из %ключ_трафик_лимит%)'),
-        ('monthly_traffic_reset_enabled', '0'),
         ('expired_key_retention_days', '30'),
         ('expired_key_deletion_notifications_enabled', '1'),
         ('referral_enabled', '0'),
@@ -747,15 +759,9 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             price_rub INTEGER DEFAULT 0,
             traffic_limit_gb INTEGER DEFAULT 0,
             group_id INTEGER DEFAULT 1,
-            max_ips INTEGER DEFAULT 1
+            max_ips INTEGER DEFAULT 1,
+            system_type TEXT
         )
-    """)
-
-    # Hidden tariff for admin keys
-    conn.execute("""
-        INSERT INTO tariffs (name, duration_days, price_cents, price_stars, display_order, is_active)
-        SELECT 'Admin Tariff', 365, 0, 0, 999, 0
-        WHERE NOT EXISTS (SELECT 1 FROM tariffs WHERE name = 'Admin Tariff')
     """)
 
     # ── tariff_groups ─────────────────────────────────────────────────────────
@@ -765,6 +771,8 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             sort_order INTEGER DEFAULT 1,
+            monthly_traffic_reset_enabled INTEGER NOT NULL DEFAULT 0
+                CHECK (monthly_traffic_reset_enabled IN (0, 1)),
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -772,6 +780,41 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         INSERT OR IGNORE INTO tariff_groups (id, name, sort_order)
         VALUES (1, 'Основная', 1)
     """)
+    conn.execute("""
+        INSERT INTO tariffs (
+            name, duration_days, price_cents, price_stars, display_order,
+            is_active, traffic_limit_gb, group_id, max_ips, system_type
+        )
+        SELECT 'Admin Tariff', 0, 0, 0, 999, 0, 0, 1, 1, 'admin_custom'
+        WHERE NOT EXISTS (
+            SELECT 1 FROM tariffs
+            WHERE group_id = 1 AND system_type = 'admin_custom'
+        )
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tariffs_admin_custom_group "
+        "ON tariffs(group_id) WHERE system_type = 'admin_custom'"
+    )
+
+    # ── trial_offers ─────────────────────────────────────────────────────────
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trial_offers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tariff_id INTEGER REFERENCES tariffs(id) ON DELETE RESTRICT,
+            is_primary INTEGER NOT NULL DEFAULT 0
+                CHECK (is_primary IN (0, 1)),
+            is_enabled INTEGER NOT NULL DEFAULT 1
+                CHECK (is_enabled IN (0, 1)),
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK (is_primary = 1 OR tariff_id IS NOT NULL)
+        )
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_offers_primary "
+        "ON trial_offers(is_primary) WHERE is_primary = 1"
+    )
 
     # ── servers ───────────────────────────────────────────────────────────────
 
@@ -816,13 +859,17 @@ def migration_initial(conn: sqlite3.Connection) -> None:
             client_uuid TEXT,
             panel_email TEXT,
             custom_name TEXT,
-            expires_at DATETIME NOT NULL,
+            expires_at DATETIME,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             traffic_used INTEGER DEFAULT 0,
             traffic_limit INTEGER DEFAULT 0,
             traffic_updated_at DATETIME,
             traffic_notified_pct INTEGER DEFAULT 100,
             sub_id TEXT,
+            traffic_limit_override INTEGER
+                CHECK (traffic_limit_override IS NULL OR traffic_limit_override >= 0),
+            max_ips_override INTEGER
+                CHECK (max_ips_override IS NULL OR max_ips_override BETWEEN 1 AND 999),
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (server_id) REFERENCES servers(id),
             FOREIGN KEY (tariff_id) REFERENCES tariffs(id)
@@ -879,6 +926,36 @@ def migration_initial(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_status_paid_at ON payments(status, paid_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_key_status_paid_at ON payments(vpn_key_id, status, paid_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_promo_code_id ON payments(promo_code_id)")
+
+    # ── trial_activations ─────────────────────────────────────────────────────
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trial_activations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            offer_id INTEGER,
+            tariff_id INTEGER,
+            group_id INTEGER,
+            vpn_key_id INTEGER REFERENCES vpn_keys(id) ON DELETE SET NULL,
+            payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL,
+            legacy_global_block INTEGER NOT NULL DEFAULT 0
+                CHECK (legacy_global_block IN (0, 1)),
+            activated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_activations_user_group "
+        "ON trial_activations(user_id, group_id) "
+        "WHERE legacy_global_block = 0 AND group_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_activations_legacy_user "
+        "ON trial_activations(user_id) WHERE legacy_global_block = 1"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trial_activations_offer "
+        "ON trial_activations(offer_id)"
+    )
 
     # ── notification_log ──────────────────────────────────────────────────────
 
@@ -2623,7 +2700,6 @@ def migration_81(conn: sqlite3.Connection) -> None:
             "🔑 <b>%key(field=name)%</b>\n\n"
             "<b>Статус:</b> %key(field=status)%\n"
             "<b>Сервер:</b> %key(field=server)%\n"
-            "<b>Протокол:</b> %key(field=inbound)% (%key(field=protocol)%)\n"
             "<b>Трафик:</b> %key(field=traffic)%\n"
             "<b>Действует до:</b> %key(field=expires_at)%\n\n"
             "📜 <b>История операций:</b>\n%key_history%"
@@ -3784,6 +3860,940 @@ def migration_91(conn: sqlite3.Connection) -> None:
     )
 
 
+def _vpn_keys_expiry_requires_v92_rebuild(conn: sqlite3.Connection) -> bool:
+    """Returns whether the legacy key table still rejects NULL expiry values."""
+    for row in conn.execute("PRAGMA table_info(vpn_keys)").fetchall():
+        if row[1] == 'expires_at':
+            return bool(row[3])
+    raise RuntimeError("vpn_keys.expires_at is missing")
+
+
+def _rebuild_vpn_keys_for_v92(conn: sqlite3.Connection) -> None:
+    """Rebuilds vpn_keys with nullable expiry and per-key admin overrides."""
+    source_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(vpn_keys)").fetchall()
+    }
+    traffic_override_expr = (
+        "traffic_limit_override"
+        if "traffic_limit_override" in source_columns
+        else "NULL"
+    )
+    max_ips_override_expr = (
+        "max_ips_override" if "max_ips_override" in source_columns else "NULL"
+    )
+
+    conn.execute("DROP TABLE IF EXISTS vpn_keys_v92")
+    conn.execute(
+        """
+        CREATE TABLE vpn_keys_v92 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            server_id INTEGER,
+            tariff_id INTEGER NOT NULL,
+            panel_inbound_id INTEGER,
+            client_uuid TEXT,
+            panel_email TEXT,
+            custom_name TEXT,
+            expires_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            traffic_used INTEGER DEFAULT 0,
+            traffic_limit INTEGER DEFAULT 0,
+            traffic_updated_at DATETIME,
+            traffic_notified_pct INTEGER DEFAULT 100,
+            sub_id TEXT,
+            traffic_limit_override INTEGER
+                CHECK (traffic_limit_override IS NULL OR traffic_limit_override >= 0),
+            max_ips_override INTEGER
+                CHECK (max_ips_override IS NULL OR max_ips_override BETWEEN 1 AND 999),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (server_id) REFERENCES servers(id),
+            FOREIGN KEY (tariff_id) REFERENCES tariffs(id)
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT INTO vpn_keys_v92 (
+            id, user_id, server_id, tariff_id, panel_inbound_id, client_uuid,
+            panel_email, custom_name, expires_at, created_at, traffic_used,
+            traffic_limit, traffic_updated_at, traffic_notified_pct, sub_id,
+            traffic_limit_override, max_ips_override
+        )
+        SELECT
+            id, user_id, server_id, tariff_id, panel_inbound_id, client_uuid,
+            panel_email, custom_name, expires_at, created_at, traffic_used,
+            traffic_limit, traffic_updated_at, traffic_notified_pct, sub_id,
+            {traffic_override_expr}, {max_ips_override_expr}
+        FROM vpn_keys
+        """
+    )
+    conn.execute("DROP TABLE vpn_keys")
+    conn.execute("ALTER TABLE vpn_keys_v92 RENAME TO vpn_keys")
+    conn.execute("CREATE INDEX idx_vpn_keys_user_id ON vpn_keys(user_id)")
+    conn.execute("CREATE INDEX idx_vpn_keys_expires_at ON vpn_keys(expires_at)")
+    conn.execute(
+        "CREATE INDEX idx_vpn_keys_user_expires "
+        "ON vpn_keys(user_id, expires_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_vpn_keys_server_email "
+        "ON vpn_keys(server_id, panel_email)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_vpn_keys_panel_email_lower "
+        "ON vpn_keys(LOWER(panel_email))"
+    )
+    conn.execute("CREATE INDEX idx_vpn_keys_server_id ON vpn_keys(server_id)")
+
+
+def migration_92(conn: sqlite3.Connection) -> None:
+    """Migration v92: group reset policy, unlimited keys and admin plans."""
+    requires_rebuild = _vpn_keys_expiry_requires_v92_rebuild(conn)
+    foreign_keys_disabled = False
+    if requires_rebuild:
+        # PRAGMA foreign_keys cannot be changed while a transaction is active.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        foreign_keys_disabled = True
+
+    try:
+        _add_column(
+            conn,
+            "tariff_groups",
+            "monthly_traffic_reset_enabled INTEGER NOT NULL DEFAULT 0 "
+            "CHECK (monthly_traffic_reset_enabled IN (0, 1))",
+        )
+        _add_column(conn, "tariffs", "system_type TEXT")
+
+        if requires_rebuild:
+            _rebuild_vpn_keys_for_v92(conn)
+        else:
+            _add_column(
+                conn,
+                "vpn_keys",
+                "traffic_limit_override INTEGER "
+                "CHECK (traffic_limit_override IS NULL OR "
+                "traffic_limit_override >= 0)",
+            )
+            _add_column(
+                conn,
+                "vpn_keys",
+                "max_ips_override INTEGER "
+                "CHECK (max_ips_override IS NULL OR "
+                "max_ips_override BETWEEN 1 AND 999)",
+            )
+
+        reset_row = conn.execute(
+            "SELECT value FROM settings "
+            "WHERE key = 'monthly_traffic_reset_enabled'"
+        ).fetchone()
+        if reset_row is not None:
+            reset_enabled = int(
+                str(reset_row[0]).strip().lower()
+                in {'1', 'true', 'yes', 'on'}
+            )
+            conn.execute(
+                "UPDATE tariff_groups "
+                "SET monthly_traffic_reset_enabled = ?",
+                (reset_enabled,),
+            )
+            conn.execute(
+                "DELETE FROM settings "
+                "WHERE key = 'monthly_traffic_reset_enabled'"
+            )
+
+        legacy_admin = conn.execute(
+            """
+            SELECT id, group_id, max_ips
+            FROM tariffs
+            WHERE system_type = 'admin_custom' OR name = 'Admin Tariff'
+            ORDER BY CASE WHEN system_type = 'admin_custom' THEN 0 ELSE 1 END, id
+            LIMIT 1
+            """
+        ).fetchone()
+        if legacy_admin:
+            legacy_admin_id = int(legacy_admin[0])
+            legacy_group_id = int(legacy_admin[1] or 1)
+            legacy_max_ips = max(1, min(999, int(legacy_admin[2] or 1)))
+            conn.execute(
+                """
+                UPDATE vpn_keys
+                SET traffic_limit_override = COALESCE(
+                        traffic_limit_override,
+                        MAX(0, COALESCE(traffic_limit, 0))
+                    ),
+                    max_ips_override = COALESCE(max_ips_override, ?)
+                WHERE tariff_id = ?
+                """,
+                (legacy_max_ips, legacy_admin_id),
+            )
+            conn.execute(
+                """
+                UPDATE tariffs
+                SET group_id = ?, system_type = 'admin_custom', is_active = 0,
+                    duration_days = 0, traffic_limit_gb = 0, max_ips = 1,
+                    price_rub = 0, price_minor = 0
+                WHERE id = ?
+                """,
+                (legacy_group_id, legacy_admin_id),
+            )
+
+        groups = conn.execute(
+            "SELECT id FROM tariff_groups ORDER BY id"
+        ).fetchall()
+        for group in groups:
+            group_id = int(group[0])
+            existing = conn.execute(
+                """
+                SELECT id FROM tariffs
+                WHERE group_id = ? AND system_type = 'admin_custom'
+                ORDER BY id LIMIT 1
+                """,
+                (group_id,),
+            ).fetchone()
+            if existing:
+                continue
+            conn.execute(
+                """
+                INSERT INTO tariffs (
+                    name, duration_days, price_rub, price_minor, display_order,
+                    is_active, traffic_limit_gb, group_id, max_ips, system_type
+                )
+                VALUES (?, 0, 0, 0, 999, 0, 0, ?, 1, 'admin_custom')
+                """,
+                (f'Admin Custom {group_id}', group_id),
+            )
+
+        conn.execute(
+            """
+            UPDATE settings
+            SET value = ''
+            WHERE key = 'trial_tariff_id'
+              AND CAST(value AS INTEGER) IN (
+                    SELECT id FROM tariffs
+                    WHERE system_type = 'admin_custom'
+              )
+            """
+        )
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_tariffs_admin_custom_group "
+            "ON tariffs(group_id) WHERE system_type = 'admin_custom'"
+        )
+        update_user_ui_text_defaults(
+            (
+                definition
+                for definition in USER_UI_TEXT_DEFINITIONS
+                if definition.text_key
+                in {'format.duration_unlimited', 'key.tariff.custom'}
+            ),
+            conn=conn,
+        )
+
+        foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_errors:
+            raise RuntimeError(
+                "foreign_key_check failed after vpn_keys rebuild: "
+                f"{foreign_key_errors[:5]}"
+            )
+
+        if foreign_keys_disabled:
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = ON")
+            foreign_keys_disabled = False
+    except Exception:
+        if foreign_keys_disabled:
+            conn.rollback()
+            conn.execute("PRAGMA foreign_keys = ON")
+        raise
+
+    logger.info(
+        "Migration v92 applied: tariff-group reset policies, nullable key "
+        "expiry and protected admin plans are ready"
+    )
+
+
+def _create_trial_tables_v93(conn: sqlite3.Connection) -> None:
+    """Creates the persisted trial-offer model and its integrity guards."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trial_offers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tariff_id INTEGER REFERENCES tariffs(id) ON DELETE RESTRICT,
+            is_primary INTEGER NOT NULL DEFAULT 0
+                CHECK (is_primary IN (0, 1)),
+            is_enabled INTEGER NOT NULL DEFAULT 1
+                CHECK (is_enabled IN (0, 1)),
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK (is_primary = 1 OR tariff_id IS NOT NULL)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_offers_primary "
+        "ON trial_offers(is_primary) WHERE is_primary = 1"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trial_activations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            offer_id INTEGER,
+            tariff_id INTEGER,
+            group_id INTEGER,
+            vpn_key_id INTEGER REFERENCES vpn_keys(id) ON DELETE SET NULL,
+            payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL,
+            legacy_global_block INTEGER NOT NULL DEFAULT 0
+                CHECK (legacy_global_block IN (0, 1)),
+            activated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_activations_user_group "
+        "ON trial_activations(user_id, group_id) "
+        "WHERE legacy_global_block = 0 AND group_id IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_activations_legacy_user "
+        "ON trial_activations(user_id) WHERE legacy_global_block = 1"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trial_activations_offer "
+        "ON trial_activations(offer_id)"
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_offers_protect_primary_delete
+        BEFORE DELETE ON trial_offers
+        WHEN OLD.is_primary = 1
+        BEGIN
+            SELECT RAISE(ABORT, 'primary trial offer cannot be deleted');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_offers_protect_primary_marker
+        BEFORE UPDATE OF is_primary ON trial_offers
+        WHEN NEW.is_primary <> OLD.is_primary
+        BEGIN
+            SELECT RAISE(ABORT, 'trial offer primary marker is immutable');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_offers_reject_missing_insert
+        BEFORE INSERT ON trial_offers
+        WHEN NEW.tariff_id IS NOT NULL
+         AND NOT EXISTS (
+                SELECT 1 FROM tariffs WHERE id = NEW.tariff_id
+             )
+        BEGIN
+            SELECT RAISE(ABORT, 'trial tariff does not exist');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_offers_reject_missing_update
+        BEFORE UPDATE OF tariff_id ON trial_offers
+        WHEN NEW.tariff_id IS NOT NULL
+         AND NOT EXISTS (
+                SELECT 1 FROM tariffs WHERE id = NEW.tariff_id
+             )
+        BEGIN
+            SELECT RAISE(ABORT, 'trial tariff does not exist');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_offers_reject_system_insert
+        BEFORE INSERT ON trial_offers
+        WHEN NEW.tariff_id IS NOT NULL
+         AND EXISTS (
+                SELECT 1 FROM tariffs
+                WHERE id = NEW.tariff_id AND system_type IS NOT NULL
+             )
+        BEGIN
+            SELECT RAISE(ABORT, 'system tariff cannot be used by a trial offer');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_offers_reject_system_update
+        BEFORE UPDATE OF tariff_id ON trial_offers
+        WHEN NEW.tariff_id IS NOT NULL
+         AND EXISTS (
+                SELECT 1 FROM tariffs
+                WHERE id = NEW.tariff_id AND system_type IS NOT NULL
+             )
+        BEGIN
+            SELECT RAISE(ABORT, 'system tariff cannot be used by a trial offer');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_offers_touch_updated_at
+        AFTER UPDATE OF tariff_id, is_enabled ON trial_offers
+        BEGIN
+            UPDATE trial_offers
+            SET updated_at = CURRENT_TIMESTAMP
+            WHERE id = NEW.id;
+        END
+        """
+    )
+
+
+def _migrate_trial_button_v93(raw_json: str | None) -> str | None:
+    """Converts only the released legacy activate action to a context action."""
+    if raw_json is None:
+        return None
+    try:
+        buttons = json.loads(raw_json)
+    except (TypeError, json.JSONDecodeError):
+        return raw_json
+    if not isinstance(buttons, list):
+        return raw_json
+
+    changed = False
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+        if (
+            button.get('id') == 'btn_activate_trial'
+            and button.get('action_type') == 'internal'
+            and button.get('action_value') == 'cmd_activate_trial'
+        ):
+            button['action_type'] = 'system'
+            button['action_value'] = None
+            changed = True
+    if not changed:
+        return raw_json
+    return json.dumps(buttons, ensure_ascii=False)
+
+
+def migration_93(conn: sqlite3.Connection) -> None:
+    """Migration v93: group-aware persisted trial offers and activations."""
+    activation_table_existed = conn.execute(
+        """
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'trial_activations'
+        """
+    ).fetchone() is not None
+    legacy_settings = {
+        str(row['key']): str(row['value'] or '')
+        for row in conn.execute(
+            """
+            SELECT key, value FROM settings
+            WHERE key IN ('trial_enabled', 'trial_tariff_id')
+            """
+        ).fetchall()
+    }
+
+    _create_trial_tables_v93(conn)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('trial_usage_scope', 'once_per_user')
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_usage_scope_insert
+        BEFORE INSERT ON settings
+        WHEN NEW.key = 'trial_usage_scope'
+         AND NEW.value NOT IN ('once_per_user', 'once_per_group')
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid trial usage scope');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_trial_usage_scope_update
+        BEFORE UPDATE OF value ON settings
+        WHEN NEW.key = 'trial_usage_scope'
+         AND NEW.value NOT IN ('once_per_user', 'once_per_group')
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid trial usage scope');
+        END
+        """
+    )
+
+    primary = conn.execute(
+        "SELECT id FROM trial_offers WHERE is_primary = 1 LIMIT 1"
+    ).fetchone()
+    migrated_tariff_id = None
+    raw_tariff_id = legacy_settings.get('trial_tariff_id', '')
+    if raw_tariff_id.isdecimal():
+        candidate = conn.execute(
+            """
+            SELECT id FROM tariffs
+            WHERE id = ? AND system_type IS NULL
+            """,
+            (int(raw_tariff_id),),
+        ).fetchone()
+        if candidate is not None:
+            migrated_tariff_id = int(candidate['id'])
+    migrated_enabled = int(
+        legacy_settings.get('trial_enabled', '0').strip().casefold()
+        in {'1', 'true', 'yes', 'on'}
+    )
+
+    if primary is None:
+        conn.execute(
+            """
+            INSERT INTO trial_offers (
+                tariff_id, is_primary, is_enabled
+            ) VALUES (?, 1, ?)
+            """,
+            (migrated_tariff_id, migrated_enabled),
+        )
+    elif legacy_settings:
+        conn.execute(
+            """
+            UPDATE trial_offers
+            SET tariff_id = ?, is_enabled = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (migrated_tariff_id, migrated_enabled, int(primary['id'])),
+        )
+
+    should_backfill_legacy = (not activation_table_existed) or bool(legacy_settings)
+    if should_backfill_legacy:
+        conn.execute(
+            """
+            UPDATE users
+            SET used_trial = 1
+            WHERE EXISTS (
+                SELECT 1 FROM payments p
+                WHERE p.user_id = users.id
+                  AND p.payment_type = 'trial'
+                  AND p.status = 'paid'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO trial_activations (
+                user_id, legacy_global_block
+            )
+            SELECT u.id, 1
+            FROM users u
+            WHERE COALESCE(u.used_trial, 0) = 1
+              AND NOT EXISTS (
+                    SELECT 1 FROM trial_activations ta
+                    WHERE ta.user_id = u.id
+                      AND ta.legacy_global_block = 1
+              )
+            """
+        )
+
+    conn.execute(
+        "DELETE FROM settings WHERE key IN ('trial_enabled', 'trial_tariff_id')"
+    )
+
+    trial_text = (
+        "🎁 <b>Пробная подписка</b>\n\n"
+        "Попробуйте VPN бесплатно и оцените качество соединения.\n\n"
+        "%trial_offer%\n\n"
+        "Нажмите кнопку ниже, чтобы активировать пробный доступ.\n\n"
+        "%trial_eligibility%"
+    )
+    trial_row = conn.execute(
+        """
+        SELECT buttons_default, buttons_custom
+        FROM pages WHERE page_key = 'trial'
+        """
+    ).fetchone()
+    if trial_row is not None:
+        conn.execute(
+            """
+            UPDATE pages
+            SET text_default = ?, buttons_default = ?, buttons_custom = ?
+            WHERE page_key = 'trial'
+            """,
+            (
+                trial_text,
+                _migrate_trial_button_v93(trial_row['buttons_default']),
+                _migrate_trial_button_v93(trial_row['buttons_custom']),
+            ),
+        )
+    conn.execute(
+        """
+        UPDATE pages
+        SET text_default = ?
+        WHERE page_key = 'trial_already_used'
+        """,
+        (
+            "🎁 <b>Пробный период недоступен</b>\n\n"
+            "Это пробное предложение уже недоступно для вашего аккаунта.",
+        ),
+    )
+
+    update_user_ui_text_defaults(
+        (
+            definition
+            for definition in USER_UI_TEXT_DEFINITIONS
+            if definition.text_key in {
+                'format.traffic_gb',
+                'trial.offer.summary',
+                'trial.eligibility.once_per_user',
+                'trial.eligibility.once_per_group',
+            }
+        ),
+        conn=conn,
+    )
+
+    foreign_key_errors = conn.execute('PRAGMA foreign_key_check').fetchall()
+    if foreign_key_errors:
+        raise RuntimeError(
+            "foreign_key_check failed after trial migration: "
+            f"{foreign_key_errors[:5]}"
+        )
+    logger.info(
+        "Migration v93 applied: persisted primary/additional trial offers and "
+        "group-aware eligibility are ready"
+    )
+
+
+_RETIRED_KEY_PAGE_PLACEHOLDERS = (
+    '%key(field=inbound)%',
+    '%key(field=protocol)%',
+    '%key_inbound%',
+    '%key_protocol%',
+    '%ключ_инбаунд%',
+    '%ключ_протокол%',
+)
+_RETIRED_KEY_PAGE_PLACEHOLDER_PATTERN = (
+    r'(?:'
+    + '|'.join(
+        re.escape(placeholder)
+        for placeholder in sorted(
+            _RETIRED_KEY_PAGE_PLACEHOLDERS,
+            key=len,
+            reverse=True,
+        )
+    )
+    + r')'
+)
+_RETIRED_KEY_PAGE_PLACEHOLDER_RE = re.compile(
+    _RETIRED_KEY_PAGE_PLACEHOLDER_PATTERN,
+    re.IGNORECASE,
+)
+_RETIRED_KEY_WRAPPED_PLACEHOLDER_RE = re.compile(
+    r'\(\s*'
+    + _RETIRED_KEY_PAGE_PLACEHOLDER_PATTERN
+    + r'(?:\s*[,/|·-]\s*'
+    + _RETIRED_KEY_PAGE_PLACEHOLDER_PATTERN
+    + r')*\s*\)',
+    re.IGNORECASE,
+)
+_RETIRED_KEY_SEGMENT_SEPARATOR_RE = re.compile(
+    r'(\s+(?:[·|/]|[-–—])\s+|[,;]\s*)'
+)
+_RETIRED_KEY_BUTTON_DISPLAY_FIELDS = frozenset({
+    'label',
+    'text',
+    'title',
+    'item_label',
+    'item_label_template',
+})
+_RETIRED_KEY_BUTTON_TARGET_FIELDS = frozenset({
+    'id',
+    'url',
+    'action_value',
+    'callback_data',
+    'web_app',
+})
+_DROP_RETIRED_KEY_BUTTON = object()
+
+
+def _contains_retired_key_page_placeholder(value: str) -> bool:
+    """Returns whether a stored customization uses a retired key field."""
+    return _RETIRED_KEY_PAGE_PLACEHOLDER_RE.search(value) is not None
+
+
+def _remove_retired_key_page_tokens(value: str) -> str:
+    """Removes only retired tokens without interpreting the surrounding data."""
+    return _RETIRED_KEY_PAGE_PLACEHOLDER_RE.sub('', value)
+
+
+def _clean_retired_key_text_segment(segment: str) -> str | None:
+    """Removes one retired-only display clause while preserving mixed clauses."""
+    placeholders = _ATOMIC_KEY_PAGE_PLACEHOLDER_RE.findall(segment)
+    if not any(
+        _RETIRED_KEY_PAGE_PLACEHOLDER_RE.fullmatch(placeholder)
+        for placeholder in placeholders
+    ):
+        return segment
+
+    has_supported_placeholder = any(
+        _RETIRED_KEY_PAGE_PLACEHOLDER_RE.fullmatch(placeholder) is None
+        for placeholder in placeholders
+    )
+    if not has_supported_placeholder:
+        return None
+
+    leading = segment[:len(segment) - len(segment.lstrip(' \t'))]
+    trailing = segment[len(segment.rstrip(' \t')):]
+    cleaned = _RETIRED_KEY_WRAPPED_PLACEHOLDER_RE.sub('', segment.strip(' \t'))
+    cleaned = _remove_retired_key_page_tokens(cleaned)
+    cleaned = re.sub(r'\(\s*\)|\[\s*\]', '', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
+    cleaned = re.sub(r'^\s*(?:[·|/,;]|[-–—])+\s*', '', cleaned)
+    cleaned = re.sub(r'\s*(?:[·|/,;]|[-–—])+\s*$', '', cleaned)
+    cleaned = cleaned.strip(' \t')
+    if not cleaned:
+        return None
+    return f'{leading}{cleaned}{trailing}'
+
+
+def _clean_retired_key_text_line(line: str) -> str | None:
+    """Cleans retired key fields from one line of a stored text template."""
+    if not _contains_retired_key_page_placeholder(line):
+        return line
+
+    parts = _RETIRED_KEY_SEGMENT_SEPARATOR_RE.split(line)
+    kept_parts: list[str] = []
+    for index in range(0, len(parts), 2):
+        cleaned = _clean_retired_key_text_segment(parts[index])
+        if cleaned is None:
+            continue
+        if kept_parts and index > 0:
+            kept_parts.append(parts[index - 1])
+        kept_parts.append(cleaned)
+
+    if not kept_parts:
+        return None
+
+    cleaned_line = ''.join(kept_parts)
+    cleaned_line = re.sub(r'[ \t]{2,}', ' ', cleaned_line)
+    cleaned_line = re.sub(r'\s*(?:[·|/,;]|[-–—])+\s*$', '', cleaned_line)
+    return cleaned_line.rstrip(' \t') or None
+
+
+def _clean_retired_key_text(value: str | None) -> str | None:
+    """Cleans retired key fields from a page or item text without resetting it."""
+    if value is None or not _contains_retired_key_page_placeholder(value):
+        return value
+
+    result: list[str] = []
+    for raw_line in value.splitlines(keepends=True):
+        if raw_line.endswith('\r\n'):
+            line, ending = raw_line[:-2], '\r\n'
+        elif raw_line.endswith(('\r', '\n')):
+            line, ending = raw_line[:-1], raw_line[-1]
+        else:
+            line, ending = raw_line, ''
+        cleaned_line = _clean_retired_key_text_line(line)
+        if cleaned_line is not None:
+            result.append(f'{cleaned_line}{ending}')
+    return ''.join(result)
+
+
+def _clean_retired_key_button_value(value, *, field_name: str | None = None):
+    """Recursively cleans one decoded button JSON value."""
+    if isinstance(value, str):
+        if not _contains_retired_key_page_placeholder(value):
+            return value, 0
+        if field_name in _RETIRED_KEY_BUTTON_TARGET_FIELDS:
+            return _DROP_RETIRED_KEY_BUTTON, 1
+        if field_name in _RETIRED_KEY_BUTTON_DISPLAY_FIELDS:
+            cleaned = _clean_retired_key_text(value)
+            if cleaned is None or not cleaned.strip():
+                return _DROP_RETIRED_KEY_BUTTON, 1
+            return cleaned, 0
+        return _remove_retired_key_page_tokens(value), 0
+
+    if isinstance(value, list):
+        cleaned_items = []
+        dropped = 0
+        for child in value:
+            cleaned_child, child_dropped = _clean_retired_key_button_value(child)
+            dropped += child_dropped
+            if cleaned_child is not _DROP_RETIRED_KEY_BUTTON:
+                cleaned_items.append(cleaned_child)
+        return cleaned_items, dropped
+
+    if isinstance(value, dict):
+        for key in _RETIRED_KEY_BUTTON_TARGET_FIELDS:
+            target = value.get(key)
+            if isinstance(target, str) and _contains_retired_key_page_placeholder(target):
+                return _DROP_RETIRED_KEY_BUTTON, 1
+
+        cleaned_mapping = {}
+        dropped = 0
+        for key, child in value.items():
+            cleaned_child, child_dropped = _clean_retired_key_button_value(
+                child,
+                field_name=str(key).casefold(),
+            )
+            dropped += child_dropped
+            if cleaned_child is _DROP_RETIRED_KEY_BUTTON:
+                return _DROP_RETIRED_KEY_BUTTON, dropped or 1
+            cleaned_mapping[key] = cleaned_child
+        return cleaned_mapping, dropped
+
+    return value, 0
+
+
+def _clean_retired_key_button_json(
+    value: str | None,
+) -> tuple[str | None, int, bool]:
+    """Cleans button JSON and reports dropped buttons and malformed input."""
+    if value is None:
+        return value, 0, False
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        if not _contains_retired_key_page_placeholder(value):
+            return value, 0, True
+        return _remove_retired_key_page_tokens(value), 0, True
+
+    cleaned, dropped = _clean_retired_key_button_value(parsed)
+    if cleaned is _DROP_RETIRED_KEY_BUTTON:
+        cleaned = []
+        dropped = max(1, dropped)
+    if cleaned == parsed and dropped == 0:
+        return value, 0, False
+    return json.dumps(cleaned, ensure_ascii=False), dropped, False
+
+
+def migration_94(conn: sqlite3.Connection) -> None:
+    """Migration v94: retire inbound/protocol key presentation fields."""
+    deleted_texts = conn.execute(
+        "DELETE FROM user_ui_texts WHERE text_key = 'key.inbound.all_protocols'"
+    ).rowcount
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('my_keys_item_template', ?)
+        """,
+        (_my_keys_item_template(),),
+    )
+    setting_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'my_keys_item_template'"
+    ).fetchone()
+    settings_changed = 0
+    if setting_row is not None:
+        current_value = setting_row[0]
+        cleaned_value = _clean_retired_key_text(current_value)
+        if cleaned_value != current_value:
+            conn.execute(
+                "UPDATE settings SET value = ? WHERE key = 'my_keys_item_template'",
+                (cleaned_value,),
+            )
+            settings_changed = 1
+
+    page_values_changed = 0
+    dropped_buttons = 0
+    malformed_button_values = 0
+    for column in ('text_default', 'text_custom', 'buttons_default', 'buttons_custom'):
+        rows = conn.execute(
+            f"SELECT page_key, {column} FROM pages WHERE {column} IS NOT NULL"
+        ).fetchall()
+        for page_key, current_value in rows:
+            if not isinstance(current_value, str):
+                continue
+            if column.startswith('buttons_'):
+                cleaned_value, dropped, malformed = _clean_retired_key_button_json(
+                    current_value
+                )
+                dropped_buttons += dropped
+                malformed_button_values += int(malformed)
+            else:
+                cleaned_value = _clean_retired_key_text(current_value)
+            if cleaned_value != current_value:
+                conn.execute(
+                    f"UPDATE pages SET {column} = ? WHERE page_key = ?",
+                    (cleaned_value, page_key),
+                )
+                page_values_changed += 1
+
+    logger.info(
+        "Migration v94 applied: retired key presentation fields removed "
+        "(ui_texts_deleted=%s, settings_changed=%s, page_values_changed=%s, "
+        "buttons_dropped=%s, malformed_button_values=%s)",
+        deleted_texts,
+        settings_changed,
+        page_values_changed,
+        dropped_buttons,
+        malformed_button_values,
+    )
+
+
+def migration_95(conn: sqlite3.Connection) -> None:
+    """Migration v95: requeue background-completed purchases left as drafts."""
+    repaired = conn.execute(
+        """
+        UPDATE payment_auto_checks
+        SET state = 'provider_succeeded',
+            next_check_at = CURRENT_TIMESTAMP,
+            completion_attempts = 1,
+            last_error = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE state = 'completed'
+          AND EXISTS (
+                SELECT 1
+                FROM payments p
+                JOIN vpn_keys vk ON vk.id = p.vpn_key_id
+                WHERE p.order_id = payment_auto_checks.order_id
+                  AND p.intent_version = 1
+                  AND p.purpose = 'key_purchase'
+                  AND p.status = 'paid'
+                  AND p.fulfillment_status = 'completed'
+                  AND vk.server_id IS NULL
+          )
+        """
+    ).rowcount
+    logger.info(
+        "Migration v95 applied: requeued %s background paid key drafts",
+        repaired,
+    )
+
+
+def migration_96(conn: sqlite3.Connection) -> None:
+    """Migration v96: add tariff and device limit to the stock key card."""
+    updated = conn.execute(
+        """
+        UPDATE pages
+        SET text_default = ?
+        WHERE page_key = 'key_details'
+        """,
+        (_key_details_page_text_v96(),),
+    ).rowcount
+    logger.info(
+        "Migration v96 applied: refreshed %s stock key-details default",
+        updated,
+    )
+
+
+def migration_97(conn: sqlite3.Connection) -> None:
+    """Migration v97: add per-user numbering for future key display names."""
+    _add_column(
+        conn,
+        'users',
+        'last_key_number INTEGER NOT NULL DEFAULT 0 CHECK (last_key_number >= 0)',
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value)
+        VALUES ('key_name_prefix', 'Ключ')
+        """
+    )
+    logger.info(
+        "Migration v97 applied: per-user key counters and key_name_prefix are ready"
+    )
+
+
 MIGRATIONS = {
     74: migration_74,
     75: migration_75,
@@ -3803,6 +4813,12 @@ MIGRATIONS = {
     89: migration_89,
     90: migration_90,
     91: migration_91,
+    92: migration_92,
+    93: migration_93,
+    94: migration_94,
+    95: migration_95,
+    96: migration_96,
+    97: migration_97,
 }
 
 

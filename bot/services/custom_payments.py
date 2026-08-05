@@ -1,145 +1,23 @@
 """Core flow for custom payment providers extensions."""
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from typing import Any
 
 from bot.utils.payment_provider_registry import (
-    create_payment,
     check_payment,
     get_payment_provider,
     handle_payment_webhook,
-    is_payment_provider_enabled,
 )
 from database.requests import (
     cancel_pending_order,
-    create_pending_order,
     find_order_by_order_id,
     find_payment_provider_order_by_external_id,
+    get_payment_auto_check,
     get_payment_provider_order,
-    save_payment_provider_order,
-    schedule_payment_auto_check,
     update_payment_auto_check,
     update_payment_provider_order_status,
 )
-from bot.services.promotions import prepare_order_pricing
-from bot.services.money import minor_to_decimal
-
-logger = logging.getLogger(__name__)
-
-
-def _charge_text(amount_minor: int, currency: str) -> str:
-    """Serializes provider minor units without float arithmetic."""
-    return format(minor_to_decimal(max(0, int(amount_minor)), currency), 'f')
-
-
-async def create_custom_payment_order(
-    provider_id: str,
-    *,
-    user_id: int,
-    telegram_id: int,
-    tariff: Mapping[str, Any],
-    action: str,
-    vpn_key_id: int | None = None,
-    key: Mapping[str, Any] | None = None,
-    bot_username: str | None = None,
-) -> dict[str, Any]:
-    """Creates a core order, calculates quote and calls create_payment provider."""
-    provider = get_payment_provider(provider_id)
-    if provider is None:
-        raise ValueError('payment provider не зарегистрирован')
-    if not is_payment_provider_enabled(provider.provider_id, {'user_id': user_id, 'telegram_id': telegram_id}):
-        return {'ok': False, 'reason': 'Способ оплаты временно недоступен.'}
-    purpose = 'key_renewal' if vpn_key_id else 'key_purchase'
-    if purpose not in provider.supported_purposes:
-        return {'ok': False, 'reason': 'Способ оплаты не поддерживает это назначение.'}
-
-    (_, order_id) = create_pending_order(
-        user_id=user_id,
-        tariff_id=int(tariff['id']),
-        payment_type=provider.payment_type,
-        vpn_key_id=vpn_key_id,
-    )
-    quote = prepare_order_pricing(
-        order_id=order_id,
-        user_id=user_id,
-        tariff=dict(tariff),
-        payment_type=provider.payment_type,
-        action=action,
-    )
-    if not quote.get('ok'):
-        return {'ok': False, 'order_id': order_id, 'quote': quote, 'reason': quote.get('unavailable_reason')}
-    if quote.get('is_free'):
-        return {'ok': True, 'order_id': order_id, 'quote': quote, 'is_free': True}
-
-    context = {
-        'provider_id': provider.provider_id,
-        'payment_type': provider.payment_type,
-        'order_id': order_id,
-        'user_id': user_id,
-        'telegram_id': telegram_id,
-        'tariff': dict(tariff),
-        'action': action,
-        'purpose': purpose,
-        'base_currency': str(quote.get('base_currency') or tariff.get('base_currency') or 'RUB'),
-        'nominal_amount_minor': int(tariff.get('price_minor') or 0),
-        'payable_amount_minor': int(quote.get('payable_amount_minor') or quote.get('payable_amount_cents') or 0),
-        'nominal_amount_cents': int(tariff.get('price_minor') or 0),
-        'payable_amount_cents': int(quote.get('payable_amount_minor') or quote.get('payable_amount_cents') or 0),
-        'charge_amount': _charge_text(int(quote['final_amount']), provider.currency),
-        'charge_currency': provider.currency,
-        'rate_snapshot': dict(quote.get('rate_snapshot') or {}),
-        'vpn_key_id': vpn_key_id,
-        'key': dict(key or {}),
-        'amount_cents': int(quote['final_amount']),
-        'currency': provider.currency,
-        'quote': dict(quote),
-        'bot_username': bot_username,
-        'description': _payment_description(tariff, action=action, key=key),
-    }
-    result = await create_payment(provider.provider_id, context)
-    saved = save_payment_provider_order(
-        order_id=order_id,
-        provider_id=provider.provider_id,
-        payment_type=provider.payment_type,
-        provider_payment_id=result.get('provider_payment_id'),
-        payment_url=result.get('payment_url'),
-        status=result.get('status') or 'pending',
-        metadata=result.get('metadata') or {},
-        purpose=purpose,
-        charge_amount=_charge_text(int(quote['final_amount']), provider.currency),
-        charge_currency=provider.currency,
-    )
-    if saved is False:
-        raise RuntimeError('Не удалось сохранить custom provider order')
-    if provider.auto_check_interval_seconds:
-        try:
-            schedule_payment_auto_check(
-                order_id,
-                provider.provider_id,
-                first_delay_seconds=min(
-                    1800,
-                    max(120, int(provider.auto_check_interval_seconds)),
-                ),
-            )
-        except Exception as error:
-            logger.error(
-                "Не удалось поставить custom payment в очередь provider=%s order=%s: %s",
-                provider.provider_id,
-                order_id,
-                error,
-                exc_info=True,
-            )
-    return {
-        'ok': True,
-        'order_id': order_id,
-        'provider': provider,
-        'provider_order': get_payment_provider_order(order_id),
-        'payment_url': result['payment_url'],
-        'quote': quote,
-        'is_free': False,
-    }
 
 
 async def check_custom_payment_order(provider_id: str, order: Mapping[str, Any]) -> dict[str, Any]:
@@ -192,14 +70,16 @@ async def complete_custom_payment_order(
     bot: Any = None,
     notify_user: bool = False,
 ) -> dict[str, Any]:
-    """Completes custom payment via core billing without UI/FSM."""
-    from bot.services.billing import complete_payment_order_background
+    """Completes custom payment through the shared confirmed-payment service."""
+    from bot.services.payment_completion import complete_confirmed_payment
 
-    return await complete_payment_order_background(
+    result = await complete_confirmed_payment(
         order_id,
         bot=bot,
+        background=True,
         notify_user=notify_user,
     )
+    return result.as_dict()
 
 
 async def auto_check_custom_payment_orders(
@@ -269,34 +149,22 @@ async def process_custom_payment_webhook(
         'processed_now': False,
     }
     if status == 'succeeded':
-        update_payment_auto_check(
-            order_id,
-            state='provider_succeeded',
-            next_delay_seconds=0,
-        )
+        auto_check = get_payment_auto_check(order_id)
+        auto_check_state = str((auto_check or {}).get('state') or '')
+        if auto_check_state and auto_check_state != 'completed':
+            update_payment_auto_check(
+                order_id,
+                state='provider_succeeded',
+                next_delay_seconds=0,
+                expected_state=auto_check_state,
+            )
         completed = await complete_custom_payment_order(order_id, bot=bot, notify_user=True)
         response['completed'] = bool(completed.get('ok'))
         response['processed_now'] = bool(completed.get('processed_now'))
-        if completed.get('ok'):
-            update_payment_auto_check(order_id, state='completed')
     elif status == 'canceled':
         cancel_pending_order(order_id)
         update_payment_auto_check(order_id, state='canceled')
     return response
-
-
-def _payment_description(
-    tariff: Mapping[str, Any],
-    *,
-    action: str,
-    key: Mapping[str, Any] | None = None,
-) -> str:
-    tariff_name = str(tariff.get('name') or 'VPN')
-    days = int(tariff.get('duration_days') or 0)
-    if action == 'renewal' and key:
-        key_name = str(key.get('display_name') or 'VPN-ключ')
-        return f"Продление ключа «{key_name}»: «{tariff_name}» ({days} дн.)"
-    return f"Покупка «{tariff_name}» — {days} дней"
 
 
 def _find_provider_order_for_webhook(
@@ -319,6 +187,5 @@ __all__ = [
     'auto_check_custom_payment_orders',
     'check_custom_payment_order',
     'complete_custom_payment_order',
-    'create_custom_payment_order',
     'process_custom_payment_webhook',
 ]

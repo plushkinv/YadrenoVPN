@@ -15,6 +15,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
+from aiogram import Bot
+
 from bot.utils.action_registry import register_action_handler as _register_action_handler
 from bot.utils.page_flow import register_page_guard as _register_page_guard
 from bot.utils.page_flow import register_page_hook as _register_page_hook
@@ -116,6 +118,11 @@ def register_guard(name: str, func: Callable) -> None:
     _ensure_extension_mutation_allowed('register_guard')
     guard_name = _require_extension_registry_name(name, 'guard')
     _register_page_guard(guard_name, _bind_extension_callable(func))
+    from bot.utils.page_flow import mark_page_flow_extension_owner
+
+    extension_id = _CURRENT_EXTENSION.get()
+    if extension_id is not None:
+        mark_page_flow_extension_owner('guard', guard_name, extension_id)
     _record_registration('guards', guard_name)
 
 
@@ -140,6 +147,11 @@ def register_page_hook(name: str, func: Callable) -> None:
     _ensure_extension_mutation_allowed('register_page_hook')
     hook_name = _require_extension_registry_name(name, 'page hook')
     _register_page_hook(hook_name, _bind_extension_callable(func))
+    from bot.utils.page_flow import mark_page_flow_extension_owner
+
+    extension_id = _CURRENT_EXTENSION.get()
+    if extension_id is not None:
+        mark_page_flow_extension_owner('hook', hook_name, extension_id)
     _record_registration('page_hooks', hook_name)
 
 
@@ -462,6 +474,7 @@ def get_custom_extensions_diagnostics(
     directory_status = _extension_directory_status(base_dir)
     files = _scan_extension_files(base_dir) if directory_status == 'ok' else []
     from bot.utils.extension_settings import get_all_extension_settings
+    from bot.utils.page_flow import get_page_flow_runtime_diagnostics
 
     return {
         'enabled': bool(enabled),
@@ -471,6 +484,7 @@ def get_custom_extensions_diagnostics(
         'last_load': _load_result_to_dict(_LAST_LOAD_RESULT),
         'registrations': _registrations_snapshot(),
         'registry_totals': _registry_totals(),
+        'page_flow_runtime': get_page_flow_runtime_diagnostics(),
         'settings': get_all_extension_settings(),
     }
 
@@ -1398,6 +1412,8 @@ def _get_current_extension_telegram_id() -> int | None:
 
 def _extract_extension_bot(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     for item in list(args) + list(kwargs.values()):
+        if isinstance(item, Bot):
+            return item
         bot = getattr(item, 'bot', None)
         if bot is not None:
             return bot
@@ -1508,9 +1524,9 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
         ACTION_REGISTRY.pop(name, None)
     remove_action_policies(registrations.get('action_policies', set()))
     for name in registrations.get('guards', set()):
-        page_flow.PAGE_GUARDS.pop(name, None)
+        page_flow.remove_page_flow_registration('guard', name)
     for name in registrations.get('page_hooks', set()):
-        page_flow.PAGE_HOOKS.pop(name, None)
+        page_flow.remove_page_flow_registration('hook', name)
     for name in registrations.get('pricing_policies', set()):
         PRICING_POLICIES.pop(name, None)
     for name in registrations.get('promo_reward_policies', set()):
@@ -1552,6 +1568,7 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
         },
         'guards': dict(page_flow.PAGE_GUARDS),
         'page_hooks': dict(page_flow.PAGE_HOOKS),
+        'page_flow_runtime': page_flow.snapshot_page_flow_runtime_state(),
         'pricing_policies': dict(PRICING_POLICIES),
         'promo_reward_policies': dict(PROMO_REWARD_POLICIES),
         'referral_reward_policies': dict(REFERRAL_REWARD_POLICIES),
@@ -1593,6 +1610,7 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
     page_flow.PAGE_GUARDS.update(snapshot['guards'])
     page_flow.PAGE_HOOKS.clear()
     page_flow.PAGE_HOOKS.update(snapshot['page_hooks'])
+    page_flow.restore_page_flow_runtime_state(snapshot.get('page_flow_runtime', {}))
     PRICING_POLICIES.clear()
     PRICING_POLICIES.update(snapshot['pricing_policies'])
     PROMO_REWARD_POLICIES.clear()
@@ -1658,6 +1676,9 @@ def reset_custom_extensions_runtime() -> dict[str, dict[str, int]]:
     for extension_id in list(_EXTENSION_REGISTRATIONS):
         _remove_extension_runtime_registrations(extension_id)
         _EXTENSION_REGISTRATIONS.pop(extension_id, None)
+    from bot.utils.page_flow import reset_page_flow_runtime_health
+
+    reset_page_flow_runtime_health()
     for module_name in list(sys.modules):
         if module_name.startswith('_custom_extensions_'):
             sys.modules.pop(module_name, None)

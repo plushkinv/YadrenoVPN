@@ -23,6 +23,7 @@ PROMO_FAILURE_PAGES = {
     "expired": "promo_expired",
     "exhausted": "promo_exhausted",
     "already_used": "promo_exhausted",
+    "already_reserved": "promo_exhausted",
 }
 
 

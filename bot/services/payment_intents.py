@@ -7,9 +7,9 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from database.requests import (
+    cancel_promo_reservation_for_order,
     cancel_unconfirmed_payment_for_method_change,
     create_payment_intent_record,
-    find_order_by_order_id,
     get_base_currency,
     get_page,
     get_page_route,
@@ -23,7 +23,7 @@ from database.requests import (
 from bot.services.promotions import prepare_order_pricing
 from bot.services.exchange_rate import provider_amount_from_base_minor
 from bot.services.money import format_money_minor, minor_to_decimal
-from bot.utils.user_ui_texts import render_ui_text
+from bot.utils.user_ui_texts import render_duration_days, render_ui_text
 
 PURPOSE_KEY_PURCHASE = 'key_purchase'
 PURPOSE_KEY_RENEWAL = 'key_renewal'
@@ -71,6 +71,7 @@ class PaymentIntent:
     charge_amount: Decimal | None = None
     charge_currency: str | None = None
     rate_snapshot: Mapping[str, Any] = field(default_factory=dict)
+    provider_confirmed_at: str | None = None
 
     @property
     def nominal_amount_cents(self) -> int:
@@ -182,6 +183,20 @@ def create_payment_intent(
         tariff = get_tariff_by_id(tariff_id)
         if not tariff:
             raise ValueError('Tariff does not exist')
+        if (
+            tariff.get('system_type') is not None
+            or not bool(tariff.get('is_active', 1))
+        ):
+            raise ValueError('Tariff is not available for purchase')
+        if purpose == PURPOSE_KEY_RENEWAL:
+            key_id = _optional_positive_int(payload.get('key_id'))
+            key = get_vpn_key_by_id(key_id) if key_id else None
+            if key is None:
+                raise ValueError('Renewal key does not exist')
+            if int(key.get('tariff_group_id') or 1) != int(
+                tariff.get('group_id') or 1
+            ):
+                raise ValueError('Tariff belongs to another key group')
 
     base_currency = get_base_currency()
     if purpose == PURPOSE_BALANCE_TOPUP:
@@ -208,10 +223,7 @@ def create_payment_intent(
         )
         tariff_name = str(tariff.get('name') or f'#{tariff_id}')
         if purpose == PURPOSE_KEY_PURCHASE:
-            days = render_ui_text(
-                "format.days_short",
-                days=int(tariff.get('duration_days') or 0),
-            )
+            days = render_duration_days(tariff.get('duration_days'))
             default_description = render_ui_text(
                 "payment.invoice.purchase_description",
                 tariff_name=tariff_name,
@@ -313,18 +325,24 @@ def quote_payment_intent(order_id: str, payment_type: str) -> PaymentQuote:
         if str(pricing['charge_currency']) == 'XTR'
         else 0
     )
-    if not update_payment_intent_quote(
-        intent.order_id,
-        payment_type=str(payment_type),
-        payable_amount_minor=int(
-            pricing.get('payable_amount_minor', pricing['payable_amount_cents'])
-        ),
-        charge_amount=_decimal_text(charge_amount),
-        charge_currency=str(pricing['charge_currency']),
-        rate_snapshot=pricing['rate_snapshot'],
-        compatibility_amount_cents=compatibility_cents,
-        compatibility_amount_stars=compatibility_stars,
-    ):
+    try:
+        quote_persisted = update_payment_intent_quote(
+            intent.order_id,
+            payment_type=str(payment_type),
+            payable_amount_minor=int(
+                pricing.get('payable_amount_minor', pricing['payable_amount_cents'])
+            ),
+            charge_amount=_decimal_text(charge_amount),
+            charge_currency=str(pricing['charge_currency']),
+            rate_snapshot=pricing['rate_snapshot'],
+            compatibility_amount_cents=compatibility_cents,
+            compatibility_amount_stars=compatibility_stars,
+        )
+    except Exception:
+        cancel_promo_reservation_for_order(intent.order_id)
+        raise
+    if not quote_persisted:
+        cancel_promo_reservation_for_order(intent.order_id)
         raise RuntimeError('Payment intent quote was not persisted')
     return _payment_quote(intent, pricing, charge_amount=charge_amount)
 
@@ -356,6 +374,11 @@ def load_payment_intent(order_id: str) -> PaymentIntent | None:
         charge_amount=Decimal(str(raw_charge)) if raw_charge not in {None, ''} else None,
         charge_currency=str(row['charge_currency']) if row.get('charge_currency') else None,
         rate_snapshot=MappingProxyType(dict(row.get('rate_snapshot') or {})),
+        provider_confirmed_at=(
+            str(row['provider_confirmed_at'])
+            if row.get('provider_confirmed_at')
+            else None
+        ),
     )
 
 
@@ -372,60 +395,26 @@ def restart_payment_intent_for_method_change(
     *,
     user_id: int,
 ) -> PaymentIntent | None:
-    """Replace an unconfirmed provider-bound order with a fresh provider choice."""
-    row = find_order_by_order_id(str(order_id))
+    """Replace one unconfirmed v1 intent with a fresh provider choice."""
+    current = load_payment_intent(str(order_id))
     if (
-        not row
-        or int(row.get('user_id') or 0) != int(user_id)
-        or str(row.get('status') or '') != 'pending'
-        or row.get('provider_confirmed_at')
+        current is None
+        or current.user_id != int(user_id)
+        or current.status != 'pending'
+        or current.provider_confirmed_at is not None
     ):
         return None
 
-    current = load_payment_intent(str(order_id))
-    if current is not None:
-        purpose = current.purpose
-        purpose_data = dict(current.purpose_data)
-        nominal_amount = (
-            current.nominal_amount_minor
-            if purpose == PURPOSE_BALANCE_TOPUP
-            else None
-        )
-        description = current.description
-        navigation = current.navigation
-        balance_deduct_minor = current.balance_deduct_minor
-    else:
-        key_id = _optional_positive_int(row.get('vpn_key_id'))
-        raw_purpose = str(row.get('purpose') or '')
-        if raw_purpose in PURPOSE_REGISTRY:
-            purpose = raw_purpose
-        else:
-            purpose = PURPOSE_KEY_RENEWAL if key_id else PURPOSE_KEY_PURCHASE
-        tariff_id = _optional_positive_int(row.get('tariff_id'))
-        if purpose == PURPOSE_BALANCE_TOPUP:
-            purpose_data = {}
-            nominal_amount = int(
-                row.get('nominal_amount_minor')
-                or row.get('nominal_amount_cents')
-                or row.get('amount_cents')
-                or 0
-            )
-        else:
-            if tariff_id is None:
-                return None
-            purpose_data = {'tariff_id': tariff_id}
-            if purpose == PURPOSE_KEY_RENEWAL:
-                if key_id is None:
-                    return None
-                purpose_data['key_id'] = key_id
-            nominal_amount = None
-        description = None
-        navigation = None
-        balance_deduct_minor = int(
-            row.get('balance_deduct_minor')
-            or row.get('balance_deduct_cents')
-            or 0
-        )
+    purpose = current.purpose
+    purpose_data = dict(current.purpose_data)
+    nominal_amount = (
+        current.nominal_amount_minor
+        if purpose == PURPOSE_BALANCE_TOPUP
+        else None
+    )
+    description = current.description
+    navigation = current.navigation
+    balance_deduct_minor = current.balance_deduct_minor
 
     try:
         replacement = create_payment_intent(

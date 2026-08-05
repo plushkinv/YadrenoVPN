@@ -6,10 +6,10 @@ from typing import Any
 
 from bot.utils.page_dynamic_data import build_payment_coupon_context_values
 from bot.utils.page_renderer import (
-    build_page_keyboard,
+    PreparedPageRender,
     get_page_data,
+    prepare_page_render,
     render_page,
-    render_page_text,
 )
 from bot.utils.text import send_media_or_text
 
@@ -89,25 +89,24 @@ async def send_optional_payment_coupon_message(
         if context is None or page_data is None:
             return False
 
-        text = render_page_text(
+        prepared = await prepare_page_render(
+            bot,
             PAYMENT_COUPON_MESSAGE_PAGE_KEY,
             context=context,
         )
-        if text is None:
-            raise RuntimeError(
-                f"Required user page cannot be rendered: "
-                f"{PAYMENT_COUPON_MESSAGE_PAGE_KEY}"
+        if not isinstance(prepared, PreparedPageRender):
+            logger.info(
+                "Optional payment coupon delivery skipped by page flow: order=%s",
+                order_id,
             )
+            return False
         await send_media_or_text(
             bot,
             chat_id=int(telegram_id or 0),
-            text=text,
-            media=page_data.get('image'),
-            media_type=page_data.get('media_type'),
-            reply_markup=build_page_keyboard(
-                PAYMENT_COUPON_MESSAGE_PAGE_KEY,
-                context=context,
-            ),
+            text=prepared.text,
+            media=prepared.media,
+            media_type=prepared.media_type,
+            reply_markup=prepared.reply_markup,
         )
         return True
     except Exception as error:

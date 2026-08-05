@@ -11,9 +11,11 @@ import json
 import logging
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Optional, Dict, List, Any
 from urllib.parse import urlparse
 
+from aiogram import Bot
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardButton, InlineKeyboardMarkup,
@@ -29,6 +31,14 @@ from bot.utils.page_placeholder_context import (
     enrich_page_placeholder_context,
     enrich_page_placeholder_context_sync,
 )
+from bot.utils.page_flow import (
+    PageGuardResult,
+    PageHookResult,
+    create_page_flow_execution_frame,
+    parse_registry_names,
+    run_page_guards,
+    run_page_hooks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +46,66 @@ logger = logging.getLogger(__name__)
 MAX_BUTTONS_PER_ROW = 2
 PAGE_MEDIA_TYPES = {'photo', 'video', 'animation'}
 _COLLECTION_ITEM_KEY_RE = re.compile(r'item_[A-Za-z0-9_]+\Z', re.IGNORECASE)
+_USE_PREPARED_MARKUP = object()
+
+
+@dataclass
+class PageRenderInputs:
+    """Base or effective runtime inputs used to materialize one page."""
+
+    visibility: Optional[Dict[str, bool]] = None
+    context: Optional[Dict[str, Any]] = None
+    text_replacements: Optional[Dict[str, Any]] = None
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None
+    append_buttons: Optional[List[List[InlineKeyboardButton]]] = None
+
+
+@dataclass
+class PreparedPageRender:
+    """Fully prepared page payload, reusable by one or more transport attempts."""
+
+    requested_page_key: str
+    page_key: str
+    route_key: Optional[str]
+    text: str
+    reply_markup: Optional[InlineKeyboardMarkup]
+    media: Any
+    media_type: Optional[str]
+    page_data: Dict[str, Any]
+    base_inputs: PageRenderInputs
+    effective_inputs: PageRenderInputs
+
+
+@dataclass(frozen=True)
+class PageRenderDenied:
+    """A route or page guard denied this materialization."""
+
+    requested_page_key: str
+    page_key: str
+    route_key: Optional[str]
+    scope: str
+    guard_result: PageGuardResult
+
+
+@dataclass(frozen=True)
+class PageRenderMissing:
+    """A route cannot be resolved to an enabled stored page."""
+
+    requested_page_key: str
+    route_key: Optional[str]
+    reason: str
+
+
+PagePrepareOutcome = PreparedPageRender | PageRenderDenied | PageRenderMissing
+
+
+@dataclass(frozen=True)
+class PageDeliveryResult:
+    """Transport result for a previously prepared page outcome."""
+
+    status: str
+    message: Optional[Message] = None
+    callback_answered: bool = False
 
 
 def validate_required_user_pages() -> int:
@@ -118,6 +188,8 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
         "buttons": buttons,
         "_text_default": row.get('text_default') or '',
         "_text_custom": row.get('text_custom'),
+        "_guard_names": row.get('guard_names'),
+        "_hook_names": row.get('hook_names'),
     }
 
 
@@ -319,9 +391,9 @@ def _build_keyboard(
     Placement rules: by row, max 2 buttons in a row, fallback in case of collisions.
     """
     from bot.utils.action_registry import (
-        ACTION_REGISTRY,
         SYSTEM_BUTTONS,
         normalize_callback_data,
+        resolve_internal_button,
         resolve_system_collection,
         resolve_system_button,
     )
@@ -475,9 +547,7 @@ def _build_keyboard(
             continue
 
         if action_type == 'system':
-            if btn_id not in SYSTEM_BUTTONS and not (
-                btn_id.startswith('btn_pay_ext_') or btn_id.startswith('btn_renew_pay_ext_')
-            ):
+            if btn_id not in SYSTEM_BUTTONS:
                 logger.warning(f"System handler не найден для кнопки '{btn_id}' — пропускаем")
                 continue
 
@@ -509,10 +579,17 @@ def _build_keyboard(
             if action_value is None:
                 continue
 
-            cb = ACTION_REGISTRY.get(action_value)
-            if cb is None:
+            try:
+                internal_result = resolve_internal_button(action_value, context)
+            except (TypeError, ValueError) as e:
+                logger.warning("Некорректное internal-действие '%s': %s", action_value, e)
+                continue
+            if internal_result is None:
                 logger.warning(f"action_value '{action_value}' не найден в ACTION_REGISTRY — пропускаем")
                 continue
+            if internal_result.get('hidden') is True:
+                continue
+            cb = internal_result.get('callback_data')
             try:
                 callback_data = normalize_callback_data(
                     cb,
@@ -921,7 +998,7 @@ def _target_viewer_id(target) -> Optional[int]:
 
 
 def _target_bot_username(target) -> str:
-    bot = getattr(target, 'bot', None)
+    bot = target if isinstance(target, Bot) else getattr(target, 'bot', None)
     if bot is None and isinstance(target, CallbackQuery):
         bot = getattr(target.message, 'bot', None)
     return (
@@ -956,6 +1033,53 @@ def _build_fallback_page_data(fallback_text: str) -> Dict[str, Any]:
     }
 
 
+def _copy_runtime_button_rows(
+    rows: Optional[List[List[InlineKeyboardButton]]],
+) -> Optional[List[List[InlineKeyboardButton]]]:
+    if not rows:
+        return None
+    return [list(row) for row in rows]
+
+
+def _copy_render_inputs(
+    *,
+    visibility: Optional[Mapping[str, bool]],
+    context: Optional[Mapping[str, Any]],
+    text_replacements: Optional[Mapping[str, Any]],
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]],
+    append_buttons: Optional[List[List[InlineKeyboardButton]]],
+) -> PageRenderInputs:
+    return PageRenderInputs(
+        visibility=dict(visibility) if visibility is not None else None,
+        context=dict(context) if context is not None else None,
+        text_replacements=(
+            dict(text_replacements) if text_replacements is not None else None
+        ),
+        prepend_buttons=_copy_runtime_button_rows(prepend_buttons),
+        append_buttons=_copy_runtime_button_rows(append_buttons),
+    )
+
+
+def _merge_optional_mappings(
+    base: Optional[Mapping[str, Any]],
+    *updates: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    merged = dict(base or {})
+    for update in updates:
+        merged.update(update)
+    return merged or None
+
+
+def _merge_runtime_rows(
+    *row_groups: Optional[List[List[InlineKeyboardButton]]],
+) -> Optional[List[List[InlineKeyboardButton]]]:
+    merged: List[List[InlineKeyboardButton]] = []
+    for rows in row_groups:
+        if rows:
+            merged.extend(list(row) for row in rows)
+    return merged or None
+
+
 def _resolve_render_media(
     page_data: Dict[str, Any],
     media_policy: str,
@@ -969,6 +1093,340 @@ def _resolve_render_media(
             return None, None
         return runtime_media, _normalize_page_media_type(runtime_media_type, runtime_media)
     raise ValueError("media_policy must be 'page' or 'runtime'")
+
+
+async def prepare_page_render(
+    target: Any,
+    page_key: str,
+    visibility: Optional[Dict[str, bool]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    text_replacements: Optional[Dict[str, Any]] = None,
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+    append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+    fallback_text: Optional[str] = None,
+    media_policy: str = 'page',
+    runtime_media: Any = None,
+    runtime_media_type: Optional[str] = None,
+    route_key: Optional[str] = None,
+    *,
+    _bypass_guards: bool = False,
+) -> PagePrepareOutcome:
+    """Runs the complete page flow and returns a transport-independent payload."""
+    if not isinstance(page_key, str) or not page_key.strip():
+        raise ValueError('page_key must be a non-empty string')
+    requested_page_key = page_key.strip()
+    normalized_route_key = route_key.strip() if isinstance(route_key, str) and route_key.strip() else None
+    route: Optional[Dict[str, Any]] = None
+    rendered_page_key = requested_page_key
+
+    if normalized_route_key is not None:
+        from database.requests import get_page_route
+
+        route = get_page_route(normalized_route_key)
+        if not route or not bool(route.get('is_enabled')):
+            return PageRenderMissing(
+                requested_page_key=requested_page_key,
+                route_key=normalized_route_key,
+                reason='route_missing_or_disabled',
+            )
+        routed_page_key = str(route.get('page_key') or '').strip()
+        if not routed_page_key or routed_page_key != requested_page_key:
+            return PageRenderMissing(
+                requested_page_key=requested_page_key,
+                route_key=normalized_route_key,
+                reason='route_page_mismatch',
+            )
+        rendered_page_key = routed_page_key
+
+    base_inputs = _copy_render_inputs(
+        visibility=visibility,
+        context=context,
+        text_replacements=text_replacements,
+        prepend_buttons=prepend_buttons,
+        append_buttons=append_buttons,
+    )
+    page_data = get_page_data(rendered_page_key)
+    stored_page_flow = page_data is not None
+    if page_data is None and fallback_text is None:
+        logger.error(
+            "User page %r is missing; rendering screen_unavailable",
+            requested_page_key,
+        )
+        rendered_page_key = 'screen_unavailable'
+        page_data = get_page_data(rendered_page_key)
+        route = None
+        normalized_route_key = None
+        if page_data is None:
+            raise RuntimeError(
+                "Required fallback page 'screen_unavailable' is missing while "
+                f"rendering {requested_page_key!r}"
+            )
+        stored_page_flow = True
+    elif page_data is None:
+        page_data = _build_fallback_page_data(fallback_text or '')
+        stored_page_flow = False
+        route = None
+        normalized_route_key = None
+
+    render_context = _build_render_context(target, rendered_page_key, context)
+    render_context['page_key'] = rendered_page_key
+    if normalized_route_key is not None:
+        render_context['route_key'] = normalized_route_key
+
+    frame = create_page_flow_execution_frame()
+    if stored_page_flow and not _bypass_guards:
+        if route is not None:
+            route_guard = await run_page_guards(
+                parse_registry_names(route.get('guard_names')),
+                target,
+                render_context,
+                frame=frame,
+                page_key=rendered_page_key,
+                scope='route',
+            )
+            if not route_guard.allowed:
+                return PageRenderDenied(
+                    requested_page_key=requested_page_key,
+                    page_key=rendered_page_key,
+                    route_key=normalized_route_key,
+                    scope='route',
+                    guard_result=route_guard,
+                )
+
+        page_guard = await run_page_guards(
+            parse_registry_names(page_data.get('_guard_names')),
+            target,
+            render_context,
+            frame=frame,
+            page_key=rendered_page_key,
+            scope='page',
+        )
+        if not page_guard.allowed:
+            return PageRenderDenied(
+                requested_page_key=requested_page_key,
+                page_key=rendered_page_key,
+                route_key=normalized_route_key,
+                scope='page',
+                guard_result=page_guard,
+            )
+
+    page_hook = PageHookResult()
+    route_hook = PageHookResult()
+    if stored_page_flow:
+        page_hook = await run_page_hooks(
+            parse_registry_names(page_data.get('_hook_names')),
+            target,
+            render_context,
+            frame=frame,
+            page_key=rendered_page_key,
+            scope='page',
+        )
+        render_context.update(page_hook.context)
+        if route is not None:
+            route_hook = await run_page_hooks(
+                parse_registry_names(route.get('hook_names')),
+                target,
+                render_context,
+                frame=frame,
+                page_key=rendered_page_key,
+                scope='route',
+            )
+            render_context.update(route_hook.context)
+
+    effective_visibility = _merge_optional_mappings(
+        visibility,
+        page_hook.visibility,
+        route_hook.visibility,
+    )
+    effective_replacements = _merge_optional_mappings(
+        text_replacements,
+        page_hook.text_replacements,
+        route_hook.text_replacements,
+    )
+    effective_prepend = _merge_runtime_rows(
+        page_hook.prepend_buttons,
+        route_hook.prepend_buttons,
+        prepend_buttons,
+    )
+    effective_append = _merge_runtime_rows(
+        page_hook.append_buttons,
+        route_hook.append_buttons,
+        append_buttons,
+    )
+
+    render_context = await enrich_page_placeholder_context(
+        rendered_page_key,
+        page_data,
+        render_context,
+        effective_replacements,
+    )
+
+    from bot.utils.action_dispatcher import apply_action_policy_previews
+
+    rendered_buttons = await apply_action_policy_previews(
+        page_data['buttons'],
+        target,
+        page_key=rendered_page_key,
+        context=render_context,
+    )
+    text = _apply_text_replacements(
+        page_data['text'],
+        effective_replacements,
+        render_context,
+    )
+    keyboard = _build_keyboard(
+        buttons=rendered_buttons,
+        visibility=effective_visibility,
+        context=render_context,
+        text_replacements=effective_replacements,
+        prepend_buttons=effective_prepend,
+        append_buttons=effective_append,
+    )
+    media, media_type = _resolve_render_media(
+        page_data,
+        media_policy,
+        runtime_media,
+        runtime_media_type,
+    )
+    effective_inputs = _copy_render_inputs(
+        visibility=effective_visibility,
+        context=render_context,
+        text_replacements=effective_replacements,
+        prepend_buttons=effective_prepend,
+        append_buttons=effective_append,
+    )
+    return PreparedPageRender(
+        requested_page_key=requested_page_key,
+        page_key=rendered_page_key,
+        route_key=normalized_route_key,
+        text=text,
+        reply_markup=keyboard,
+        media=media,
+        media_type=media_type,
+        page_data=page_data,
+        base_inputs=base_inputs,
+        effective_inputs=effective_inputs,
+    )
+
+
+def _remember_prepared_page_context(
+    target: Any,
+    prepared: PreparedPageRender,
+    rendered_message: Message,
+) -> None:
+    """Stores base and effective page inputs for a later /yaa rerender."""
+    try:
+        from config import ADMIN_IDS
+        from bot.services.page_context import remember_page_context
+
+        viewer_id = _target_viewer_id(target)
+        if viewer_id not in ADMIN_IDS:
+            return
+        remember_page_context(
+            viewer_id,
+            page_key=prepared.page_key,
+            route_key=prepared.route_key,
+            message=rendered_message,
+            base_visibility=prepared.base_inputs.visibility,
+            base_context=prepared.base_inputs.context,
+            base_text_replacements=prepared.base_inputs.text_replacements,
+            base_prepend_buttons=prepared.base_inputs.prepend_buttons,
+            base_append_buttons=prepared.base_inputs.append_buttons,
+            effective_visibility=prepared.effective_inputs.visibility,
+            effective_context=prepared.effective_inputs.context,
+            effective_text_replacements=prepared.effective_inputs.text_replacements,
+            effective_prepend_buttons=prepared.effective_inputs.prepend_buttons,
+            effective_append_buttons=prepared.effective_inputs.append_buttons,
+        )
+    except Exception as exc:
+        logger.warning("Failed to remember page context for /yaa: %s", exc)
+
+
+async def deliver_page_prepare_outcome(
+    target: Any,
+    outcome: PagePrepareOutcome,
+    *,
+    force_new: bool = False,
+    send_func: Any = None,
+    fallback_context: Optional[Dict[str, Any]] = None,
+    reply_markup_override: Any = _USE_PREPARED_MARKUP,
+    remember_context: bool = True,
+) -> PageDeliveryResult:
+    """Delivers a typed prepare outcome without rerunning guards or hooks."""
+    from bot.utils.text import safe_edit_or_send
+
+    sender = send_func or safe_edit_or_send
+    if isinstance(outcome, PageRenderMissing):
+        return PageDeliveryResult('missing')
+    if isinstance(outcome, PageRenderDenied):
+        denial = outcome.guard_result
+        if denial.message:
+            if isinstance(target, CallbackQuery):
+                await target.answer(denial.message, show_alert=denial.show_alert)
+                return PageDeliveryResult('denied', callback_answered=True)
+            if isinstance(target, Message):
+                await sender(
+                    target,
+                    denial.message,
+                    reply_markup=None,
+                    media=None,
+                    media_type=None,
+                    force_new=True,
+                )
+            else:
+                logger.info(
+                    "Background page delivery denied: page=%s scope=%s",
+                    outcome.page_key,
+                    outcome.scope,
+                )
+            return PageDeliveryResult('denied')
+
+        if isinstance(target, Bot):
+            logger.info(
+                "Background page delivery denied: page=%s scope=%s",
+                outcome.page_key,
+                outcome.scope,
+            )
+            return PageDeliveryResult('denied')
+        fallback_outcome = await prepare_page_render(
+            target,
+            'action_unavailable',
+            context=fallback_context,
+            _bypass_guards=True,
+        )
+        await deliver_page_prepare_outcome(
+            target,
+            fallback_outcome,
+            force_new=isinstance(target, Message),
+            send_func=send_func,
+            fallback_context=fallback_context,
+            remember_context=remember_context,
+        )
+        callback_answered = False
+        if isinstance(target, CallbackQuery):
+            await target.answer()
+            callback_answered = True
+        return PageDeliveryResult('denied', callback_answered=callback_answered)
+
+    msg = target.message if isinstance(target, CallbackQuery) else target
+    if isinstance(msg, Bot):
+        raise ValueError('Bot targets require a background transport adapter')
+    reply_markup = (
+        outcome.reply_markup
+        if reply_markup_override is _USE_PREPARED_MARKUP
+        else reply_markup_override
+    )
+    rendered_message = await sender(
+        msg,
+        outcome.text,
+        reply_markup=reply_markup,
+        media=outcome.media,
+        media_type=outcome.media_type,
+        force_new=force_new,
+    )
+    if remember_context and rendered_message is not None:
+        _remember_prepared_page_context(target, outcome, rendered_message)
+    return PageDeliveryResult('ready', message=rendered_message)
 
 
 async def render_page(
@@ -985,6 +1443,7 @@ async def render_page(
     media_policy: str = 'page',
     runtime_media: Any = None,
     runtime_media_type: Optional[str] = None,
+    route_key: Optional[str] = None,
 ) -> Optional[Message]:
     """
     Retrieves a page from the database and sends/edits a message.
@@ -1007,94 +1466,44 @@ async def render_page(
         media_policy: "page" uses pages media, "runtime" uses runtime_media
         runtime_media: Technical media object/file_id used with media_policy="runtime"
         runtime_media_type: Runtime media type: photo, video or animation
+        route_key: Optional page_routes identity; its page_key must match page_key
     """
-    from bot.utils.text import safe_edit_or_send
-
-    sender = send_func or safe_edit_or_send
-
-    # 1. Get page data
-    rendered_page_key = page_key
-    page_data = get_page_data(rendered_page_key)
-
-    if page_data is None and fallback_text is None:
-        logger.error("User page %r is missing; rendering screen_unavailable", page_key)
-        rendered_page_key = 'screen_unavailable'
-        page_data = get_page_data(rendered_page_key)
-        if page_data is None:
-            raise RuntimeError(
-                f"Required fallback page 'screen_unavailable' is missing while rendering {page_key!r}"
-            )
-    elif page_data is None:
-        page_data = _build_fallback_page_data(fallback_text or '')
-
-    render_context = _build_render_context(target, rendered_page_key, context)
-    render_context = await enrich_page_placeholder_context(
-        rendered_page_key,
-        page_data,
-        render_context,
-        text_replacements,
-    )
-
-    from bot.utils.action_dispatcher import apply_action_policy_previews
-
-    rendered_buttons = await apply_action_policy_previews(
-        page_data["buttons"],
+    outcome = await prepare_page_render(
         target,
-        page_key=rendered_page_key,
-        context=render_context,
-    )
-
-    # 2. Text processing
-    text = _apply_text_replacements(page_data["text"], text_replacements, render_context)
-
-    # 3. Assembling the keyboard
-    kb = _build_keyboard(
-        buttons=rendered_buttons,
+        page_key,
         visibility=visibility,
-        context=render_context,
+        context=context,
         text_replacements=text_replacements,
         prepend_buttons=prepend_buttons,
         append_buttons=append_buttons,
+        fallback_text=fallback_text,
+        media_policy=media_policy,
+        runtime_media=runtime_media,
+        runtime_media_type=runtime_media_type,
+        route_key=route_key,
     )
 
-    # 4. Define the media
-    media, media_type = _resolve_render_media(
-        page_data,
-        media_policy,
-        runtime_media,
-        runtime_media_type,
-    )
-
-    # 5. Submit/edit
-    msg = target.message if isinstance(target, CallbackQuery) else target
-    rendered_message = await sender(
-        msg,
-        text,
-        reply_markup=kb,
-        media=media,
-        media_type=media_type,
+    if isinstance(outcome, PageRenderMissing):
+        logger.warning(
+            "Page route materialization is missing: route=%s page=%s reason=%s",
+            outcome.route_key,
+            outcome.requested_page_key,
+            outcome.reason,
+        )
+        if isinstance(target, Bot):
+            return None
+        return await render_page(
+            target,
+            'screen_unavailable',
+            context=context,
+            force_new=force_new,
+            send_func=send_func,
+        )
+    delivery = await deliver_page_prepare_outcome(
+        target,
+        outcome,
         force_new=force_new,
+        send_func=send_func,
+        fallback_context=context,
     )
-
-    # 6. Remember the editable user page for /yaa.
-    try:
-        from config import ADMIN_IDS
-        from bot.services.page_context import remember_page_context
-
-        viewer_id = _target_viewer_id(target)
-
-        if viewer_id in ADMIN_IDS:
-            remember_page_context(
-                viewer_id,
-                page_key=rendered_page_key,
-                message=rendered_message,
-                visibility=visibility,
-                context=render_context,
-                text_replacements=text_replacements,
-                prepend_buttons=prepend_buttons,
-                append_buttons=append_buttons,
-            )
-    except Exception as e:
-        logger.warning("Не удалось сохранить контекст страницы для /yaa: %s", e)
-
-    return rendered_message
+    return delivery.message

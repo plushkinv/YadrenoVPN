@@ -38,7 +38,7 @@ def check_unblock_conditions():
     return get_setting('referral_enabled', '0') == '1'
 """
 
-REQUIRED_SCHEMA_VERSION = 91
+REQUIRED_SCHEMA_VERSION = 97
 
 BLOCKING_MESSAGE = (
     "🔒 <b>Обновление 10.1 проверяет обязательную миграцию</b>\n\n"

@@ -70,6 +70,19 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
         frozenset({"days"}),
     ),
     UserUITextDefinition(
+        "format.duration_unlimited",
+        "Без срока",
+        "plain",
+        "Display value shared by user-facing screens for an unlimited duration.",
+    ),
+    UserUITextDefinition(
+        "format.traffic_gb",
+        "%gb% ГБ",
+        "plain",
+        "Compact gigabyte limit shared by user-facing runtime data.",
+        frozenset({"gb"}),
+    ),
+    UserUITextDefinition(
         "tariff.price_unset",
         "Цена не установлена",
         "plain",
@@ -120,10 +133,35 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
         frozenset({"used", "limit", "percent"}),
     ),
     UserUITextDefinition(
-        "key.inbound.all_protocols",
-        "Все протоколы",
+        "key.tariff.custom",
+        "Индивидуальный тариф",
         "plain",
-        "Inbound display for a subscription containing every available protocol.",
+        "User-facing tariff name for a key issued through the protected admin plan.",
+    ),
+    UserUITextDefinition(
+        "trial.offer.summary",
+        (
+            "📋 <b>%tariff%</b>\n"
+            "📂 Группа: %group%\n"
+            "⏳ Срок: %duration%\n"
+            "📊 Трафик: %traffic%\n"
+            "📱 Устройства: %device_limit%"
+        ),
+        "html",
+        "User-facing summary of the selected trial offer.",
+        frozenset({"tariff", "group", "duration", "traffic", "device_limit"}),
+    ),
+    UserUITextDefinition(
+        "trial.eligibility.once_per_user",
+        "<i>Пробный период предоставляется один раз на аккаунт.</i>",
+        "html",
+        "Eligibility note when only one trial is allowed per user.",
+    ),
+    UserUITextDefinition(
+        "trial.eligibility.once_per_group",
+        "<i>В каждой группе тарифов можно активировать один пробный период.</i>",
+        "html",
+        "Eligibility note when one trial is allowed in every tariff group.",
     ),
     UserUITextDefinition(
         "key.history.operation_with_days",
@@ -220,8 +258,8 @@ USER_UI_TEXT_CATALOG = {
 if len(USER_UI_TEXT_CATALOG) != len(USER_UI_TEXT_DEFINITIONS):
     raise RuntimeError("Duplicate text_key in USER_UI_TEXT_DEFINITIONS")
 
-if len(USER_UI_TEXT_CATALOG) != 28:
-    raise RuntimeError("The initial core user UI text catalog must contain exactly 28 entries")
+if len(USER_UI_TEXT_CATALOG) != 33:
+    raise RuntimeError("The core user UI text catalog must contain exactly 33 entries")
 
 
 __all__ = [

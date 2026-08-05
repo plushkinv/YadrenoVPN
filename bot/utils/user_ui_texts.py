@@ -158,6 +158,14 @@ def render_ui_text(text_key: str, /, **values: Any) -> str:
     return rendered
 
 
+def render_duration_days(days: Any) -> str:
+    """Renders a tariff duration while preserving zero as unlimited."""
+    normalized = max(0, int(days or 0))
+    if normalized == 0:
+        return render_ui_text('format.duration_unlimited')
+    return render_ui_text('format.days_short', days=normalized)
+
+
 __all__ = [
     "CachedUserUIText",
     "SafeHtml",
@@ -165,5 +173,6 @@ __all__ = [
     "get_ui_text",
     "load_user_ui_text_cache",
     "reload_user_ui_text_cache",
+    "render_duration_days",
     "render_ui_text",
 ]

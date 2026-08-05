@@ -64,6 +64,7 @@ def _count_where(
 
 def _customization_default_settings() -> dict[str, str | None]:
     return {
+        "key_name_prefix": "Ключ",
         "my_keys_item_template": migrations._my_keys_item_template(),
         "notification_text": (
             "⚠️ <b>Ваш VPN-ключ %ключ_имя% скоро истекает!</b>\n\n"

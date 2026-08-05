@@ -249,10 +249,11 @@ async def _apply_promotion(order: dict[str, Any]) -> dict[str, Any]:
 async def _apply_referrals_once(order: dict[str, Any], *, bot: Any) -> None:
     async def apply() -> dict[str, Any]:
         from bot.services.billing import process_referral_reward
+        from bot.utils.billing_values import resolve_duration_days
 
         events = await process_referral_reward(
             int(order['user_id']),
-            int(order.get('period_days') or order.get('duration_days') or 0),
+            resolve_duration_days(order, fallback=0),
             int(order.get('payable_amount_cents') or 0),
             str(order.get('payment_type') or ''),
             bot=bot,

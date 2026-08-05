@@ -52,24 +52,27 @@ def build_key_page_context(
     *,
     status: str | None = None,
     traffic: str | None = None,
-    inbound: str | None = None,
-    protocol: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Builds the allowlisted display context for ``%key(field=...)%``."""
     display_name = key.get('display_name') or f"#{key.get('id', '')}"
     server = key.get('server_name') or '—'
-    expires = format_date_for_display(key.get('expires_at'))
-    tariff = key.get('tariff_name') or '—'
-    device_limit = key.get('tariff_max_ips')
+    expires = (
+        render_ui_text('format.duration_unlimited')
+        if key.get('expires_at') is None
+        else format_date_for_display(key.get('expires_at'))
+    )
+    tariff = (
+        render_ui_text('key.tariff.custom')
+        if key.get('tariff_system_type') == 'admin_custom'
+        else key.get('tariff_name') or '—'
+    )
+    device_limit = key.get('max_ips_override')
+    if device_limit is None:
+        device_limit = key.get('tariff_max_ips')
     if device_limit is None:
         device_limit = key.get('max_ips')
     if device_limit is None:
         device_limit = '—'
-
-    if inbound is None:
-        inbound = render_ui_text("key.inbound.all_protocols") if key.get('sub_id') else '—'
-    if protocol is None:
-        protocol = 'SUBSCRIPTION' if key.get('sub_id') else '—'
 
     return {
         KEY_FIELDS_CONTEXT_KEY: {
@@ -79,8 +82,6 @@ def build_key_page_context(
             'traffic': traffic if traffic is not None else _default_key_traffic(key),
             'expires_at': expires,
             'server': server,
-            'inbound': inbound,
-            'protocol': protocol,
             'tariff': tariff,
             'device_limit': device_limit,
         },

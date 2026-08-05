@@ -19,6 +19,8 @@ from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Dict, Any, Tuple
 
+from bot.utils.billing_values import resolve_duration_days
+
 from database.requests import (
     find_order_by_order_id, complete_order, is_order_already_paid,
     get_setting,
@@ -395,7 +397,7 @@ async def _process_payment_order_unlocked(
         return ""
 
     user_internal_id = order['user_id']
-    days = order.get('period_days') or order.get('duration_days') or 30
+    days = resolve_duration_days(order)
 
     if order['vpn_key_id']:
         from bot.services.key_lifecycle import renew_key_access
@@ -405,8 +407,15 @@ async def _process_payment_order_unlocked(
             reset_traffic=True,
             tariff_id=order.get('tariff_id'),
         )
-        if days and renew_result['db_updated']:
-            logger.info(f"Ключ {order['vpn_key_id']} продлён на {days} дней (order={order_id})")
+        if renew_result['db_updated']:
+            if days == 0:
+                logger.info(
+                    "Ключ %s переведён на бессрочный тариф (order=%s)",
+                    order['vpn_key_id'],
+                    order_id,
+                )
+            else:
+                logger.info(f"Ключ {order['vpn_key_id']} продлён на {days} дней (order={order_id})")
             if not renew_result['panel_synced']:
                 logger.warning(
                     f"Ключ {order['vpn_key_id']} продлён в БД, но панель синхронизирована "
@@ -436,7 +445,7 @@ async def _process_payment_order_unlocked(
             raise TariffNotFoundError()
         
         try:
-            days = order.get('period_days') or order.get('duration_days') or 30
+            days = resolve_duration_days(order)
             # We get the traffic limit from the tariff
             from database.requests import get_tariff_by_id as _get_tariff
             _tariff = _get_tariff(order['tariff_id'])
@@ -551,8 +560,9 @@ async def process_crypto_payment(
         from bot.errors import TariffNotFoundError
         raise TariffNotFoundError()
     
-    # Delegate to unified logic
-    return await process_payment_order(order_id, bot=bot)
+    # Signature/provider confirmation ends here. Closing the order and every
+    # continuation is owned by complete_confirmed_payment at the entry point.
+    return True, "payment_confirmed", order
 
 
 def build_crypto_payment_url(
@@ -1698,7 +1708,7 @@ async def _run_payment_post_actions(
                 payment_type,
             )
 
-    days = order.get('period_days') or order.get('duration_days') or 30
+    days = resolve_duration_days(order)
     await process_referral_reward(
         user_internal_id,
         days,
@@ -1714,183 +1724,3 @@ async def _run_payment_post_actions(
         await notify_admins_payment(bot, order)
     except Exception as notify_err:
         logger.warning("Ошибка уведомления об оплате order=%s: %s", order.get('order_id'), notify_err)
-
-
-async def _notify_automatic_payment_user(bot: Any, order: Dict[str, Any]) -> bool:
-    """Notifies a user that background polling completed the payment."""
-    from database.requests import get_user_by_id, mark_user_bot_blocked
-    from bot.utils.delivery import is_bot_blocked_error
-    from bot.utils.page_renderer import build_page_keyboard, get_page_data, render_page_text
-    from bot.utils.text import send_media_or_text
-
-    user = get_user_by_id(int(order.get('user_id') or 0))
-    telegram_id = int((user or {}).get('telegram_id') or 0)
-    if not telegram_id:
-        return False
-    try:
-        if order.get('purpose') == 'balance_topup':
-            from bot.services.payment_intents import format_rub_cents
-
-            nominal = format_rub_cents(int(order.get('nominal_amount_cents') or 0))
-            paid = format_rub_cents(int(order.get('payable_amount_cents') or 0))
-            page_key = 'balance_topup_result'
-            context = {
-                'telegram_id': telegram_id,
-                'order_id': order.get('order_id'),
-                'payment_nominal_text': nominal,
-                'payment_amount_text': paid,
-            }
-        else:
-            page_key = 'payment_auto_completed'
-            context = {
-                'telegram_id': telegram_id,
-                'order_id': order.get('order_id'),
-            }
-
-        page_data = get_page_data(page_key)
-        if page_data is None:
-            raise RuntimeError(f"Required user page is missing: {page_key}")
-        text = render_page_text(page_key, context=context)
-        if text is None:
-            raise RuntimeError(f"Required user page cannot be rendered: {page_key}")
-        await send_media_or_text(
-            bot,
-            chat_id=telegram_id,
-            text=text,
-            media=page_data.get('image'),
-            media_type=page_data.get('media_type'),
-            reply_markup=build_page_keyboard(page_key, context=context),
-        )
-        from bot.services.payment_coupon_delivery import (
-            send_optional_payment_coupon_message,
-        )
-
-        await send_optional_payment_coupon_message(
-            bot,
-            telegram_id=telegram_id,
-            order_id=order.get('order_id'),
-        )
-        return True
-    except Exception as error:
-        if is_bot_blocked_error(error):
-            mark_user_bot_blocked(telegram_id)
-        logger.warning(
-            "Не удалось уведомить пользователя об автозавершении order=%s: %s",
-            order.get('order_id'),
-            error,
-        )
-        return False
-
-
-async def complete_payment_order_background(
-    order_id: str,
-    *,
-    bot: Any,
-    notify_user: bool = True,
-    retry_post_actions: bool = False,
-) -> Dict[str, Any]:
-    """Completes a provider-confirmed order without Telegram callback or FSM state."""
-    success, text, order = await process_payment_order(
-        order_id,
-        bot=bot,
-        process_referrals=False,
-    )
-    result: Dict[str, Any] = {
-        'ok': bool(success and order),
-        'text': text,
-        'order': order,
-        'processed_now': bool(order and order.get('_payment_processed_now', True)),
-        'user_notified': False,
-    }
-    if not success or not order:
-        return result
-
-    if result['processed_now'] or retry_post_actions:
-        payment_type = str(order.get('payment_type') or '')
-        await _run_payment_post_actions(
-            order,
-            bot=bot,
-            payment_type=payment_type,
-            referral_amount=_payment_order_referral_amount(order),
-            force=retry_post_actions,
-        )
-        if notify_user:
-            result['user_notified'] = await _notify_automatic_payment_user(bot, order)
-    return result
-
-
-async def complete_payment_flow(
-    order_id: str,
-    message,
-    state,
-    telegram_id: int,
-    payment_type: str,
-    referral_amount: int
-) -> None:
-    """
-    Single post-payment flow after payment confirmation.
-    
-    Performs:
-    1. Order processing (process_payment_order)
-    2. Write off the balance (if partial payment)
-    3. Accrual of referral reward
-    4. Finalization of the UI (issuing a key / showing the result)
-    
-    Called from:
-    - successful_payment_handler (Stars/TG payments) — base.py
-    - check_yookassa_payment (Yukassa) - yookassa.py
-    
-    Args:
-        order_id: Order ID
-        message: Message to respond to the user
-        state: FSM context (for balance and cleanup)
-        telegram_id: Telegram user ID
-        payment_type: Payment type ('stars', 'cards', 'yookassa_qr')
-        referral_amount: Raw amount for referral reward:
-            - 'stars': number of stars
-            - 'cards': pennies of rubles
-            - 'yookassa_qr': pennies of rubles
-    """
-    from bot.handlers.user.payments.base import finalize_payment_ui
-    state_data = await state.get_data()
-    balance_to_deduct = state_data.get('balance_to_deduct', 0)
-    
-    try:
-        (success, text, order) = await process_payment_order(
-            order_id,
-            bot=message.bot,
-            process_referrals=False,
-        )
-        
-        if success and order:
-            await _run_payment_post_actions(
-                order,
-                bot=message.bot,
-                payment_type=payment_type,
-                referral_amount=referral_amount,
-                balance_override_cents=balance_to_deduct,
-            )
-
-            # Clearing FSM balance data
-            await state.update_data(balance_to_deduct=0, remaining_cents=0)
-            
-            # UI finalization
-            await finalize_payment_ui(message, state, text, order, user_id=telegram_id)
-        else:
-            logger.warning('Payment completion failed order=%s status=%s', order_id, text)
-            from bot.utils.page_renderer import render_page
-
-            await render_page(message, 'payment_failed')
-    
-    except Exception as e:
-        from bot.errors import TariffNotFoundError
-        if isinstance(e, TariffNotFoundError):
-            from bot.utils.page_renderer import render_page
-
-            await render_page(message, 'payment_order_unavailable')
-        else:
-            logger.exception('Payment completion failed type=%s: %s', payment_type, e)
-            from bot.utils.page_renderer import render_page
-
-            await render_page(message, 'payment_failed')
-

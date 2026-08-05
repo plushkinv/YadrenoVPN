@@ -18,8 +18,6 @@ from bot.utils.text import escape_html, safe_edit_or_send
 
 logger = logging.getLogger(__name__)
 
-from bot.utils.text import safe_edit_or_send
-
 router = Router()
 
 
@@ -30,7 +28,7 @@ router = Router()
 async def show_trial_menu(callback: CallbackQuery):
     """Shows the trial subscription settings menu."""
     from database.requests import (
-        get_setting, is_trial_enabled, get_trial_tariff_id, get_tariff_by_id
+        get_tariff_by_id, get_trial_tariff_id, is_trial_enabled
     )
     from bot.keyboards.admin import trial_settings_kb
 
@@ -42,23 +40,25 @@ async def show_trial_menu(callback: CallbackQuery):
         tariff = get_tariff_by_id(tariff_id)
         if tariff:
             status = "🟢" if tariff['is_active'] else "⚪"
-            tariff_name = f"{status} {tariff['name']} ({tariff['duration_days']} дн.)"
+            duration = 'Без срока' if int(tariff['duration_days']) == 0 else f"{tariff['duration_days']} дн."
+            tariff_name = f"{status} {tariff['name']} ({duration})"
 
     status_text = "🟢 Включена" if enabled else "⚪ Выключена"
-    tariff_text = tariff_name if tariff_name else "_не задан_"
+    tariff_text = escape_html(tariff_name) if tariff_name else "<i>не задан</i>"
 
     text = (
         "🎁 <b>Пробная подписка</b>\n\n"
-        "Управление функцией пробного доступа для новых пользователей.\n\n"
+        "Настройки основного пробного предложения.\n\n"
         f"📌 <b>Статус:</b> {escape_html(status_text)}\n"
         f"📋 <b>Тариф:</b> {tariff_text}\n\n"
         "❓ <b>Как работает:</b>\n"
-        "• Если включено и тариф задан — кнопка «🎁 Пробная подписка» появляется на главной у пользователей, которые ещё не использовали пробный период.\n"
+        "• Если предложение включено и тариф задан — штатная кнопка появляется у пользователей, которым оно доступно.\n"
         "• При активации — пользователю выдаётся ключ с выбранным тарифом.\n"
-        "• Каждый пользователь может активировать пробный период только один раз."
+        "• Переключатель управляет только основным предложением; дополнительные настраиваются через Yadreno Admin.\n"
+        "• Редактируемая страница подтверждения общая для всех пробных предложений."
     )
 
-    await safe_edit_or_send(callback.message, 
+    await safe_edit_or_send(callback.message,
         text,
         reply_markup=trial_settings_kb(enabled, tariff_name)
     )
@@ -86,7 +86,7 @@ async def _set_trial_enabled(callback: CallbackQuery, target_enabled: bool):
     if not is_admin(callback.from_user.id):
         return
 
-    from database.requests import set_setting, is_trial_enabled
+    from database.requests import is_trial_enabled, set_primary_trial_enabled
 
     current = is_trial_enabled()
     if current == target_enabled:
@@ -94,10 +94,9 @@ async def _set_trial_enabled(callback: CallbackQuery, target_enabled: bool):
         await callback.answer(f"Пробная подписка {status}")
         return
 
-    new_value = '1' if target_enabled else '0'
-    set_setting('trial_enabled', new_value)
+    set_primary_trial_enabled(target_enabled)
 
-    action = "включена" if new_value == '1' else "выключена"
+    action = "включена" if target_enabled else "выключена"
     logger.info(f"Пробная подписка {action} (admin: {callback.from_user.id})")
 
     await show_trial_menu(callback)
@@ -156,14 +155,13 @@ async def admin_trial_select_tariff(callback: CallbackQuery):
     tariffs = get_all_tariffs(include_hidden=True)
     selected_id = get_trial_tariff_id()
 
-    # Filtering Admin Tariff
-    available = [t for t in tariffs if t.get('name') != 'Admin Tariff']
+    available = [t for t in tariffs if t.get('system_type') is None]
 
     if not available:
         await callback.answer("❌ Нет доступных тарифов", show_alert=True)
         return
 
-    await safe_edit_or_send(callback.message, 
+    await safe_edit_or_send(callback.message,
         "📋 <b>Выбор тарифа для пробной подписки</b>\n\n"
         "Выберите тариф, который будет выдаваться пользователям.\n"
         "Отображаются все тарифы, включая неактивные для покупки.\n\n"
@@ -180,16 +178,16 @@ async def admin_trial_set_tariff(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         return
 
-    from database.requests import set_setting, get_tariff_by_id
+    from database.requests import get_tariff_by_id, set_primary_trial_tariff
 
     tariff_id = int(callback.data.split(":")[1])
     tariff = get_tariff_by_id(tariff_id)
 
-    if not tariff:
+    if not tariff or tariff.get('system_type') is not None:
         await callback.answer("❌ Тариф не найден", show_alert=True)
         return
 
-    set_setting('trial_tariff_id', str(tariff_id))
+    set_primary_trial_tariff(tariff_id)
     logger.info(
         f"Тариф пробной подписки изменён на ID={tariff_id} "
         f"({tariff['name']}) (admin: {callback.from_user.id})"

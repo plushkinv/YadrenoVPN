@@ -9,7 +9,7 @@ def _status_dot(enabled: bool) -> str:
     """Status indicator for row buttons."""
     return '🟢' if enabled else '⚪'
 
-def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: bool, qr_enabled: bool=False, monthly_reset_enabled: bool=False, demo_enabled: bool=False, wata_enabled: bool=False, platega_enabled: bool=False, cardlink_enabled: bool=False, notify_enabled: bool=False) -> InlineKeyboardMarkup:
+def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: bool, qr_enabled: bool=False, demo_enabled: bool=False, wata_enabled: bool=False, platega_enabled: bool=False, cardlink_enabled: bool=False, notify_enabled: bool=False) -> InlineKeyboardMarkup:
     """
     Main menu of the payments section.
 
@@ -18,7 +18,6 @@ def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: b
         crypto_enabled: Whether crypto payments are enabled
         cards_enabled: Whether TG payments are enabled (historical internal name cards)
         qr_enabled: Is YuKass direct payment enabled?
-        monthly_reset_enabled: Is monthly traffic auto-reset enabled?
         demo_enabled: Is demo payment enabled?
         wata_enabled: Is payment via WATA enabled?
         platega_enabled: Is payment via Platega enabled?
@@ -52,8 +51,6 @@ def payments_menu_kb(stars_enabled: bool, crypto_enabled: bool, cards_enabled: b
     )
     notify_status = _status_dot(notify_enabled)
     builder.row(InlineKeyboardButton(text=f'{notify_status} Сообщать об оплатах', callback_data='admin_toggle_payment_notify'))
-    reset_status = _status_dot(monthly_reset_enabled)
-    builder.row(InlineKeyboardButton(text=f'{reset_status} Автосброс трафика 1-го числа', callback_data='admin_toggle_monthly_reset'))
     builder.row(InlineKeyboardButton(text='📂 Группы тарифов', callback_data='admin_groups'))
     builder.row(InlineKeyboardButton(text='📋 Тарифы', callback_data='admin_tariffs'))
     builder.row(InlineKeyboardButton(text='💱 Валюта и курсы', callback_data='admin_payment_rates'))

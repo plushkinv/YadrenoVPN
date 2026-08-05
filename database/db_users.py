@@ -242,14 +242,15 @@ def get_users_stats() -> Dict[str, int]:
             'active': count("""
                 SELECT COUNT(DISTINCT u.id) as cnt FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0 AND vk.expires_at > datetime('now')
+                WHERE u.is_banned = 0
+                  AND (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
             """),
             'inactive': count("""
                 SELECT COUNT(*) as cnt FROM users u
                 WHERE u.is_banned = 0
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys
-                    WHERE expires_at > datetime('now')
+                    WHERE expires_at > datetime('now') OR expires_at IS NULL
                 )
             """),
             'never_paid': count("""
@@ -264,7 +265,7 @@ def get_users_stats() -> Dict[str, int]:
                 AND vk.expires_at <= datetime('now')
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys
-                    WHERE expires_at > datetime('now')
+                    WHERE expires_at > datetime('now') OR expires_at IS NULL
                 )
             """),
             'bot_blocked': count("""
@@ -295,12 +296,14 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
             base_query = """
                 SELECT DISTINCT u.* FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0 AND vk.expires_at > datetime('now')
+                WHERE u.is_banned = 0
+                  AND (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
             """
             count_query = """
                 SELECT COUNT(DISTINCT u.id) as cnt FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0 AND vk.expires_at > datetime('now')
+                WHERE u.is_banned = 0
+                  AND (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
             """
         elif filter_type == 'inactive':
             base_query = """
@@ -308,7 +311,7 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
                 WHERE u.is_banned = 0 
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys 
-                    WHERE expires_at > datetime('now')
+                    WHERE expires_at > datetime('now') OR expires_at IS NULL
                 )
             """
             count_query = """
@@ -316,7 +319,7 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
                 WHERE u.is_banned = 0 
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys 
-                    WHERE expires_at > datetime('now')
+                    WHERE expires_at > datetime('now') OR expires_at IS NULL
                 )
             """
         elif filter_type == 'never_paid':
@@ -338,7 +341,7 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
                 AND vk.expires_at <= datetime('now')
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys 
-                    WHERE expires_at > datetime('now')
+                    WHERE expires_at > datetime('now') OR expires_at IS NULL
                 )
             """
             count_query = """
@@ -348,7 +351,7 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
                 AND vk.expires_at <= datetime('now')
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys 
-                    WHERE expires_at > datetime('now')
+                    WHERE expires_at > datetime('now') OR expires_at IS NULL
                 )
             """
         elif filter_type == 'bot_blocked':

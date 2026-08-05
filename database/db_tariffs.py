@@ -18,8 +18,14 @@ __all__ = [
     'toggle_tariff_active',
     'get_tariffs_count',
     'get_admin_tariff',
+    'get_admin_custom_tariff',
+    'ensure_admin_custom_tariff',
+    'is_admin_custom_tariff',
     'normalize_tariff_money',
 ]
+
+
+ADMIN_CUSTOM_SYSTEM_TYPE = 'admin_custom'
 
 
 def _base_currency_and_rub_rate(conn) -> tuple[str, Decimal]:
@@ -57,7 +63,11 @@ def normalize_tariff_money(row: Dict[str, Any], *, base_currency: str, rub_rate:
     data['price_rub'] = float(rub_major) if rub_major % 1 else int(rub_major)
     return data
 
-def get_all_tariffs(include_hidden: bool = False) -> List[Dict[str, Any]]:
+def get_all_tariffs(
+    include_hidden: bool = False,
+    *,
+    include_system: bool = False,
+) -> List[Dict[str, Any]]:
     """
     Gets a list of all tariffs.
     
@@ -68,21 +78,20 @@ def get_all_tariffs(include_hidden: bool = False) -> List[Dict[str, Any]]:
         List of dictionaries with tariff data
     """
     with get_db() as conn:
-        if include_hidden:
-            cursor = conn.execute("""
-                SELECT id, name, duration_days, price_rub, price_minor,
-                       display_order, is_active, traffic_limit_gb, group_id, max_ips
-                FROM tariffs
-                ORDER BY display_order, id
-            """)
-        else:
-            cursor = conn.execute("""
-                SELECT id, name, duration_days, price_rub, price_minor,
-                       display_order, is_active, traffic_limit_gb, group_id, max_ips
-                FROM tariffs
-                WHERE is_active = 1
-                ORDER BY display_order, id
-            """)
+        conditions = []
+        if not include_hidden:
+            conditions.append("is_active = 1")
+        if not include_system:
+            conditions.append("system_type IS NULL")
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        cursor = conn.execute(f"""
+            SELECT id, name, duration_days, price_rub, price_minor,
+                   display_order, is_active, traffic_limit_gb, group_id, max_ips,
+                   system_type
+            FROM tariffs
+            {where_clause}
+            ORDER BY display_order, id
+        """)
         base, rub_rate = _base_currency_and_rub_rate(conn)
         return [normalize_tariff_money(dict(row), base_currency=base, rub_rate=rub_rate) for row in cursor.fetchall()]
 
@@ -99,7 +108,8 @@ def get_tariff_by_id(tariff_id: int) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.execute("""
             SELECT id, name, duration_days, price_rub, price_minor,
-                   display_order, is_active, traffic_limit_gb, group_id, max_ips
+                   display_order, is_active, traffic_limit_gb, group_id, max_ips,
+                   system_type
             FROM tariffs
             WHERE id = ?
         """, (tariff_id,))
@@ -135,6 +145,15 @@ def add_tariff(
     Returns:
         ID of the created tariff
     """
+    duration_days = int(duration_days)
+    traffic_limit_gb = int(traffic_limit_gb)
+    max_ips = int(max_ips)
+    if not 0 <= duration_days <= 99999:
+        raise ValueError("duration_days must be between 0 and 99999")
+    if not 0 <= traffic_limit_gb <= 99999:
+        raise ValueError("traffic_limit_gb must be between 0 and 99999")
+    if not 1 <= max_ips <= 999:
+        raise ValueError("max_ips must be between 1 and 999")
     with get_db() as conn:
         base, rub_rate = _base_currency_and_rub_rate(conn)
         if price_minor is None:
@@ -173,8 +192,28 @@ def update_tariff(tariff_id: int, **fields) -> bool:
     
     if not fields:
         return False
+
+    if 'duration_days' in fields:
+        fields['duration_days'] = int(fields['duration_days'])
+        if not 0 <= fields['duration_days'] <= 99999:
+            raise ValueError("duration_days must be between 0 and 99999")
+    if 'traffic_limit_gb' in fields:
+        fields['traffic_limit_gb'] = int(fields['traffic_limit_gb'])
+        if not 0 <= fields['traffic_limit_gb'] <= 99999:
+            raise ValueError("traffic_limit_gb must be between 0 and 99999")
+    if 'max_ips' in fields:
+        fields['max_ips'] = int(fields['max_ips'])
+        if not 1 <= fields['max_ips'] <= 999:
+            raise ValueError("max_ips must be between 1 and 999")
     
     with get_db() as conn:
+        protected = conn.execute(
+            "SELECT system_type FROM tariffs WHERE id = ?",
+            (tariff_id,),
+        ).fetchone()
+        if protected and protected['system_type'] is not None:
+            logger.warning("Protected system tariff ID %s cannot be updated", tariff_id)
+            return False
         base, rub_rate = _base_currency_and_rub_rate(conn)
         if 'price_minor' in fields:
             resolved_minor = max(0, int(fields['price_minor']))
@@ -223,7 +262,7 @@ def toggle_tariff_active(tariff_id: int) -> Optional[bool]:
         New status (True = active) or None if tariff not found
     """
     tariff = get_tariff_by_id(tariff_id)
-    if not tariff:
+    if not tariff or tariff.get('system_type') is not None:
         return None
     
     new_status = 0 if tariff['is_active'] else 1
@@ -246,50 +285,99 @@ def get_tariffs_count() -> int:
         Number of active tariffs
     """
     with get_db() as conn:
-        cursor = conn.execute("SELECT COUNT(*) as cnt FROM tariffs WHERE is_active = 1")
+        cursor = conn.execute(
+            "SELECT COUNT(*) as cnt FROM tariffs "
+            "WHERE is_active = 1 AND system_type IS NULL"
+        )
         row = cursor.fetchone()
         return row['cnt'] if row else 0
 
-def get_admin_tariff() -> Optional[Dict[str, Any]]:
-    """
-    Gets the hidden Admin Tariff for the admin adding keys.
-    
-    If the tariff does not exist, it creates it automatically.
-    
-    Returns:
-        Dictionary with tariff data
-    """
+def _get_admin_custom_tariff_with_conn(
+    conn: sqlite3.Connection,
+    group_id: int,
+) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        """
+        SELECT id, name, duration_days, price_rub, price_minor,
+               display_order, is_active, traffic_limit_gb, group_id, max_ips,
+               system_type
+        FROM tariffs
+        WHERE group_id = ? AND system_type = ?
+        LIMIT 1
+        """,
+        (int(group_id), ADMIN_CUSTOM_SYSTEM_TYPE),
+    ).fetchone()
+    if row is None:
+        return None
+    base, rub_rate = _base_currency_and_rub_rate(conn)
+    return normalize_tariff_money(
+        dict(row),
+        base_currency=base,
+        rub_rate=rub_rate,
+    )
+
+
+def get_admin_custom_tariff(group_id: int) -> Optional[Dict[str, Any]]:
+    """Returns the protected custom admin tariff for one tariff group."""
     with get_db() as conn:
-        cursor = conn.execute("""
-            SELECT id, name, duration_days, price_rub, price_minor,
-                   display_order, is_active, max_ips
-            FROM tariffs
-            WHERE name = 'Admin Tariff'
-            LIMIT 1
-        """)
-        row = cursor.fetchone()
-        
-        if row:
-            base, rub_rate = _base_currency_and_rub_rate(conn)
-            return normalize_tariff_money(dict(row), base_currency=base, rub_rate=rub_rate)
-        
-        # If the tariff is not found, create it
-        cursor = conn.execute("""
-            INSERT INTO tariffs (name, duration_days, price_rub, price_minor, display_order, is_active, max_ips)
-            VALUES ('Admin Tariff', 30, 0, 0, 999, 0, 1)
-        """)
-        logger.info("Создан Admin Tariff")
-        
-        return {
-            'id': cursor.lastrowid,
-            'name': 'Admin Tariff',
-            'duration_days': 30,
-            'price_rub': 0,
-            'price_minor': 0,
-            'base_currency': _base_currency_and_rub_rate(conn)[0],
-            'display_order': 999,
-            'is_active': 0,
-            'max_ips': 1
-        }
+        return _get_admin_custom_tariff_with_conn(conn, group_id)
+
+
+def ensure_admin_custom_tariff(
+    group_id: int,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> Dict[str, Any]:
+    """Returns or creates the protected custom admin tariff for a group."""
+    if conn is None:
+        with get_db() as owned_conn:
+            return ensure_admin_custom_tariff(group_id, conn=owned_conn)
+
+    group = conn.execute(
+        "SELECT id FROM tariff_groups WHERE id = ?",
+        (int(group_id),),
+    ).fetchone()
+    if group is None:
+        raise ValueError(f"Tariff group {group_id} does not exist")
+    existing = _get_admin_custom_tariff_with_conn(conn, group_id)
+    if existing is not None:
+        return existing
+
+    cursor = conn.execute(
+        """
+        INSERT INTO tariffs (
+            name, duration_days, price_rub, price_minor, display_order,
+            is_active, traffic_limit_gb, group_id, max_ips, system_type
+        )
+        VALUES (?, 0, 0, 0, 999, 0, 0, ?, 1, ?)
+        """,
+        (f'Admin Custom {int(group_id)}', int(group_id), ADMIN_CUSTOM_SYSTEM_TYPE),
+    )
+    logger.info(
+        "Created protected admin custom tariff for group %s (ID: %s)",
+        group_id,
+        cursor.lastrowid,
+    )
+    created = _get_admin_custom_tariff_with_conn(conn, group_id)
+    if created is None:
+        raise RuntimeError("Failed to create protected admin custom tariff")
+    return created
+
+
+def is_admin_custom_tariff(tariff_id: int) -> bool:
+    """Returns whether a tariff is the protected custom admin tariff."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT system_type FROM tariffs WHERE id = ?",
+            (int(tariff_id),),
+        ).fetchone()
+        return bool(
+            row and row['system_type'] == ADMIN_CUSTOM_SYSTEM_TYPE
+        )
+
+
+def get_admin_tariff(group_id: int = 1) -> Optional[Dict[str, Any]]:
+    """Compatibility wrapper for the group-aware protected admin tariff."""
+    return ensure_admin_custom_tariff(group_id)
 
 

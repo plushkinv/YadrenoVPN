@@ -400,6 +400,7 @@ def get_promo_code_availability(
     order_id: Optional[str] = None,
     *,
     user_id: Optional[int] = None,
+    block_user_reservations: bool = False,
 ) -> Dict[str, Any]:
     with get_db() as conn:
         row = conn.execute(
@@ -411,6 +412,7 @@ def get_promo_code_availability(
             dict(row) if row else None,
             order_id=order_id,
             user_id=user_id,
+            block_user_reservations=block_user_reservations,
         )
 
 
@@ -650,6 +652,15 @@ def reserve_promo_for_order(
 ) -> Dict[str, Any]:
     with get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        existing_reservation = conn.execute(
+            """
+            SELECT *
+            FROM promo_redemptions
+            WHERE order_id = ? AND status = 'reserved'
+            LIMIT 1
+            """,
+            (order_id,),
+        ).fetchone()
         promo_row = conn.execute(
             "SELECT * FROM promo_codes WHERE id = ?",
             (promo["id"],),
@@ -664,10 +675,47 @@ def reserve_promo_for_order(
         if not availability["ok"]:
             return availability
 
-        conn.execute(
-            "DELETE FROM promo_redemptions WHERE order_id = ? AND status = 'reserved'",
-            (order_id,),
-        )
+        if (
+            existing_reservation
+            and int(existing_reservation["promo_code_id"]) == int(promo["id"])
+            and int(existing_reservation["user_id"]) == int(user_id)
+        ):
+            conn.execute(
+                """
+                UPDATE promo_redemptions
+                SET code = ?,
+                    discount_percent = ?,
+                    payment_type = ?,
+                    action = ?,
+                    original_amount = ?,
+                    discount_amount = ?,
+                    final_amount = ?,
+                    amount_unit = ?
+                WHERE id = ? AND status = 'reserved'
+                """,
+                (
+                    promo["code"],
+                    int(promo.get("discount_percent") or 0),
+                    payment_type,
+                    action,
+                    original_amount,
+                    discount_amount,
+                    final_amount,
+                    amount_unit,
+                    int(existing_reservation["id"]),
+                ),
+            )
+            return {"ok": True, "reason": None, "promo": dict(promo_row)}
+
+        if existing_reservation:
+            conn.execute(
+                """
+                UPDATE promo_redemptions
+                SET status = 'canceled'
+                WHERE id = ? AND status = 'reserved'
+                """,
+                (int(existing_reservation["id"]),),
+            )
         conn.execute(
             """
             INSERT INTO promo_redemptions (

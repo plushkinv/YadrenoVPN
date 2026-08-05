@@ -237,6 +237,8 @@ def build_agent_runtime_context(
 
 _CUSTOMIZATION_KEY_TEXTS = frozenset({
     'format.days_short',
+    'format.duration_unlimited',
+    'key.tariff.custom',
     'key.status.active',
     'key.status.expired',
     'key.status.traffic_exhausted',
@@ -244,7 +246,6 @@ _CUSTOMIZATION_KEY_TEXTS = frozenset({
     'key.traffic.unlimited',
     'key.traffic.used_unlimited',
     'key.traffic.limited',
-    'key.inbound.all_protocols',
     'key.history.operation_with_days',
     'key.history.operation',
     'key.history.payment',
@@ -259,6 +260,7 @@ _CUSTOMIZATION_PAYMENT_TEXTS = frozenset({
     'payment.invoice.change_method_button',
     'payment.invoice.stale_error',
     'format.days_short',
+    'format.duration_unlimited',
     'tariff.price_unset',
     'payment.quote.promo_line',
     'payment.quote.price_line',
@@ -273,6 +275,15 @@ _CUSTOMIZATION_REFERRAL_TEXTS = frozenset({
 _CUSTOMIZATION_EXPIRED_KEY_TEXTS = frozenset({
     'key.deleted_list.item',
     'key.deleted_list.more',
+})
+_CUSTOMIZATION_TRIAL_TEXTS = frozenset({
+    'format.days_short',
+    'format.duration_unlimited',
+    'format.traffic_gb',
+    'key.traffic.unlimited',
+    'trial.offer.summary',
+    'trial.eligibility.once_per_user',
+    'trial.eligibility.once_per_group',
 })
 
 
@@ -294,6 +305,8 @@ def _dependent_user_ui_text_keys(page_key: str | None) -> frozenset[str] | None:
         return _CUSTOMIZATION_REFERRAL_TEXTS
     if page_key == 'expired_keys_deleted':
         return _CUSTOMIZATION_EXPIRED_KEY_TEXTS
+    if page_key == 'trial':
+        return _CUSTOMIZATION_TRIAL_TEXTS
     if page_key in {
         'main', 'prepayment', 'renew_payment', 'payment_tariff_select',
         'payment_method_select', 'payment_method_select_renewal',
@@ -318,8 +331,17 @@ def _dependent_user_ui_text_keys(page_key: str | None) -> frozenset[str] | None:
 
 
 def build_customization_sources_context(page_key: str | None = None) -> dict[str, Any]:
-    """Expose the three supported stock UI sources without implementation recipes."""
-    from database.requests import get_all_user_ui_texts
+    """Expose supported UI and bounded business-customization sources."""
+    from database.requests import (
+        get_all_groups,
+        get_all_tariffs,
+        get_all_trial_offers,
+        get_all_user_ui_texts,
+        get_setting,
+        get_trial_usage_scope,
+        is_trial_offer_storage_ready,
+        trial_offer_action_value,
+    )
     from database.user_ui_text_catalog import USER_UI_TEXT_CATALOG
 
     dependent_keys = _dependent_user_ui_text_keys(page_key)
@@ -339,6 +361,47 @@ def build_customization_sources_context(page_key: str | None = None) -> dict[str
             "required_placeholders": sorted(definition.placeholders),
             "optional_placeholders": sorted(definition.optional_placeholders),
         })
+    trial_storage_ready = is_trial_offer_storage_ready()
+    trial_offers = []
+    trial_tariffs = []
+    if trial_storage_ready:
+        for offer in get_all_trial_offers():
+            offer_id = int(offer['offer_id'])
+            trial_offers.append({
+                'offer_id': offer_id,
+                'tariff_id': offer.get('tariff_id'),
+                'tariff_name': offer.get('tariff_name'),
+                'group_id': offer.get('group_id'),
+                'group_name': offer.get('group_name'),
+                'is_primary': bool(offer.get('is_primary')),
+                'is_enabled': bool(offer.get('is_enabled')),
+                'duration_days': int(offer.get('duration_days') or 0),
+                'traffic_limit_gb': int(offer.get('traffic_limit_gb') or 0),
+                'max_ips': int(offer.get('max_ips') or 1),
+                'created_at': offer.get('created_at'),
+                'updated_at': offer.get('updated_at'),
+                'action_type': 'internal',
+                'action_value': trial_offer_action_value(offer_id),
+            })
+        group_names = {
+            int(group['id']): group.get('name')
+            for group in get_all_groups()
+        }
+        trial_tariffs = [
+            {
+                'tariff_id': int(tariff['id']),
+                'name': tariff.get('name'),
+                'group_id': int(tariff.get('group_id') or 1),
+                'group_name': group_names.get(int(tariff.get('group_id') or 1)),
+                'is_active': bool(tariff.get('is_active')),
+                'duration_days': int(tariff.get('duration_days') or 0),
+                'traffic_limit_gb': int(tariff.get('traffic_limit_gb') or 0),
+                'max_ips': int(tariff.get('max_ips') or 1),
+            }
+            for tariff in get_all_tariffs(include_hidden=True)
+            if tariff.get('system_type') is None
+        ]
+
     return {
         "pages": {
             "table": "pages",
@@ -377,12 +440,61 @@ def build_customization_sources_context(page_key: str | None = None) -> dict[str
         "settings": {
             "table": "settings",
             "keys": [
+                "key_name_prefix",
                 "my_keys_item_template",
                 "notification_text",
                 "traffic_notification_text",
                 "referral_new_ref_notification_text",
                 "referral_purchase_notification_text",
             ],
+            "definitions": {
+                "key_name_prefix": {
+                    "value": get_setting("key_name_prefix"),
+                    "default": "Ключ",
+                    "format": "plain",
+                    "description": (
+                        "Base text for names assigned only to future keys; "
+                        "changes take effect without restart"
+                    ),
+                    "generated_name": "<trimmed prefix> <per-user sequence>",
+                    "applies_to": "new keys only",
+                    "restart_required": False,
+                    "max_effective_name_length": 30,
+                },
+            },
+        },
+        "trial_offers": {
+            "table": "trial_offers",
+            "available": trial_storage_ready,
+            "unavailable_reason": (
+                None if trial_storage_ready else "database_schema_requires_v93"
+            ),
+            "usage_scope": {
+                "setting_key": "trial_usage_scope",
+                "value": get_trial_usage_scope(),
+                "allowed_values": ["once_per_user", "once_per_group"],
+            },
+            "primary_contract": (
+                "the primary row is managed by the stock Trial subscription admin section; "
+                "customization may create, update, disable, or delete only non-primary rows"
+            ),
+            "additional_offer_fields": ["tariff_id", "is_enabled"],
+            "mutation_api": {
+                "set_usage_scope": "set_trial_usage_scope(scope)",
+                "create_additional": "create_trial_offer(tariff_id, enabled=True)",
+                "update_additional": (
+                    "update_trial_offer(offer_id, tariff_id=None, enabled=None)"
+                ),
+                "delete_additional": "delete_trial_offer(offer_id)",
+                "module": "database.requests",
+            },
+            "eligible_tariffs": trial_tariffs,
+            "offers": trial_offers,
+            "button_contract": {
+                "action_type": "internal",
+                "action_value": "cmd_trial_offer:<offer_id>",
+                "behavior": "opens the shared trial confirmation page",
+            },
         },
     }
 

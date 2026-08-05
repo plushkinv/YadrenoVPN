@@ -158,9 +158,75 @@ def key_view_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='📅 Продлить', callback_data=f'admin_key_extend:{key_id}'))
     builder.row(InlineKeyboardButton(text='🔄 Сбросить трафик', callback_data=f'admin_key_reset_traffic:{key_id}'))
-    builder.row(InlineKeyboardButton(text='📊 Изменить лимит трафика', callback_data=f'admin_key_change_traffic:{key_id}'))
+    builder.row(InlineKeyboardButton(text='📋 Изменить тарифный план', callback_data=f'admin_key_change_plan:{key_id}'))
     builder.row(InlineKeyboardButton(text='🗑️ Удалить ключ', callback_data=f'admin_key_delete_ask:{key_id}'))
     builder.row(back_button(f'admin_user_view:{user_telegram_id}'), home_button())
+    return builder.as_markup()
+
+
+def key_plan_select_kb(
+    key_id: int,
+    tariffs: List[Dict[str, Any]],
+    custom_tariff_id: int,
+) -> InlineKeyboardMarkup:
+    """Tariff choices for a full administrator key reissue."""
+    builder = InlineKeyboardBuilder()
+    for tariff in tariffs:
+        hidden_suffix = ' · скрытый' if not tariff.get('is_active') else ''
+        builder.row(InlineKeyboardButton(
+            text=f"📋 {tariff['name']}{hidden_suffix}",
+            callback_data=f"admin_key_plan_select:{key_id}:{tariff['id']}",
+        ))
+    builder.row(InlineKeyboardButton(
+        text='🛠 Произвольный тариф',
+        callback_data=f'admin_key_plan_select:{key_id}:{custom_tariff_id}',
+    ))
+    builder.row(back_button(f'admin_key_view:{key_id}'), home_button())
+    return builder.as_markup()
+
+
+def key_plan_confirm_kb(key_id: int, tariff_id: int) -> InlineKeyboardMarkup:
+    """Confirmation for a full key plan reissue."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text='✅ Полностью переоформить',
+        callback_data=f'admin_key_plan_apply:{key_id}:{tariff_id}',
+    ))
+    builder.row(InlineKeyboardButton(
+        text='⬅️ Назад',
+        callback_data=f'admin_key_change_plan:{key_id}',
+    ))
+    builder.row(home_button())
+    return builder.as_markup()
+
+
+def key_plan_custom_confirm_kb(key_id: int) -> InlineKeyboardMarkup:
+    """Confirmation for an administrator-defined custom plan."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text='✅ Полностью переоформить',
+        callback_data='admin_key_plan_custom_apply',
+    ))
+    builder.row(InlineKeyboardButton(
+        text='⬅️ Назад',
+        callback_data=f'admin_key_change_plan:{key_id}',
+    ))
+    builder.row(home_button())
+    return builder.as_markup()
+
+
+def add_key_group_kb(groups: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Group selection for a custom administrator key."""
+    builder = InlineKeyboardBuilder()
+    for group in groups:
+        builder.row(InlineKeyboardButton(
+            text=f"📂 {group['name']}",
+            callback_data=f"admin_add_key_group:{group['id']}",
+        ))
+    builder.row(InlineKeyboardButton(
+        text='❌ Отмена',
+        callback_data='admin_user_add_key_cancel',
+    ))
     return builder.as_markup()
 
 def add_key_server_kb(servers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:

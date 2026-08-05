@@ -1,7 +1,6 @@
 """Data-only item builders for repeatable button templates stored in pages."""
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any, Iterable, Mapping
 
 from bot.services.money import format_money_minor
@@ -52,41 +51,6 @@ def build_tariff_button_items(
             'data': {
                 'item_name': str(tariff.get('name') or tariff_id),
                 'item_price': price_text,
-            },
-        })
-    return items
-
-
-def build_provider_tariff_button_items(
-    tariffs: Iterable[Mapping[str, Any]],
-    payment_type: str,
-    callback_factory: Callable[[int], str],
-    *,
-    minimum_amount: int = 1,
-) -> list[dict[str, Any]]:
-    """Return page-owned tariff items for compatibility provider callbacks."""
-    from bot.services.exchange_rate import get_payment_rate_snapshot, provider_amount_from_base_minor
-
-    snapshot = get_payment_rate_snapshot()
-    items: list[dict[str, Any]] = []
-    for tariff in tariffs:
-        base_minor = int(
-            tariff.get('price_minor')
-            or int(float(tariff.get('price_rub') or 0) * 100)
-        )
-        amount, currency = provider_amount_from_base_minor(
-            base_minor,
-            payment_type,
-            snapshot,
-        )
-        if amount < int(minimum_amount):
-            continue
-        tariff_id = int(tariff['id'])
-        items.append({
-            'callback_data': callback_factory(tariff_id),
-            'data': {
-                'item_name': str(tariff.get('name') or tariff_id),
-                'item_price': format_money_minor(amount, currency),
             },
         })
     return items
@@ -155,7 +119,6 @@ def build_key_button_items(keys: Iterable[Mapping[str, Any]]) -> list[dict[str, 
 __all__ = [
     'build_key_button_items',
     'build_protocol_button_items',
-    'build_provider_tariff_button_items',
     'build_server_button_items',
     'build_tariff_button_items',
 ]

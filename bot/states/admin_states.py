@@ -114,13 +114,18 @@ class AdminStates(StatesGroup):
     # ========== VPN Key Management ==========
     key_view = State()               # View a specific key
     key_extend_days = State()        # Entering the number of days to extend
-    key_change_traffic = State()     # Entering a new traffic limit
+    key_plan_custom_traffic = State()
+    key_plan_custom_days = State()
+    key_plan_custom_devices = State()
+    key_plan_custom_confirm = State()
     
     # ========== Adding a key by administrator ==========
+    add_key_group = State()          # Tariff group selection
     add_key_server = State()         # Server selection
     add_key_inbound = State()        # Selecting inbound (protocol)
     add_key_traffic = State()        # Entering traffic limit (GB)
     add_key_days = State()           # Enter validity period (days)
+    add_key_devices = State()        # Enter device limit
     add_key_confirm = State()        # Creation Confirmation
     
     # ========== Management of tariff groups ==========
@@ -246,11 +251,11 @@ TARIFF_PARAMS = [
     {
         "key": "duration_days",
         "label": "Длительность",
-        "hint": "в днях (1-99999)",
-        "validate": lambda x: x.isdigit() and 1 <= int(x) <= 99999,
-        "error": "Длительность от 1 до 99999 дней",
+        "hint": "в днях (0 = без срока, максимум 99999)",
+        "validate": lambda x: x.isdigit() and 0 <= int(x) <= 99999,
+        "error": "Длительность от 0 до 99999 дней",
         "convert": int,
-        "format": lambda x: f"{x} дн."
+        "format": lambda x: f"{x} дн." if x > 0 else "Без срока"
     },
     {
         "key": "traffic_limit_gb",

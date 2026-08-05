@@ -70,6 +70,8 @@ _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
     'payment_base_currency': ('%платеж_базовая_валюта%',),
     'payment_error': ('%платеж_ошибка%',),
     'payment_coupon': (),
+    'trial_offer': (),
+    'trial_eligibility': (),
     'payment_wait_seconds': (),
     'payment_minimum': (),
     'promo_code': (),
@@ -96,6 +98,7 @@ _PARAMETERIZED_PAGE_PLACEHOLDERS = frozenset({
     'key',
     'payment_coupon',
     'tariffs',
+    'trial_offer',
 })
 
 
@@ -108,8 +111,6 @@ KEY_PAGE_FIELDS = frozenset({
     'traffic',
     'expires_at',
     'server',
-    'inbound',
-    'protocol',
     'tariff',
     'device_limit',
 })
@@ -118,6 +119,14 @@ PAYMENT_COUPON_PAGE_FIELDS = frozenset({
     'code',
     'discount_percent',
     'lifetime_days',
+})
+TRIAL_OFFER_FIELDS_CONTEXT_KEY = 'trial_offer_fields'
+TRIAL_OFFER_PAGE_FIELDS = frozenset({
+    'tariff',
+    'group',
+    'duration',
+    'traffic',
+    'device_limit',
 })
 
 
@@ -341,6 +350,29 @@ def _resolve_payment_coupon_placeholder(
     return _format_value(values.get(field), mode)
 
 
+def _resolve_trial_offer_placeholder(
+    context: Mapping[str, Any],
+    mode: PagePlaceholderMode,
+    params: Mapping[str, str],
+) -> str:
+    """Resolves either the composite offer or one allowlisted display field."""
+    if not params:
+        return _format_value(
+            _context_value(context, 'trial_offer_html'),
+            mode,
+            html_ready=True,
+        )
+    if set(params) != {'field'}:
+        return ''
+    field = params.get('field', '').casefold()
+    if field not in TRIAL_OFFER_PAGE_FIELDS:
+        return ''
+    values = context.get(TRIAL_OFFER_FIELDS_CONTEXT_KEY)
+    if not isinstance(values, Mapping):
+        return ''
+    return _format_value(values.get(field), mode)
+
+
 def _resolve_registered_placeholder(
     placeholder: str,
     context: Mapping[str, Any],
@@ -367,6 +399,14 @@ def _resolve_registered_placeholder(
         return _resolve_key_placeholder(context, mode, params)
     if name == 'payment_coupon':
         return _resolve_payment_coupon_placeholder(context, mode, params)
+    if name == 'trial_offer':
+        return _resolve_trial_offer_placeholder(context, mode, params)
+    if name == 'trial_eligibility':
+        return _format_value(
+            _context_value(context, 'trial_eligibility_html'),
+            mode,
+            html_ready=True,
+        )
     if name == 'no_tariffs':
         return ''
     if name == 'referral_link':

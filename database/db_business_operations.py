@@ -139,8 +139,9 @@ def get_first_active_key_for_user(user_id: int) -> dict[str, Any] | None:
             """
             SELECT *
             FROM vpn_keys
-            WHERE user_id = ? AND expires_at > datetime('now')
-            ORDER BY expires_at DESC
+            WHERE user_id = ?
+              AND (expires_at > datetime('now') OR expires_at IS NULL)
+            ORDER BY expires_at IS NULL, expires_at DESC
             LIMIT 1
             """,
             (int(user_id),),
@@ -182,9 +183,16 @@ def apply_key_days_operation_once(
             ),
         ).fetchone()
         if existing:
+            unlimited_noop = (
+                existing['operation_type'] == 'grant_days_unlimited_noop'
+            )
             return {
                 'ok': True,
-                'status': 'already_applied',
+                'status': (
+                    'already_unlimited'
+                    if unlimited_noop
+                    else 'already_applied'
+                ),
                 'already_applied': True,
                 'key_id': int(existing['vpn_key_id']),
                 'operation_id': int(existing['id']),
@@ -194,8 +202,9 @@ def apply_key_days_operation_once(
         key = conn.execute(
             """
             SELECT id, expires_at FROM vpn_keys
-            WHERE user_id = ? AND expires_at > datetime('now')
-            ORDER BY expires_at DESC
+            WHERE user_id = ?
+              AND (expires_at > datetime('now') OR expires_at IS NULL)
+            ORDER BY expires_at IS NULL, expires_at DESC
             LIMIT 1
             """,
             (normalized_user_id,),
@@ -210,6 +219,39 @@ def apply_key_days_operation_once(
             }
 
         key_id = int(key['id'])
+        if key['expires_at'] is None:
+            operation = conn.execute(
+                """
+                INSERT INTO key_operation_log (
+                    vpn_key_id, user_id, operation_type, delta_days, source,
+                    reason, reference_type, reference_id,
+                    expires_before, expires_after, metadata
+                )
+                VALUES (?, ?, 'grant_days_unlimited_noop', ?, ?, ?, ?, ?,
+                        NULL, NULL, ?)
+                """,
+                (
+                    key_id,
+                    normalized_user_id,
+                    normalized_days,
+                    normalized_source,
+                    _optional_text(reason),
+                    normalized_reference_type,
+                    normalized_reference_id,
+                    _json_metadata(metadata or {}),
+                ),
+            )
+            return {
+                'ok': True,
+                'status': 'already_unlimited',
+                'already_applied': True,
+                'key_id': key_id,
+                'user_id': normalized_user_id,
+                'days': normalized_days,
+                'operation_id': int(operation.lastrowid),
+                'expires_before': None,
+                'expires_after': None,
+            }
         expires_before = str(key['expires_at'])
         modifier = f'{normalized_days:+} days'
         conn.execute(

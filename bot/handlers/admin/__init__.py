@@ -13,6 +13,7 @@ from bot.handlers.admin.broadcast_editor import router as broadcast_editor_route
 from bot.handlers.admin.users_list import router as users_list_router
 from bot.handlers.admin.users_manage import router as users_manage_router
 from bot.handlers.admin.users_keys import router as users_keys_router
+from bot.handlers.admin.key_plans import router as key_plans_router
 from bot.handlers.admin.users_keys_deleted import router as users_keys_deleted_router
 from bot.handlers.admin.system import router as system_router
 from bot.handlers.admin.trial import router as trial_router
@@ -38,6 +39,7 @@ admin_router.include_router(broadcast_editor_router)
 admin_router.include_router(users_list_router)
 admin_router.include_router(users_manage_router)
 admin_router.include_router(support_router)
+admin_router.include_router(key_plans_router)
 admin_router.include_router(users_keys_router)
 admin_router.include_router(users_keys_deleted_router)
 admin_router.include_router(system_router)

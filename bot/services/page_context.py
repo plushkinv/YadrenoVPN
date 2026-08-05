@@ -108,11 +108,42 @@ class PageContext:
 
     page_key: str
     message: Message
-    visibility: Optional[Dict[str, bool]]
-    context: Optional[Dict[str, Any]]
-    text_replacements: Optional[Dict[str, str]]
-    prepend_buttons: Optional[List[List[InlineKeyboardButton]]]
-    append_buttons: Optional[List[List[InlineKeyboardButton]]]
+    visibility: Optional[Dict[str, bool]] = None
+    context: Optional[Dict[str, Any]] = None
+    text_replacements: Optional[Dict[str, Any]] = None
+    prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None
+    append_buttons: Optional[List[List[InlineKeyboardButton]]] = None
+    route_key: Optional[str] = None
+    base_visibility: Optional[Dict[str, bool]] = None
+    base_context: Optional[Dict[str, Any]] = None
+    base_text_replacements: Optional[Dict[str, Any]] = None
+    base_prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None
+    base_append_buttons: Optional[List[List[InlineKeyboardButton]]] = None
+
+    @property
+    def effective_visibility(self) -> Optional[Dict[str, bool]]:
+        """Compatibility-safe explicit name for the rendered visibility snapshot."""
+        return self.visibility
+
+    @property
+    def effective_context(self) -> Optional[Dict[str, Any]]:
+        """Compatibility-safe explicit name for the rendered context snapshot."""
+        return self.context
+
+    @property
+    def effective_text_replacements(self) -> Optional[Dict[str, Any]]:
+        """Compatibility-safe explicit name for rendered text replacements."""
+        return self.text_replacements
+
+    @property
+    def effective_prepend_buttons(self) -> Optional[List[List[InlineKeyboardButton]]]:
+        """Compatibility-safe explicit name for rendered prepend rows."""
+        return self.prepend_buttons
+
+    @property
+    def effective_append_buttons(self) -> Optional[List[List[InlineKeyboardButton]]]:
+        """Compatibility-safe explicit name for rendered append rows."""
+        return self.append_buttons
 
 
 _contexts: dict[int, PageContext] = {}
@@ -175,9 +206,20 @@ def remember_page_context(
     message: Message,
     visibility: Optional[Dict[str, bool]] = None,
     context: Optional[Dict[str, Any]] = None,
-    text_replacements: Optional[Dict[str, str]] = None,
+    text_replacements: Optional[Dict[str, Any]] = None,
     prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
     append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+    route_key: Optional[str] = None,
+    base_visibility: Optional[Dict[str, bool]] = None,
+    base_context: Optional[Dict[str, Any]] = None,
+    base_text_replacements: Optional[Dict[str, Any]] = None,
+    base_prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+    base_append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+    effective_visibility: Optional[Dict[str, bool]] = None,
+    effective_context: Optional[Dict[str, Any]] = None,
+    effective_text_replacements: Optional[Dict[str, Any]] = None,
+    effective_prepend_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
+    effective_append_buttons: Optional[List[List[InlineKeyboardButton]]] = None,
 ) -> None:
     """Remembers the admin page if it supports /yaa."""
     if not is_supported_yaa_page_key(page_key):
@@ -185,11 +227,57 @@ def remember_page_context(
     _contexts[telegram_id] = PageContext(
         page_key=page_key,
         message=message,
-        visibility=_copy_visibility(visibility),
-        context=_copy_optional_mapping(context, 'context'),
-        text_replacements=_copy_optional_mapping(text_replacements, 'text_replacements'),
-        prepend_buttons=_copy_button_rows(prepend_buttons, 'prepend_buttons'),
-        append_buttons=_copy_button_rows(append_buttons, 'append_buttons'),
+        visibility=_copy_visibility(
+            effective_visibility if effective_visibility is not None else visibility
+        ),
+        context=_copy_optional_mapping(
+            effective_context if effective_context is not None else context,
+            'effective_context',
+        ),
+        text_replacements=_copy_optional_mapping(
+            effective_text_replacements
+            if effective_text_replacements is not None
+            else text_replacements,
+            'effective_text_replacements',
+        ),
+        prepend_buttons=_copy_button_rows(
+            effective_prepend_buttons
+            if effective_prepend_buttons is not None
+            else prepend_buttons,
+            'effective_prepend_buttons',
+        ),
+        append_buttons=_copy_button_rows(
+            effective_append_buttons
+            if effective_append_buttons is not None
+            else append_buttons,
+            'effective_append_buttons',
+        ),
+        route_key=route_key,
+        base_visibility=_copy_visibility(
+            base_visibility if base_visibility is not None else visibility
+        ),
+        base_context=_copy_optional_mapping(
+            base_context if base_context is not None else context,
+            'base_context',
+        ),
+        base_text_replacements=_copy_optional_mapping(
+            base_text_replacements
+            if base_text_replacements is not None
+            else text_replacements,
+            'base_text_replacements',
+        ),
+        base_prepend_buttons=_copy_button_rows(
+            base_prepend_buttons
+            if base_prepend_buttons is not None
+            else prepend_buttons,
+            'base_prepend_buttons',
+        ),
+        base_append_buttons=_copy_button_rows(
+            base_append_buttons
+            if base_append_buttons is not None
+            else append_buttons,
+            'base_append_buttons',
+        ),
     )
 
 

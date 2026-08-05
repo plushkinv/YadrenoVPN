@@ -174,12 +174,21 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
     else:
         text += "⚪ <b>Демо оплата (РФ)</b>\n"
 
-    monthly_reset = get_setting('monthly_traffic_reset_enabled', '0') == '1'
     notify = get_setting('payment_notifications_enabled', '0') == '1'
 
     await safe_edit_or_send(callback.message,
         text,
-        reply_markup=payments_menu_kb(stars, crypto, cards, qr, monthly_reset, demo, wata, platega, cardlink, notify_enabled=notify)
+        reply_markup=payments_menu_kb(
+            stars,
+            crypto,
+            cards,
+            qr,
+            demo,
+            wata,
+            platega,
+            cardlink,
+            notify_enabled=notify,
+        )
     )
     await callback.answer()
 
@@ -478,25 +487,6 @@ def _format_rate_for_display(value: object, *, significant_digits: int = 6) -> s
     if '.' in rendered:
         rendered = rendered.rstrip('0').rstrip('.')
     return rendered or '0'
-
-
-# ============================================================================
-# TOGGLE MONTHLY RESET
-# ============================================================================
-
-@router.callback_query(F.data == "admin_toggle_monthly_reset")
-async def toggle_monthly_reset(callback: CallbackQuery, state: FSMContext):
-    """Switching traffic auto-reset on the 1st."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
-        return
-    
-    current = get_setting('monthly_traffic_reset_enabled', '0')
-    new_val = '0' if current == '1' else '1'
-    set_setting('monthly_traffic_reset_enabled', new_val)
-    
-    # Redrawing the payment menu
-    await show_payments_menu(callback, state)
 
 
 @router.callback_query(F.data == "admin_toggle_payment_notify")

@@ -167,7 +167,7 @@ def cancel_unconfirmed_payment_for_method_change(
     *,
     user_id: int,
 ) -> bool:
-    """Cancel one unconfirmed order and all active provider-side tracking."""
+    """Cancel one unconfirmed v1 intent and its active provider tracking."""
     normalized_order_id = str(order_id)
     with get_db() as conn:
         cursor = conn.execute(
@@ -177,6 +177,7 @@ def cancel_unconfirmed_payment_for_method_change(
             WHERE order_id = ?
               AND user_id = ?
               AND status = 'pending'
+              AND intent_version = 1
               AND provider_confirmed_at IS NULL
             """,
             (normalized_order_id, int(user_id)),
@@ -532,22 +533,26 @@ def fulfill_key_purchase_once(
             return {'ok': True, 'already_applied': True, 'key_id': int(existing['vpn_key_id'])}
 
         tariff = conn.execute(
-            "SELECT id FROM tariffs WHERE id = ?",
+            "SELECT id, system_type FROM tariffs WHERE id = ?",
             (int(tariff_id),),
         ).fetchone()
         owner = conn.execute("SELECT id FROM users WHERE id = ?", (int(user_id),)).fetchone()
-        if not tariff or not owner:
+        if (
+            not tariff
+            or not owner
+            or tariff['system_type'] is not None
+        ):
             return {'ok': False, 'reason': 'owner_or_tariff_not_found'}
 
-        cursor = conn.execute(
-            """
-            INSERT INTO vpn_keys
-                (user_id, tariff_id, expires_at, created_at, traffic_limit)
-            VALUES (?, ?, datetime('now', '+' || ? || ' days'), CURRENT_TIMESTAMP, ?)
-            """,
-            (int(user_id), int(tariff_id), int(days), int(traffic_limit_bytes)),
+        from .db_keys import _create_initial_vpn_key_with_conn
+
+        key_id = _create_initial_vpn_key_with_conn(
+            conn,
+            int(user_id),
+            int(tariff_id),
+            int(days),
+            int(traffic_limit_bytes),
         )
-        key_id = int(cursor.lastrowid)
         payload = {'tariff_id': int(tariff_id), 'key_id': key_id}
         conn.execute(
             """
@@ -589,13 +594,27 @@ def fulfill_key_renewal_once(
 
         key = conn.execute(
             """
-            SELECT id, traffic_limit, traffic_used
-            FROM vpn_keys WHERE id = ? AND user_id = ?
+            SELECT vk.id, vk.traffic_limit, vk.traffic_used,
+                   t.group_id AS tariff_group_id
+            FROM vpn_keys vk
+            JOIN tariffs t ON t.id = vk.tariff_id
+            WHERE vk.id = ? AND vk.user_id = ?
             """,
             (int(key_id), int(user_id)),
         ).fetchone()
-        tariff = conn.execute("SELECT id FROM tariffs WHERE id = ?", (int(tariff_id),)).fetchone()
-        if not key or not tariff:
+        tariff = conn.execute(
+            """
+            SELECT id, group_id, system_type
+            FROM tariffs WHERE id = ?
+            """,
+            (int(tariff_id),),
+        ).fetchone()
+        if (
+            not key
+            or not tariff
+            or tariff['system_type'] is not None
+            or int(key['tariff_group_id']) != int(tariff['group_id'])
+        ):
             return {'ok': False, 'reason': 'owned_key_or_tariff_not_found'}
 
         modifier = f"{int(days):+} days"
@@ -612,20 +631,32 @@ def fulfill_key_renewal_once(
         cursor = conn.execute(
             """
             UPDATE vpn_keys
-            SET expires_at = MAX(
-                    datetime('now'),
-                    datetime(
-                        CASE WHEN expires_at > datetime('now')
-                            THEN expires_at ELSE datetime('now') END,
-                        ?
+            SET expires_at = CASE
+                    WHEN ? = 0 THEN NULL
+                    ELSE MAX(
+                        datetime('now'),
+                        datetime(
+                            CASE WHEN expires_at > datetime('now')
+                                THEN expires_at ELSE datetime('now') END,
+                            ?
+                        )
                     )
-                ),
+                END,
                 tariff_id = ?,
                 traffic_limit = ?,
+                traffic_limit_override = NULL,
+                max_ips_override = NULL,
                 traffic_notified_pct = 100
             WHERE id = ? AND user_id = ?
             """,
-            (modifier, int(tariff_id), new_limit, int(key_id), int(user_id)),
+            (
+                int(days),
+                modifier,
+                int(tariff_id),
+                new_limit,
+                int(key_id),
+                int(user_id),
+            ),
         )
         if cursor.rowcount <= 0:
             return {'ok': False, 'reason': 'key_update_failed'}

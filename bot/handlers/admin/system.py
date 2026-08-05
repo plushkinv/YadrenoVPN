@@ -296,6 +296,54 @@ def _format_extensions_diagnostics(diagnostics: dict) -> str:
             )
         )
 
+    page_flow_runtime = dict(diagnostics.get('page_flow_runtime') or {})
+    flow_totals = dict(page_flow_runtime.get('totals') or {})
+    if flow_totals:
+        lines.extend(["", "<b>Runtime проверок/хуков страниц:</b>"])
+        lines.append(
+            "• зарегистрировано: {registered}, вызовов: {calls}, сбоев: {failures}, "
+            "таймаутов: {timeouts}, отклонений: {limits}, пропусков: {skips}".format(
+                registered=flow_totals.get('registered', 0),
+                calls=flow_totals.get('calls', 0),
+                failures=flow_totals.get('failures', 0),
+                timeouts=flow_totals.get('timeouts', 0),
+                limits=flow_totals.get('limit_rejections', 0),
+                skips=flow_totals.get('skips', 0),
+            )
+        )
+        unhealthy = [
+            item
+            for item in list(page_flow_runtime.get('items') or [])
+            if item.get('status') in {'degraded', 'open', 'half_open'}
+        ]
+        if unhealthy:
+            lines.append("<b>Проблемные flow-обработчики:</b>")
+            for item in unhealthy[:6]:
+                cooldown = int(item.get('disabled_for_seconds') or 0)
+                cooldown_text = f", пауза {cooldown} сек." if cooldown else ''
+                lines.append(
+                    "• <code>{name}</code> ({kind}/{status}): сбоев подряд {failures}{cooldown}".format(
+                        name=escape_html(str(item.get('name') or 'unknown')),
+                        kind=escape_html(str(item.get('kind') or 'flow')),
+                        status=escape_html(str(item.get('status') or 'unknown')),
+                        failures=int(item.get('consecutive_failures') or 0),
+                        cooldown=cooldown_text,
+                    )
+                )
+                last_error = str(item.get('last_error') or '').strip()
+                if last_error:
+                    failure_kind = escape_html(
+                        str(item.get('last_failure_kind') or 'failure')
+                    )
+                    lines.append(
+                        "  └ {kind}: <code>{error}</code>".format(
+                            kind=failure_kind,
+                            error=escape_html(last_error[:120]),
+                        )
+                    )
+            if len(unhealthy) > 6:
+                lines.append(f"• ещё {len(unhealthy) - 6}")
+
     return "\n".join(lines)
 
 

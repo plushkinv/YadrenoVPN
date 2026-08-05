@@ -102,6 +102,17 @@ async def grant_days_to_first_active_key(
 
         key_id = int(key['id'])
         expires_before = key.get('expires_at')
+        if expires_before is None:
+            return {
+                'ok': True,
+                'status': 'already_unlimited',
+                'reason': 'already_unlimited',
+                'key_id': key_id,
+                'user_id': user_id,
+                'days': days,
+                'expires_before': None,
+                'expires_after': None,
+            }
 
         from bot.services.key_lifecycle import renew_key_access
 

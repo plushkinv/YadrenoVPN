@@ -5,7 +5,11 @@ import string
 import datetime
 from typing import Optional, List, Dict, Any, Tuple
 from .connection import get_db
-from .db_tariffs import _base_currency_and_rub_rate, normalize_tariff_money
+from .db_tariffs import (
+    _base_currency_and_rub_rate,
+    ensure_admin_custom_tariff,
+    normalize_tariff_money,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,8 @@ __all__ = [
     'get_server_group_ids',
     'toggle_server_group',
     'get_tariff_group_id',
+    'set_group_monthly_traffic_reset',
+    'toggle_group_monthly_traffic_reset',
 ]
 
 def get_all_groups() -> List[Dict[str, Any]]:
@@ -33,7 +39,8 @@ def get_all_groups() -> List[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, sort_order, created_at
+            SELECT id, name, sort_order, monthly_traffic_reset_enabled,
+                   created_at
             FROM tariff_groups
             ORDER BY sort_order, id
         """)
@@ -51,7 +58,8 @@ def get_group_by_id(group_id: int) -> Optional[Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.execute("""
-            SELECT id, name, sort_order, created_at
+            SELECT id, name, sort_order, monthly_traffic_reset_enabled,
+                   created_at
             FROM tariff_groups
             WHERE id = ?
         """, (group_id,))
@@ -80,6 +88,7 @@ def add_group(name: str) -> int:
             VALUES (?, ?)
         """, (name, new_order))
         group_id = cursor.lastrowid
+        ensure_admin_custom_tariff(group_id, conn=conn)
         logger.info(f"Добавлена группа тарифов: {name} (ID: {group_id}, sort_order: {new_order})")
         return group_id
 
@@ -121,8 +130,36 @@ def delete_group(group_id: int) -> bool:
         return False
     
     with get_db() as conn:
-        # We transfer tariffs and servers to “Main”
-        conn.execute("UPDATE tariffs SET group_id = 1 WHERE group_id = ?", (group_id,))
+        target_admin_tariff = ensure_admin_custom_tariff(1, conn=conn)
+        source_admin_tariff = conn.execute(
+            """
+            SELECT id FROM tariffs
+            WHERE group_id = ? AND system_type = 'admin_custom'
+            """,
+            (group_id,),
+        ).fetchone()
+        if source_admin_tariff:
+            source_admin_tariff_id = int(source_admin_tariff['id'])
+            target_admin_tariff_id = int(target_admin_tariff['id'])
+            conn.execute(
+                "UPDATE vpn_keys SET tariff_id = ? WHERE tariff_id = ?",
+                (target_admin_tariff_id, source_admin_tariff_id),
+            )
+            conn.execute(
+                "UPDATE payments SET tariff_id = ? WHERE tariff_id = ?",
+                (target_admin_tariff_id, source_admin_tariff_id),
+            )
+            conn.execute(
+                "DELETE FROM tariffs WHERE id = ?",
+                (source_admin_tariff_id,),
+            )
+
+        # Ordinary tariffs and servers are transferred to “Main”.
+        conn.execute(
+            "UPDATE tariffs SET group_id = 1 "
+            "WHERE group_id = ? AND system_type IS NULL",
+            (group_id,),
+        )
         conn.execute("""
             INSERT OR IGNORE INTO server_groups (server_id, group_id)
             SELECT server_id, 1 FROM server_groups WHERE group_id = ?
@@ -189,7 +226,12 @@ def get_groups_count() -> int:
         cursor = conn.execute("SELECT COUNT(*) FROM tariff_groups")
         return cursor.fetchone()[0]
 
-def get_tariffs_by_group(group_id: int) -> List[Dict[str, Any]]:
+def get_tariffs_by_group(
+    group_id: int,
+    *,
+    include_hidden: bool = False,
+    include_system: bool = False,
+) -> List[Dict[str, Any]]:
     """
     Retrieves active tariffs of the specified group.
     
@@ -200,11 +242,17 @@ def get_tariffs_by_group(group_id: int) -> List[Dict[str, Any]]:
         List of group rates
     """
     with get_db() as conn:
-        cursor = conn.execute("""
+        conditions = ["group_id = ?"]
+        if not include_hidden:
+            conditions.append("is_active = 1")
+        if not include_system:
+            conditions.append("system_type IS NULL")
+        cursor = conn.execute(f"""
             SELECT id, name, duration_days, price_rub, price_minor,
-                   display_order, is_active, traffic_limit_gb, group_id
+                   display_order, is_active, traffic_limit_gb, group_id,
+                   max_ips, system_type
             FROM tariffs
-            WHERE group_id = ? AND is_active = 1
+            WHERE {' AND '.join(conditions)}
             ORDER BY display_order, id
         """, (group_id,))
         base, rub_rate = _base_currency_and_rub_rate(conn)
@@ -292,3 +340,42 @@ def get_tariff_group_id(tariff_id: int) -> int:
         cursor = conn.execute("SELECT group_id FROM tariffs WHERE id = ?", (tariff_id,))
         row = cursor.fetchone()
         return row['group_id'] if row else 1
+
+
+def set_group_monthly_traffic_reset(group_id: int, enabled: bool) -> bool:
+    """Sets the monthly traffic reset policy for one tariff group."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE tariff_groups
+            SET monthly_traffic_reset_enabled = ?
+            WHERE id = ?
+            """,
+            (int(bool(enabled)), int(group_id)),
+        )
+        return cursor.rowcount > 0
+
+
+def toggle_group_monthly_traffic_reset(group_id: int) -> Optional[bool]:
+    """Toggles and returns the monthly traffic reset policy for a group."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT monthly_traffic_reset_enabled
+            FROM tariff_groups
+            WHERE id = ?
+            """,
+            (int(group_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        enabled = not bool(row['monthly_traffic_reset_enabled'])
+        conn.execute(
+            """
+            UPDATE tariff_groups
+            SET monthly_traffic_reset_enabled = ?
+            WHERE id = ?
+            """,
+            (int(enabled), int(group_id)),
+        )
+        return enabled

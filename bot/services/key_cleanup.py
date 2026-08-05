@@ -258,9 +258,8 @@ async def cleanup_expired_database_keys(
     """Atomically delete retained expired keys, then notify each user once."""
     from bot.utils.delivery import is_bot_blocked_error
     from bot.utils.page_renderer import (
-        build_page_keyboard,
-        get_page_data,
-        render_page_text,
+        PreparedPageRender,
+        prepare_page_render,
     )
     from bot.utils.text import send_media_or_text
     from database.requests import (
@@ -304,40 +303,32 @@ async def cleanup_expired_database_keys(
         )
         return report
 
-    page_data = get_page_data(EXPIRED_KEYS_DELETED_PAGE_KEY)
-    if page_data is None:
-        report.notification_errors = len(grouped)
-        logger.error(
-            "Expired-key cleanup cannot notify users: required page %s is missing",
-            EXPIRED_KEYS_DELETED_PAGE_KEY,
-        )
-        return report
-
     for telegram_id, user_keys in grouped.items():
         context = {
+            "telegram_id": telegram_id,
             "retention_days": retention_days,
             "deleted_key_count": len(user_keys),
             "deleted_keys_html": build_deleted_keys_html(user_keys),
         }
         try:
-            text = render_page_text(
+            prepared = await prepare_page_render(
+                bot,
                 EXPIRED_KEYS_DELETED_PAGE_KEY,
                 context=context,
             )
-            if text is None:
-                raise RuntimeError(
-                    "Required expired-key deletion page cannot be rendered"
+            if not isinstance(prepared, PreparedPageRender):
+                logger.info(
+                    "Expired-key deletion notification skipped by page flow"
                 )
+                report.notification_errors += 1
+                continue
             await send_media_or_text(
                 bot,
                 chat_id=telegram_id,
-                text=text,
-                media=page_data.get("image"),
-                media_type=page_data.get("media_type"),
-                reply_markup=build_page_keyboard(
-                    EXPIRED_KEYS_DELETED_PAGE_KEY,
-                    context=context,
-                ),
+                text=prepared.text,
+                media=prepared.media,
+                media_type=prepared.media_type,
+                reply_markup=prepared.reply_markup,
             )
             report.notified += 1
         except Exception as exc:

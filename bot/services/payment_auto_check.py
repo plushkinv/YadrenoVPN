@@ -87,15 +87,16 @@ async def retry_confirmed_payment_intents(
         summary['queued'] += 1
         async with semaphore:
             try:
-                from bot.services.billing import complete_payment_order_background
+                from bot.services.payment_completion import complete_confirmed_payment
 
-                result = await complete_payment_order_background(
+                result = await complete_confirmed_payment(
                     order_id,
                     bot=bot,
+                    background=True,
                     notify_user=True,
                     retry_post_actions=True,
                 )
-                if result.get('ok'):
+                if result.ok:
                     summary['completed'] += 1
                 elif str(row.get('fulfillment_status') or '') == 'processing':
                     summary['pending'] += 1
@@ -119,7 +120,7 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
     if not order_id:
         return 'errors'
     if row.get('state') == 'provider_succeeded':
-        return await _complete_confirmed_payment(bot, row)
+        return await _complete_confirmed_queue_row(bot, row)
 
     minimum_interval = _custom_minimum_interval(row)
     if (
@@ -135,7 +136,11 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
             minimum_interval,
             AUTO_CHECK_MAX_AGE_SECONDS,
         )
-        update_payment_auto_check(order_id, state='exhausted')
+        update_payment_auto_check(
+            order_id,
+            state='exhausted',
+            expected_state='active',
+        )
         return 'exhausted'
 
     attempt_no = int(row.get('check_attempts') or 0) + 1
@@ -156,6 +161,7 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
                 order_id,
                 state='exhausted',
                 last_error=str(error)[:500],
+                expected_state='active',
             )
             return 'exhausted'
         delay = _next_check_delay(row, attempt_no)
@@ -164,6 +170,7 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
                 order_id,
                 state='exhausted',
                 last_error=str(error)[:500],
+                expected_state='active',
             )
             return 'exhausted'
         update_payment_auto_check(
@@ -171,17 +178,23 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
             state='active',
             next_delay_seconds=delay,
             last_error=str(error)[:500],
+            expected_state='active',
         )
         return 'errors'
 
     if status == 'succeeded':
-        update_payment_auto_check(
+        transitioned = update_payment_auto_check(
             order_id,
             state='provider_succeeded',
             next_delay_seconds=0,
+            expected_state='active',
         )
         current = get_payment_auto_check(order_id) or dict(row)
-        return await _complete_confirmed_payment(bot, current)
+        if not transitioned and str(current.get('state') or '') == 'completed':
+            return 'completed'
+        if str(current.get('state') or '') != 'provider_succeeded':
+            return 'errors'
+        return await _complete_confirmed_queue_row(bot, current)
 
     if status == 'canceled':
         order = find_order_by_order_id(order_id)
@@ -191,7 +204,11 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
             from database.requests import update_payment_provider_order_status
 
             update_payment_provider_order_status(order_id, 'canceled')
-        update_payment_auto_check(order_id, state='canceled')
+        update_payment_auto_check(
+            order_id,
+            state='canceled',
+            expected_state='active',
+        )
         return 'canceled'
 
     if attempt_no >= AUTO_CHECK_MAX_ATTEMPTS:
@@ -201,17 +218,26 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
             order_id,
             attempt_no,
         )
-        update_payment_auto_check(order_id, state='exhausted')
+        update_payment_auto_check(
+            order_id,
+            state='exhausted',
+            expected_state='active',
+        )
         return 'exhausted'
 
     delay = _next_check_delay(row, attempt_no)
     if delay is None:
-        update_payment_auto_check(order_id, state='exhausted')
+        update_payment_auto_check(
+            order_id,
+            state='exhausted',
+            expected_state='active',
+        )
         return 'exhausted'
     update_payment_auto_check(
         order_id,
         state='active',
         next_delay_seconds=delay,
+        expected_state='active',
     )
     return 'pending'
 
@@ -287,27 +313,67 @@ def _custom_minimum_interval(row: Mapping[str, Any]) -> int | None:
     return int(provider.auto_check_interval_seconds)
 
 
-async def _complete_confirmed_payment(bot: Any, row: Mapping[str, Any]) -> str:
+async def _complete_confirmed_queue_row(bot: Any, row: Mapping[str, Any]) -> str:
     order_id = str(row.get('order_id') or '')
+
+    def queue_is_completed() -> bool:
+        current = get_payment_auto_check(order_id)
+        return bool(current and str(current.get('state') or '') == 'completed')
+
     completed_before = int(row.get('completion_attempts') or 0)
     if completed_before >= COMPLETION_MAX_ATTEMPTS:
-        update_payment_auto_check(order_id, state='completion_failed')
+        transitioned = update_payment_auto_check(
+            order_id,
+            state='completion_failed',
+            expected_state='provider_succeeded',
+        )
+        if not transitioned and queue_is_completed():
+            return 'completed'
         return 'errors'
 
     attempt_no = record_payment_completion_attempt(order_id)
+    claimed_row = get_payment_auto_check(order_id)
+    if claimed_row and str(claimed_row.get('state') or '') != 'provider_succeeded':
+        return (
+            'completed'
+            if str(claimed_row.get('state') or '') == 'completed'
+            else 'errors'
+        )
     try:
-        from bot.services.billing import complete_payment_order_background
+        from bot.services.payment_completion import complete_confirmed_payment
 
-        result = await complete_payment_order_background(
+        result = await complete_confirmed_payment(
             order_id,
             bot=bot,
+            background=True,
             notify_user=True,
+            show_primary_result=attempt_no == 1,
             retry_post_actions=(
                 attempt_no > 1 or str(row.get('order_status') or '') == 'paid'
             ),
         )
-        if not result.get('ok'):
-            raise RuntimeError(str(result.get('text') or 'payment_not_completed'))
+        if not result.ok:
+            if not result.retryable:
+                error = RuntimeError(str(result.text or 'payment_not_completed'))
+                transitioned = update_payment_auto_check(
+                    order_id,
+                    state='completion_failed',
+                    last_error=str(error)[:500],
+                    expected_state='provider_succeeded',
+                )
+                if not transitioned and queue_is_completed():
+                    return 'completed'
+                logger.error(
+                    "Неповторяемая ошибка завершения подтверждённого платежа: "
+                    "provider=%s order=%s error=%s",
+                    row.get('provider_id'),
+                    order_id,
+                    error,
+                )
+                if transitioned:
+                    await _notify_admins_completion_failure(bot, row, error)
+                return 'errors'
+            raise RuntimeError(str(result.text or 'payment_not_completed'))
     except Exception as error:
         if attempt_no >= COMPLETION_MAX_ATTEMPTS:
             logger.error(
@@ -318,12 +384,16 @@ async def _complete_confirmed_payment(bot: Any, row: Mapping[str, Any]) -> str:
                 error,
                 exc_info=True,
             )
-            update_payment_auto_check(
+            transitioned = update_payment_auto_check(
                 order_id,
                 state='completion_failed',
                 last_error=str(error)[:500],
+                expected_state='provider_succeeded',
             )
-            await _notify_admins_completion_failure(bot, row, error)
+            if not transitioned and queue_is_completed():
+                return 'completed'
+            if transitioned:
+                await _notify_admins_completion_failure(bot, row, error)
         else:
             delay = COMPLETION_RETRY_DELAYS_SECONDS[attempt_no - 1]
             logger.warning(
@@ -336,15 +406,22 @@ async def _complete_confirmed_payment(bot: Any, row: Mapping[str, Any]) -> str:
                 delay,
                 error,
             )
-            update_payment_auto_check(
+            transitioned = update_payment_auto_check(
                 order_id,
                 state='provider_succeeded',
                 next_delay_seconds=delay,
                 last_error=str(error)[:500],
+                expected_state='provider_succeeded',
             )
+            if not transitioned and queue_is_completed():
+                return 'completed'
         return 'errors'
 
-    update_payment_auto_check(order_id, state='completed')
+    update_payment_auto_check(
+        order_id,
+        state='completed',
+        expected_state='provider_succeeded',
+    )
     return 'completed'
 
 

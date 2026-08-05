@@ -131,7 +131,7 @@ async def provision_client_on_server(
     email: str,
     total_gb: int = 0,
     total_gb_bytes: Optional[int] = None,
-    expire_days: int = 30,
+    expire_days: int = 0,
     expiry_time_ms: Optional[int] = None,
     limit_ip: int = 1,
     enable: bool = True,
@@ -308,6 +308,39 @@ def calculate_panel_total_for_key(key: Dict[str, Any], panel_used_bytes: int = 0
     return max(0, int(panel_used_bytes or 0)) + _traffic_remaining_bytes(key)
 
 
+def _base_traffic_limit_for_key(key: Dict[str, Any]) -> int:
+    """Returns a tariff or per-key base package in bytes."""
+    if key.get('tariff_system_type') == 'admin_custom':
+        override = key.get('traffic_limit_override')
+        if override is not None:
+            return max(0, int(override))
+        return max(0, int(key.get('traffic_limit', 0) or 0))
+    return max(0, int(key.get('tariff_traffic_limit_gb', 0) or 0)) * (
+        1024 ** 3
+    )
+
+
+def get_key_limit_ip(key: Dict[str, Any]) -> int:
+    """Returns the effective panel device limit for a key."""
+    override = key.get('max_ips_override')
+    if override is not None:
+        return max(1, min(999, int(override)))
+    tariff_max_ips = key.get('tariff_max_ips')
+    if tariff_max_ips is None and key.get('tariff_id'):
+        from database.db_tariffs import get_tariff_by_id
+
+        try:
+            tariff = get_tariff_by_id(int(key['tariff_id']))
+            tariff_max_ips = (tariff or {}).get('max_ips')
+        except Exception as error:
+            logger.warning(
+                "Could not resolve tariff %s for key limitIp; using 1: %s",
+                key.get('tariff_id'),
+                error,
+            )
+    return max(1, min(999, int(tariff_max_ips or 1)))
+
+
 def _panel_total_gb_for_key(key: Dict[str, Any], panel_used_bytes: int = 0) -> int:
     """Converts the working limit of the panel to whole GB for add_client()."""
     total_bytes = calculate_panel_total_for_key(key, panel_used_bytes)
@@ -470,14 +503,7 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
     if not key:
         return False
     
-    # We get the limit from the tariff
-    tariff_id = key.get('tariff_id')
-    traffic_limit = key.get('traffic_limit', 0) or 0
-    
-    if tariff_id:
-        tariff = get_tariff_by_id(tariff_id)
-        if tariff:
-            traffic_limit = (tariff.get('traffic_limit_gb', 0) or 0) * (1024**3)
+    traffic_limit = _base_traffic_limit_for_key(key)
     
     # Reset traffic_used and reset thresholds in the database
     reset_key_traffic_notification(key_id)
@@ -554,17 +580,14 @@ def get_key_expiry_time_ms(key: Dict[str, Any]) -> int:
 
 def _key_days_left_for_add(key: Dict[str, Any]) -> int:
     """
-    Returns a positive term for add_client.
-
-    3X-UI does not accept creating a client with a 0 or negative term, so
-    the exact value is then adjusted anyway via update_client_full().
+    Returns a non-negative term for add_client; zero means unlimited.
     """
     from datetime import datetime, timezone
     import math
 
     expires_at = key.get('expires_at')
     if not expires_at:
-        return 365
+        return 0
 
     try:
         dt = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00'))
@@ -1201,14 +1224,7 @@ def restore_traffic_limit_in_db(key_id: int) -> bool:
     if not key:
         return False
     
-    # We get the limit from the tariff
-    tariff_id = key.get('tariff_id')
-    traffic_limit = key.get('traffic_limit', 0) or 0
-    
-    if tariff_id:
-        tariff = get_tariff_by_id(tariff_id)
-        if tariff:
-            traffic_limit = (tariff.get('traffic_limit_gb', 0) or 0) * (1024**3)
+    traffic_limit = _base_traffic_limit_for_key(key)
     
     # Resetting traffic_used and notification thresholds
     reset_key_traffic_notification(key_id)
@@ -1431,19 +1447,7 @@ async def _ensure_subscription_keys_on_server_impl(
 
         expiry_time_ms = _key_expiry_time_ms(key)
         traffic_limit = key.get('traffic_limit', 0) or 0
-        limit_ip = 1
-        if key.get('tariff_id'):
-            from database.db_tariffs import get_tariff_by_id
-            try:
-                tariff = get_tariff_by_id(key['tariff_id'])
-                if tariff:
-                    max_ips = tariff.get('max_ips', 1)
-                    limit_ip = max_ips if max_ips is not None else 1
-            except Exception as e:
-                logger.warning(
-                    f"ensure_subscription_keys: не удалось получить тариф "
-                    f"{key.get('tariff_id')} для limitIp, используется 1: {e}"
-                )
+        limit_ip = get_key_limit_ip(key)
 
         traffic_entry = build_inbound_traffic_map(inbounds).get(email, {})
         aggregate_panel_used = (traffic_entry.get('up', 0) or 0) + (traffic_entry.get('down', 0) or 0)
@@ -1599,7 +1603,7 @@ async def _ensure_subscription_keys_on_server_impl(
                                 email=email,
                                 total_gb=total_gb,
                                 total_gb_bytes=target_total_bytes,
-                                expire_days=days_left if days_left > 0 else 365,
+                                expire_days=days_left,
                                 expiry_time_ms=expiry_time_ms,
                                 limit_ip=limit_ip,
                                 enable=active,
@@ -1659,7 +1663,7 @@ async def _ensure_subscription_keys_on_server_impl(
                                 email=email,
                                 total_gb=total_gb,
                                 total_gb_bytes=target_total_bytes,
-                                expire_days=days_left if days_left > 0 else 365,
+                                expire_days=days_left,
                                 expiry_time_ms=expiry_time_ms,
                                 limit_ip=limit_ip,
                                 enable=active,
@@ -1898,7 +1902,7 @@ async def _ensure_subscription_keys_on_server_impl(
                             email=email,
                             total_gb=total_gb,
                             total_gb_bytes=calculate_panel_total_for_key(key, 0),
-                            expire_days=days_left if days_left > 0 else 365,
+                            expire_days=days_left,
                             expiry_time_ms=expiry_time_ms,
                             limit_ip=limit_ip,
                             enable=active,

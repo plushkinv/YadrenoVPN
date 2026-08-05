@@ -73,6 +73,39 @@ def normalize_callback_data(value: Any, field: str = 'callback_data') -> str:
     return callback
 
 
+def resolve_internal_button(
+    action_value: Any,
+    context: Mapping[str, Any],
+) -> Optional[dict]:
+    """Resolves fixed actions and validated persisted trial-offer actions."""
+    action_key = _require_text(action_value, 'action_value').strip()
+    if not isinstance(context, Mapping):
+        raise ValueError('context must be a mapping')
+    fixed_callback = ACTION_REGISTRY.get(action_key)
+    if fixed_callback is not None:
+        return {'callback_data': normalize_callback_data(fixed_callback)}
+
+    from database.db_trial import TRIAL_OFFER_ACTION_PREFIX
+
+    if not action_key.startswith(TRIAL_OFFER_ACTION_PREFIX):
+        return None
+    raw_offer_id = action_key[len(TRIAL_OFFER_ACTION_PREFIX):]
+    if not raw_offer_id.isdecimal() or int(raw_offer_id) <= 0:
+        return None
+
+    from database.requests import get_trial_offer_eligibility
+
+    telegram_id = context.get('telegram_id')
+    if isinstance(telegram_id, bool) or not isinstance(telegram_id, int):
+        telegram_id = None
+    eligibility = get_trial_offer_eligibility(telegram_id, int(raw_offer_id))
+    if not eligibility.get('eligible'):
+        return {'hidden': True}
+    return {
+        'callback_data': normalize_callback_data(f'trial_offer:{int(raw_offer_id)}'),
+    }
+
+
 # =============================================================================
 # SYSTEM_BUTTONS: system buttons
 #
@@ -83,119 +116,6 @@ def normalize_callback_data(value: Any, field: str = 'callback_data') -> str:
 # context contains the data passed by the handler to render_page:
 # - order_id, telegram_id, and other parameters
 # =============================================================================
-
-
-def _resolve_pay_crypto(ctx: dict) -> Optional[dict]:
-    """Crypto payment button (USDT). Determines visibility and generates action."""
-    from database.requests import is_crypto_configured
-
-    if not is_crypto_configured():
-        return None
-
-    order_id = ctx.get('order_id')
-    cb = f"pay_crypto:{order_id}" if order_id else "pay_crypto"
-    return {"callback_data": cb}
-
-
-def _resolve_pay_stars(ctx: dict) -> Optional[dict]:
-    """Star payment button."""
-    from database.requests import is_stars_enabled
-
-    if not is_stars_enabled():
-        return None
-
-    order_id = ctx.get('order_id')
-    cb = f"pay_stars:{order_id}" if order_id else "pay_stars"
-    return {"callback_data": cb}
-
-
-def _resolve_pay_cards(ctx: dict) -> Optional[dict]:
-    """TG payments button (historical internal name cards)."""
-    from database.requests import is_cards_enabled
-
-    if not is_cards_enabled():
-        return None
-
-    order_id = ctx.get('order_id')
-    cb = f"pay_cards:{order_id}" if order_id else "pay_cards"
-    return {"callback_data": cb}
-
-
-def _resolve_pay_qr(ctx: dict) -> Optional[dict]:
-    """Payment button via YuKassa."""
-    from database.requests import is_yookassa_qr_configured
-
-    if not is_yookassa_qr_configured():
-        return None
-
-    return {"callback_data": "pay_qr"}
-
-
-def _resolve_pay_wata(ctx: dict) -> Optional[dict]:
-    """Payment button via WATA."""
-    from database.requests import is_wata_configured
-
-    if not is_wata_configured():
-        return None
-
-    return {"callback_data": "pay_wata"}
-
-
-def _resolve_pay_platega(ctx: dict) -> Optional[dict]:
-    """Payment button via Platega."""
-    from database.requests import is_platega_configured
-
-    if not is_platega_configured():
-        return None
-
-    return {"callback_data": "pay_platega"}
-
-
-def _resolve_pay_cardlink(ctx: dict) -> Optional[dict]:
-    """Payment button via Cardlink."""
-    from database.requests import is_cardlink_configured
-
-    if not is_cardlink_configured():
-        return None
-
-    return {"callback_data": "pay_cardlink"}
-
-
-def _resolve_pay_demo(ctx: dict) -> Optional[dict]:
-    """Demo payment button (RF card)."""
-    from database.requests import is_demo_payment_enabled
-
-    if not is_demo_payment_enabled():
-        return None
-
-    order_id = ctx.get('order_id')
-    cb = f"demo_tariffs:{order_id}" if order_id else "demo_tariffs"
-    return {"callback_data": cb}
-
-
-def _resolve_pay_balance(ctx: dict) -> Optional[dict]:
-    """“Use balance” button. Visible only when referral + balance > 0."""
-    from database.requests import (
-        is_referral_enabled, get_referral_reward_type,
-        get_user_balance, get_user_internal_id,
-    )
-
-    if not is_referral_enabled() or get_referral_reward_type() != 'balance':
-        return None
-
-    telegram_id = ctx.get('telegram_id')
-    if not telegram_id:
-        return None
-
-    user_id = get_user_internal_id(telegram_id)
-    if not user_id:
-        return None
-
-    balance_cents = get_user_balance(user_id)
-    if balance_cents <= 0:
-        return None
-
-    return {"callback_data": "pay_use_balance"}
 
 
 def _resolve_enter_promo(ctx: dict) -> Optional[dict]:
@@ -217,154 +137,6 @@ def _get_renew_key_id(ctx: dict) -> Optional[str]:
         logger.warning("Некорректный key_id для system-кнопки: %r", key_id)
         return None
     return str(key_id)
-
-
-def _resolve_renew_pay_crypto(ctx: dict) -> Optional[dict]:
-    """Renewal button via crypto payment (USDT)."""
-    from database.requests import is_crypto_configured
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id or not is_crypto_configured():
-        return None
-
-    return {"callback_data": f"renew_crypto_tariff:{key_id}"}
-
-
-def _resolve_renew_pay_stars(ctx: dict) -> Optional[dict]:
-    """Renewal button via Telegram Stars."""
-    from database.requests import is_stars_enabled
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id or not is_stars_enabled():
-        return None
-
-    return {"callback_data": f"renew_stars_tariff:{key_id}"}
-
-
-def _resolve_renew_pay_cards(ctx: dict) -> Optional[dict]:
-    """Renewal button via Telegram Payments."""
-    from database.requests import is_cards_enabled
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id or not is_cards_enabled():
-        return None
-
-    return {"callback_data": f"renew_cards_tariff:{key_id}"}
-
-
-def _resolve_renew_pay_qr(ctx: dict) -> Optional[dict]:
-    """Renewal button via YuKassa QR payment."""
-    from database.requests import is_yookassa_qr_configured
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id or not is_yookassa_qr_configured():
-        return None
-
-    return {"callback_data": f"renew_qr_tariff:{key_id}"}
-
-
-def _resolve_renew_pay_wata(ctx: dict) -> Optional[dict]:
-    """Renewal button via WATA."""
-    from database.requests import is_wata_configured
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id or not is_wata_configured():
-        return None
-
-    return {"callback_data": f"renew_wata_tariff:{key_id}"}
-
-
-def _resolve_renew_pay_platega(ctx: dict) -> Optional[dict]:
-    """Renewal button via Platega."""
-    from database.requests import is_platega_configured
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id or not is_platega_configured():
-        return None
-
-    return {"callback_data": f"renew_platega_tariff:{key_id}"}
-
-
-def _resolve_renew_pay_cardlink(ctx: dict) -> Optional[dict]:
-    """Renewal button via Cardlink."""
-    from database.requests import is_cardlink_configured
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id or not is_cardlink_configured():
-        return None
-
-    return {"callback_data": f"renew_cardlink_tariff:{key_id}"}
-
-
-def _resolve_renew_pay_demo(ctx: dict) -> Optional[dict]:
-    """Renewal button via demo payment."""
-    from database.requests import is_demo_payment_enabled
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id or not is_demo_payment_enabled():
-        return None
-
-    return {"callback_data": f"renew_demo_tariffs:{key_id}"}
-
-
-def _resolve_renew_pay_balance(ctx: dict) -> Optional[dict]:
-    """Extension button from internal balance."""
-    from database.requests import (
-        is_referral_enabled, get_referral_reward_type,
-        get_user_balance, get_user_internal_id,
-    )
-
-    key_id = _get_renew_key_id(ctx)
-    if not key_id:
-        return None
-
-    if not is_referral_enabled() or get_referral_reward_type() != 'balance':
-        return None
-
-    telegram_id = ctx.get('telegram_id')
-    if not telegram_id:
-        return None
-
-    user_id = get_user_internal_id(telegram_id)
-    if not user_id:
-        return None
-
-    balance_cents = get_user_balance(user_id)
-    if balance_cents <= 0:
-        return None
-
-    return {"callback_data": f"pay_use_balance:{key_id}"}
-
-
-def _resolve_pay_ext(btn_id: str, ctx: dict) -> Optional[dict]:
-    provider_id = btn_id.removeprefix('btn_pay_ext_')
-    if not provider_id:
-        return None
-    from bot.utils.payment_provider_registry import get_payment_provider, is_payment_provider_enabled
-
-    provider = get_payment_provider(provider_id)
-    if provider is None or not is_payment_provider_enabled(provider.provider_id, ctx):
-        return None
-    return {
-        "callback_data": f"pe:{provider.provider_id}",
-        "label": provider.label,
-    }
-
-
-def _resolve_renew_pay_ext(btn_id: str, ctx: dict) -> Optional[dict]:
-    provider_id = btn_id.removeprefix('btn_renew_pay_ext_')
-    key_id = _get_renew_key_id(ctx)
-    if not provider_id or not key_id:
-        return None
-    from bot.utils.payment_provider_registry import get_payment_provider, is_payment_provider_enabled
-
-    provider = get_payment_provider(provider_id)
-    if provider is None or not is_payment_provider_enabled(provider.provider_id, ctx):
-        return None
-    return {
-        "callback_data": f"re:{provider.provider_id}:{key_id}",
-        "label": provider.label,
-    }
 
 
 def _resolve_renew_enter_promo(ctx: dict) -> Optional[dict]:
@@ -590,27 +362,32 @@ def _resolve_context_callback(ctx: dict, context_key: str) -> Optional[dict]:
     return {"callback_data": value.strip()}
 
 
+def _resolve_activate_trial(ctx: dict) -> Optional[dict]:
+    """Builds a confirmation callback for the offer shown on the shared page."""
+    offer_id = ctx.get('trial_offer_id')
+    if isinstance(offer_id, bool) or not isinstance(offer_id, int) or offer_id <= 0:
+        from database.requests import get_primary_trial_offer
+
+        primary = get_primary_trial_offer()
+        offer_id = int(primary['offer_id']) if primary else None
+    if offer_id is None:
+        return None
+
+    from database.requests import get_trial_offer_eligibility
+
+    telegram_id = ctx.get('telegram_id')
+    if isinstance(telegram_id, bool) or not isinstance(telegram_id, int):
+        telegram_id = None
+    eligibility = get_trial_offer_eligibility(telegram_id, offer_id)
+    if not eligibility.get('eligible'):
+        return None
+    return {'callback_data': f'trial_activate:{offer_id}'}
+
+
 # Map: button_id → handler
 SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
-    "btn_pay_crypto":  _resolve_pay_crypto,
-    "btn_pay_stars":   _resolve_pay_stars,
-    "btn_pay_cards":   _resolve_pay_cards,
-    "btn_pay_qr":      _resolve_pay_qr,
-    "btn_pay_wata":    _resolve_pay_wata,
-    "btn_pay_platega": _resolve_pay_platega,
-    "btn_pay_cardlink": _resolve_pay_cardlink,
-    "btn_pay_demo":    _resolve_pay_demo,
-    "btn_pay_balance": _resolve_pay_balance,
+    "btn_activate_trial": _resolve_activate_trial,
     "btn_enter_promo": _resolve_enter_promo,
-    "btn_renew_pay_crypto": _resolve_renew_pay_crypto,
-    "btn_renew_pay_stars": _resolve_renew_pay_stars,
-    "btn_renew_pay_cards": _resolve_renew_pay_cards,
-    "btn_renew_pay_qr": _resolve_renew_pay_qr,
-    "btn_renew_pay_wata": _resolve_renew_pay_wata,
-    "btn_renew_pay_platega": _resolve_renew_pay_platega,
-    "btn_renew_pay_cardlink": _resolve_renew_pay_cardlink,
-    "btn_renew_pay_demo": _resolve_renew_pay_demo,
-    "btn_renew_pay_balance": _resolve_renew_pay_balance,
     "btn_renew_enter_promo": _resolve_renew_enter_promo,
     "btn_renew_back": _resolve_renew_back,
     "btn_key_show_key": _resolve_key_show_key,
@@ -668,10 +445,6 @@ def resolve_system_button(button_id: str, context: Mapping[str, Any]) -> Optiona
     handler = SYSTEM_BUTTONS.get(button_id)
     if handler is not None:
         return _normalize_system_button_result(button_id, handler(context))
-    if button_id.startswith('btn_pay_ext_'):
-        return _normalize_system_button_result(button_id, _resolve_pay_ext(button_id, context))
-    if button_id.startswith('btn_renew_pay_ext_'):
-        return _normalize_system_button_result(button_id, _resolve_renew_pay_ext(button_id, context))
     return None
 
 

@@ -13,7 +13,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import ADMIN_IDS
 from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
 from bot.utils.text import escape_html
-from bot.utils.user_ui_texts import render_ui_text
+from bot.utils.user_ui_texts import render_duration_days, render_ui_text
 
 logger = logging.getLogger(__name__)
 
@@ -356,9 +356,8 @@ async def notify_referrers_purchase(
                 'referral_level': level,
                 'payment_tariff_name': str(tariff_name),
                 'payment_amount_text': _format_referral_purchase_amount(order, event),
-                'payment_period_text': render_ui_text(
-                    'format.days_short',
-                    days=event.get('period_days', 0) or 0,
+                'payment_period_text': render_duration_days(
+                    event.get('period_days', 0),
                 ),
                 'referral_reward_text': _format_referral_reward(event),
             })

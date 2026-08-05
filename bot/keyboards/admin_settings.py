@@ -117,7 +117,7 @@ def trial_tariff_select_kb(tariffs: List[Dict[str, Any]], selected_id: Optional[
     """
     Keyboard for selecting a tariff for a trial subscription.
     
-    Displays all tariffs except Admin Tariff.
+    Displays ordinary tariffs only.
     
     Args:
         tariffs: List of all tariffs (including inactive ones)
@@ -125,12 +125,13 @@ def trial_tariff_select_kb(tariffs: List[Dict[str, Any]], selected_id: Optional[
     """
     builder = InlineKeyboardBuilder()
     for tariff in tariffs:
-        if tariff.get('name') == 'Admin Tariff':
+        if tariff.get('system_type') is not None:
             continue
         status = '🟢' if tariff.get('is_active') else '⚪'
         is_selected = tariff['id'] == selected_id
         selected_suffix = ' — выбрано' if is_selected else ''
-        builder.row(InlineKeyboardButton(text=f"{status} {tariff['name']} ({tariff['duration_days']} дн.){selected_suffix}", callback_data=f"admin_trial_set_tariff:{tariff['id']}"))
+        duration = 'Без срока' if int(tariff['duration_days']) == 0 else f"{tariff['duration_days']} дн."
+        builder.row(InlineKeyboardButton(text=f"{status} {tariff['name']} ({duration}){selected_suffix}", callback_data=f"admin_trial_set_tariff:{tariff['id']}"))
     builder.row(back_button('admin_trial'), home_button())
     return builder.as_markup()
 

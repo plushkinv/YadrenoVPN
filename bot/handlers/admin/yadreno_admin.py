@@ -876,6 +876,7 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
             message.from_user.id,
             bound_page,
             bound_page_before,
+            topic_id,
         ):
             return
         await _deliver_final_response(
@@ -949,6 +950,7 @@ async def _rerender_bound_yaa_page_if_changed(
     telegram_id: int,
     binding: YaaPageBinding | None,
     before: str | None,
+    topic_id: int = YADRENO_ADMIN_YAA_TOPIC_ID,
 ) -> bool:
     """Rerender the pinned Telegram page once after a completed changed turn."""
     if before is None:
@@ -974,32 +976,56 @@ async def _rerender_bound_yaa_page_if_changed(
         from bot.utils.key_sender import rerender_key_delivery_page_context
 
         if await rerender_key_delivery_page_context(page_context, telegram_id):
+            _refresh_yaa_binding_after_rerender(telegram_id, topic_id, binding)
             return True
     if page_context.page_key == "qr_payment":
         from bot.handlers.user.payments.base import rerender_qr_payment_page_context
 
         if await rerender_qr_payment_page_context(page_context, telegram_id):
+            _refresh_yaa_binding_after_rerender(telegram_id, topic_id, binding)
             return True
     if page_context.page_key in {"my_keys", "my_keys_empty"}:
         from bot.handlers.user.keys import rerender_my_keys_page_context
 
         if await rerender_my_keys_page_context(page_context, telegram_id):
+            _refresh_yaa_binding_after_rerender(telegram_id, topic_id, binding)
             return True
     if page_context.page_key == "key_details":
         from bot.handlers.user.keys import rerender_key_details_page_context
 
         if await rerender_key_details_page_context(page_context, telegram_id):
+            _refresh_yaa_binding_after_rerender(telegram_id, topic_id, binding)
             return True
     await render_page(
         page_context.message,
         page_key=page_context.page_key,
-        visibility=page_context.visibility,
-        context=page_context.context,
-        text_replacements=page_context.text_replacements,
-        prepend_buttons=page_context.prepend_buttons,
-        append_buttons=page_context.append_buttons,
+        route_key=page_context.route_key,
+        visibility=page_context.base_visibility,
+        context=page_context.base_context,
+        text_replacements=page_context.base_text_replacements,
+        prepend_buttons=page_context.base_prepend_buttons,
+        append_buttons=page_context.base_append_buttons,
     )
+    _refresh_yaa_binding_after_rerender(telegram_id, topic_id, binding)
     return True
+
+
+def _refresh_yaa_binding_after_rerender(
+    telegram_id: int,
+    topic_id: int,
+    previous: YaaPageBinding,
+) -> None:
+    """Pins the fresh base/effective snapshot produced by the rerender."""
+    latest = get_page_context(telegram_id)
+    if latest is None:
+        return
+    remember_yaa_page_binding(
+        telegram_id,
+        topic_id,
+        latest,
+        backup_path=previous.backup_path,
+        attachment=previous.attachment,
+    )
 
 
 def _safe_upload_filename(raw_name: str | None, fallback: str) -> str:
@@ -1444,6 +1470,7 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
             buffer.user_id,
             bound_page,
             bound_page_before,
+            buffer.topic_id,
         ):
             return
         await _deliver_final_response(
@@ -1753,6 +1780,7 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
         message.from_user.id,
         binding,
         before,
+        YADRENO_ADMIN_YAA_TOPIC_ID,
     ):
         return
 
@@ -1888,6 +1916,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
             message.from_user.id,
             bound_page,
             bound_page_before,
+            topic_id,
         ):
             return
         await _deliver_final_response(progress.final_target, final, topic_id)

@@ -49,6 +49,16 @@ PAYMENT_MINIMUM_LABELS = {
     "balance": "0 ₽",
 }
 
+_PROMO_FULL_PRICE_FALLBACK_REASONS = frozenset({
+    "already_reserved",
+    "already_used",
+    "exhausted",
+    "expired",
+    "inactive",
+    "not_found",
+})
+
+
 def _amount_unit(payment_type: str) -> str:
     return "stars" if payment_type_currency(payment_type) == 'XTR' else "cents"
 
@@ -83,6 +93,13 @@ def get_active_promo_discount_percent(user_id: int) -> int:
     """Return the currently usable promo discount for a pre-intent tariff list."""
     promo = get_user_active_promo_code(int(user_id))
     if not promo:
+        return 0
+    availability = get_promo_code_availability(
+        promo["code"],
+        user_id=int(user_id),
+        block_user_reservations=True,
+    )
+    if not availability.get("ok"):
         return 0
     return max(0, min(100, int(promo.get("discount_percent") or 0)))
 
@@ -134,6 +151,7 @@ def build_quote(
     nominal_amount_minor: int | None = None,
     nominal_amount_cents: int | None = None,
     rate_snapshot: Dict[str, Any] | None = None,
+    _use_active_promo: bool = True,
 ) -> Dict[str, Any]:
     """Returns the price calculation taking into account the active promotional code or coupon."""
     raw_nominal = nominal_amount_minor if nominal_amount_minor is not None else nominal_amount_cents
@@ -146,6 +164,7 @@ def build_quote(
     amount_unit = _amount_unit(payment_type)
     promo = None
     promo_error = None
+    promo_skipped_reason = None
 
     if explicit_code:
         availability = get_promo_code_availability(
@@ -157,15 +176,19 @@ def build_quote(
             promo = availability.get("promo")
         else:
             promo_error = str(availability.get("reason") or "unavailable")
-    else:
+    elif _use_active_promo:
         promo = get_user_active_promo_code(user_id, order_id=order_id)
         if promo:
             availability = get_promo_code_availability(
                 promo["code"],
                 order_id=order_id,
                 user_id=user_id,
+                block_user_reservations=True,
             )
             if not availability.get("ok"):
+                promo_skipped_reason = str(
+                    availability.get("reason") or "unavailable"
+                )
                 promo = None
 
     discount_percent = int(promo.get("discount_percent") or 0) if promo else 0
@@ -187,6 +210,7 @@ def build_quote(
         "ok": promo_error is None,
         "promo": promo,
         "promo_error": promo_error,
+        "promo_skipped_reason": promo_skipped_reason,
         "payment_type": payment_type,
         "amount_unit": amount_unit,
         "original_amount": original_amount,
@@ -285,7 +309,7 @@ def prepare_order_pricing(
     rate_snapshot: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
-    Calculates the price, saves the snapshot in payments and reserves a promotional code for the order.
+    Calculates the price, reserves the promo and then saves the payment snapshot.
     """
     quote = build_quote(
         user_id=user_id,
@@ -298,19 +322,27 @@ def prepare_order_pricing(
         rate_snapshot=rate_snapshot,
     )
 
+    tariff_id = int(tariff.get('id') or 0)
+    if tariff_id:
+        from database.requests import (
+            find_order_by_order_id,
+            is_tariff_payment_target_allowed,
+        )
+
+        order = find_order_by_order_id(order_id) or {}
+        if not is_tariff_payment_target_allowed(
+            user_id=int(user_id),
+            tariff_id=tariff_id,
+            vpn_key_id=order.get('vpn_key_id'),
+        ):
+            quote['ok'] = False
+            quote['is_free'] = False
+            quote['unavailable_reason'] = 'tariff_unavailable'
+            quote['unavailable_code'] = 'tariff_unavailable'
+
     if not quote["ok"]:
         cancel_promo_reservation_for_order(order_id)
         return quote
-
-    save_order_pricing_snapshot(
-        order_id=order_id,
-        payment_type=payment_type,
-        original_amount=quote["original_amount"],
-        discount_amount=quote["discount_amount"],
-        final_amount=quote["final_amount"],
-        amount_unit=quote["amount_unit"],
-        promo=quote["promo"],
-    )
 
     if quote["promo"]:
         reservation = reserve_promo_for_order(
@@ -325,12 +357,50 @@ def prepare_order_pricing(
             amount_unit=quote["amount_unit"],
         )
         if not reservation.get("ok"):
-            quote["ok"] = False
-            quote["unavailable_reason"] = str(reservation.get("reason") or "unavailable")
-            quote["unavailable_code"] = quote["unavailable_reason"]
-            return quote
+            reason = str(reservation.get("reason") or "unavailable")
+            if reason not in _PROMO_FULL_PRICE_FALLBACK_REASONS:
+                cancel_promo_reservation_for_order(order_id)
+                quote["ok"] = False
+                quote["unavailable_reason"] = reason
+                quote["unavailable_code"] = reason
+                return quote
+            quote = build_quote(
+                user_id=user_id,
+                tariff=tariff,
+                payment_type=payment_type,
+                order_id=order_id,
+                purpose=purpose or action,
+                nominal_amount_minor=nominal_amount_minor,
+                nominal_amount_cents=nominal_amount_cents,
+                rate_snapshot=quote["rate_snapshot"],
+                _use_active_promo=False,
+            )
+            quote["promo_skipped_reason"] = reason
+            cancel_promo_reservation_for_order(order_id)
+            if not quote["ok"]:
+                return quote
     else:
         cancel_promo_reservation_for_order(order_id)
+
+    try:
+        snapshot_saved = save_order_pricing_snapshot(
+            order_id=order_id,
+            payment_type=payment_type,
+            original_amount=quote["original_amount"],
+            discount_amount=quote["discount_amount"],
+            final_amount=quote["final_amount"],
+            amount_unit=quote["amount_unit"],
+            promo=quote["promo"],
+        )
+    except Exception:
+        logger.exception("Failed to save pricing snapshot for order %s", order_id)
+        snapshot_saved = False
+    if not snapshot_saved:
+        cancel_promo_reservation_for_order(order_id)
+        quote["ok"] = False
+        quote["is_free"] = False
+        quote["unavailable_reason"] = "pricing_persistence_failed"
+        quote["unavailable_code"] = "pricing_persistence_failed"
 
     return quote
 
@@ -340,6 +410,7 @@ def activate_promo_code_for_user(user_id: int, code: str, *, allow_coupons: bool
     availability = get_promo_code_availability(
         (code or "").strip(),
         user_id=user_id,
+        block_user_reservations=True,
     )
     if not availability.get("ok"):
         return {
@@ -465,6 +536,7 @@ def _issue_auto_coupon_after_payment(order: Dict[str, Any]) -> Optional[Dict[str
 async def _apply_promo_reward_policies_after_payment(order: Dict[str, Any]) -> list[Dict[str, Any]]:
     """Applies declarative post-payment promo rewards via core API."""
     try:
+        from bot.utils.billing_values import resolve_duration_days
         from bot.utils.policy_registry import apply_promo_reward_policies
 
         rewards = apply_promo_reward_policies(
@@ -473,7 +545,7 @@ async def _apply_promo_reward_policies_after_payment(order: Dict[str, Any]) -> l
                 "user_id": order.get("user_id"),
                 "payment_type": order.get("payment_type"),
                 "tariff_id": order.get("tariff_id"),
-                "period_days": order.get("period_days") or order.get("duration_days"),
+                "period_days": resolve_duration_days(order),
                 "amount_cents": _order_final_amount(order),
             }
         )

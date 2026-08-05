@@ -29,6 +29,7 @@ KEY_ID_ACTIONS = frozenset({
     'key.rename.start',
     'key.delete',
 })
+TRIAL_OFFER_ACTIONS = frozenset({'trial.activate'})
 
 ACTION_POLICY_PHASES = frozenset({'preview', 'execute'})
 ACTION_POLICY_SOURCES = frozenset({'command', 'callback', 'button'})
@@ -124,7 +125,12 @@ def normalize_core_action_params(action: Any, params: Any = None) -> dict[str, A
     if not isinstance(params, Mapping):
         raise ValueError('action params must be a mapping')
     normalized = dict(params)
-    allowed = {'key_id'} if action_name in KEY_ID_ACTIONS else set()
+    if action_name in KEY_ID_ACTIONS:
+        allowed = {'key_id'}
+    elif action_name in TRIAL_OFFER_ACTIONS:
+        allowed = {'offer_id'}
+    else:
+        allowed = set()
     unknown = set(normalized) - allowed
     if unknown:
         raise ValueError(f"unsupported params for {action_name}: {', '.join(sorted(unknown))}")
@@ -133,6 +139,13 @@ def normalize_core_action_params(action: Any, params: Any = None) -> dict[str, A
         if isinstance(key_id, bool) or not isinstance(key_id, int) or key_id <= 0:
             raise ValueError(f'{action_name} requires a positive integer key_id')
         return {'key_id': key_id}
+    if action_name in TRIAL_OFFER_ACTIONS:
+        if 'offer_id' not in normalized:
+            return {}
+        offer_id = normalized.get('offer_id')
+        if isinstance(offer_id, bool) or not isinstance(offer_id, int) or offer_id <= 0:
+            raise ValueError(f'{action_name} offer_id must be a positive integer')
+        return {'offer_id': offer_id}
     return {}
 
 

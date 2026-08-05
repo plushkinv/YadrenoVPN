@@ -11,11 +11,7 @@ from typing import Any, Mapping, Optional
 from aiogram import Bot
 
 from bot.utils.delivery import is_bot_blocked_error
-from bot.utils.page_renderer import (
-    build_page_keyboard,
-    get_page_data,
-    render_page_text,
-)
+from bot.utils.page_renderer import PreparedPageRender, prepare_page_render
 from bot.utils.text import send_media_or_text
 from database.requests import (
     cancel_ineligible_lapsed_coupon_deliveries,
@@ -73,34 +69,43 @@ def _coupon_page_context(coupon: Mapping[str, Any]) -> dict[str, Any]:
 async def _deliver_coupon(
     bot: Bot,
     coupon: Mapping[str, Any],
-    page_data: Mapping[str, Any],
 ) -> tuple[str, int, Optional[Exception]]:
     """Try one Telegram delivery cycle and return its stable result code."""
     delivery_id = int(coupon["delivery_id"])
     telegram_id = int(coupon["telegram_id"])
-    context = _coupon_page_context(coupon)
+    context = {
+        'telegram_id': telegram_id,
+        **_coupon_page_context(coupon),
+    }
     last_error: Optional[Exception] = None
+
+    try:
+        prepared = await prepare_page_render(
+            bot,
+            LAPSED_KEY_COUPON_PAGE_KEY,
+            context=context,
+        )
+    except Exception as exc:
+        prepared = None
+        last_error = exc
+    if not isinstance(prepared, PreparedPageRender):
+        last_error = last_error or RuntimeError('page_flow_denied')
+        mark_lapsed_coupon_delivery_retry(
+            delivery_id,
+            str(last_error),
+            attempts=0,
+        )
+        return 'deferred', 0, last_error
 
     for attempt_index in range(DELIVERY_ATTEMPTS_PER_CYCLE):
         try:
-            text = render_page_text(
-                LAPSED_KEY_COUPON_PAGE_KEY,
-                context=context,
-            )
-            if text is None:
-                raise RuntimeError(
-                    "Required lapsed-key coupon page cannot be rendered"
-                )
             await send_media_or_text(
                 bot,
                 chat_id=telegram_id,
-                text=text,
-                media=page_data.get("image"),
-                media_type=page_data.get("media_type"),
-                reply_markup=build_page_keyboard(
-                    LAPSED_KEY_COUPON_PAGE_KEY,
-                    context=context,
-                ),
+                text=prepared.text,
+                media=prepared.media,
+                media_type=prepared.media_type,
+                reply_markup=prepared.reply_markup,
             )
             attempts = attempt_index + 1
             mark_lapsed_coupon_delivery_sent(
@@ -155,15 +160,6 @@ async def process_lapsed_coupon_deliveries(
         )
         return report
 
-    page_data = get_page_data(LAPSED_KEY_COUPON_PAGE_KEY)
-    if page_data is None:
-        logger.error(
-            "Required lapsed-user coupon page %s is missing",
-            LAPSED_KEY_COUPON_PAGE_KEY,
-        )
-        report.deferred = len(due)
-        return report
-
     for delivery in due:
         delivery_id = int(delivery["id"])
         try:
@@ -176,7 +172,6 @@ async def process_lapsed_coupon_deliveries(
             result, _attempts, error = await _deliver_coupon(
                 bot,
                 coupon,
-                page_data,
             )
             if result == "sent":
                 report.sent += 1

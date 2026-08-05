@@ -40,7 +40,13 @@ async def _build_my_keys_render_data(telegram_id: int):
     return await build_my_keys_render_data(telegram_id)
 
 
-async def _render_my_keys_page(target, telegram_id: int, force_new: bool = False) -> None:
+async def _render_my_keys_page(
+    target,
+    telegram_id: int,
+    force_new: bool = False,
+    *,
+    route_key: str | None = None,
+) -> None:
     """Renders the “My Keys” page from the pages table."""
     from bot.utils.page_renderer import render_page
 
@@ -55,6 +61,7 @@ async def _render_my_keys_page(target, telegram_id: int, force_new: bool = False
         await render_page(
             target,
             page_key='my_keys_empty',
+            route_key=route_key,
             context=context,
             force_new=force_new,
         )
@@ -63,6 +70,7 @@ async def _render_my_keys_page(target, telegram_id: int, force_new: bool = False
     await render_page(
         target,
         page_key='my_keys',
+        route_key=route_key,
         context=context,
         force_new=force_new,
     )
@@ -70,20 +78,29 @@ async def _render_my_keys_page(target, telegram_id: int, force_new: bool = False
 
 async def rerender_my_keys_page_context(page_context, viewer_id: int) -> bool:
     """Redraws the saved “My Keys” screen after editing via /yaa."""
-    context = page_context.context or {}
+    context = page_context.base_context or page_context.context or {}
     telegram_id = context.get('telegram_id') or viewer_id
-    await _render_my_keys_page(page_context.message, int(telegram_id))
+    await _render_my_keys_page(
+        page_context.message,
+        int(telegram_id),
+        route_key=getattr(page_context, 'route_key', None),
+    )
     return True
 
 
 async def rerender_key_details_page_context(page_context, viewer_id: int) -> bool:
     """Redraws the saved key card after editing via /yaa."""
-    context = page_context.context or {}
+    context = page_context.base_context or page_context.context or {}
     key_id = context.get('key_id')
     if not key_id:
         return False
     telegram_id = context.get('telegram_id') or viewer_id
-    await show_key_details(int(telegram_id), int(key_id), page_context.message)
+    await show_key_details(
+        int(telegram_id),
+        int(key_id),
+        page_context.message,
+        route_key=getattr(page_context, 'route_key', None),
+    )
     return True
 
 
@@ -105,7 +122,14 @@ async def my_keys_handler(callback: CallbackQuery):
     await show_my_keys(telegram_id, callback)
     await callback.answer()
 
-async def show_key_details(telegram_id: int, key_id: int, message, is_callback: bool = True):
+async def show_key_details(
+    telegram_id: int,
+    key_id: int,
+    message,
+    is_callback: bool = True,
+    *,
+    route_key: str | None = None,
+):
     """General logic for displaying key details."""
     from database.requests import get_key_details_for_user, get_key_payments_history, is_key_active, is_traffic_exhausted
     from bot.services.vpn_api import format_traffic
@@ -123,8 +147,6 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
         status = render_ui_text('key.status.active')
     else:
         status = render_ui_text('key.status.expired')
-    inbound_name = '—'
-    protocol = '—'
     is_unconfigured = not key.get('server_id')
     traffic_used = key.get('traffic_used', 0) or 0
     traffic_limit = key.get('traffic_limit', 0) or 0
@@ -147,31 +169,16 @@ async def show_key_details(telegram_id: int, key_id: int, message, is_callback: 
         )
     else:
         traffic_info = render_ui_text('key.traffic.unlimited')
-    if key.get('sub_id'):
-        # Subscription: one key covers all inbound servers at once
-        inbound_name = render_ui_text('key.inbound.all_protocols')
-        protocol = 'SUBSCRIPTION'
-    elif key.get('server_active') and key.get('panel_email'):
-        try:
-            from bot.services.vpn_api import get_client
-            client = await get_client(key['server_id'])
-            stats = await client.get_client_stats(key['panel_email'])
-            if stats:
-                protocol = stats.get('protocol', 'vless').upper()
-                inbound_name = stats.get('remark', 'VPN') or 'VPN'
-        except Exception as e:
-            logger.warning(f'Ошибка получения протокола: {e}')
     payments = get_key_payments_history(key_id)
     key_page_context = build_key_page_context(
         key,
         status=status,
         traffic=traffic_info,
-        inbound=inbound_name,
-        protocol=protocol,
     )
     await render_page(
         message,
         page_key='key_details',
+        route_key=route_key,
         context={
             'telegram_id': telegram_id,
             'key_id': key_id,
@@ -282,7 +289,7 @@ async def key_show_handler(callback: CallbackQuery):
 
 async def show_renew_payment_page(target, key: dict, key_id: int, force_new: bool = False):
     """Shows the tariff-first renewal shell from editable pages."""
-    from bot.utils.action_registry import SYSTEM_BUTTONS
+    from bot.services.payment_provider_adapters import has_available_payment_method
     from bot.utils.key_pages import build_key_page_context
     from bot.utils.page_renderer import render_page
     from bot.utils.page_button_items import build_tariff_button_items
@@ -290,6 +297,7 @@ async def show_renew_payment_page(target, key: dict, key_id: int, force_new: boo
     from database.requests import get_user_internal_id
 
     telegram_id = target.from_user.id
+    user_id = get_user_internal_id(telegram_id)
     context = {
         'key_id': key_id,
         'telegram_id': telegram_id,
@@ -297,33 +305,17 @@ async def show_renew_payment_page(target, key: dict, key_id: int, force_new: boo
             get_tariffs_for_renewal(int(key.get('tariff_id') or 0)),
             'key_renewal',
             key_id=key_id,
-            user_id=get_user_internal_id(telegram_id),
+            user_id=user_id,
         ),
         'tariff_back_callback': f'key:{key_id}',
         **build_key_page_context(key),
     }
-    payment_button_ids = (
-        'btn_renew_pay_crypto',
-        'btn_renew_pay_stars',
-        'btn_renew_pay_cards',
-        'btn_renew_pay_qr',
-        'btn_renew_pay_wata',
-        'btn_renew_pay_platega',
-        'btn_renew_pay_cardlink',
-        'btn_renew_pay_demo',
-        'btn_renew_pay_balance',
+    has_payment_method = has_available_payment_method(
+        'key_renewal',
+        telegram_id=telegram_id,
+        user_id=user_id,
+        key_id=key_id,
     )
-    has_payment_method = any(
-        SYSTEM_BUTTONS[button_id](context) is not None
-        for button_id in payment_button_ids
-    )
-    if not has_payment_method:
-        try:
-            from bot.utils.payment_provider_registry import list_payment_providers
-
-            has_payment_method = bool(list_payment_providers(enabled_only=True, context=context))
-        except Exception:
-            has_payment_method = False
 
     if not has_payment_method:
         await render_page(
@@ -404,7 +396,12 @@ async def key_replace_start_handler(callback: CallbackQuery, state: FSMContext):
 
 async def _execute_key_replace_or_configure(request: CoreActionRequest) -> None:
     """Run the original configure/replace entry flow after policy resolution."""
-    from database.requests import get_key_details_for_user, get_active_servers, is_traffic_exhausted
+    from database.requests import (
+        find_latest_paid_order_for_key,
+        get_active_servers,
+        get_key_details_for_user,
+        is_traffic_exhausted,
+    )
     from bot.utils.page_button_items import build_server_button_items
     from bot.utils.groups import get_servers_for_key
     from bot.utils.page_renderer import render_page
@@ -433,6 +430,20 @@ async def _execute_key_replace_or_configure(request: CoreActionRequest) -> None:
     if is_traffic_exhausted(key):
         await _render_key_action_page(callback, 'key_operation_unavailable', key=key)
         return
+    if request.action == 'key.configure.start':
+        paid_order = find_latest_paid_order_for_key(key_id)
+        if paid_order:
+            from bot.handlers.user.payments.keys_config import run_new_key_setup_flow
+
+            await run_new_key_setup_flow(
+                callback,
+                str(paid_order['order_id']),
+                state=state,
+                owner_telegram_id=telegram_id,
+            )
+            if isinstance(callback, CallbackQuery):
+                await callback.answer()
+            return
     tariff_id = key.get('tariff_id')
     servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
     if not servers:
@@ -590,6 +601,7 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
         calculate_panel_total_for_key,
         get_client,
         get_key_expiry_time_ms,
+        get_key_limit_ip,
         get_key_traffic_snapshot,
         provision_client_on_server,
         VPNAPIError,
@@ -710,22 +722,20 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
         else:
             remaining_bytes = 0
             limit_gb = 0
-        expires_at = datetime.fromisoformat(current_key['expires_at'])
-        now = datetime.now()
-        delta = expires_at - now
-        days_left = delta.days
-        if delta.seconds > 0:
-            days_left += 1
-        if days_left < 1:
-            days_left = 1
+        if current_key.get('expires_at') is None:
+            days_left = 0
+        else:
+            expires_at = datetime.fromisoformat(current_key['expires_at'])
+            now = datetime.now()
+            delta = expires_at - now
+            days_left = delta.days
+            if delta.seconds > 0:
+                days_left += 1
+            if days_left < 1:
+                days_left = 1
         exact_expiry_time_ms = get_key_expiry_time_ms(current_key)
 
-        limit_ip = 1
-        if current_key.get('tariff_id'):
-            from database.db_tariffs import get_tariff_by_id
-            tariff = get_tariff_by_id(current_key['tariff_id'])
-            if tariff:
-                limit_ip = tariff.get('max_ips', 1)
+        limit_ip = get_key_limit_ip(current_key)
 
         # === 4. Creating a new one ===
         if subscription_mode:

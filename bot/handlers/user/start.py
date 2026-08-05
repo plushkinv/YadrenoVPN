@@ -6,13 +6,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramForbiddenError
 from config import ADMIN_IDS
 from database.requests import get_or_create_user, is_user_banned, is_referral_enabled, get_user_by_referral_code, set_user_referrer
-from bot.utils.page_flow import (
-    build_page_flow_context,
-    parse_registry_names,
-    run_page_guards,
-    run_page_hooks,
-)
-from bot.utils.text import safe_edit_or_send
 from bot.utils.user_pages import render_access_blocked_page
 
 logger = logging.getLogger(__name__)
@@ -41,42 +34,6 @@ async def _render_show_id_page(target, force_new: bool = False):
     await render_page(target, page_key=SHOW_ID_PAGE_KEY, force_new=force_new)
 
 
-async def _show_main_page_guard_denied(
-    target,
-    message: str | None,
-    *,
-    show_alert: bool,
-) -> None:
-    """Deliver extension-owned guard text or use the stock unavailable page."""
-    if message and isinstance(target, CallbackQuery):
-        await target.answer(message, show_alert=show_alert)
-        return
-    if message:
-        await safe_edit_or_send(target, message, force_new=True)
-        return
-    from bot.utils.page_renderer import render_page
-
-    await render_page(
-        target,
-        page_key='action_unavailable',
-        force_new=not isinstance(target, CallbackQuery),
-    )
-    if isinstance(target, CallbackQuery):
-        await target.answer()
-
-
-def _merge_main_append_buttons(
-    hook_append_buttons: list[list[InlineKeyboardButton]] | None,
-    admin_append_buttons: list[list[InlineKeyboardButton]] | None,
-) -> list[list[InlineKeyboardButton]] | None:
-    append_buttons = []
-    if hook_append_buttons:
-        append_buttons.extend(hook_append_buttons)
-    if admin_append_buttons:
-        append_buttons.extend(admin_append_buttons)
-    return append_buttons or None
-
-
 async def _render_main_page(target, force_new: bool = False) -> bool:
     """Renders the main page via render_page.
     
@@ -85,7 +42,7 @@ async def _render_main_page(target, force_new: bool = False) -> bool:
         force_new: Force a new message to be sent
     """
     from bot.utils.page_renderer import render_page
-    from database.requests import get_page, is_trial_enabled, get_trial_tariff_id, has_used_trial
+    from database.requests import can_use_primary_trial
 
     # Determining telegram_id
     if isinstance(target, CallbackQuery):
@@ -96,15 +53,13 @@ async def _render_main_page(target, force_new: bool = False) -> bool:
     is_admin = user_id in ADMIN_IDS
 
     # Dynamic visibility of buttons
-    show_trial = is_trial_enabled() and get_trial_tariff_id() is not None and (not has_used_trial(user_id))
+    show_trial = can_use_primary_trial(user_id)
     show_referral = is_referral_enabled()
 
     visibility = {
         'btn_trial': show_trial,
         'btn_referral': show_referral,
     }
-
-    text_replacements = {}
 
     # Admin Panel button for administrators
     admin_append_buttons = None
@@ -113,47 +68,15 @@ async def _render_main_page(target, force_new: bool = False) -> bool:
             [InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")]
         ]
 
-    context = build_page_flow_context(target, telegram_id=user_id, page_key='main')
-    prepend_buttons = None
-    append_buttons = admin_append_buttons
-
-    page = get_page('main')
-    if page:
-        guard_result = await run_page_guards(
-            parse_registry_names(page.get('guard_names')),
-            target,
-            context,
-        )
-        if not guard_result.allowed:
-            await _show_main_page_guard_denied(
-                target,
-                guard_result.message,
-                show_alert=guard_result.show_alert,
-            )
-            return False
-
-        hook_result = await run_page_hooks(
-            parse_registry_names(page.get('hook_names')),
-            target,
-            context,
-        )
-        context.update(hook_result.context)
-        visibility.update(hook_result.visibility)
-        text_replacements.update(hook_result.text_replacements)
-        prepend_buttons = hook_result.prepend_buttons
-        append_buttons = _merge_main_append_buttons(hook_result.append_buttons, admin_append_buttons)
-
-    await render_page(
+    rendered = await render_page(
         target,
         page_key='main',
-        context=context,
+        context={'telegram_id': user_id},
         visibility=visibility,
-        text_replacements=text_replacements,
-        prepend_buttons=prepend_buttons,
-        append_buttons=append_buttons,
+        append_buttons=admin_append_buttons,
         force_new=force_new,
     )
-    return True
+    return rendered is not None
 
 
 @router.message(Command('start'), StateFilter('*'))
@@ -194,21 +117,23 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
 
     if args and args.startswith('bill'):
         from bot.services.billing import process_crypto_payment
-        from bot.handlers.user.payments.base import finalize_payment_ui
+        from bot.services.payment_completion import complete_confirmed_payment
         try:
             (success, text, order) = await process_crypto_payment(args, user_id=user['id'], bot=message.bot)
             if success and order:
-                # Payment Intent v1 has already run its idempotent post-payment effects.
-                if (
-                    order.get('_payment_processed_now', True)
-                    and not order.get('_post_actions_completed')
-                ):
-                    try:
-                        from bot.services.notifications import notify_admins_payment
-                        await notify_admins_payment(message.bot, order)
-                    except Exception as notify_err:
-                        logging.getLogger(__name__).warning(f'Ошибка уведомления об оплате: {notify_err}')
-                await finalize_payment_ui(message, state, text, order, user_id=message.from_user.id)
+                await complete_confirmed_payment(
+                    str(order.get('order_id') or ''),
+                    bot=message.bot,
+                    target=message,
+                    state=state,
+                    telegram_id=message.from_user.id,
+                    payment_type=str(order.get('payment_type') or 'crypto'),
+                    referral_amount=int(
+                        order.get('final_amount_cents')
+                        if order.get('final_amount_cents') is not None
+                        else order.get('amount_cents') or 0
+                    ),
+                )
             else:
                 logger.warning('Legacy crypto deep-link was not completed: %s', text)
                 from bot.utils.page_renderer import render_page
