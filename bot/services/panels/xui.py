@@ -15,7 +15,6 @@ import contextvars
 from dataclasses import replace
 import logging
 import json
-import re
 import uuid
 import time
 import urllib.parse
@@ -62,6 +61,7 @@ from bot.utils.inbounds import (
     is_ignored_inbound,
     is_mtproto_inbound,
 )
+from bot.utils.panel_version import parse_panel_version, panel_version_at_least
 
 
 class StaleAPIProfileError(Exception):
@@ -462,24 +462,11 @@ class XUIClient(BaseVPNClient):
     @staticmethod
     def _version_tuple(version: Optional[str]) -> tuple:
         """Returns a tuple of the 3x-ui version for safe comparison."""
-        if not version:
-            return ()
-        text = str(version).strip().lstrip("vV")
-        parts = []
-        for part in text.split("."):
-            match = re.match(r"(\d+)", part)
-            if not match:
-                break
-            parts.append(int(match.group(1)))
-        return tuple(parts)
+        return parse_panel_version(version)
 
     @classmethod
     def _version_at_least(cls, version: Optional[str], minimum: tuple) -> bool:
-        parts = cls._version_tuple(version)
-        if not parts:
-            return False
-        padded = parts + (0,) * (len(minimum) - len(parts))
-        return padded[:len(minimum)] >= minimum
+        return panel_version_at_least(version, minimum)
 
     def _supports_mtproto_multi_client(self, profile: Optional[str] = None) -> bool:
         """Whether this panel can manage one MTProto secret per client."""
