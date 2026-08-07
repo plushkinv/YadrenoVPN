@@ -104,7 +104,13 @@ async def on_startup(bot: Bot):
     bot.my_username = bot_info.username
     logger.info(f"✅ Бот запущен: @{bot_info.username}")
 
-    from bot.services.update_rollback import notify_pending_rollback_result
+    from bot.services.update_rollback import (
+        acknowledge_pending_update,
+        notify_pending_rollback_result,
+        notify_pending_update_result,
+        pending_update_health_exists,
+        wait_for_pending_update_acceptance,
+    )
 
     try:
         await notify_pending_rollback_result(bot)
@@ -141,10 +147,50 @@ async def on_startup(bot: Bot):
     except Exception as e:
         logger.warning(f"Не удалось запустить восстановление Yadreno Admin: {e}")
 
+    async def deliver_update_result_after_startup() -> None:
+        try:
+            await notify_pending_update_result(bot)
+        except Exception as e:
+            logger.warning(f"Не удалось отправить результат обновления: {e}")
+
+    update_result_task = asyncio.create_task(deliver_update_result_after_startup())
+    bot.pending_update_result_task = update_result_task
+
+    # No Telegram update is polled until the independent worker accepts the
+    # initialized PID after its stability window.
+    update_health_pending = pending_update_health_exists()
+    update_acknowledged = False
+    try:
+        update_acknowledged = acknowledge_pending_update()
+    except Exception as e:
+        logger.warning(f"Не удалось подтвердить запуск после обновления: {e}")
+    if update_health_pending and not update_acknowledged:
+        raise RuntimeError("Pending update health record could not be acknowledged")
+    if update_acknowledged:
+        update_accepted = await wait_for_pending_update_acceptance()
+        if not update_accepted:
+            raise RuntimeError(
+                "Update worker did not release the bot after startup acknowledgement"
+            )
+
+    # Background jobs start only after the managed-update activation gate. This
+    # prevents post-snapshot writes while automatic rollback is still possible.
+    bot.background_tasks = [
+        asyncio.create_task(run_daily_tasks(bot)),
+        asyncio.create_task(run_update_check_scheduler(bot)),
+        asyncio.create_task(run_traffic_sync_scheduler(bot)),
+        asyncio.create_task(run_payment_auto_check_scheduler(bot)),
+    ]
+
 
 async def on_shutdown(bot: Bot):
     """Actions to take when stopping the bot."""
     logger.info("🛑 Бот останавливается...")
+
+    update_result_task = getattr(bot, 'pending_update_result_task', None)
+    if update_result_task is not None and not update_result_task.done():
+        update_result_task.cancel()
+        await asyncio.gather(update_result_task, return_exceptions=True)
 
     webhook_server = getattr(bot, 'custom_payment_webhook_server', None)
     if webhook_server is not None:
@@ -208,18 +254,10 @@ async def main():
     
 
     
-    # Launch the daily task scheduler (statistics + backups)
-    daily_tasks = asyncio.create_task(run_daily_tasks(bot))
-    # Launch the update check scheduler
-    update_tasks = asyncio.create_task(run_update_check_scheduler(bot))
-    # Launch the traffic synchronization scheduler (every 5 minutes)
-    traffic_tasks = asyncio.create_task(run_traffic_sync_scheduler(bot))
-    payment_check_tasks = asyncio.create_task(run_payment_auto_check_scheduler(bot))
-    background_tasks = [daily_tasks, update_tasks, traffic_tasks, payment_check_tasks]
-    
     try:
         await dp.start_polling(bot)
     finally:
+        background_tasks = getattr(bot, 'background_tasks', [])
         for task in background_tasks:
             task.cancel()
         await asyncio.gather(*background_tasks, return_exceptions=True)

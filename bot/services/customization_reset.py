@@ -90,7 +90,7 @@ def _create_database_backup(
     original_db_path = db_connection.DB_PATH
     db_connection.DB_PATH = db_path
     try:
-        return backup_bot_database_to(backup_path)
+        return backup_bot_database_to(backup_path, backup_root=backup_dir)
     finally:
         db_connection.DB_PATH = original_db_path
 

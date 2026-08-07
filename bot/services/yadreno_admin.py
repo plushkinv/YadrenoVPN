@@ -1497,7 +1497,7 @@ def _format_sql_rows(rows: list[sqlite3.Row] | list[tuple[Any, ...]], columns: l
 async def _execute_sqlite(
     args: dict[str, Any],
     runtime: Optional[_ToolRuntimeContext] = None,
-) -> dict[str, Optional[str]]:
+) -> dict[str, Any]:
     """Executes an sqlite query using db_path/db_name."""
     db_path = str(args.get("db_path") or args.get("db_name") or "").strip()
     if not db_path:
@@ -1511,19 +1511,72 @@ async def _execute_sqlite(
     if not query:
         return {"result": "", "error": "empty query"}
 
-    def _run() -> dict[str, Optional[str]]:
+    def _run() -> dict[str, Any]:
+        statement_match = re.match(r"^\s*([A-Za-z]+)", query)
+        statement_type = (
+            statement_match.group(1).upper() if statement_match else "UNKNOWN"
+        )
+        touched_tables: set[str] = set()
+        authorizer_actions: set[str] = set()
+        action_names = {
+            sqlite3.SQLITE_READ: "read",
+            sqlite3.SQLITE_INSERT: "insert",
+            sqlite3.SQLITE_UPDATE: "update",
+            sqlite3.SQLITE_DELETE: "delete",
+        }
+
+        def _authorizer(
+            action_code: int,
+            first_argument: Optional[str],
+            _second_argument: Optional[str],
+            _database_name: Optional[str],
+            _trigger_name: Optional[str],
+        ) -> int:
+            action_name = action_names.get(action_code)
+            if action_name:
+                authorizer_actions.add(action_name)
+                if first_argument and first_argument != "sqlite_master":
+                    touched_tables.add(str(first_argument))
+            return sqlite3.SQLITE_OK
+
+        audit = {
+            "db_path": str(path),
+            "statement_type": statement_type,
+            "actions": [],
+            "tables": [],
+        }
         try:
             with sqlite3.connect(path) as conn:
                 conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA foreign_keys = ON")
+                foreign_keys_row = conn.execute("PRAGMA foreign_keys").fetchone()
+                if not foreign_keys_row or int(foreign_keys_row[0]) != 1:
+                    raise RuntimeError("sqlite foreign_keys could not be enabled")
+                conn.set_authorizer(_authorizer)
                 cursor = conn.execute(query)
                 if cursor.description:
                     columns = [item[0] for item in cursor.description]
                     rows = cursor.fetchall()
-                    return {"result": _format_sql_rows(rows, columns), "error": None}
+                    audit["actions"] = sorted(authorizer_actions)
+                    audit["tables"] = sorted(touched_tables)[:20]
+                    return {
+                        "result": _format_sql_rows(rows, columns),
+                        "error": None,
+                        "_audit": audit,
+                    }
                 conn.commit()
-                return {"result": f"OK, rows_affected={cursor.rowcount}", "error": None}
+                audit["actions"] = sorted(authorizer_actions)
+                audit["tables"] = sorted(touched_tables)[:20]
+                audit["rows_affected"] = cursor.rowcount
+                return {
+                    "result": f"OK, rows_affected={cursor.rowcount}",
+                    "error": None,
+                    "_audit": audit,
+                }
         except Exception as e:
-            return {"result": "", "error": str(e)}
+            audit["actions"] = sorted(authorizer_actions)
+            audit["tables"] = sorted(touched_tables)[:20]
+            return {"result": "", "error": str(e), "_audit": audit}
 
     return await asyncio.to_thread(_run)
 
@@ -1582,7 +1635,7 @@ async def _execute_sql_cli(
 async def _execute_sql(
     args: dict[str, Any],
     runtime: Optional[_ToolRuntimeContext] = None,
-) -> dict[str, Optional[str]]:
+) -> dict[str, Any]:
     """Executes satellite_sql for sqlite/mysql/postgres."""
     db_type = str(args.get("db_type", "")).strip().lower()
     db_name = str(args.get("db_name", "")).strip()
@@ -1602,12 +1655,13 @@ async def _execute_sql(
     return {"result": "", "error": f"unsupported db_type {db_type}"}
 
 
-def _log_tool_audit(event: dict[str, Any], tool_result: dict[str, Optional[str]]) -> None:
+def _log_tool_audit(event: dict[str, Any], tool_result: dict[str, Any]) -> None:
     """Writes an audit log for a locally executed tool_call."""
     args = event.get("args") or {}
     tool = str(event.get("tool") or "")
     result = tool_result.get("result") or ""
     error = tool_result.get("error") or ""
+    audit = tool_result.pop("_audit", None)
     status = "error" if error else "ok"
     details = ""
 
@@ -1615,19 +1669,40 @@ def _log_tool_audit(event: dict[str, Any], tool_result: dict[str, Optional[str]]
         details = f" path={args.get('path') or ''}"
     elif tool == "satellite_run_script":
         details = f" tmp_dir={TMP_DIR}"
+    elif tool == "satellite_sql" and isinstance(audit, dict):
+        details = (
+            f" db_path={audit.get('db_path') or ''}"
+            f" statement_type={audit.get('statement_type') or 'UNKNOWN'}"
+            f" actions={audit.get('actions') or []}"
+            f" tables={audit.get('tables') or []}"
+            f" rows_affected={audit.get('rows_affected')}"
+        )
 
-    logger.info(
-        "Yadreno Admin tool audit: request_id=%s tool_call_id=%s tool=%s "
-        "status=%s result_len=%s error_len=%s error_preview=%r%s",
-        event.get("request_id"),
-        event.get("tool_call_id"),
-        tool,
-        status,
-        len(result),
-        len(error),
-        error[:200],
-        details,
-    )
+    if tool == "satellite_sql":
+        logger.info(
+            "Yadreno Admin tool audit: request_id=%s tool_call_id=%s tool=%s "
+            "status=%s result_len=%s error_len=%s%s",
+            event.get("request_id"),
+            event.get("tool_call_id"),
+            tool,
+            status,
+            len(result),
+            len(error),
+            details,
+        )
+    else:
+        logger.info(
+            "Yadreno Admin tool audit: request_id=%s tool_call_id=%s tool=%s "
+            "status=%s result_len=%s error_len=%s error_preview=%r%s",
+            event.get("request_id"),
+            event.get("tool_call_id"),
+            tool,
+            status,
+            len(result),
+            len(error),
+            error[:200],
+            details,
+        )
 
 
 def _core_guard_integrity_error_for_tool(

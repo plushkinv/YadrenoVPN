@@ -4822,6 +4822,24 @@ MIGRATIONS = {
 }
 
 
+def _assert_migration_database_integrity(
+    conn: sqlite3.Connection,
+    *,
+    stage: str,
+) -> None:
+    """Fail a migration boundary on structural or foreign-key corruption."""
+    quick_rows = conn.execute('PRAGMA quick_check').fetchall()
+    if len(quick_rows) != 1 or quick_rows[0][0] != 'ok':
+        raise RuntimeError(
+            f"quick_check failed {stage}: {quick_rows[:5]}"
+        )
+    foreign_key_rows = conn.execute('PRAGMA foreign_key_check').fetchall()
+    if foreign_key_rows:
+        raise RuntimeError(
+            f"foreign_key_check failed {stage}: {foreign_key_rows[:5]}"
+        )
+
+
 
 def run_migrations() -> None:
     """
@@ -4846,6 +4864,12 @@ def run_migrations() -> None:
                 f"Версия БД ({current}) ниже минимально поддерживаемой ({INITIAL_VERSION}). "
                 f"Сначала обновите бот до промежуточной версии, чтобы БД мигрировала до v{INITIAL_VERSION}."
             )
+
+        with get_db() as validation_conn:
+            _assert_migration_database_integrity(
+                validation_conn,
+                stage="before migrations",
+            )
         
         logger.info(f"🔄 Требуется миграция БД с версии {current} до {LATEST_VERSION}")
         
@@ -4862,6 +4886,21 @@ def run_migrations() -> None:
                     logger.info(f"🚀 Применяю миграцию v{version}...")
                     MIGRATIONS[version](conn)
                     set_version(conn, version)
+
+        with get_db() as validation_conn:
+            _assert_migration_database_integrity(
+                validation_conn,
+                stage="after migrations",
+            )
+            version_row = validation_conn.execute(
+                "SELECT version FROM schema_version LIMIT 1"
+            ).fetchone()
+            final_version = int(version_row[0]) if version_row else 0
+            if final_version != LATEST_VERSION:
+                raise RuntimeError(
+                    f"schema version mismatch after migrations: "
+                    f"expected {LATEST_VERSION}, got {final_version}"
+                )
         
         logger.info(f"✅ Миграция успешная: БД обновлена до версии {LATEST_VERSION}")
         

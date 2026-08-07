@@ -49,74 +49,6 @@ print_err() {
     echo -e "${RED}[✗]${NC} $1"
 }
 
-# Создание обязательной точки отката перед изменением Git-версии
-prepare_update_snapshot() {
-    local update_mode="$1"
-    local requested_target="$2"
-    local python_bin="$VENV_DIR/bin/python"
-
-    if [ ! -x "$python_bin" ]; then
-        print_err "Python из виртуального окружения не найден: $python_bin"
-        return 1
-    fi
-
-    local output
-    if ! output=$(
-        cd "$INSTALL_DIR" &&
-        "$python_bin" -m bot.services.update_rollback prepare \
-            --project-root "$INSTALL_DIR" \
-            --mode "$update_mode" \
-            --requested-target "$requested_target" \
-            --actor "installer"
-    ); then
-        print_err "Не удалось создать и проверить backup базы данных. Обновление отменено."
-        return 1
-    fi
-
-    UPDATE_SNAPSHOT_ID=$(echo "$output" | tail -n 1 | tr -d '\r')
-    if [ -z "$UPDATE_SNAPSHOT_ID" ]; then
-        print_err "Исполнитель backup не вернул идентификатор точки отката"
-        return 1
-    fi
-    print_ok "Создан pre-update backup: $UPDATE_SNAPSHOT_ID"
-}
-
-# Фиксация целевого коммита после успешного изменения Git-версии
-mark_update_snapshot_applied() {
-    local python_bin="$VENV_DIR/bin/python"
-    local runner="$INSTALL_DIR/backup/pre_update/$UPDATE_SNAPSHOT_ID/rollback_runner.py"
-
-    if [ -z "$UPDATE_SNAPSHOT_ID" ] || [ ! -f "$runner" ]; then
-        print_err "Не найден исполнитель созданной точки отката"
-        return 1
-    fi
-    "$python_bin" "$runner" mark-applied \
-        --project-root "$INSTALL_DIR" \
-        --snapshot-id "$UPDATE_SNAPSHOT_ID" \
-        > /dev/null
-    print_ok "Точка отката привязана к установленному коммиту"
-}
-
-# Общая блокировка не допускает одновременный update и rollback
-acquire_update_operation_lock() {
-    if ! command -v flock > /dev/null 2>&1; then
-        print_err "Команда flock не найдена; безопасное обновление невозможно"
-        return 1
-    fi
-    mkdir -p "$INSTALL_DIR/backup/pre_update"
-    exec 9> "$INSTALL_DIR/backup/pre_update/.operation.lock"
-    if ! flock -n 9; then
-        print_err "Уже выполняется другое обновление или откат"
-        exec 9>&-
-        return 1
-    fi
-}
-
-release_update_operation_lock() {
-    flock -u 9 2>/dev/null || true
-    exec 9>&-
-}
-
 # Запрос настроек у пользователя
 ask_config() {
     print_header "Настройка конфигурации"
@@ -266,7 +198,7 @@ do_install() {
             reinstall_choice="1"
         else
             echo ""
-            echo "  1) Переустановить (удалить и установить заново)"
+            echo "  1) Безопасно переустановить на месте"
             echo "  2) Отмена"
             read -p "Выберите [1-2]: " reinstall_choice
         fi
@@ -274,17 +206,19 @@ do_install() {
             echo "Установка отменена."
             return 0
         fi
-        systemctl stop yadreno-vpn 2>/dev/null || true
-        # Сохраняем config.py и базу данных
-        if [ -f "$INSTALL_DIR/config.py" ]; then
-            cp "$INSTALL_DIR/config.py" /tmp/yadreno_config_backup.py
-            BACKUP_CONFIG=1
+        REINSTALL_EXISTING=1
+        ask_config
+        write_config
+        install_system_deps
+        if ! do_hard_reset; then
+            print_err "Безопасная переустановка не завершена"
+            return 1
         fi
-        if [ -f "$DB_PATH" ]; then
-            cp "$DB_PATH" /tmp/yadreno_db_backup.db
-            BACKUP_DB=1
-        fi
-        rm -rf "$INSTALL_DIR"
+        setup_systemd
+        print_header "✅ Переустановка завершена!"
+        echo -e "  Директория: ${GREEN}$INSTALL_DIR${NC}"
+        echo -e "  Все копии БД сохранены в: ${GREEN}$INSTALL_DIR/backup${NC}"
+        return 0
     fi
 
     # Запрашиваем настройки до начала установки
@@ -298,20 +232,6 @@ do_install() {
     git clone "$REPO_URL" "$INSTALL_DIR" -q
     cd "$INSTALL_DIR"
     print_ok "Репозиторий клонирован"
-
-    # Восстановление backup'ов при переустановке
-    if [ "$BACKUP_CONFIG" = "1" ] && [ -f "/tmp/yadreno_config_backup.py" ]; then
-        cp /tmp/yadreno_config_backup.py "$INSTALL_DIR/config.py"
-        rm /tmp/yadreno_config_backup.py
-        print_ok "config.py восстановлен из резервной копии"
-        NEED_WRITE_CONFIG=0
-    fi
-    if [ "$BACKUP_DB" = "1" ] && [ -f "/tmp/yadreno_db_backup.db" ]; then
-        mkdir -p "$INSTALL_DIR/database"
-        cp /tmp/yadreno_db_backup.db "$DB_PATH"
-        rm /tmp/yadreno_db_backup.db
-        print_ok "База данных восстановлена из резервной копии"
-    fi
 
     # Запись config.py
     write_config
@@ -337,12 +257,10 @@ do_install() {
 }
 
 # ============================================================
-# ПУНКТ 2: МЯГКОЕ ОБНОВЛЕНИЕ (git pull)
+# ПУНКТ 2: ШТАТНОЕ МЯГКОЕ ОБНОВЛЕНИЕ (fast-forward)
 # ============================================================
 do_soft_update() {
     print_header "🔄 Мягкое обновление"
-    STASHED=0
-    UPDATE_SNAPSHOT_ID=""
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
         print_err "Yadreno VPN не установлен в $INSTALL_DIR"
@@ -350,62 +268,65 @@ do_soft_update() {
     fi
 
     cd "$INSTALL_DIR"
-    acquire_update_operation_lock
-
     local requested_target="origin/main"
     if [ -n "$TARGET_COMMIT" ]; then
         requested_target="$TARGET_COMMIT"
     fi
-    prepare_update_snapshot "installer_update" "$requested_target"
 
-    # Сохраняем текущие изменения в stash (если есть)
-    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-        print_warn "Обнаружены локальные изменения — сохраняем через git stash"
-        git stash -q
-        STASHED=1
+    # The downloaded installer may run against an older installed updater.
+    # Resolve the marked stage here as well so that version cannot skip the
+    # first blocking commit before the target code takes over this policy.
+    if ! git fetch -q origin; then
+        print_err "Не удалось получить список обновлений с GitHub"
+        return 1
+    fi
+    local resolved_target
+    if ! resolved_target=$(git rev-parse --verify "${requested_target}^{commit}" 2>/dev/null); then
+        print_err "Целевая версия обновления недоступна: $requested_target"
+        return 1
+    fi
+    local blocking_commit=""
+    local commit_subject=""
+    while IFS='|' read -r commit_hash commit_subject; do
+        if [[ "$commit_subject" == \!* ]]; then
+            blocking_commit="$commit_hash"
+            break
+        fi
+    done < <(git log "HEAD..$resolved_target" --format='%H|%s' --reverse)
+
+    if [ -n "$blocking_commit" ]; then
+        requested_target="$blocking_commit"
+        print_warn "Сначала будет установлена обязательная переходная версия ${blocking_commit:0:8}"
+    fi
+    local update_args=(
+        update
+        --project-root "$INSTALL_DIR"
+        --mode "installer_update"
+        --target "$requested_target"
+        --strategy "pull"
+        --actor "installer"
+        --service-name "yadreno-vpn"
+    )
+    if [ -n "$blocking_commit" ]; then
+        update_args+=(--block-updates)
     fi
 
-    if [ -n "$TARGET_COMMIT" ]; then
-        git fetch -q origin
-        git checkout -q "$TARGET_COMMIT"
-    else
-        git checkout -q main
-        git pull -q origin main
+    local output
+    if ! output=$(
+        "$VENV_DIR/bin/python" -m bot.services.update_rollback "${update_args[@]}" 2>&1
+    ); then
+        print_err "Обновление не установлено"
+        echo "$output"
+        return 1
     fi
-
-    if [ "$STASHED" = "1" ]; then
-        git stash pop -q 2>/dev/null || print_warn "Не удалось восстановить локальные изменения (конфликт)"
-    fi
-
-    mark_update_snapshot_applied
-
-    print_ok "Код обновлён"
-
-    # Обновляем зависимости
-    source "$VENV_DIR/bin/activate"
-    pip install --upgrade -r requirements.txt -q
-    deactivate
-    print_ok "Зависимости обновлены"
-
-    # Перезапуск
-    systemctl restart yadreno-vpn
-    sleep 2
-
-    if systemctl is-active --quiet yadreno-vpn; then
-        print_ok "Бот перезапущен и работает!"
-    else
-        print_err "Бот не запустился после обновления"
-        echo "  systemctl status yadreno-vpn"
-    fi
-    release_update_operation_lock
+    print_ok "$output"
 }
 
 # ============================================================
-# ПУНКТ 3: ЖЁСТКАЯ ПЕРЕЗАПИСЬ (git fetch + reset)
+# ПУНКТ 3: АВАРИЙНАЯ ЖЁСТКАЯ ПЕРЕЗАПИСЬ (git fetch + reset)
 # ============================================================
 do_hard_reset() {
     print_header "⚠️  Жёсткая перезапись"
-    UPDATE_SNAPSHOT_ID=""
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
         print_err "Yadreno VPN не установлен в $INSTALL_DIR"
@@ -413,8 +334,8 @@ do_hard_reset() {
     fi
 
     echo -e "${RED}Внимание! Все локальные изменения в коде будут перезаписаны.${NC}"
-    echo -e "${YELLOW}config.py и database/vpn_bot.db затронуты НЕ будут.${NC}"
-    if [ "$AUTO_MODE" = "1" ]; then
+    echo -e "${YELLOW}config.py, данные бота и каталог backup/ будут сохранены.${NC}"
+    if [ "$AUTO_MODE" = "1" ] || [ "$REINSTALL_EXISTING" = "1" ]; then
         confirm="y"
     else
         read -p "Продолжить? (y/N): " confirm
@@ -425,45 +346,31 @@ do_hard_reset() {
     fi
 
     cd "$INSTALL_DIR"
-    acquire_update_operation_lock
-
-    # Жёсткая перезапись: config.py и database/vpn_bot.db игнорируются Git
-    git fetch origin -q
     local target="origin/main"
     if [ -n "$TARGET_COMMIT" ]; then
         target="$TARGET_COMMIT"
     fi
-    prepare_update_snapshot "installer_reset" "$target"
-    git reset --hard "$target" -q
-    git clean -fd -q \
-        -e backup/ \
-        -e config.py \
-        -e custom_extensions/ \
-        -e database/vpn_bot.db \
-        -e database/vpn_bot.db-wal \
-        -e database/vpn_bot.db-shm \
-        -e logs/ \
-        -e venv/
-    mark_update_snapshot_applied
-    print_ok "Код перезаписан ($target)"
 
-    # Обновляем зависимости
-    source "$VENV_DIR/bin/activate"
-    pip install --upgrade -r requirements.txt -q
-    deactivate
-    print_ok "Зависимости обновлены"
-
-    # Перезапуск
-    systemctl restart yadreno-vpn
-    sleep 2
-
-    if systemctl is-active --quiet yadreno-vpn; then
-        print_ok "Бот перезапущен и работает!"
-    else
-        print_err "Бот не запустился после перезаписи"
-        echo "  systemctl status yadreno-vpn"
+    local mode="installer_reset"
+    if [ "$REINSTALL_EXISTING" = "1" ]; then
+        mode="installer_reinstall"
     fi
-    release_update_operation_lock
+    local output
+    if ! output=$(
+        "$VENV_DIR/bin/python" -m bot.services.update_rollback update \
+            --project-root "$INSTALL_DIR" \
+            --mode "$mode" \
+            --target "$target" \
+            --strategy "reset" \
+            --actor "installer" \
+            --service-name "yadreno-vpn" \
+            --clean-untracked 2>&1
+    ); then
+        print_err "Перезапись не установлена"
+        echo "$output"
+        return 1
+    fi
+    print_ok "$output"
 }
 
 # ============================================================
@@ -476,13 +383,32 @@ do_rollback() {
         print_err "Yadreno VPN не установлен в $INSTALL_DIR"
         return 1
     fi
-    if [ ! -x "$VENV_DIR/bin/python" ]; then
-        print_err "Python из виртуального окружения не найден: $VENV_DIR/bin/python"
+    cd "$INSTALL_DIR"
+    local python_bin="$VENV_DIR/bin/python"
+    if [ ! -x "$python_bin" ]; then
+        python_bin=$(command -v python3 || true)
+    fi
+    if [ -z "$python_bin" ] || [ ! -x "$python_bin" ]; then
+        print_err "Не найден Python для автономного отката"
         return 1
     fi
 
-    cd "$INSTALL_DIR"
-    "$VENV_DIR/bin/python" -m bot.services.update_rollback interactive \
+    local runner=""
+    local candidate
+    for candidate in "$INSTALL_DIR"/backup/pre_update/*/rollback_runner.py; do
+        if [ ! -f "$candidate" ]; then
+            continue
+        fi
+        if [ -z "$runner" ] || [ "$candidate" -nt "$runner" ]; then
+            runner="$candidate"
+        fi
+    done
+    if [ -z "$runner" ]; then
+        print_err "В backup/pre_update не найден автономный исполнитель отката"
+        return 1
+    fi
+
+    "$python_bin" "$runner" interactive \
         --project-root "$INSTALL_DIR" \
         --service-name "yadreno-vpn"
 }
@@ -540,14 +466,23 @@ if [ -n "$1" ]; then
             ;;
         update)
             export TARGET_COMMIT="$2"
-            do_soft_update 
+            if do_soft_update; then
+                exit 0
+            fi
+            exit 1
             ;;
         reset)
             export TARGET_COMMIT="$2"
-            do_hard_reset 
+            if do_hard_reset; then
+                exit 0
+            fi
+            exit 1
             ;;
         rollback)
-            do_rollback
+            if do_rollback; then
+                exit 0
+            fi
+            exit 1
             ;;
         *)
             print_err "Неизвестное действие: $ACTION. Доступно: install, update, reset, rollback"

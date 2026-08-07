@@ -23,13 +23,8 @@ from bot.utils.git_utils import (
     get_remote_url,
     set_remote_url,
     check_for_updates,
-    pull_updates,
-    pull_to_commit,
-    force_pull_updates,
     get_last_commit_info,
     get_previous_commits_info,
-    install_requirements,
-    restart_bot,
 )
 from bot.version import BOT_COMMIT, BOT_RELEASE
 from bot.keyboards.admin import (
@@ -61,6 +56,7 @@ from bot.services.update_rollback import (
     get_current_version_identity,
     get_rollback_point,
     list_rollback_points,
+    schedule_admin_update,
     schedule_admin_rollback,
 )
 from bot.states.admin_states import AdminStates
@@ -69,7 +65,7 @@ from database.requests import get_yadreno_admin_api_key, set_setting
 logger = logging.getLogger(__name__)
 
 from bot.utils.text import escape_html, get_message_text_for_storage, safe_edit_or_send
-from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock, set_update_blocked
+from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock
 from bot.utils.yadreno_admin_errors import format_yadreno_admin_error
 
 router = Router()
@@ -773,43 +769,40 @@ async def admin_update_cmd(message: Message, state: FSMContext):
         
     await safe_edit_or_send(message,
         "🔄 <b>Экстренное обновление...</b>\n\n"
-        "Загружаю изменения с GitHub..."
+        "Проверяю базу данных и подготавливаю безопасное обновление..."
     )
-    
-    success, log_message = pull_updates(
+
+    target = f"origin/{get_current_branch() or 'main'}"
+    success, detail = await asyncio.to_thread(
+        schedule_admin_update,
         update_mode="admin_emergency",
+        target=target,
+        strategy="pull",
+        admin_id=message.from_user.id,
         actor=f"telegram_admin:{message.from_user.id}",
     )
-    
+
     if not success:
         await safe_edit_or_send(message,
-            f"❌ <b>Ошибка обновления</b>\n\n{log_message}"
+            "⚠️ <b>Обновление не началось</b>\n\n"
+            f"{escape_html(detail)}\n\n"
+            "Текущая версия продолжает работать."
         )
         return
-        
-    logger.info(f"🔄 Бот экстренно обновлён администратором {message.from_user.id} через команду /update")
-    
+
+    logger.info(
+        "Managed emergency update %s scheduled by administrator %s",
+        detail,
+        message.from_user.id,
+    )
     await safe_edit_or_send(message,
-        f"✅ <b>Обновление завершено!</b>\n\n{log_message}\n\n"
-        "🔄 Перезапуск бота через 2 секунды...",
+        "🔄 <b>Обновление запущено</b>\n\n"
+        f"Snapshot: <code>{escape_html(detail)}</code>\n\n"
+        "Бот временно перезапустится. Итог придёт отдельным сообщением "
+        "только после проверки миграций и стабильного запуска.",
         force_new=True
     )
-    
     await state.clear()
-    await asyncio.sleep(2)
-    
-    # Install/update dependencies
-    success, req_message = install_requirements()
-    if not success:
-        logger.error(f"Ошибка установки зависимостей: {req_message}")
-        await safe_edit_or_send(message,
-            f"⚠️ <b>Ошибка установки зависимостей</b>\n\n{req_message}\n\n"
-            "Бот не будет перезапущен. Проверьте requirements.txt и попробуйте снова.",
-            force_new=True
-        )
-        return
-    
-    restart_bot()
 
 
 # ============================================================================
@@ -1123,65 +1116,48 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
     if has_blocking and blocking_commit:
         await safe_edit_or_send(callback.message, 
             "🔄 <b>Обновление...</b>\n\n"
-            f"Устанавливаю версию <code>{blocking_commit['hash'][:8]}</code>..."
+            f"Проверяю БД перед версией <code>{blocking_commit['hash'][:8]}</code>..."
         )
-        
-        success, message = pull_to_commit(
-            blocking_commit['hash'],
-            update_mode="admin_blocking",
-            actor=f"telegram_admin:{callback.from_user.id}",
-        )
+        target = blocking_commit['hash']
+        strategy = "reset"
+        update_mode = "admin_blocking"
     else:
-        # Regular update - git pull
         await safe_edit_or_send(callback.message, 
             "🔄 <b>Обновление...</b>\n\n"
-            "Загружаю изменения с GitHub..."
+            "Проверяю базу данных и подготавливаю обновление..."
         )
-        
-        success, message = pull_updates(
-            update_mode="admin_regular",
-            actor=f"telegram_admin:{callback.from_user.id}",
-        )
-    
+        target = f"origin/{get_current_branch() or 'main'}"
+        strategy = "pull"
+        update_mode = "admin_regular"
+
+    success, detail = await asyncio.to_thread(
+        schedule_admin_update,
+        update_mode=update_mode,
+        target=target,
+        strategy=strategy,
+        admin_id=callback.from_user.id,
+        actor=f"telegram_admin:{callback.from_user.id}",
+        block_updates=bool(has_blocking),
+    )
+
     if not success:
         await safe_edit_or_send(callback.message, 
-            f"❌ <b>Ошибка обновления</b>\n\n{message}",
+            "⚠️ <b>Обновление не началось</b>\n\n"
+            f"{escape_html(detail)}\n\n"
+            "Текущая версия продолжает работать.",
             reply_markup=back_and_home_kb("admin_bot_settings")
         )
         await callback.answer()
         return
-    
-    # Successful update - show the log and restart
-    logger.info(f"🔄 Бот обновлён администратором {callback.from_user.id}")
-    
-    if has_blocking:
-        set_update_blocked()
 
     await safe_edit_or_send(callback.message,
-        f"✅ <b>Обновление завершено!</b>\n\n{message}\n\n"
-        "🔄 Перезапуск бота через 2 секунды..."
+        "🔄 <b>Обновление запущено</b>\n\n"
+        f"Snapshot: <code>{escape_html(detail)}</code>\n\n"
+        "Бот временно остановится. Результат придёт отдельным сообщением "
+        "после проверки миграций и запуска."
     )
-    
-    await callback.answer("Бот перезапускается...", show_alert=True)
-    
-    # Clearing FSM state
+    await callback.answer("Безопасное обновление запущено", show_alert=True)
     await state.clear()
-    
-    # We give time to send the message
-    await asyncio.sleep(2)
-    
-    # Install/update dependencies
-    success, req_message = install_requirements()
-    if not success:
-        logger.error(f"Ошибка установки зависимостей: {req_message}")
-        await safe_edit_or_send(callback.message,
-            f"⚠️ <b>Ошибка установки зависимостей</b>\n\n{req_message}\n\n"
-            "Бот не будет перезапущен. Проверьте requirements.txt и попробуйте снова."
-        )
-        return
-    
-    # Restarting the bot
-    restart_bot()
 
 
 
@@ -1235,77 +1211,50 @@ async def force_overwrite_confirmed(callback: CallbackQuery, state: FSMContext):
     
     success_fetch, pending_commits = get_pending_commits_list()
     blocking_commit = find_first_blocking_commit(pending_commits) if success_fetch else None
-    
+
     if blocking_commit:
-        # There is a blocking commit - we update only to it (via reset --hard)
-        success, message = pull_to_commit(
-            blocking_commit['hash'],
-            update_mode="admin_force_blocking",
-            actor=f"telegram_admin:{callback.from_user.id}",
-        )
-        
-        if not success:
-            await safe_edit_or_send(callback.message, 
-                f"❌ <b>Ошибка перезаписи</b>\n\n{message}",
-                reply_markup=back_and_home_kb("admin_bot_settings")
-            )
-            await callback.answer()
-            return
-        
-        # Block updates
-        set_update_blocked()
-        
-        blocking_hash = blocking_commit['hash'][:8]
-        
-        logger.info(f"🔄 Принудительная перезапись до блокирующего коммита {blocking_hash} администратором {callback.from_user.id}")
-        
-        await safe_edit_or_send(callback.message, 
-            f"✅ <b>Перезапись завершена!</b>\n\n{message}\n\n"
-            "После перезапуска бот проверит готовность к следующим обновлениям.\n\n"
-            "🔄 Перезапуск бота через 2 секунды..."
-        )
+        target = blocking_commit['hash']
+        update_mode = "admin_force_blocking"
+        block_updates = True
     else:
-        # No blocking commits - full rewrite
-        success, message = force_pull_updates(
-            update_mode="admin_force",
-            actor=f"telegram_admin:{callback.from_user.id}",
-        )
-        
-        if not success:
-            await safe_edit_or_send(callback.message, 
-                f"❌ <b>Ошибка перезаписи</b>\n\n{message}",
-                reply_markup=back_and_home_kb("admin_bot_settings")
-            )
-            await callback.answer()
-            return
-        
-        logger.info(f"🔄 Бот принудительно перезаписан администратором {callback.from_user.id}")
-        
-        await safe_edit_or_send(callback.message, 
-            f"✅ <b>Успешно!</b>\n\n{message}\n\n"
-            "🔄 Перезапуск бота через 2 секунды..."
-        )
-    
-    await callback.answer("Бот перезапускается...", show_alert=True)
-    
-    # Clearing FSM state
-    await state.clear()
-    
-    # We give time to send the message
-    await asyncio.sleep(2)
-    
-    # Install/update dependencies
-    success, req_message = install_requirements()
+        target = f"origin/{get_current_branch() or 'main'}"
+        update_mode = "admin_force"
+        block_updates = False
+
+    success, detail = await asyncio.to_thread(
+        schedule_admin_update,
+        update_mode=update_mode,
+        target=target,
+        strategy="reset",
+        admin_id=callback.from_user.id,
+        actor=f"telegram_admin:{callback.from_user.id}",
+        clean_untracked=True,
+        block_updates=block_updates,
+    )
     if not success:
-        logger.error(f"Ошибка установки зависимостей: {req_message}")
-        await safe_edit_or_send(callback.message,
-            f"⚠️ <b>Ошибка установки зависимостей</b>\n\n{req_message}\n\n"
-            "Бот не будет перезапущен. Проверьте requirements.txt и попробуйте снова."
+        await safe_edit_or_send(
+            callback.message,
+            "⚠️ <b>Перезапись не началась</b>\n\n"
+            f"{escape_html(detail)}\n\n"
+            "Текущая версия продолжает работать.",
+            reply_markup=back_and_home_kb("admin_bot_settings"),
         )
+        await callback.answer()
         return
-    
-    # Restarting the bot
-    restart_bot()
+
+    logger.info(
+        "Managed force update %s scheduled by administrator %s",
+        detail,
+        callback.from_user.id,
+    )
+    await safe_edit_or_send(
+        callback.message,
+        "🔄 <b>Безопасная перезапись запущена</b>\n\n"
+        f"Snapshot: <code>{escape_html(detail)}</code>\n\n"
+        "Итог придёт отдельным сообщением после проверки базы данных и запуска."
+    )
+    await callback.answer("Безопасная перезапись запущена", show_alert=True)
+    await state.clear()
 
 
 # ============================================================================
