@@ -2,9 +2,9 @@
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
-from bot.utils.custom_pages import CUSTOM_PAGE_CALLBACK_PREFIX, extract_custom_page_key
+from bot.utils.custom_pages import CUSTOM_PAGE_CALLBACK_PREFIX, extract_page_key
 from bot.utils.page_renderer import render_page
-from database.requests import get_page, is_user_banned
+from database.requests import is_user_banned
 
 
 router = Router()
@@ -20,9 +20,8 @@ async def custom_page_handler(callback: CallbackQuery):
         await callback.answer()
         return
 
-    page_key = extract_custom_page_key(callback.data)
-    page = get_page(page_key) if page_key else None
-    if not page_key or not page:
+    page_key = extract_page_key(callback.data)
+    if not page_key:
         rendered = await render_page(callback, 'screen_unavailable')
         if rendered is not None:
             await callback.answer()

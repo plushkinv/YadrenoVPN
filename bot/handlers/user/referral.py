@@ -28,7 +28,8 @@ def format_price_compact(cents: int) -> str:
 def _build_stats_text(user_internal_id: int) -> str:
     """Generates a statistics block for the referral statistics placeholder.
     
-    Shows only enabled levels and (if reward_type='balance') balance.
+    Shows enabled levels with the user's effective rates and, in balance mode,
+    the current balance.
     
     Args:
         user_internal_id: Internal user ID

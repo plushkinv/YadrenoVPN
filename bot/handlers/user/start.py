@@ -5,7 +5,14 @@ from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramForbiddenError
 from config import ADMIN_IDS
-from database.requests import get_or_create_user, is_user_banned, is_referral_enabled, get_user_by_referral_code, set_user_referrer
+from database.requests import (
+    get_or_create_user,
+    get_referral_attribution_window_hours,
+    get_user_by_referral_code,
+    is_referral_enabled,
+    is_user_banned,
+    set_user_referrer,
+)
 from bot.utils.user_pages import render_access_blocked_page
 
 logger = logging.getLogger(__name__)
@@ -179,11 +186,20 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
                 force_new=True,
             )
 
-    if is_new and args and args.startswith('ref_'):
-        ref_code = args[4:]
-        referrer = get_user_by_referral_code(ref_code)
+    if args and args.startswith('ref_'):
+        attribution_window_hours = get_referral_attribution_window_hours()
+        if is_new or attribution_window_hours > 0:
+            ref_code = args[4:]
+            referrer = get_user_by_referral_code(ref_code)
+        else:
+            referrer = None
         if referrer and referrer['id'] != user['id']:
-            if set_user_referrer(user['id'], referrer['id']):
+            if set_user_referrer(
+                user['id'],
+                referrer['id'],
+                is_new_registration=is_new,
+                attribution_window_hours=attribution_window_hours,
+            ):
                 logger.info(f"User {user_id} привязан к рефереру {referrer['telegram_id']}")
                 try:
                     from bot.services.notifications import notify_referrers_new_referral

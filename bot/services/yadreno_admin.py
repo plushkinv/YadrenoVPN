@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
@@ -59,7 +60,13 @@ from database.requests import (
 
 logger = logging.getLogger(__name__)
 
-HUB_URL = "https://admin.yadreno.ru"
+HUB_URLS: tuple[str, ...] = (
+    "https://admin.yadreno.ru",
+    "https://admin-en.yadreno.ru",
+)
+# Kept as the canonical public origin for compatibility with code/tests that
+# import the old constant. HTTP calls use the process-local endpoint selector.
+HUB_URL = HUB_URLS[0]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TMP_DIR = PROJECT_ROOT / "tmp"
 UPLOAD_TMP_DIR = TMP_DIR / "yadreno_uploads"
@@ -100,6 +107,41 @@ PUBLIC_IP_URLS = (
 )
 
 _server_ip_cache: Optional[str] = None
+
+
+class _HubEndpointSelector:
+    """Keep the last healthy trusted Hub endpoint in process memory only."""
+
+    def __init__(self, endpoints: tuple[str, ...]) -> None:
+        if not endpoints:
+            raise ValueError("At least one Hub endpoint is required")
+        self._endpoints = tuple(endpoint.rstrip("/") for endpoint in endpoints)
+        self._preferred_index = 0
+
+    @property
+    def preferred(self) -> str:
+        return self._endpoints[self._preferred_index]
+
+    def candidates(self, attempts: int) -> tuple[str, ...]:
+        """Return a stable round-robin order starting with the last success."""
+        start = self._preferred_index
+        return tuple(
+            self._endpoints[(start + offset) % len(self._endpoints)]
+            for offset in range(max(1, attempts))
+        )
+
+    def mark_success(self, endpoint: str) -> None:
+        try:
+            self._preferred_index = self._endpoints.index(endpoint.rstrip("/"))
+        except ValueError:
+            logger.warning("Ignoring an unknown Yadreno Admin Hub endpoint")
+
+    def reset(self) -> None:
+        """Restore the primary endpoint; used by deterministic tests."""
+        self._preferred_index = 0
+
+
+_hub_endpoint_selector = _HubEndpointSelector(HUB_URLS)
 _dangerous_shell_patterns: tuple[tuple[str, str], ...] = (
     (
         r"(^|[;&|]\s*)(sudo\s+)?rm\s+([^\n;&|]*\s)?-(?=[^\s\n;&|]*r)(?=[^\s\n;&|]*f)[^\s\n;&|]*\s+(?:-[^\s\n;&|]+\s+)*(--\s+)?(/|\*/|/\*|~|\$HOME)(\s|$)",
@@ -848,6 +890,63 @@ def _is_retryable_hub_error(error: Exception) -> bool:
     )
 
 
+def _is_definitely_pre_request_failure(error: Exception) -> bool:
+    """Return whether HTTP request bytes could not have reached the Hub."""
+    return isinstance(error, aiohttp.ClientConnectorError)
+
+
+def _can_repeat_hub_request(error: Exception, *, read_only: bool) -> bool:
+    """Protect mutating protocol calls from ambiguous duplicate side effects."""
+    if read_only:
+        if isinstance(error, YadrenoAdminError) and error.kind == "protocol":
+            return True
+        return _is_retryable_hub_error(error)
+    return _is_definitely_pre_request_failure(error)
+
+
+def _hub_attempt_count() -> int:
+    """Try every trusted endpoint at least once despite a lower retry setting."""
+    try:
+        configured = int(RETRY_CONFIG.get("max_attempts", 3))
+    except (TypeError, ValueError):
+        configured = 3
+    return max(1, configured, len(HUB_URLS))
+
+
+def _rewrite_hub_viewer_url(
+    data: dict[str, Any],
+    *,
+    endpoint: str,
+) -> dict[str, Any]:
+    """Use the endpoint that delivered a final for its Hub-owned viewer URL."""
+    viewer_url = data.get("viewer_url")
+    if not isinstance(viewer_url, str) or not viewer_url:
+        return data
+    try:
+        viewer_parts = urlsplit(viewer_url)
+        primary_parts = urlsplit(HUB_URLS[0])
+        endpoint_parts = urlsplit(endpoint)
+    except ValueError:
+        return data
+    if (
+        viewer_parts.scheme.lower() != primary_parts.scheme.lower()
+        or viewer_parts.netloc.lower() != primary_parts.netloc.lower()
+    ):
+        return data
+    rewritten = urlunsplit(
+        (
+            endpoint_parts.scheme,
+            endpoint_parts.netloc,
+            viewer_parts.path,
+            viewer_parts.query,
+            viewer_parts.fragment,
+        )
+    )
+    if rewritten == viewer_url:
+        return data
+    return {**data, "viewer_url": rewritten}
+
+
 async def _request_json(
     session: aiohttp.ClientSession,
     api_key: str,
@@ -864,18 +963,21 @@ async def _request_json(
     """
     headers = _hub_headers(api_key)
     delays = RETRY_CONFIG.get("delays", [1, 3, 9])
-    max_attempts = RETRY_CONFIG.get("max_attempts", 3)
+    max_attempts = _hub_attempt_count()
     last_error: Optional[Exception] = None
+    read_only = method.upper() in {"GET", "HEAD", "OPTIONS"}
+    endpoints = _hub_endpoint_selector.candidates(max_attempts)
 
-    for attempt in range(1, max_attempts + 1):
+    for attempt, endpoint in enumerate(endpoints, start=1):
         try:
             async with session.request(
                 method,
-                f"{HUB_URL}{path}",
+                f"{endpoint}{path}",
                 headers=headers,
                 json=json_payload,
             ) as response:
                 if allow_no_content and response.status == 204:
+                    _hub_endpoint_selector.mark_success(endpoint)
                     return response.status, None
                 if response.status >= 400:
                     await response.text()
@@ -895,18 +997,27 @@ async def _request_json(
                         "Hub returned a non-object JSON response",
                         kind="protocol",
                     )
-                return response.status, data
+                _hub_endpoint_selector.mark_success(endpoint)
+                return response.status, _rewrite_hub_viewer_url(
+                    data,
+                    endpoint=endpoint,
+                )
         except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
             last_error = e
-            if not _is_retryable_hub_error(e):
-                raise
+            if not _can_repeat_hub_request(e, read_only=read_only):
+                if isinstance(e, YadrenoAdminError):
+                    raise
+                raise YadrenoAdminError(
+                    f"Could not reach the Yadreno Admin hub: {e}",
+                ) from e
             if attempt >= max_attempts:
                 break
             delay = delays[min(attempt - 1, len(delays) - 1)]
             logger.warning(
-                "Ошибка запроса к Yadreno Admin (%s %s), попытка %s/%s: %s",
+                "Ошибка запроса к Yadreno Admin (%s %s via %s), попытка %s/%s: %s",
                 method,
                 path,
+                urlsplit(endpoint).netloc,
                 attempt,
                 max_attempts,
                 e,
@@ -1162,10 +1273,11 @@ async def _request_multipart(
     """Makes a multipart request to the upload API of the hub with retry."""
     headers = _hub_headers(api_key)
     delays = RETRY_CONFIG.get("delays", [1, 3, 9])
-    max_attempts = RETRY_CONFIG.get("max_attempts", 3)
+    max_attempts = _hub_attempt_count()
     last_error: Optional[Exception] = None
+    endpoints = _hub_endpoint_selector.candidates(max_attempts)
 
-    for attempt in range(1, max_attempts + 1):
+    for attempt, endpoint in enumerate(endpoints, start=1):
         handles = []
         try:
             form = aiohttp.FormData()
@@ -1182,7 +1294,7 @@ async def _request_multipart(
                     content_type=upload.content_type or "application/octet-stream",
                 )
             async with session.post(
-                f"{HUB_URL}{path}",
+                f"{endpoint}{path}",
                 headers=headers,
                 data=form,
             ) as response:
@@ -1204,17 +1316,26 @@ async def _request_multipart(
                         "Hub returned a non-object JSON response",
                         kind="protocol",
                     )
-                return response.status, data
+                _hub_endpoint_selector.mark_success(endpoint)
+                return response.status, _rewrite_hub_viewer_url(
+                    data,
+                    endpoint=endpoint,
+                )
         except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
             last_error = e
-            if not _is_retryable_hub_error(e):
-                raise
+            if not _can_repeat_hub_request(e, read_only=False):
+                if isinstance(e, YadrenoAdminError):
+                    raise
+                raise YadrenoAdminError(
+                    f"Could not upload a file to the Yadreno Admin hub: {e}",
+                ) from e
             if attempt >= max_attempts:
                 break
             delay = delays[min(attempt - 1, len(delays) - 1)]
             logger.warning(
-                "Ошибка upload-запроса к Yadreno Admin (%s), попытка %s/%s: %s",
+                "Ошибка upload-запроса к Yadreno Admin (%s via %s), попытка %s/%s: %s",
                 path,
+                urlsplit(endpoint).netloc,
                 attempt,
                 max_attempts,
                 e,

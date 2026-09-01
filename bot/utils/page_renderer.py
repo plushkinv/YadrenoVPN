@@ -74,6 +74,7 @@ class PreparedPageRender:
     page_data: Dict[str, Any]
     base_inputs: PageRenderInputs
     effective_inputs: PageRenderInputs
+    stored_page: bool = True
 
 
 @dataclass(frozen=True)
@@ -164,9 +165,14 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
         {"text": str, "image": str|None, "media_type": str|None, "buttons": list[dict]}
         or None if page not found
     """
+    from database.db_pages import resolve_page_row
     from database.requests import get_page
 
-    row = get_page(page_key)
+    row = resolve_page_row(
+        page_key,
+        get_page(page_key),
+        warn_unknown=True,
+    )
     if not row:
         return None
 
@@ -608,16 +614,16 @@ def _build_keyboard(
                 continue
 
         elif action_type == 'page':
-            from bot.utils.custom_pages import build_custom_page_callback, custom_page_exists
+            from bot.utils.custom_pages import build_page_callback, page_exists
 
             action_value = require_string_value(action_value, 'action_value', btn_id)
             if action_value is None:
                 continue
-            if not custom_page_exists(action_value):
+            if not page_exists(action_value, warn_unknown=True):
                 logger.warning(f"custom-страница '{action_value}' для кнопки '{btn_id}' не найдена или имеет неверный ключ — пропускаем")
                 continue
 
-            callback_data = build_custom_page_callback(action_value)
+            callback_data = build_page_callback(action_value)
             if not callback_data:
                 logger.warning(f"callback custom-страницы '{action_value}' для кнопки '{btn_id}' не помещается в лимит Telegram — пропускаем")
                 continue
@@ -1147,6 +1153,16 @@ async def prepare_page_render(
     )
     page_data = get_page_data(rendered_page_key)
     stored_page_flow = page_data is not None
+    if page_data is None:
+        from database.requests import get_page_classification
+
+        classification = get_page_classification(rendered_page_key)
+        if classification.exists and not classification.render_allowed:
+            return PageRenderMissing(
+                requested_page_key=requested_page_key,
+                route_key=normalized_route_key,
+                reason=f'page_classification_rejected:{classification.reason}',
+            )
     if page_data is None and fallback_text is None:
         logger.error(
             "User page %r is missing; rendering screen_unavailable",
@@ -1306,6 +1322,7 @@ async def prepare_page_render(
         page_data=page_data,
         base_inputs=base_inputs,
         effective_inputs=effective_inputs,
+        stored_page=stored_page_flow,
     )
 
 
@@ -1337,6 +1354,7 @@ def _remember_prepared_page_context(
             effective_text_replacements=prepared.effective_inputs.text_replacements,
             effective_prepend_buttons=prepared.effective_inputs.prepend_buttons,
             effective_append_buttons=prepared.effective_inputs.append_buttons,
+            stored_page=prepared.stored_page,
         )
     except Exception as exc:
         logger.warning("Failed to remember page context for /yaa: %s", exc)
@@ -1492,6 +1510,8 @@ async def render_page(
         )
         if isinstance(target, Bot):
             return None
+        if outcome.requested_page_key == 'screen_unavailable':
+            raise RuntimeError("Required fallback page 'screen_unavailable' is not renderable")
         return await render_page(
             target,
             'screen_unavailable',

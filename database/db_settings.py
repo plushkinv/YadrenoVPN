@@ -16,6 +16,9 @@ __all__ = [
     'set_setting',
     'delete_setting',
     'is_update_notifications_enabled',
+    'REFERRAL_ATTRIBUTION_WINDOW_HOURS_SETTING',
+    'REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX',
+    'get_referral_attribution_window_hours',
     'get_expired_key_retention_days',
     'is_expired_key_deletion_notifications_enabled',
     'get_display_timezone',
@@ -68,6 +71,10 @@ __all__ = [
 DEFAULT_DISPLAY_TIMEZONE = 'Europe/Moscow'
 DISPLAY_TIMEZONE_SETTING = 'display_timezone'
 UPDATE_NOTIFICATIONS_ENABLED_SETTING = 'update_notifications_enabled'
+REFERRAL_ATTRIBUTION_WINDOW_HOURS_SETTING = (
+    'referral_attribution_window_hours'
+)
+REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX = 8760
 EXPIRED_KEY_RETENTION_DAYS_SETTING = 'expired_key_retention_days'
 EXPIRED_KEY_DELETION_NOTIFICATIONS_SETTING = (
     'expired_key_deletion_notifications_enabled'
@@ -160,6 +167,28 @@ def delete_setting(key: str) -> bool:
 def is_update_notifications_enabled() -> bool:
     """Returns the state of hidden new version notifications."""
     return get_setting(UPDATE_NOTIFICATIONS_ENABLED_SETTING, '1') == '1'
+
+
+def get_referral_attribution_window_hours() -> int:
+    """Return the validated referral-attribution window in whole hours."""
+    raw = get_setting(REFERRAL_ATTRIBUTION_WINDOW_HOURS_SETTING, '0')
+    try:
+        hours = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning(
+            'Invalid %s value %r; falling back to 0',
+            REFERRAL_ATTRIBUTION_WINDOW_HOURS_SETTING,
+            raw,
+        )
+        return 0
+    if not 0 <= hours <= REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX:
+        logger.warning(
+            'Out-of-range %s value %r; falling back to 0',
+            REFERRAL_ATTRIBUTION_WINDOW_HOURS_SETTING,
+            raw,
+        )
+        return 0
+    return hours
 
 
 def get_expired_key_retention_days() -> int:

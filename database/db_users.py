@@ -5,6 +5,7 @@ import string
 import datetime
 from typing import Optional, List, Dict, Any, Tuple
 from .connection import get_db
+from .db_settings import REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX
 
 logger = logging.getLogger(__name__)
 
@@ -530,21 +531,57 @@ def get_user_by_referral_code(code: str) -> Optional[Dict[str, Any]]:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def set_user_referrer(user_id: int, referrer_id: int) -> bool:
+def set_user_referrer(
+    user_id: int,
+    referrer_id: int,
+    *,
+    is_new_registration: bool = True,
+    attribution_window_hours: int = 0,
+) -> bool:
     """
-    Link the referrer to the user.
+    Atomically link the referrer when the registration window permits it.
     
     Args:
         user_id: User ID (the one who was invited)
         referrer_id: ID of the inviter (referrer)
+        is_new_registration: Whether this call created the user record
+        attribution_window_hours: Allowed age for an existing unbound account
     
     Returns:
-        True if successful
+        True only when this call created the referral relation
     """
+    try:
+        window_hours = int(attribution_window_hours)
+    except (TypeError, ValueError):
+        window_hours = 0
+    if not 0 <= window_hours <= REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX:
+        window_hours = 0
+
     with get_db() as conn:
         cursor = conn.execute(
-            "UPDATE users SET referred_by = ? WHERE id = ? AND referred_by IS NULL",
-            (referrer_id, user_id)
+            """
+            UPDATE users
+            SET referred_by = ?
+            WHERE id = ?
+              AND referred_by IS NULL
+              AND (
+                    ? = 1
+                    OR (
+                        ? > 0
+                        AND datetime(created_at) >= datetime(
+                            'now',
+                            '-' || CAST(? AS INTEGER) || ' hours'
+                        )
+                    )
+              )
+            """,
+            (
+                referrer_id,
+                user_id,
+                1 if is_new_registration else 0,
+                window_hours,
+                window_hours,
+            ),
         )
         success = cursor.rowcount > 0
         if success:

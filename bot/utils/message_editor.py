@@ -17,6 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
 from database.requests import get_setting, set_setting
+from database.page_registry import CORE_EDITOR_PAGE_KEYS, CORE_PAGE_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -24,101 +25,21 @@ logger = logging.getLogger(__name__)
 ALL_MEDIA_TYPES = ['text', 'photo', 'video', 'animation']
 
 
-# Keys that are stored in the new pages table
-PAGE_KEYS = (
-    'main',
-    'help',
-    'trial',
-    'access_blocked',
-    'prepayment',
-    'prepayment_unavailable',
-    'renew_payment',
-    'my_keys',
-    'my_keys_empty',
-    'key_details',
-    'key_status',
-    'key_show_unconfigured',
-    'renew_payment_unavailable',
-    'key_replace_server_select',
-    'key_replace_confirm',
-    'key_subscription_host_select',
-    'key_rename_prompt',
-    'new_key_server_select',
-    'new_key_no_servers',
-    'referral',
-    'key_delivery',
-    'qr_payment',
-    'demo_payment',
-    'payment_tariff_select',
-    'payment_method_select',
-    'payment_completed',
-    'payment_coupon_message',
-    'balance_topup_amount',
-    'balance_topup_result',
-    'support_start',
-    'support_status',
-    'promo_enter',
-    'promo_status',
-    'show_id',
-    'action_unavailable',
-    'screen_unavailable',
-    'trial_already_used',
-    'balance_insufficient',
-    'balance_topup_amount_invalid',
-    'payment_method_select_renewal',
-    'payment_method_select_topup',
-    'payment_method_select_surcharge',
-    'payment_link_renewal',
-    'payment_link_topup',
-    'payment_creating',
-    'payment_pending',
-    'payment_check_wait',
-    'payment_canceled',
-    'payment_unavailable',
-    'payment_minimum_unavailable',
-    'payment_order_unavailable',
-    'payment_failed',
-    'payment_auto_completed',
-    'promo_invalid',
-    'promo_not_found',
-    'promo_inactive',
-    'promo_expired',
-    'promo_exhausted',
-    'promo_unavailable',
-    'promo_applied',
-    'promo_link_saved',
-    'support_reply_start',
-    'support_format_unsupported',
-    'support_thread_unavailable',
-    'support_failed',
-    'support_sent',
-    'my_keys_key_deleted',
-    'key_not_found',
-    'key_progress',
-    'key_operation_unavailable',
-    'key_operation_failed',
-    'key_rename_invalid',
-    'key_delivery_partial',
-    'key_delivery_failed',
-    'key_renewed',
-    'expiry_notification_actions',
-    'expired_keys_deleted',
-    'lapsed_key_coupon',
-)
+# Compatibility export for editor callers; the canonical registry is database.page_registry.
+PAGE_KEYS = CORE_EDITOR_PAGE_KEYS
 
 # Stock pages used outside the normal full-screen editor still have to exist at
 # startup: custom_profile is a built-in route target and support_reply is a
 # keyboard-only user template.
-REQUIRED_USER_PAGE_KEYS = frozenset((*PAGE_KEYS, 'custom_profile', 'support_reply'))
+REQUIRED_USER_PAGE_KEYS = CORE_PAGE_KEYS
 
 
 def _is_page_key(key: str) -> bool:
-    if key in PAGE_KEYS:
+    if key in CORE_PAGE_KEYS:
         return True
+    from database.requests import is_page_render_allowed
 
-    from bot.utils.custom_pages import custom_page_exists
-
-    return custom_page_exists(key)
+    return is_page_render_allowed(key, warn_unknown=False)
 
 
 def _page_image_value(row: dict) -> Optional[str]:

@@ -78,6 +78,7 @@ def _customization_default_settings() -> dict[str, str | None]:
         ),
         "referral_new_ref_notification_text": migrations._referral_new_ref_notification_text(),
         "referral_purchase_notification_text": migrations._referral_purchase_notification_text(),
+        "referral_attribution_window_hours": "0",
         "broadcast_message": None,
         "broadcast_style_profile": json.dumps(
             migrations.DEFAULT_BROADCAST_STYLE_PROFILE,
@@ -129,26 +130,39 @@ def _reset_pages(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
     return actions
 
 
-def _delete_non_stock_custom_pages(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
+def _delete_custom_pages(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
     if not _table_exists(conn, "pages"):
         return []
 
-    placeholders = ", ".join("?" for _ in STOCK_CUSTOM_PAGE_KEYS)
+    if 'page_kind' not in _columns(conn, 'pages'):
+        placeholders = ", ".join("?" for _ in STOCK_CUSTOM_PAGE_KEYS)
+        where = (
+            f"page_key LIKE 'custom\\_%' ESCAPE '\\' "
+            f"AND page_key NOT IN ({placeholders})"
+        )
+        affected = _count_where(
+            conn,
+            "pages",
+            where,
+            STOCK_CUSTOM_PAGE_KEYS,
+        )
+        actions = [f"pre-v105 custom_* pages to delete: {affected} row(s)"]
+        if affected and not dry_run:
+            conn.execute(
+                f"DELETE FROM pages WHERE {where}",
+                tuple(STOCK_CUSTOM_PAGE_KEYS),
+            )
+        return actions
+
     affected = _count_where(
         conn,
         "pages",
-        f"page_key LIKE 'custom\\_%' ESCAPE '\\' AND page_key NOT IN ({placeholders})",
-        STOCK_CUSTOM_PAGE_KEYS,
+        "page_kind IN ('custom', 'legacy_custom')",
     )
-    actions = [f"non-stock custom_* pages to delete: {affected} row(s)"]
+    actions = [f"custom and legacy_custom pages to delete: {affected} row(s)"]
     if affected and not dry_run:
         conn.execute(
-            f"""
-            DELETE FROM pages
-            WHERE page_key LIKE 'custom\\_%' ESCAPE '\\'
-              AND page_key NOT IN ({placeholders})
-            """,
-            tuple(STOCK_CUSTOM_PAGE_KEYS),
+            "DELETE FROM pages WHERE page_kind IN ('custom', 'legacy_custom')"
         )
     return actions
 
@@ -331,7 +345,7 @@ def reset_customization_database(
         actions.extend(_reset_pages(conn, dry_run))
         actions.extend(_reset_user_ui_texts(conn, dry_run))
         actions.extend(_reset_page_routes(conn, dry_run))
-        actions.extend(_delete_non_stock_custom_pages(conn, dry_run))
+        actions.extend(_delete_custom_pages(conn, dry_run))
         actions.extend(_reset_settings(conn, dry_run))
         actions.extend(_reset_extension_tables(conn, dry_run))
 

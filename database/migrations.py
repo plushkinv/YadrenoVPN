@@ -2,7 +2,7 @@
 
 Fresh installations are created directly at the committed v97 compatibility
 boundary. Older databases must pass through the ordered blocking releases that
-materialize v97 before this code can run. Migrations v98-v103 remain incremental
+materialize v97 before this code can run. Migrations v98-v105 remain incremental
 so already installed v97 databases and fresh databases use the same transitions.
 """
 from __future__ import annotations
@@ -13,6 +13,13 @@ import sqlite3
 
 from .connection import get_db
 from .db_user_ui_texts import update_user_ui_text_defaults
+from .page_registry import (
+    CORE_PAGE_KEYS,
+    PAGE_KIND_CORE,
+    PAGE_KIND_CUSTOM,
+    PAGE_KIND_LEGACY_CUSTOM,
+    is_valid_custom_page_key,
+)
 from .user_ui_text_catalog import USER_UI_TEXT_DEFINITIONS
 
 
@@ -23,7 +30,7 @@ logger = logging.getLogger(__name__)
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 103
+LATEST_VERSION = 105
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -3188,6 +3195,46 @@ def migration_103(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_104(conn: sqlite3.Connection) -> None:
+    """Migration v104: seed the bounded referral-attribution window."""
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        ('referral_attribution_window_hours', '0'),
+    )
+
+
+def migration_105(conn: sqlite3.Connection) -> None:
+    """Migration v105: persist the one-time classification of stored pages."""
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(pages)").fetchall()
+    }
+    if 'page_kind' not in columns:
+        conn.execute(
+            "ALTER TABLE pages ADD COLUMN page_kind TEXT NOT NULL DEFAULT 'unknown' "
+            "CHECK (page_kind IN ('core', 'custom', 'legacy_custom', 'unknown'))"
+        )
+
+    classified: list[tuple[str, str]] = []
+    for row in conn.execute("SELECT page_key FROM pages").fetchall():
+        page_key = str(row[0])
+        if page_key in CORE_PAGE_KEYS:
+            page_kind = PAGE_KIND_CORE
+        elif is_valid_custom_page_key(page_key):
+            page_kind = PAGE_KIND_CUSTOM
+        else:
+            page_kind = PAGE_KIND_LEGACY_CUSTOM
+        classified.append((page_kind, page_key))
+    if classified:
+        conn.executemany(
+            "UPDATE pages SET page_kind = ? WHERE page_key = ?",
+            classified,
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pages_page_kind ON pages(page_kind)"
+    )
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -3195,6 +3242,8 @@ MIGRATIONS = {
     101: migration_101,
     102: migration_102,
     103: migration_103,
+    104: migration_104,
+    105: migration_105,
 }
 
 

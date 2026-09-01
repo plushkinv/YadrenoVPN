@@ -43,10 +43,22 @@ def extract_page_route_key(callback_data: object) -> Optional[str]:
 
 
 def page_route_exists(route_key: object) -> bool:
-    """Checks that the route is valid, is in the database and is enabled."""
+    """Check that an enabled route resolves to an allowed stored page."""
     if not is_page_route_key(route_key):
         return False
 
-    from database.requests import page_route_exists as db_page_route_exists
+    from database.db_pages import resolve_page_row
+    from database.requests import get_page, get_page_route
 
-    return db_page_route_exists(str(route_key))
+    route = get_page_route(str(route_key))
+    if not route or not route.get('is_enabled'):
+        return False
+    page_key = str(route.get('page_key') or '').strip()
+    return bool(
+        page_key
+        and resolve_page_row(
+            page_key,
+            get_page(page_key),
+            warn_unknown=True,
+        ) is not None
+    )

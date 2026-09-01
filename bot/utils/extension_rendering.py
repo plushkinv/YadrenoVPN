@@ -8,7 +8,7 @@ from typing import Any
 from aiogram.types import CallbackQuery, Message
 
 from bot.utils.page_renderer import render_page
-from database.requests import get_page, get_page_route
+from database.requests import get_page_route, resolve_renderable_page
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ async def render_extension_page(
     force_new_for_message: bool = False,
 ) -> tuple[bool, bool]:
     """Renders one stored page requested by an extension event."""
-    if not get_page(page_key):
+    if not resolve_renderable_page(page_key, warn_unknown=True):
         logger.warning("Extension requested missing page '%s'", page_key)
         return False, False
 
@@ -50,7 +50,7 @@ async def render_extension_route(
         return False, False
 
     page_key = str(route.get('page_key') or '').strip()
-    if not page_key or not get_page(page_key):
+    if not page_key or not resolve_renderable_page(page_key, warn_unknown=True):
         logger.warning(
             "Extension route '%s' points to missing page '%s'",
             route_key,

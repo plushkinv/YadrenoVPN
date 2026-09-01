@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from bot.utils.datetime_format import format_date_for_display
@@ -34,6 +35,25 @@ def format_price_compact(cents: int) -> str:
     return format_money_minor(cents)
 
 
+def _format_effective_referral_percent(
+    level_percent: Any,
+    coefficient: Any,
+) -> str:
+    """Formats the user's effective core referral rate without trailing zeroes."""
+    try:
+        value = Decimal(str(level_percent)) * Decimal(str(coefficient))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ValueError("Invalid referral percentage or coefficient") from error
+    if not value.is_finite():
+        raise ValueError("Referral percentage and coefficient must be finite")
+    if value == 0:
+        return "0"
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered
+
+
 def build_tariff_text(*, group_id: int | None = None, include_title: bool = False) -> str:
     """Generates an HTML block for the tariff list placeholder."""
     from database.requests import (
@@ -64,18 +84,20 @@ def build_tariff_text(*, group_id: int | None = None, include_title: bool = Fals
 
 
 def build_referral_stats_text(user_internal_id: int) -> str:
-    """Generates an HTML block for the referral statistics placeholder."""
+    """Generates referral statistics with the user's effective core rates."""
     from database.requests import (
         get_referral_levels,
         get_referral_reward_type,
         get_referral_stats,
         get_user_balance,
+        get_user_referral_coefficient,
     )
 
     reward_type = get_referral_reward_type()
     levels = get_referral_levels()
     stats = get_referral_stats(user_internal_id)
     balance = get_user_balance(user_internal_id)
+    coefficient = get_user_referral_coefficient(user_internal_id)
 
     stats_by_level = {s['level']: s for s in stats} if stats else {}
 
@@ -89,7 +111,10 @@ def build_referral_stats_text(user_internal_id: int) -> str:
         lines.append(render_ui_text("referral.no_levels"))
     for level in visible_levels:
         level_num = level['level_number']
-        percent = level['percent']
+        percent = _format_effective_referral_percent(
+            level['percent'],
+            coefficient,
+        )
         level_stat = stats_by_level.get(level_num)
         count = level_stat['count'] if level_stat else 0
 

@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import logging
 import re
+import sqlite3
 import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -532,7 +533,7 @@ def get_custom_extensions_diagnostics(
     enabled: bool | None = None,
 ) -> dict[str, Any]:
     """Returns a read-only snapshot for admin diagnostics of extensions."""
-    from database.requests import get_setting
+    from database.requests import get_page_classification_diagnostics, get_setting
 
     configured_value = get_setting(CUSTOM_EXTENSIONS_ENABLED_SETTING, '0')
     if enabled is None:
@@ -552,6 +553,26 @@ def get_custom_extensions_diagnostics(
     from bot.utils.extension_settings import get_all_extension_settings
     from bot.utils.page_flow import get_page_flow_runtime_diagnostics
 
+    try:
+        page_classification = get_page_classification_diagnostics(limit=8)
+        page_classification['status'] = 'ok'
+    except sqlite3.Error as exc:
+        page_classification = {
+            'status': 'unavailable',
+            'reason': str(exc),
+            'counts': {
+                'core': 0,
+                'custom': 0,
+                'legacy_custom': 0,
+                'unknown': 0,
+            },
+            'legacy': [],
+            'legacy_total': 0,
+            'unknown': [],
+            'unknown_total': 0,
+            'limit': 8,
+        }
+
     return {
         'enabled': configured_enabled,
         'configured_value': configured_value,
@@ -565,6 +586,7 @@ def get_custom_extensions_diagnostics(
         'registrations': _registrations_snapshot(),
         'registry_totals': _registry_totals(),
         'page_flow_runtime': get_page_flow_runtime_diagnostics(),
+        'page_classification': page_classification,
         'settings': get_all_extension_settings(),
     }
 

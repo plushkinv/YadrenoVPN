@@ -251,6 +251,37 @@ def _format_extensions_diagnostics(diagnostics: dict) -> str:
             )
         )
 
+    page_classification = dict(diagnostics.get('page_classification') or {})
+    page_counts = dict(page_classification.get('counts') or {})
+    if page_counts:
+        lines.extend(["", "<b>Классификация страниц:</b>"])
+        lines.append(
+            "• core: {core}, custom: {custom}, legacy: {legacy}, unknown: {unknown}".format(
+                core=int(page_counts.get('core') or 0),
+                custom=int(page_counts.get('custom') or 0),
+                legacy=int(page_counts.get('legacy_custom') or 0),
+                unknown=int(page_counts.get('unknown') or 0),
+            )
+        )
+        legacy_keys = list(page_classification.get('legacy') or [])
+        if legacy_keys:
+            lines.append(
+                "⚠️ Legacy: "
+                + ", ".join(
+                    f"<code>{escape_html(str(page_key))}</code>"
+                    for page_key in legacy_keys
+                )
+            )
+        unknown_keys = list(page_classification.get('unknown') or [])
+        if unknown_keys:
+            lines.append(
+                "❌ Unknown: "
+                + ", ".join(
+                    f"<code>{escape_html(str(page_key))}</code>"
+                    for page_key in unknown_keys
+                )
+            )
+
     page_flow_runtime = dict(diagnostics.get('page_flow_runtime') or {})
     flow_totals = dict(page_flow_runtime.get('totals') or {})
     if flow_totals:
