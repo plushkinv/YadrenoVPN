@@ -60,7 +60,7 @@ def server_view_kb(server_id: int, is_active: bool, show_group_button: bool=Fals
     toggle_text = '⏸️ Деактивировать' if is_active else '🔄 Активировать'
     builder.row(InlineKeyboardButton(text=toggle_text, callback_data=f'admin_server_toggle:{server_id}'))
     if show_group_button:
-        builder.row(InlineKeyboardButton(text='📂 Изменить группу', callback_data=f'admin_server_change_group:{server_id}'))
+        builder.row(InlineKeyboardButton(text='📂 Изменить тарифную группу', callback_data=f'admin_server_change_group:{server_id}'))
     builder.row(InlineKeyboardButton(text='🗑️ Удалить сервер', callback_data=f'admin_server_delete:{server_id}'))
     builder.row(back_button('admin_servers'), home_button())
     return builder.as_markup()
@@ -82,7 +82,12 @@ def server_groups_kb(server_id: int, all_groups: List[Dict[str, Any]], selected_
     builder.row(back_button(f'admin_server_view:{server_id}'))
     return builder.as_markup()
 
-def add_server_step_kb(step: int, total_steps: int=6) -> InlineKeyboardMarkup:
+def add_server_step_kb(
+    step: int,
+    total_steps: int = 6,
+    *,
+    allow_skip: bool = False,
+) -> InlineKeyboardMarkup:
     """
     Keyboard for the add server step.
     
@@ -91,6 +96,13 @@ def add_server_step_kb(step: int, total_steps: int=6) -> InlineKeyboardMarkup:
         total_steps: Total number of steps
     """
     builder = InlineKeyboardBuilder()
+    if allow_skip:
+        builder.row(
+            InlineKeyboardButton(
+                text='⏭ Пропустить',
+                callback_data='admin_server_add_skip_inbound_group',
+            )
+        )
     buttons = []
     if step > 1:
         buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_server_add_back'))
@@ -123,7 +135,12 @@ def add_server_test_failed_kb() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_server_add_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_servers'))
     return builder.as_markup()
 
-def edit_server_kb(current_param: int, total_params: int=6) -> InlineKeyboardMarkup:
+def edit_server_kb(
+    current_param: int,
+    total_params: int = 6,
+    *,
+    allow_clear_group: bool = False,
+) -> InlineKeyboardMarkup:
     """
     Server editing keyboard with navigation.
     
@@ -132,6 +149,13 @@ def edit_server_kb(current_param: int, total_params: int=6) -> InlineKeyboardMar
         total_params: Total number of parameters
     """
     builder = InlineKeyboardBuilder()
+    if allow_clear_group:
+        builder.row(
+            InlineKeyboardButton(
+                text='🌐 Все inbound’ы',
+                callback_data='admin_server_edit_clear_inbound_group',
+            )
+        )
     nav_buttons = []
     if current_param > 0:
         nav_buttons.append(InlineKeyboardButton(text='⬅️ Пред.', callback_data='admin_server_edit_prev'))

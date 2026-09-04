@@ -25,9 +25,10 @@ class AdminStates(StatesGroup):
     add_server_auth_method = State() # Authentication method selection
     add_server_name = State()        # Step 1: Title
     add_server_url = State()         # Step 2: Panel URL
-    add_server_api_token = State()   # Step 3: 3X-UI API token
-    add_server_login = State()       # Step 3: Login
-    add_server_password = State()    # Step 4: Password
+    add_server_inbound_group = State()  # Step 3: Optional virtual inbound group
+    add_server_api_token = State()   # Step 4: 3X-UI API token
+    add_server_login = State()       # Step 4: Login
+    add_server_password = State()    # Step 5: Password
     add_server_confirm = State()     # Confirmation after verification
     
     # ========== Editing the server ==========
@@ -92,7 +93,7 @@ class AdminStates(StatesGroup):
     add_tariff_price = State()       # Step 2: Price in the current base currency
     add_tariff_duration = State()    # Step 3: Duration
     add_tariff_traffic_limit = State() # Step 4: Data Limit (GB)
-    add_tariff_max_ips = State()     # Step 5: Device Limit (IP)
+    add_tariff_max_ips = State()     # Step 5: Device limit
     add_tariff_confirm = State()     # Confirmation
     payment_rate_value = State()     # Stablecoin/Stars RUB rate input
     base_currency_transition_rate = State()
@@ -140,6 +141,19 @@ class AdminStates(StatesGroup):
 # SERVER SETTINGS
 # ============================================================================
 
+SQLITE_MAX_INTEGER = 9_223_372_036_854_775_807
+
+
+def _valid_inbound_group_id(value: str) -> bool:
+    normalized = str(value or '').strip()
+    return bool(
+        normalized
+        and normalized.isascii()
+        and normalized.isdigit()
+        and 1 <= int(normalized) <= SQLITE_MAX_INTEGER
+    )
+
+
 SERVER_COMMON_PARAMS = [
     {
         "key": "name",
@@ -154,6 +168,14 @@ SERVER_COMMON_PARAMS = [
         "hint": "например: https://192.168.1.1:2053/secretpath/ или просто 192.168.1.1:2053",
         "validate": lambda x: len(x.strip()) >= 5 and ":" in x,
         "error": "Введите корректную ссылку с портом, например: https://123.45.67.89:2053/api/"
+    },
+    {
+        "key": "inbound_group_id",
+        "label": "Виртуальная inbound-группа",
+        "hint": "отправьте только номер без --, например 1 или 2",
+        "validate": _valid_inbound_group_id,
+        "convert": lambda x: int(str(x).strip()),
+        "error": "Введите целое положительное число без --, например 1 или 2",
     },
 ]
 
@@ -269,8 +291,8 @@ TARIFF_PARAMS = [
     },
     {
         "key": "max_ips",
-        "label": "Лимит устройств (IP)",
-        "hint": "Минимум 1 (ограничение по IP адресам)",
+        "label": "Лимит устройств",
+        "hint": "Минимум 1 устройство",
         "validate": lambda x: x.isdigit() and 1 <= int(x) <= 999,
         "error": "Введите число от 1 до 999",
         "convert": int,

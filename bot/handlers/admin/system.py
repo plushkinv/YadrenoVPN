@@ -33,6 +33,7 @@ from bot.utils.git_utils import (
 from bot.version import BOT_COMMIT, BOT_RELEASE
 from bot.keyboards.admin import (
     bot_settings_kb,
+    device_limit_mode_kb,
     extensions_diagnostics_kb,
     update_confirm_kb,
     update_rollback_entry_kb,
@@ -49,6 +50,7 @@ from bot.keyboards.admin import (
 from bot.services.yadreno_admin import (
     YADRENO_ADMIN_CHAT_TOPIC_ID,
     YadrenoAdminError,
+    YadrenoAdminRequestStopped,
     YadrenoAdminUpload,
     get_active_request_id,
     run_dialog_with_uploads,
@@ -62,7 +64,15 @@ from bot.services.update_rollback import (
     schedule_admin_rollback,
 )
 from bot.states.admin_states import AdminStates
-from database.requests import get_yadreno_admin_api_key, set_setting
+from database.requests import (
+    DEVICE_LIMIT_MODE_HWID,
+    DEVICE_LIMIT_MODE_IP,
+    get_active_servers,
+    get_device_limit_mode,
+    get_yadreno_admin_api_key,
+    set_device_limit_mode,
+    set_setting,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +148,121 @@ async def show_bot_settings(callback: CallbackQuery, state: FSMContext):
         reply_markup=bot_settings_kb()
     )
     await callback.answer()
+
+
+async def _render_device_limit_screen(
+    message: Message,
+    *,
+    problems: list[dict[str, str]] | None = None,
+) -> None:
+    """Render the operational client limit selector and optional diagnostics."""
+    mode = get_device_limit_mode()
+    current = 'IP-адреса' if mode == DEVICE_LIMIT_MODE_IP else 'Устройства'
+    text = (
+        "📱 <b>Ограничение устройств</b>\n\n"
+        f"Текущий режим: <b>{current}</b>.\n\n"
+        "Ограничение по IP-адресам доступно всегда. Для ограничения по "
+        "устройствам все активные панели должны использовать 3X-UI 3.7.0 "
+        "или новее.\n\n"
+        "Изменение применится к существующим ключам во время следующей "
+        "штатной синхронизации."
+    )
+    if problems:
+        rows = []
+        for problem in problems:
+            name = escape_html(problem.get('name') or 'Без названия')
+            version = escape_html(problem.get('version') or 'не определена')
+            reason = escape_html(problem.get('reason') or 'проверка не пройдена')
+            rows.append(
+                f"• <b>{name}</b> — версия <code>{version}</code>: {reason}"
+            )
+        text += (
+            "\n\n❌ <b>Режим устройств не включён</b>\n"
+            "Проблемные панели:\n" + "\n".join(rows)
+        )
+    await safe_edit_or_send(
+        message,
+        text,
+        reply_markup=device_limit_mode_kb(mode),
+    )
+
+
+@router.callback_query(F.data == "admin_device_limit")
+async def show_device_limit_mode(callback: CallbackQuery, state: FSMContext):
+    """Show the global IP/HWID limit mode selector."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    await _render_device_limit_screen(callback.message)
+    await callback.answer()
+
+
+async def _find_incompatible_hwid_panels() -> list[dict[str, str]]:
+    """Refresh active primary panels and return those lacking HWID support."""
+    from bot.services.vpn_api import (
+        get_client_from_server_data,
+        refresh_client_capabilities,
+        supports_client_hwids,
+    )
+
+    problems: list[dict[str, str]] = []
+    semaphore = asyncio.Semaphore(4)
+
+    async def inspect_panel(server: dict) -> None:
+        async with semaphore:
+            client = get_client_from_server_data(server)
+            try:
+                await refresh_client_capabilities(client, force=True)
+            except Exception as exc:
+                problems.append({
+                    'name': str(server.get('name') or server.get('id') or ''),
+                    'version': str(getattr(client, 'panel_version', None) or ''),
+                    'reason': f'панель недоступна ({type(exc).__name__})',
+                })
+                return
+            if not supports_client_hwids(client):
+                problems.append({
+                    'name': str(server.get('name') or server.get('id') or ''),
+                    'version': str(getattr(client, 'panel_version', None) or ''),
+                    'reason': 'требуется 3X-UI 3.7.0 или новее',
+                })
+
+    await asyncio.gather(*(inspect_panel(server) for server in get_active_servers()))
+    return sorted(problems, key=lambda item: item['name'].casefold())
+
+
+@router.callback_query(F.data.startswith("admin_device_limit_set:"))
+async def set_device_limit_mode_handler(callback: CallbackQuery, state: FSMContext):
+    """Change the mode, gating HWID activation on live panel versions."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+    target = str(callback.data or '').rsplit(':', 1)[-1]
+    if target not in {DEVICE_LIMIT_MODE_IP, DEVICE_LIMIT_MODE_HWID}:
+        await callback.answer("❌ Некорректный режим", show_alert=True)
+        return
+    if target == get_device_limit_mode():
+        await _render_device_limit_screen(callback.message)
+        await callback.answer()
+        return
+    if target == DEVICE_LIMIT_MODE_HWID:
+        await safe_edit_or_send(
+            callback.message,
+            "🔍 <b>Проверка панелей</b>\n\nПроверяю версии активных панелей…",
+        )
+        problems = await _find_incompatible_hwid_panels()
+        if problems:
+            await _render_device_limit_screen(callback.message, problems=problems)
+            await callback.answer("Режим не изменён", show_alert=True)
+            return
+    set_device_limit_mode(target)
+    logger.info(
+        "device_limit_mode_changed mode=%s admin_id=%s",
+        target,
+        callback.from_user.id,
+    )
+    await _render_device_limit_screen(callback.message)
+    await callback.answer("Настройка сохранена")
 
 
 @router.callback_query(F.data == "admin_extensions_diagnostics")
@@ -1797,6 +1922,8 @@ async def send_log_to_yadreno_admin(callback: CallbackQuery, state: FSMContext):
             final,
             YADRENO_ADMIN_CHAT_TOPIC_ID,
         )
+    except YadrenoAdminRequestStopped:
+        return
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,

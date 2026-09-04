@@ -139,6 +139,51 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
         "User-facing tariff name for a key issued through the protected admin plan.",
     ),
     UserUITextDefinition(
+        "key.devices.item",
+        (
+            "<b>%index%. %model%</b>\n"
+            "ОС: %os%\n"
+            "Приложение: %user_agent%\n"
+            "Первое подключение: %first_seen%\n"
+            "Последнее подключение: %last_seen%"
+        ),
+        "html",
+        "One registered device row on the key devices page.",
+        frozenset({
+            "index", "model", "os", "user_agent", "first_seen", "last_seen",
+        }),
+    ),
+    UserUITextDefinition(
+        "key.devices.empty",
+        "К этому ключу пока не привязано ни одного устройства.",
+        "html",
+        "Empty state on the key devices page.",
+    ),
+    UserUITextDefinition(
+        "key.devices.load_error",
+        "⚠️ Не удалось получить список устройств. Попробуйте позже.",
+        "html",
+        "Panel read error shown on the key devices page.",
+    ),
+    UserUITextDefinition(
+        "key.devices.unknown",
+        "не указано",
+        "plain",
+        "Fallback for absent device metadata.",
+    ),
+    UserUITextDefinition(
+        "key.devices.deleted",
+        "Устройство удалено",
+        "plain",
+        "Callback notice after deleting one registered device.",
+    ),
+    UserUITextDefinition(
+        "key.devices.delete_error",
+        "Не удалось удалить устройство",
+        "plain",
+        "Callback error after a failed device deletion.",
+    ),
+    UserUITextDefinition(
         "trial.offer.summary",
         (
             "📋 <b>%tariff%</b>\n"
@@ -258,8 +303,8 @@ USER_UI_TEXT_CATALOG = {
 if len(USER_UI_TEXT_CATALOG) != len(USER_UI_TEXT_DEFINITIONS):
     raise RuntimeError("Duplicate text_key in USER_UI_TEXT_DEFINITIONS")
 
-if len(USER_UI_TEXT_CATALOG) != 33:
-    raise RuntimeError("The core user UI text catalog must contain exactly 33 entries")
+if len(USER_UI_TEXT_CATALOG) != 39:
+    raise RuntimeError("The core user UI text catalog must contain exactly 39 entries")
 
 
 __all__ = [

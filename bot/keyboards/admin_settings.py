@@ -8,11 +8,32 @@ def bot_settings_kb() -> InlineKeyboardMarkup:
     """Keyboard of the bot settings section."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🔄 Обновления', callback_data='admin_update_bot'))
+    builder.row(InlineKeyboardButton(
+        text='📱 Ограничение устройств',
+        callback_data='admin_device_limit',
+    ))
     builder.row(InlineKeyboardButton(text='✏️ Изменить тексты', callback_data='admin_edit_texts'))
     builder.row(InlineKeyboardButton(text='📥 Скачать логи', callback_data='admin_logs_menu'))
     builder.row(InlineKeyboardButton(text='🛑 Остановить бота', callback_data='admin_stop_bot'))
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
+
+
+def device_limit_mode_kb(mode: str) -> InlineKeyboardMarkup:
+    """Keyboard for selecting the global client limit mode."""
+    builder = InlineKeyboardBuilder()
+    builder.row(*state_pair_buttons(
+        mode == 'ip',
+        'IP-адреса',
+        'admin_device_limit_set:ip',
+        'Устройства',
+        'admin_device_limit_set:hwid',
+        right_active_emoji='🟢',
+    ))
+    builder.row(back_button('admin_bot_settings'), home_button())
+    return builder.as_markup()
+
+
 def extensions_diagnostics_kb(
     enabled: bool,
     setting_buttons: Optional[List[Dict[str, str]]] = None,

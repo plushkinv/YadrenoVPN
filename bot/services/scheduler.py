@@ -815,7 +815,10 @@ async def run_daily_key_cleanup(bot: Bot) -> tuple[Optional[Any], Optional[Any]]
         logger.error("Daily inactive panel-client cleanup failed: %s", exc)
 
     try:
-        database_report = await cleanup_expired_database_keys(bot)
+        database_report = await cleanup_expired_database_keys(
+            bot,
+            panel_report=panel_report,
+        )
     except Exception as exc:
         logger.error("Daily expired-key database cleanup failed: %s", exc)
 
@@ -1263,8 +1266,10 @@ async def sync_traffic_stats(
     # totalGB on individual inbounds is the same, but clients will not disconnect themselves
     # until their own counter reaches the limit, so we do it manually.
     from database.db_keys import is_key_active, is_traffic_exhausted
+    from database.requests import get_device_limit_mode
     from bot.services.vpn_api import ensure_subscription_keys_on_server
 
+    device_limit_mode = get_device_limit_mode()
     for key in keys:
         if not key.get('sub_id'):
             continue
@@ -1280,6 +1285,7 @@ async def sync_traffic_stats(
                 await ensure_subscription_keys_on_server(
                     key['id'],
                     panel_snapshot=panel_snapshot,
+                    device_limit_mode=device_limit_mode,
                 )
             except Exception as e:
                 logger.warning(

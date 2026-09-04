@@ -1,6 +1,7 @@
 import logging
 import uuid
 import asyncio
+from datetime import datetime, timezone
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -103,6 +104,22 @@ async def rerender_key_details_page_context(page_context, viewer_id: int) -> boo
     return True
 
 
+async def rerender_key_devices_page_context(page_context, viewer_id: int) -> bool:
+    """Redraw the live device list after editing its page via /yaa."""
+    context = page_context.base_context or page_context.context or {}
+    key_id = context.get('key_id')
+    if not key_id:
+        return False
+    telegram_id = context.get('telegram_id') or viewer_id
+    await show_key_devices(
+        int(telegram_id),
+        int(key_id),
+        page_context.message,
+        route_key=getattr(page_context, 'route_key', None),
+    )
+    return True
+
+
 async def show_my_keys(telegram_id: int, target, is_callback: bool = True):
     """
     General logic for displaying a list of keys.
@@ -130,7 +147,13 @@ async def show_key_details(
     route_key: str | None = None,
 ):
     """General logic for displaying key details."""
-    from database.requests import get_key_details_for_user, get_key_payments_history, is_key_active, is_traffic_exhausted
+    from database.requests import (
+        get_device_limit_mode,
+        get_key_details_for_user,
+        get_key_payments_history,
+        is_key_active,
+        is_traffic_exhausted,
+    )
     from bot.services.vpn_api import format_traffic
     from bot.utils.key_pages import build_key_history_block, build_key_page_context
     from bot.utils.page_renderer import render_page
@@ -185,10 +208,189 @@ async def show_key_details(
             'is_unconfigured': is_unconfigured,
             'traffic_exhausted': traffic_exhausted,
             'has_sub_id': bool(key.get('sub_id')),
+            'device_limit_mode': get_device_limit_mode(),
             'key_history_html': build_key_history_block(payments),
             **key_page_context,
         },
         force_new=not is_callback,
+    )
+
+
+def _format_device_seen_at(value: int | None, unknown: str) -> str:
+    """Format a panel epoch value in the configured display time zone."""
+    if value is None:
+        return unknown
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return unknown
+    if seconds > 10_000_000_000:
+        seconds /= 1000
+    try:
+        parsed = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return unknown
+    from bot.utils.datetime_format import format_datetime_for_display
+
+    return format_datetime_for_display(parsed, fallback=unknown)
+
+
+def _normalize_device_metadata(value, unknown: str, *, limit: int) -> str:
+    """Collapse panel-controlled whitespace and bound one display value."""
+    normalized = ' '.join(str(value or '').split())
+    if not normalized:
+        return unknown
+    if len(normalized) > limit:
+        return normalized[:limit - 1].rstrip() + '…'
+    return normalized
+
+
+def _build_key_devices_render_data(
+    devices,
+    *,
+    key_id: int,
+) -> tuple[str, list[dict]]:
+    """Build DB-template-backed rows and ephemeral delete callbacks."""
+    unknown = render_ui_text('key.devices.unknown')
+    if not devices:
+        return render_ui_text('key.devices.empty'), []
+    rows: list[str] = []
+    button_items: list[dict] = []
+    for index, device in enumerate(devices, start=1):
+        model = _normalize_device_metadata(device.device_model, unknown, limit=80)
+        os_name = _normalize_device_metadata(device.device_os, '', limit=60)
+        os_version = _normalize_device_metadata(device.os_version, '', limit=40)
+        os_text = ' '.join(value for value in (os_name, os_version) if value) or unknown
+        user_agent = _normalize_device_metadata(device.user_agent, unknown, limit=180)
+        rows.append(render_ui_text(
+            'key.devices.item',
+            index=index,
+            model=model,
+            os=os_text,
+            user_agent=user_agent,
+            first_seen=_format_device_seen_at(device.first_seen, unknown),
+            last_seen=_format_device_seen_at(device.last_seen, unknown),
+        ))
+        item_name = f'{index}. {model}'
+        if len(item_name) > 48:
+            item_name = item_name[:47].rstrip() + '…'
+        callback_data = f'kd:{key_id}:{device.id}'
+        if len(callback_data.encode('utf-8')) > 64:
+            logger.warning("Device delete callback is too long key_id=%s", key_id)
+            continue
+        button_items.append({
+            'callback_data': callback_data,
+            'data': {'item_name': item_name},
+        })
+    return '\n\n'.join(rows), button_items
+
+
+async def show_key_devices(
+    telegram_id: int,
+    key_id: int,
+    target,
+    *,
+    route_key: str | None = None,
+) -> None:
+    """Fetch and render the current device collection without local storage."""
+    from bot.services.vpn_api import get_key_devices_for_user
+    from bot.utils.page_renderer import render_page
+    from database.requests import (
+        DEVICE_LIMIT_MODE_HWID,
+        get_device_limit_mode,
+        get_key_details_for_user,
+    )
+
+    key = get_key_details_for_user(key_id, telegram_id)
+    if not key:
+        await _render_key_action_page(target, 'key_not_found')
+        return
+    if (
+        get_device_limit_mode() != DEVICE_LIMIT_MODE_HWID
+        or not all((key.get('server_id'), key.get('panel_email'), key.get('sub_id')))
+    ):
+        await _render_key_action_page(target, 'key_operation_unavailable', key=key)
+        return
+    try:
+        devices = await get_key_devices_for_user(
+            key_id=key_id,
+            telegram_id=telegram_id,
+        )
+        devices_html, button_items = _build_key_devices_render_data(
+            devices,
+            key_id=key_id,
+        )
+    except Exception:
+        logger.exception(
+            "Could not load client devices key_id=%s user_id=%s",
+            key_id,
+            telegram_id,
+        )
+        devices_html = render_ui_text('key.devices.load_error')
+        button_items = []
+    await render_page(
+        target,
+        page_key='key_devices',
+        route_key=route_key,
+        context={
+            'telegram_id': telegram_id,
+            'key_id': key_id,
+            'devices_list_html': devices_html,
+            'key_device_button_items': button_items,
+        },
+    )
+
+
+@router.callback_query(F.data.startswith('key_devices:'))
+async def key_devices_handler(callback: CallbackQuery):
+    """Open the registered devices of an owned key."""
+    raw_key_id = str(callback.data or '').split(':', 1)[-1]
+    if not raw_key_id.isdecimal() or int(raw_key_id) <= 0:
+        await _render_key_action_page(callback, 'key_not_found')
+        await callback.answer()
+        return
+    await show_key_devices(callback.from_user.id, int(raw_key_id), callback)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('kd:'))
+async def key_device_delete_handler(callback: CallbackQuery):
+    """Delete one registered device immediately, then reload the live list."""
+    from bot.services.vpn_api import delete_key_device_for_user
+
+    parts = str(callback.data or '').split(':', 2)
+    if (
+        len(parts) != 3
+        or not parts[1].isdecimal()
+        or int(parts[1]) <= 0
+        or not parts[2].strip().isascii()
+        or not parts[2].strip().isdecimal()
+        or int(parts[2].strip()) <= 0
+    ):
+        await _render_key_action_page(callback, 'key_operation_unavailable')
+        await callback.answer()
+        return
+    key_id = int(parts[1])
+    notice_key = 'key.devices.deleted'
+    try:
+        deleted = await delete_key_device_for_user(
+            key_id=key_id,
+            telegram_id=callback.from_user.id,
+            device_id=parts[2],
+        )
+        if not deleted:
+            notice_key = 'key.devices.delete_error'
+    except Exception:
+        notice_key = 'key.devices.delete_error'
+        logger.exception(
+            "Could not delete client device key_id=%s user_id=%s",
+            key_id,
+            callback.from_user.id,
+        )
+    await show_key_devices(callback.from_user.id, key_id, callback)
+    await callback.answer(
+        render_ui_text(notice_key),
+        show_alert=notice_key == 'key.devices.delete_error',
     )
 
 @router.callback_query(F.data.startswith('key_delete:'))
@@ -528,7 +730,7 @@ async def key_replace_server_handler(callback: CallbackQuery, state: FSMContext)
         if not any(descriptor.available for descriptor in descriptors):
             await _render_key_action_page(
                 callback,
-                'key_operation_unavailable',
+                'key_replace_server_unavailable',
                 key=key,
             )
             return
@@ -587,9 +789,9 @@ async def _key_replace_execute_locked(callback: CallbackQuery, state: FSMContext
         calculate_panel_total_for_key,
         get_client,
         get_key_expiry_time_ms,
-        get_key_limit_ip,
         get_key_traffic_snapshot,
         provision_client_on_server,
+        resolve_key_panel_limits,
         VPNAPIError,
     )
     from bot.handlers.admin.users_keys import generate_unique_email
@@ -676,7 +878,7 @@ async def _key_replace_execute_locked(callback: CallbackQuery, state: FSMContext
             else 0
         )
         exact_expiry_time_ms = get_key_expiry_time_ms(current_key)
-        limit_ip = get_key_limit_ip(current_key)
+        panel_limits = resolve_key_panel_limits(current_key)
 
         # === 3. Create the candidate before changing the database binding ===
         candidate_sub_id = uuid.uuid4().hex
@@ -686,7 +888,8 @@ async def _key_replace_execute_locked(callback: CallbackQuery, state: FSMContext
             email=candidate_email,
             total_gb_bytes=remaining_bytes,
             expiry_time_ms=exact_expiry_time_ms,
-            limit_ip=limit_ip,
+            limit_ip=panel_limits.limit_ip,
+            limit_hwid=panel_limits.limit_hwid,
             enable=True,
             tg_id=str(telegram_id),
             sub_id=candidate_sub_id,

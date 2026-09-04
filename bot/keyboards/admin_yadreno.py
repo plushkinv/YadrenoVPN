@@ -14,7 +14,6 @@ def yadreno_admin_no_key_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text='🔑 Указать api_key',
             callback_data='admin_yadreno_set_key',
-            style='primary',
         )
     )
     builder.row(

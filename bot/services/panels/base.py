@@ -138,6 +138,7 @@ class PanelClientState:
     email: str
     client: Dict[str, Any] = field(default_factory=dict)
     inbound_ids: set[int] = field(default_factory=set)
+    out_of_scope_inbound_ids: set[int] = field(default_factory=set)
     unavailable_inbound_ids: set[int] = field(default_factory=set)
     placements: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     traffic_used: int = 0
@@ -147,8 +148,30 @@ class PanelClientState:
     enable: bool = True
     sub_id: str = ""
     limit_ip: int = 1
+    limit_hwid: int = 0
     reset: int = 0
     details_complete: bool = True
+
+
+@dataclass(frozen=True)
+class PanelClientLimits:
+    """Effective pair of mutually exclusive panel client limits."""
+
+    limit_ip: int
+    limit_hwid: int
+
+
+@dataclass(frozen=True)
+class PanelClientDevice:
+    """Normalized hardware device registered for one logical client."""
+
+    id: str
+    first_seen: Optional[int] = None
+    last_seen: Optional[int] = None
+    user_agent: str = ""
+    device_os: str = ""
+    os_version: str = ""
+    device_model: str = ""
 
 
 @dataclass
@@ -305,6 +328,7 @@ class BaseVPNClient(abc.ABC):
         expire_days: int = 0,
         expiry_time_ms: Optional[int] = None,
         limit_ip: int = 1,
+        limit_hwid: int = 0,
         enable: bool = True,
         tg_id: str = "",
         sub_id: Optional[str] = None,
@@ -363,6 +387,18 @@ class BaseVPNClient(abc.ABC):
     def supports_client_external_links(self) -> bool:
         """Return whether this panel can compose client subscription feeds."""
         return False
+
+    def supports_client_hwids(self) -> bool:
+        """Return whether per-client HWID limits and device routes exist."""
+        return False
+
+    async def get_client_devices(self, email: str) -> List[PanelClientDevice]:
+        """Return devices registered for one logical client."""
+        raise NotImplementedError("Client HWIDs are not supported")
+
+    async def delete_client_device(self, email: str, device_id: str) -> bool:
+        """Delete one registered device from a logical client."""
+        raise NotImplementedError("Client HWIDs are not supported")
 
     async def get_client_external_links(self, email: str) -> List[Dict[str, Any]]:
         """Return the complete external-link list for one logical client."""

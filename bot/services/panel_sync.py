@@ -249,16 +249,18 @@ async def _apply_clients_api_bulk_prelude(
         )
 
         if not active:
+            out_of_scope_ids = tuple(sorted(state.out_of_scope_inbound_ids))
+            if out_of_scope_ids:
+                detach_groups.setdefault(out_of_scope_ids, []).append(email)
             if bool(state.enable) and not has_unavailable_memberships:
                 disable_emails.append(email)
             continue
 
-        current_ids = set(state.inbound_ids)
+        current_ids = (
+            set(state.inbound_ids) | set(state.out_of_scope_inbound_ids)
+        )
 
         desired_ids = set(visible_ids)
-
-        if not desired_ids:
-            continue
 
         missing_ids = tuple(sorted(desired_ids - current_ids))
         extra_ids = tuple(sorted(current_ids - desired_ids))
@@ -318,6 +320,7 @@ async def _apply_clients_api_bulk_prelude(
                 state = states_by_email[email.lower()]
                 for inbound_id in inbound_ids:
                     state.inbound_ids.discard(inbound_id)
+                    state.out_of_scope_inbound_ids.discard(inbound_id)
                     state.placements.pop(inbound_id, None)
                 stats_for(email)["deleted"] += len(inbound_ids)
 
@@ -636,7 +639,12 @@ async def run_db_to_panel_sync(
     snapshots: Optional[SnapshotCollection] = None,
 ) -> PanelSyncPlan:
     """Preview or apply DB -> Panel materialization using one snapshot/server."""
-    from bot.services.vpn_api import ensure_subscription_keys_on_server
+    from bot.services.vpn_api import (
+        ensure_subscription_keys_on_server,
+        get_client_from_server_data,
+        supports_client_hwids,
+    )
+    from database.requests import DEVICE_LIMIT_MODE_HWID, get_device_limit_mode
 
     selected_ids = (
         {int(value) for value in candidate_key_ids}
@@ -661,6 +669,7 @@ async def run_db_to_panel_sync(
         if allowed_server_ids is not None
         else None
     )
+    device_limit_mode = get_device_limit_mode()
 
     for server_id, server_keys in grouped.items():
         if allowed is not None and server_id not in allowed:
@@ -677,6 +686,17 @@ async def run_db_to_panel_sync(
             continue
 
         plan.successful_server_ids.append(server_id)
+        if device_limit_mode == DEVICE_LIMIT_MODE_HWID:
+            panel_client = get_client_from_server_data(server)
+            if not supports_client_hwids(panel_client):
+                logger.warning(
+                    "panel_hwid_limit_sync_unsupported server_id=%s "
+                    "server_name=%r panel_version=%s apply=%s",
+                    server_id,
+                    report.server_name,
+                    getattr(panel_client, "panel_version", None) or "unknown",
+                    int(bool(apply)),
+                )
         bulk_stats_by_email: Dict[str, Dict[str, int]] = {}
         if apply:
             try:
@@ -698,6 +718,7 @@ async def run_db_to_panel_sync(
                     int(key["id"]),
                     panel_snapshot=snapshot,
                     dry_run=not apply,
+                    device_limit_mode=device_limit_mode,
                 )
             except Exception as exc:
                 report.stats["errors"] += 1

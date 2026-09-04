@@ -41,12 +41,14 @@ from bot.services.yadreno_admin import (
     YadrenoAdminFinal,
     YadrenoAdminLatest,
     YadrenoAdminProgressEvent,
+    YadrenoAdminRequestStopped,
     YadrenoAdminUpload,
     cancel_active_dialog,
     detect_public_server_ip,
     fetch_latest_dialog_event,
     get_active_request_id,
     is_local_request_active,
+    is_local_request_starting,
     normalize_yadreno_admin_api_key,
     run_dialog,
     run_dialog_with_uploads,
@@ -558,11 +560,6 @@ async def cancel_yadreno_dialog_button(callback: CallbackQuery):
         return
 
     topic_id = _callback_topic_id(callback.data, "admin_yadreno_cancel")
-    if get_active_request_id(callback.from_user.id, topic_id=topic_id) is None:
-        await _show_idle_agent_controls(callback.message, topic_id)
-        await callback.answer("Активного запроса нет", show_alert=False)
-        return
-
     try:
         cancel_result = await cancel_active_dialog(
             callback.from_user.id,
@@ -576,6 +573,26 @@ async def cancel_yadreno_dialog_button(callback: CallbackQuery):
     if cancel_result.status == "idle":
         await _show_idle_agent_controls(callback.message, topic_id)
         await callback.answer("Активного запроса нет", show_alert=False)
+        return
+
+    if cancel_result.status == "local_cancelled":
+        await safe_edit_or_send(
+            callback.message,
+            "🛑 <b>Запрос остановлен</b>\n\n"
+            "Он не успел уйти агенту. Можно отправить новую задачу.",
+            reply_markup=yadreno_admin_chat_kb(topic_id),
+        )
+        await callback.answer("Запрос остановлен")
+        return
+
+    if cancel_result.status == "cancel_requested" and cancel_result.request_id is None:
+        await safe_edit_or_send(
+            callback.message,
+            "🛑 <b>Запрос отменяется</b>\n\n"
+            "Он уже отправляется. Сразу после подтверждения хабу будет передана отмена.",
+            reply_markup=yadreno_admin_agent_kb(topic_id),
+        )
+        await callback.answer("Отмена принята")
         return
 
     if cancel_result.status == "orphan_cleared":
@@ -632,6 +649,9 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
         return
 
     topic_id = _callback_topic_id(callback.data, "admin_yadreno_nudge")
+    if is_local_request_starting(callback.from_user.id, topic_id=topic_id):
+        await callback.answer("Запрос ещё отправляется", show_alert=False)
+        return
     try:
         latest = await fetch_latest_dialog_event(
             callback.from_user.id,
@@ -674,6 +694,8 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
                     topic_id=topic_id,
                     progress_callback=progress.handle,
                 )
+            except YadrenoAdminRequestStopped:
+                return
             except YadrenoAdminError as e:
                 await safe_edit_or_send(
                     progress.final_target,
@@ -720,6 +742,8 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
                 topic_id=topic_id,
                 progress_callback=progress.handle,
             )
+        except YadrenoAdminRequestStopped:
+            return
         except YadrenoAdminError as e:
             await safe_edit_or_send(
                 progress.final_target,
@@ -876,16 +900,20 @@ async def cancel_yadreno_dialog(message: Message, state: FSMContext):
         )
         return
 
-    request_active = get_active_request_id(
-        message.from_user.id,
-        topic_id=topic_id,
-    ) is not None
-    text = (
-        "🛑 <b>Запрос отменяется</b>\n\n"
-        "Агент завершит работу на следующей итерации."
-        if request_active
-        else "ℹ️ <b>Активного запроса нет</b>"
-    )
+    request_active = cancelled.status not in {
+        "idle",
+        "local_cancelled",
+        "orphan_cleared",
+    }
+    if cancelled.status in {"local_cancelled", "orphan_cleared"}:
+        text = "🛑 <b>Запрос остановлен</b>"
+    elif request_active:
+        text = (
+            "🛑 <b>Запрос отменяется</b>\n\n"
+            "Агент завершит работу на следующей безопасной точке."
+        )
+    else:
+        text = "ℹ️ <b>Активного запроса нет</b>"
     await safe_edit_or_send(
         message,
         text,
@@ -950,6 +978,8 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
             final,
             topic_id=topic_id,
         )
+    except YadrenoAdminRequestStopped:
+        return
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
@@ -1061,6 +1091,12 @@ async def _rerender_bound_yaa_page_if_changed(
         from bot.handlers.user.keys import rerender_key_details_page_context
 
         if await rerender_key_details_page_context(page_context, telegram_id):
+            _refresh_yaa_binding_after_rerender(telegram_id, topic_id, binding)
+            return True
+    if page_context.page_key == "key_devices":
+        from bot.handlers.user.keys import rerender_key_devices_page_context
+
+        if await rerender_key_devices_page_context(page_context, telegram_id):
             _refresh_yaa_binding_after_rerender(telegram_id, topic_id, binding)
             return True
     await render_page(
@@ -1553,6 +1589,8 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
         await _deliver_final_response(
             progress.final_target, final, buffer.topic_id,
         )
+    except YadrenoAdminRequestStopped:
+        return
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
@@ -1706,6 +1744,8 @@ async def _handle_broadcast_yaa(
                 topic_id=YADRENO_ADMIN_BROADCAST_TOPIC_ID,
                 progress_callback=progress.handle,
             )
+    except YadrenoAdminRequestStopped:
+        return
     except YadrenoAdminError as error:
         await safe_edit_or_send(
             progress.final_target,
@@ -1856,6 +1896,8 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
                 progress_callback=progress.handle,
             )
+    except YadrenoAdminRequestStopped:
+        return
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,
@@ -2015,6 +2057,8 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
         ):
             return
         await _deliver_final_response(progress.final_target, final, topic_id)
+    except YadrenoAdminRequestStopped:
+        return
     except YadrenoAdminError as e:
         await safe_edit_or_send(
             progress.final_target,

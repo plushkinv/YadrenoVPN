@@ -2,7 +2,7 @@
 
 Fresh installations are created directly at the committed v97 compatibility
 boundary. Older databases must pass through the ordered blocking releases that
-materialize v97 before this code can run. Migrations v98-v105 remain incremental
+materialize v97 before this code can run. Migrations v98-v110 remain incremental
 so already installed v97 databases and fresh databases use the same transitions.
 """
 from __future__ import annotations
@@ -26,11 +26,42 @@ from .user_ui_text_catalog import USER_UI_TEXT_DEFINITIONS
 logger = logging.getLogger(__name__)
 
 
+_POST_V97_USER_UI_TEXT_KEYS = frozenset({
+    'key.devices.item',
+    'key.devices.empty',
+    'key.devices.load_error',
+    'key.devices.unknown',
+    'key.devices.deleted',
+    'key.devices.delete_error',
+})
+_POST_V105_CORE_PAGE_KEYS = frozenset({
+    'key_devices',
+    'key_replace_server_unavailable',
+})
+_CORE_PAGE_KEYS_V105 = CORE_PAGE_KEYS.difference(_POST_V105_CORE_PAGE_KEYS)
+_BASELINE_USER_UI_TEXT_DEFINITIONS_V97 = tuple(
+    definition
+    for definition in USER_UI_TEXT_DEFINITIONS
+    if definition.text_key not in _POST_V97_USER_UI_TEXT_KEYS
+)
+_USER_UI_TEXT_DEFINITIONS_V108 = tuple(
+    definition
+    for definition in USER_UI_TEXT_DEFINITIONS
+    if definition.text_key in _POST_V97_USER_UI_TEXT_KEYS
+)
+if len(_BASELINE_USER_UI_TEXT_DEFINITIONS_V97) != 33:
+    raise RuntimeError("The frozen v97 user UI text baseline must contain 33 rows")
+if len(_USER_UI_TEXT_DEFINITIONS_V108) != 6:
+    raise RuntimeError("Migration v108 must contain exactly six device UI rows")
+if len(_CORE_PAGE_KEYS_V105) != 80:
+    raise RuntimeError("The frozen v105 core page registry must contain 80 keys")
+
+
 # The latest schema guaranteed by the preceding ordered blocking releases.
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 105
+LATEST_VERSION = 110
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -1810,7 +1841,10 @@ def migration_initial(conn: sqlite3.Connection) -> None:
         "UPDATE pages SET updated_at = CURRENT_TIMESTAMP WHERE page_key = ?",
         ((page_key,) for page_key in _BASELINE_PAGE_UPDATED_KEYS_V97),
     )
-    update_user_ui_text_defaults(USER_UI_TEXT_DEFINITIONS, conn=conn)
+    update_user_ui_text_defaults(
+        _BASELINE_USER_UI_TEXT_DEFINITIONS_V97,
+        conn=conn,
+    )
     conn.executemany(
         """
         INSERT INTO trial_offers (id, tariff_id, is_primary, is_enabled)
@@ -3218,7 +3252,7 @@ def migration_105(conn: sqlite3.Connection) -> None:
     classified: list[tuple[str, str]] = []
     for row in conn.execute("SELECT page_key FROM pages").fetchall():
         page_key = str(row[0])
-        if page_key in CORE_PAGE_KEYS:
+        if page_key in _CORE_PAGE_KEYS_V105:
             page_kind = PAGE_KIND_CORE
         elif is_valid_custom_page_key(page_key):
             page_kind = PAGE_KIND_CUSTOM
@@ -3235,6 +3269,396 @@ def migration_105(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_106(conn: sqlite3.Connection) -> None:
+    """Migration v106: seed the expired-panel cleanup delay."""
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        ('expired_key_panel_cleanup_delay_days', '0'),
+    )
+
+
+def migration_107(conn: sqlite3.Connection) -> None:
+    """Migration v107: add an optional virtual inbound group to servers."""
+    conn.execute(
+        """
+        ALTER TABLE servers
+        ADD COLUMN inbound_group_id INTEGER
+            CHECK (
+                inbound_group_id IS NULL
+                OR (
+                    TYPEOF(inbound_group_id) = 'integer'
+                    AND inbound_group_id > 0
+                )
+            )
+        """
+    )
+
+
+def _archive_conflicting_core_page(
+    conn: sqlite3.Connection,
+    *,
+    page_key: str,
+    archive_key_base: str,
+    migration_version: int,
+) -> None:
+    """Preserve a pre-existing non-core page before claiming its key."""
+    row = conn.execute(
+        "SELECT page_kind FROM pages WHERE page_key = ?",
+        (page_key,),
+    ).fetchone()
+    if row is None or str(row[0]) == PAGE_KIND_CORE:
+        return
+    archive_key = archive_key_base
+    suffix = 2
+    while conn.execute(
+        "SELECT 1 FROM pages WHERE page_key = ?",
+        (archive_key,),
+    ).fetchone():
+        archive_key = f'{archive_key_base}_{suffix}'
+        suffix += 1
+    conn.execute(
+        """
+        INSERT INTO pages (
+            page_key, text_default, image_default, media_type_default,
+            buttons_default, text_custom, image_custom, media_type_custom,
+            updated_at, buttons_custom, guard_names, hook_names, page_kind
+        )
+        SELECT ?, text_default, image_default, media_type_default,
+               buttons_default, text_custom, image_custom, media_type_custom,
+               updated_at, buttons_custom, guard_names, hook_names, ?
+        FROM pages
+        WHERE page_key = ?
+        """,
+        (archive_key, PAGE_KIND_LEGACY_CUSTOM, page_key),
+    )
+    rows = conn.execute(
+        "SELECT page_key, buttons_default, buttons_custom FROM pages"
+    ).fetchall()
+    for button_row in rows:
+        updates: dict[str, str] = {}
+        for column, raw_value in (
+            ('buttons_default', button_row[1]),
+            ('buttons_custom', button_row[2]),
+        ):
+            if raw_value is None:
+                continue
+            try:
+                buttons = json.loads(raw_value)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(buttons, list):
+                continue
+            changed = False
+            for button in buttons:
+                if (
+                    isinstance(button, dict)
+                    and button.get('action_type') == 'page'
+                    and button.get('action_value') == page_key
+                ):
+                    button['action_value'] = archive_key
+                    changed = True
+            if changed:
+                updates[column] = json.dumps(buttons, ensure_ascii=False)
+        if updates:
+            assignments = ', '.join(f'{column} = ?' for column in updates)
+            conn.execute(
+                f"UPDATE pages SET {assignments}, updated_at = CURRENT_TIMESTAMP "
+                "WHERE page_key = ?",
+                (*updates.values(), button_row[0]),
+            )
+    conn.execute(
+        "UPDATE page_routes SET page_key = ? WHERE page_key = ?",
+        (archive_key, page_key),
+    )
+    conn.execute("DELETE FROM pages WHERE page_key = ?", (page_key,))
+    logger.warning(
+        "Migration v%s archived a conflicting page as %s",
+        migration_version,
+        archive_key,
+    )
+
+
+def _add_key_devices_button_v108(conn: sqlite3.Connection) -> None:
+    """Add the stock key-device action without touching custom buttons."""
+    row = conn.execute(
+        "SELECT buttons_default FROM pages WHERE page_key = 'key_details'"
+    ).fetchone()
+    if row is None:
+        logger.warning("Migration v108 could not find the key_details page")
+        return
+    try:
+        buttons = json.loads(row[0] or '[]')
+    except (TypeError, json.JSONDecodeError):
+        logger.warning(
+            "Migration v108 kept malformed key_details buttons_default unchanged"
+        )
+        return
+    if not isinstance(buttons, list):
+        logger.warning(
+            "Migration v108 kept non-array key_details buttons_default unchanged"
+        )
+        return
+    if any(
+        isinstance(button, dict) and button.get('id') == 'btn_key_devices'
+        for button in buttons
+    ):
+        return
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+        row_value = button.get('row')
+        if isinstance(row_value, int) and not isinstance(row_value, bool) and row_value >= 2:
+            button['row'] = row_value + 1
+    buttons.append({
+        'id': 'btn_key_devices',
+        'label': '📱 Мои устройства',
+        'color': 'secondary',
+        'row': 2,
+        'col': 0,
+        'is_hidden': False,
+        'action_type': 'system',
+        'action_value': None,
+    })
+    conn.execute(
+        """
+        UPDATE pages
+        SET buttons_default = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE page_key = 'key_details'
+        """,
+        (json.dumps(buttons, ensure_ascii=False),),
+    )
+
+
+def migration_108(conn: sqlite3.Connection) -> None:
+    """Migration v108: add the 3X-UI 3.7 client-device interface."""
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if 'settings' in tables:
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            ('device_limit_mode', 'ip'),
+        )
+    if 'pages' not in tables:
+        logger.warning("Migration v108 skipped device pages: pages table is absent")
+        return
+    _archive_conflicting_core_page(
+        conn,
+        page_key='key_devices',
+        archive_key_base='legacy_key_devices_v108',
+        migration_version=108,
+    )
+    device_buttons = json.dumps([
+        {
+            'id': 'btn_key_device_items',
+            'label': '🗑 %item_name%',
+            'color': 'danger',
+            'row': 0,
+            'col': 0,
+            'is_hidden': False,
+            'action_type': 'system_collection',
+            'action_value': None,
+        },
+        {
+            'id': 'btn_key_devices_back',
+            'label': '⬅️ Назад',
+            'color': 'secondary',
+            'row': 100,
+            'col': 0,
+            'is_hidden': False,
+            'action_type': 'system',
+            'action_value': None,
+        },
+        {
+            'id': 'btn_back_main',
+            'label': '🈴 На главную',
+            'color': 'secondary',
+            'row': 100,
+            'col': 1,
+            'is_hidden': False,
+            'action_type': 'internal',
+            'action_value': 'cmd_back_main',
+        },
+    ], ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO pages (
+            page_key, text_default, buttons_default, page_kind, updated_at
+        ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(page_key) DO UPDATE SET
+            text_default = excluded.text_default,
+            buttons_default = excluded.buttons_default,
+            page_kind = excluded.page_kind,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            'key_devices',
+            '📱 <b>Мои устройства</b>\n\n%devices_list%',
+            device_buttons,
+            PAGE_KIND_CORE,
+        ),
+    )
+    _add_key_devices_button_v108(conn)
+    if 'user_ui_texts' in tables:
+        update_user_ui_text_defaults(_USER_UI_TEXT_DEFINITIONS_V108, conn=conn)
+
+
+def migration_109(conn: sqlite3.Connection) -> None:
+    """Migration v109: add a precise unavailable replacement-server page."""
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if 'pages' not in tables:
+        logger.warning(
+            "Migration v109 skipped replacement-server page: pages table is absent"
+        )
+        return
+    _archive_conflicting_core_page(
+        conn,
+        page_key='key_replace_server_unavailable',
+        archive_key_base='legacy_key_replace_server_unavailable_v109',
+        migration_version=109,
+    )
+    buttons_default = json.dumps([
+        {
+            'id': 'btn_my_keys',
+            'label': '🔑 Мои ключи',
+            'color': 'secondary',
+            'row': 0,
+            'col': 0,
+            'is_hidden': False,
+            'action_type': 'internal',
+            'action_value': 'cmd_my_keys',
+        },
+        {
+            'id': 'btn_back_main',
+            'label': '🈴 На главную',
+            'color': 'secondary',
+            'row': 1,
+            'col': 0,
+            'is_hidden': False,
+            'action_type': 'internal',
+            'action_value': 'cmd_back_main',
+        },
+    ], ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO pages (
+            page_key, text_default, buttons_default, page_kind, updated_at
+        ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(page_key) DO UPDATE SET
+            text_default = excluded.text_default,
+            buttons_default = excluded.buttons_default,
+            page_kind = excluded.page_kind,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            'key_replace_server_unavailable',
+            '⚠️ <b>На сервере нет доступных подключений</b>\n\n'
+            'Вернитесь к карточке ключа и выберите для замены другой сервер.',
+            buttons_default,
+            PAGE_KIND_CORE,
+        ),
+    )
+
+
+_ADVANCED_STOCK_BUTTON_COLORS_V110 = frozenset({
+    'primary',
+    'success',
+    'danger',
+})
+_STOCK_BUTTON_COLOR_TARGETS_V110 = (
+    ('trial', 'btn_activate_trial'),
+    ('key_devices', 'btn_key_device_items'),
+)
+
+
+def migration_110(conn: sqlite3.Connection) -> None:
+    """Migration v110: restore the ordinary style of stock core buttons."""
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if 'pages' not in tables:
+        logger.warning(
+            "Migration v110 skipped button colors: pages table is absent"
+        )
+        return
+
+    updated_pages = 0
+    updated_buttons = 0
+    for page_key, button_id in _STOCK_BUTTON_COLOR_TARGETS_V110:
+        row = conn.execute(
+            """
+            SELECT buttons_default
+            FROM pages
+            WHERE page_key = ? AND page_kind = ?
+            """,
+            (page_key, PAGE_KIND_CORE),
+        ).fetchone()
+        if row is None:
+            logger.warning(
+                "Migration v110 could not find core page %s",
+                page_key,
+            )
+            continue
+        raw_buttons = row[0]
+        try:
+            buttons = json.loads(raw_buttons or '[]')
+        except (TypeError, json.JSONDecodeError):
+            logger.warning(
+                "Migration v110 kept malformed buttons_default on page %s unchanged",
+                page_key,
+            )
+            continue
+        if not isinstance(buttons, list):
+            logger.warning(
+                "Migration v110 kept non-array buttons_default on page %s unchanged",
+                page_key,
+            )
+            continue
+
+        changed_buttons = 0
+        for button in buttons:
+            if (
+                isinstance(button, dict)
+                and button.get('id') == button_id
+                and button.get('color') in _ADVANCED_STOCK_BUTTON_COLORS_V110
+            ):
+                button['color'] = 'secondary'
+                changed_buttons += 1
+        if not changed_buttons:
+            continue
+
+        conn.execute(
+            """
+            UPDATE pages
+            SET buttons_default = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE page_key = ?
+            """,
+            (
+                json.dumps(buttons, ensure_ascii=False, separators=(',', ':')),
+                page_key,
+            ),
+        )
+        updated_pages += 1
+        updated_buttons += changed_buttons
+
+    logger.info(
+        "Migration v110 applied: neutralized_stock_pages=%s, buttons=%s",
+        updated_pages,
+        updated_buttons,
+    )
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -3244,6 +3668,11 @@ MIGRATIONS = {
     103: migration_103,
     104: migration_104,
     105: migration_105,
+    106: migration_106,
+    107: migration_107,
+    108: migration_108,
+    109: migration_109,
+    110: migration_110,
 }
 
 

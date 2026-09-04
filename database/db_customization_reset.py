@@ -79,6 +79,7 @@ def _customization_default_settings() -> dict[str, str | None]:
         "referral_new_ref_notification_text": migrations._referral_new_ref_notification_text(),
         "referral_purchase_notification_text": migrations._referral_purchase_notification_text(),
         "referral_attribution_window_hours": "0",
+        "expired_key_panel_cleanup_delay_days": "0",
         "broadcast_message": None,
         "broadcast_style_profile": json.dumps(
             migrations.DEFAULT_BROADCAST_STYLE_PROFILE,

@@ -1,11 +1,36 @@
 """
 General rules for working with inbound panels.
 """
-from typing import Any, Dict, List, Tuple
+import re
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 
 IGNORED_INBOUND_PREFIX = "--!"
 MTPROTO_PROTOCOL = "mtproto"
+INBOUND_GROUP_SUFFIX_RE = re.compile(r"(?:--[0-9]+)+$")
+INBOUND_GROUP_MARKER_RE = re.compile(r"--([0-9]+)")
+
+
+def extract_inbound_group_ids(tag: Any) -> FrozenSet[int]:
+    """Return every numeric marker from the contiguous suffix of an inbound tag."""
+    suffix = INBOUND_GROUP_SUFFIX_RE.search(str(tag or ""))
+    if suffix is None:
+        return frozenset()
+    return frozenset(
+        int(match.group(1))
+        for match in INBOUND_GROUP_MARKER_RE.finditer(suffix.group(0))
+    )
+
+
+def inbound_matches_group(tag: Any, group_id: Optional[int]) -> bool:
+    """Whether a tag is in one virtual group; no configured group matches all tags."""
+    if group_id is None:
+        return True
+    try:
+        normalized_group_id = int(group_id)
+    except (TypeError, ValueError):
+        return False
+    return normalized_group_id in extract_inbound_group_ids(tag)
 
 
 def inbound_protocol(inbound: Dict[str, Any]) -> str:

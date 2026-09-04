@@ -287,6 +287,7 @@ async def _provision_resolved_new_key(
         get_client,
         get_key_expiry_time_ms,
         provision_client_on_server,
+        resolve_key_panel_limits,
     )
     from bot.utils.billing_values import resolve_duration_days
     from bot.utils.panel_email import generate_unique_panel_email
@@ -335,10 +336,7 @@ async def _provision_resolved_new_key(
         if "expires_at" in key
         else None
     )
-    max_ips = max(
-        0,
-        int(key.get("tariff_max_ips") or tariff.get("max_ips") or 1),
-    )
+    panel_limits = resolve_key_panel_limits(key)
     requested_sub_id = uuid.uuid5(
         uuid.NAMESPACE_URL,
         f"yadrenovpn-subscription:{stable_identity}",
@@ -350,7 +348,8 @@ async def _provision_resolved_new_key(
         total_gb_bytes=persisted_limit_bytes,
         expire_days=days,
         expiry_time_ms=exact_expiry_time_ms,
-        limit_ip=max_ips,
+        limit_ip=panel_limits.limit_ip,
+        limit_hwid=panel_limits.limit_hwid,
         enable=True,
         tg_id=str(setup.telegram_id),
         sub_id=requested_sub_id,

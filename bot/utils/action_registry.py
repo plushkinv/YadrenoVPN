@@ -241,6 +241,24 @@ def _resolve_key_rename(ctx: dict) -> Optional[dict]:
     return {"callback_data": f"key_rename:{key_id}"}
 
 
+def _resolve_key_devices(ctx: dict) -> Optional[dict]:
+    """Open registered devices only for configured keys in HWID mode."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id or _key_details_is_unconfigured(ctx):
+        return None
+    if ctx.get('device_limit_mode') != 'hwid' or ctx.get('has_sub_id') is not True:
+        return None
+    return {"callback_data": f"key_devices:{key_id}"}
+
+
+def _resolve_key_devices_back(ctx: dict) -> Optional[dict]:
+    """Return from a device list to its owning key card."""
+    key_id = _get_key_details_id(ctx)
+    if not key_id:
+        return None
+    return {"callback_data": f"key:{key_id}"}
+
+
 def _resolve_support_reply(ctx: dict) -> Optional[dict]:
     """Builds the user reply action for an existing support thread."""
     thread_id = ctx.get('support_thread_id')
@@ -387,6 +405,8 @@ SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_key_replace": _resolve_key_replace,
     "btn_key_delete": _resolve_key_delete,
     "btn_key_rename": _resolve_key_rename,
+    "btn_key_devices": _resolve_key_devices,
+    "btn_key_devices_back": _resolve_key_devices_back,
     "btn_support_reply": _resolve_support_reply,
     "btn_intent_provider_crypto": lambda ctx: _resolve_intent_provider(ctx, "crypto"),
     "btn_intent_provider_cryptobot": lambda ctx: _resolve_intent_provider(ctx, "cryptobot"),
@@ -423,6 +443,10 @@ SYSTEM_COLLECTIONS: Dict[str, Callable[[dict], list[dict]]] = {
     "btn_tariff_items": lambda ctx: _resolve_context_collection("tariff_button_items", ctx),
     "btn_server_items": lambda ctx: _resolve_context_collection("server_button_items", ctx),
     "btn_key_items": lambda ctx: _resolve_context_collection("key_button_items", ctx),
+    "btn_key_device_items": lambda ctx: _resolve_context_collection(
+        "key_device_button_items",
+        ctx,
+    ),
     "btn_tariff_group_items": lambda ctx: _resolve_context_collection("tariff_group_button_items", ctx),
     "btn_subscription_host_items": lambda ctx: _resolve_context_collection(
         "subscription_host_button_items",

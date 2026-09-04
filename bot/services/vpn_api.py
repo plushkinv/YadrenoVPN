@@ -15,10 +15,14 @@ from bot.utils.panel_email import is_managed_panel_email
 
 from .panels.base import (
     BaseVPNClient,
+    PanelClientDevice,
+    PanelClientLimits,
     PanelClientState,
+    PanelErrorKind,
     PanelInboundDescriptor,
     PanelProvisionResult,
     PanelRejectedError,
+    PanelRequestError,
     PanelServerSnapshot,
     VPNAPIError,
 )
@@ -55,6 +59,7 @@ async def provision_client_on_server(
     expire_days: int = 0,
     expiry_time_ms: Optional[int] = None,
     limit_ip: int = 1,
+    limit_hwid: int = 0,
     enable: bool = True,
     tg_id: str = "",
     sub_id: Optional[str] = None,
@@ -65,6 +70,14 @@ async def provision_client_on_server(
     if not is_managed_panel_email(email):
         raise VPNAPIError(f"Refusing to provision unmanaged panel client: {email!r}")
     panel_client = client or await get_client(server_id)
+    if int(limit_hwid) > 0:
+        await refresh_client_capabilities(panel_client)
+        if not supports_client_hwids(panel_client):
+            raise PanelRequestError(
+                PanelErrorKind.UNSUPPORTED_VERSION,
+                endpoint="/panel/api/clients/add",
+                detail="client HWID limits require 3X-UI 3.7.0+",
+            )
     result = panel_client.provision_client(
         email=email,
         total_gb=total_gb,
@@ -72,6 +85,7 @@ async def provision_client_on_server(
         expire_days=expire_days,
         expiry_time_ms=expiry_time_ms,
         limit_ip=limit_ip,
+        limit_hwid=limit_hwid,
         enable=enable,
         tg_id=tg_id,
         sub_id=sub_id,
@@ -129,11 +143,24 @@ def supports_client_external_links(client: BaseVPNClient) -> bool:
     return bool(client.supports_client_external_links())
 
 
-async def refresh_client_capabilities(client: BaseVPNClient) -> bool:
+def supports_client_hwids(client: BaseVPNClient) -> bool:
+    """Return the adapter's stored, side-effect-free HWID capability."""
+    checker = getattr(client, "supports_client_hwids", None)
+    return bool(checker()) if callable(checker) else False
+
+
+async def refresh_client_capabilities(
+    client: BaseVPNClient,
+    *,
+    force: bool = False,
+) -> bool:
     """Refresh live capability metadata before a gated panel mutation."""
     refresher = getattr(client, "refresh_capabilities", None)
     if callable(refresher):
-        result = refresher()
+        try:
+            result = refresher(force=force)
+        except TypeError:
+            result = refresher()
         result = await result if inspect.isawaitable(result) else result
         return bool(result)
     return bool(await client.login())
@@ -158,6 +185,86 @@ async def get_client_external_links(
     return [dict(item) for item in links]
 
 
+async def get_key_devices_for_user(
+    *,
+    key_id: int,
+    telegram_id: int,
+) -> List[PanelClientDevice]:
+    """Read current devices after verifying key ownership and configuration."""
+    from database.requests import (
+        DEVICE_LIMIT_MODE_HWID,
+        get_device_limit_mode,
+        get_key_details_for_user,
+    )
+
+    if get_device_limit_mode() != DEVICE_LIMIT_MODE_HWID:
+        raise VPNAPIError("Client devices are unavailable in IP limit mode")
+    key = get_key_details_for_user(int(key_id), int(telegram_id))
+    if not key:
+        raise VPNAPIError("VPN key is missing or belongs to another user")
+    server_id = key.get("server_id")
+    panel_email = str(key.get("panel_email") or "").strip()
+    if not server_id or not key.get("sub_id") or not is_managed_panel_email(panel_email):
+        raise VPNAPIError("VPN key is not configured on a panel")
+    panel_client = await get_client(int(server_id))
+    if not supports_client_hwids(panel_client):
+        raise PanelRequestError(
+            PanelErrorKind.UNSUPPORTED_VERSION,
+            endpoint="/panel/api/clients/hwids/:email",
+            detail="client HWIDs require 3X-UI 3.7.0+",
+        )
+    devices = panel_client.get_client_devices(panel_email)
+    devices = await devices if inspect.isawaitable(devices) else devices
+    if not isinstance(devices, list) or any(
+        not isinstance(device, PanelClientDevice) for device in devices
+    ):
+        raise VPNAPIError("Panel adapter returned an invalid device collection")
+    return devices
+
+
+@regular_panel_operation
+async def delete_key_device_for_user(
+    *,
+    key_id: int,
+    telegram_id: int,
+    device_id: str,
+) -> bool:
+    """Delete one device after repeating ownership checks inside the operation gate."""
+    from database.requests import (
+        DEVICE_LIMIT_MODE_HWID,
+        get_device_limit_mode,
+        get_key_details_for_user,
+    )
+
+    if get_device_limit_mode() != DEVICE_LIMIT_MODE_HWID:
+        return False
+    key = get_key_details_for_user(int(key_id), int(telegram_id))
+    if not key:
+        return False
+    server_id = key.get("server_id")
+    panel_email = str(key.get("panel_email") or "").strip()
+    normalized_device_id = str(device_id or "").strip()
+    if (
+        not server_id
+        or not key.get("sub_id")
+        or not normalized_device_id.isascii()
+        or not normalized_device_id.isdecimal()
+        or int(normalized_device_id) <= 0
+        or not is_managed_panel_email(panel_email)
+    ):
+        return False
+    panel_client = await get_client(int(server_id))
+    if not supports_client_hwids(panel_client):
+        raise PanelRequestError(
+            PanelErrorKind.UNSUPPORTED_VERSION,
+            endpoint="/panel/api/clients/hwids/:email/:id",
+            detail="client HWIDs require 3X-UI 3.7.0+",
+        )
+    result = panel_client.delete_client_device(panel_email, normalized_device_id)
+    result = await result if inspect.isawaitable(result) else result
+    return bool(result)
+
+
 @regular_panel_operation
 async def replace_client_external_links(
     *,
@@ -179,6 +286,23 @@ async def replace_client_external_links(
 
 async def test_server_connection(server_data: Dict[str, Any]) -> Dict[str, Any]:
     """Validate the complete supported contract and return a neutral failure."""
+    if (
+        not str(server_data.get("api_token") or "").strip()
+        and str(server_data.get("login") or "").strip()
+        and str(server_data.get("password") or "").strip()
+        and server_data.get("_force_auth_bootstrap") is not True
+    ):
+        from database.db_servers import get_panel_recovery_api_token
+
+        reusable_token = get_panel_recovery_api_token(
+            protocol=str(server_data.get("protocol") or "https"),
+            host=str(server_data.get("host") or ""),
+            port=int(server_data.get("port") or 0),
+            web_base_path=str(server_data.get("web_base_path") or ""),
+        )
+        if reusable_token:
+            server_data["api_token"] = reusable_token
+            server_data["_shared_panel_auth"] = True
     client = XUIClient(server_data)
     try:
         await client.validate_connection()
@@ -255,6 +379,33 @@ def get_key_limit_ip(key: Dict[str, Any]) -> int:
     return max(1, min(999, int(tariff_max_ips or 1)))
 
 
+def resolve_panel_client_limits(
+    limit_value: int,
+    *,
+    mode: Optional[str] = None,
+) -> PanelClientLimits:
+    """Resolve the tariff's single limit into the panel's two limit fields."""
+    from database.requests import (
+        DEVICE_LIMIT_MODE_HWID,
+        get_device_limit_mode,
+    )
+
+    normalized_limit = max(1, min(999, int(limit_value or 1)))
+    effective_mode = mode or get_device_limit_mode()
+    if effective_mode == DEVICE_LIMIT_MODE_HWID:
+        return PanelClientLimits(limit_ip=0, limit_hwid=normalized_limit)
+    return PanelClientLimits(limit_ip=normalized_limit, limit_hwid=0)
+
+
+def resolve_key_panel_limits(
+    key: Dict[str, Any],
+    *,
+    mode: Optional[str] = None,
+) -> PanelClientLimits:
+    """Resolve one key's tariff/override limit for the current global mode."""
+    return resolve_panel_client_limits(get_key_limit_ip(key), mode=mode)
+
+
 def get_key_expiry_time_ms(key: Dict[str, Any]) -> int:
     expires_at = key.get("expires_at")
     if not expires_at:
@@ -284,6 +435,7 @@ def _build_server_data_from_key(key: Dict[str, Any]) -> Dict[str, Any]:
         "api_token": key.get("api_token"),
         "panel_version": key.get("panel_version"),
         "panel_checked_at": key.get("panel_checked_at"),
+        "inbound_group_id": key.get("inbound_group_id"),
     }
 
 
@@ -458,16 +610,23 @@ def _client_needs_update(
     expiry_time_ms: int,
     total_gb_bytes: int,
     enable: bool,
-    limit_ip: int,
+    limit_ip: Optional[int],
+    limit_hwid: Optional[int],
     sub_id: str,
 ) -> bool:
     client = state.client
-    checks = (
+    checks = [
         (_panel_int(client.get("expiryTime"), state.expiry_time), expiry_time_ms),
         (_panel_int(client.get("totalGB"), state.total_gb), total_gb_bytes),
-        (_panel_int(client.get("limitIp"), state.limit_ip), limit_ip),
         (_panel_int(client.get("reset"), state.reset), 0),
-    )
+    ]
+    if limit_ip is not None:
+        checks.append((_panel_int(client.get("limitIp"), state.limit_ip), limit_ip))
+    if limit_hwid is not None:
+        checks.append((
+            _panel_int(client.get("limitHwid"), state.limit_hwid),
+            limit_hwid,
+        ))
     return (
         any(current != expected for current, expected in checks)
         or _panel_bool(client.get("enable"), state.enable) != enable
@@ -494,6 +653,7 @@ async def _ensure_subscription_keys_on_server_impl(
     reset_traffic: bool = False,
     panel_snapshot: Optional[PanelServerSnapshot] = None,
     dry_run: bool = False,
+    device_limit_mode: Optional[str] = None,
 ) -> Dict[str, int]:
     """Reconcile one database key with its logical panel client."""
     from database.requests import get_vpn_key_by_id
@@ -520,40 +680,92 @@ async def _ensure_subscription_keys_on_server_impl(
             state = snapshot.get_client(email)
             active = should_panel_client_exist(key)
             expiry_time_ms = get_key_expiry_time_ms(key)
-            limit_ip = get_key_limit_ip(key)
+            limits = resolve_key_panel_limits(key, mode=device_limit_mode)
+            hwid_mode = limits.limit_hwid > 0
+            hwid_supported = supports_client_hwids(client)
+            preserve_limits = hwid_mode and not hwid_supported
+            if active and state is None and preserve_limits:
+                stats["errors"] = 1
+                return stats
+            target_limit_ip = None if preserve_limits else limits.limit_ip
+            target_limit_hwid = limits.limit_hwid if hwid_supported else None
             panel_used = 0 if reset_traffic else (
                 state.traffic_used if state is not None and state.traffic_known else 0
             )
             total_bytes = calculate_panel_total_for_key(key, panel_used)
+            out_of_scope_before = (
+                set(state.out_of_scope_inbound_ids) if state is not None else set()
+            )
+
+            async def detach_out_of_scope() -> None:
+                if state is None or not state.out_of_scope_inbound_ids:
+                    return
+                inbound_ids = set(state.out_of_scope_inbound_ids)
+                bulk_detach = getattr(client, "bulk_detach_clients", None)
+                if not callable(bulk_detach):
+                    stats["errors"] += len(inbound_ids)
+                    return
+                confirmed = await bulk_detach([email], inbound_ids)
+                confirmed_emails = {
+                    str(value).strip().lower() for value in confirmed
+                }
+                if email.lower() not in confirmed_emails:
+                    stats["errors"] += len(inbound_ids)
+                    return
+                state.out_of_scope_inbound_ids.difference_update(inbound_ids)
+                for inbound_id in inbound_ids:
+                    state.placements.pop(inbound_id, None)
+                stats["deleted"] += len(inbound_ids)
 
             if not active:
                 if state is None:
                     stats["skipped"] = 1
                     stats["ok"] = 1
                     return stats
+                inactive_needs_update = (
+                    not state.unavailable_inbound_ids
+                    and bool(state.inbound_ids)
+                    and _client_needs_update(
+                        state,
+                        expiry_time_ms=expiry_time_ms,
+                        total_gb_bytes=total_bytes,
+                        enable=False,
+                        limit_ip=target_limit_ip,
+                        limit_hwid=target_limit_hwid,
+                        sub_id=str(key["sub_id"]),
+                    )
+                )
                 if dry_run:
-                    if state.enable:
-                        stats["disabled"] = 1
+                    stats["deleted"] = len(out_of_scope_before)
+                    if inactive_needs_update:
+                        stats["disabled"] = int(state.enable)
                         stats["updated"] = 1
-                    else:
+                    if not any(
+                        stats[name]
+                        for name in ("deleted", "disabled", "updated")
+                    ):
                         stats["skipped"] = 1
                 else:
-                    changed = await client.update_client_full(
-                        email=email,
-                        total_gb_bytes=total_bytes,
-                        expiry_time_ms=expiry_time_ms,
-                        enable=False,
-                        limit_ip=limit_ip,
-                        sub_id=str(key["sub_id"]),
-                        reset=0,
-                        known_state=state,
-                    )
+                    await detach_out_of_scope()
+                    changed = False
+                    if inactive_needs_update:
+                        changed = await client.update_client_full(
+                            email=email,
+                            total_gb_bytes=total_bytes,
+                            expiry_time_ms=expiry_time_ms,
+                            enable=False,
+                            limit_ip=(state.limit_ip if preserve_limits else target_limit_ip),
+                            limit_hwid=(None if preserve_limits else target_limit_hwid),
+                            sub_id=str(key["sub_id"]),
+                            reset=0,
+                            known_state=state,
+                        )
                     if changed:
                         stats["disabled"] = int(state.enable)
                         stats["updated"] = 1
-                    else:
+                    elif not stats["deleted"]:
                         stats["skipped"] = 1
-                stats["ok"] = 1
+                stats["ok"] = int(stats["errors"] == 0)
                 return stats
 
             descriptors = await get_client_inbound_descriptors(
@@ -562,21 +774,39 @@ async def _ensure_subscription_keys_on_server_impl(
             )
             target_ids = {item.id for item in descriptors if item.available}
             attached_before = set(state.inbound_ids) if state is not None else set()
+            if not dry_run:
+                await detach_out_of_scope()
+            remaining_out_of_scope = (
+                set(state.out_of_scope_inbound_ids) if state is not None else set()
+            )
+            if not target_ids:
+                if dry_run:
+                    stats["deleted"] = len(out_of_scope_before)
+                stats["errors"] += 1
+                stats["ok"] = 0
+                return stats
             needs_update = (
                 state is None
                 or not target_ids.issubset(attached_before)
-                or _client_needs_update(
-                    state,
-                    expiry_time_ms=expiry_time_ms,
-                    total_gb_bytes=total_bytes,
-                    enable=True,
-                    limit_ip=limit_ip,
-                    sub_id=str(key["sub_id"]),
+                or bool(remaining_out_of_scope)
+                or (
+                    state is not None
+                    and not state.unavailable_inbound_ids
+                    and _client_needs_update(
+                        state,
+                        expiry_time_ms=expiry_time_ms,
+                        total_gb_bytes=total_bytes,
+                        enable=True,
+                        limit_ip=target_limit_ip,
+                        limit_hwid=target_limit_hwid,
+                        sub_id=str(key["sub_id"]),
+                    )
                 )
             )
             if dry_run:
                 missing = target_ids - attached_before
                 stats["created"] = len(missing)
+                stats["deleted"] = len(out_of_scope_before)
                 stats["updated"] = int(needs_update and not missing)
                 stats["reset"] = int(reset_traffic and state is not None)
                 stats["skipped"] = int(not needs_update and not reset_traffic)
@@ -591,12 +821,21 @@ async def _ensure_subscription_keys_on_server_impl(
                 needs_update = True
 
             if needs_update:
+                provision_limit_ip = (
+                    state.limit_ip if preserve_limits and state is not None
+                    else int(target_limit_ip or 0)
+                )
+                provision_limit_hwid = (
+                    state.limit_hwid if preserve_limits and state is not None
+                    else int(target_limit_hwid or 0)
+                )
                 provisioned = await provision_client_on_server(
                     server_id=int(key["server_id"]),
                     email=email,
                     total_gb_bytes=total_bytes,
                     expiry_time_ms=expiry_time_ms,
-                    limit_ip=limit_ip,
+                    limit_ip=provision_limit_ip,
+                    limit_hwid=provision_limit_hwid,
                     enable=True,
                     tg_id=str(key.get("telegram_id") or ""),
                     sub_id=str(key["sub_id"]),
@@ -605,11 +844,33 @@ async def _ensure_subscription_keys_on_server_impl(
                 )
                 stats["created"] = len(provisioned.attached_inbound_ids - attached_before)
                 stats["updated"] = int(bool(attached_before))
-                stats["errors"] = len(provisioned.failed_inbound_ids)
+                stats["errors"] += len(provisioned.failed_inbound_ids)
                 if state is not None and not state.enable and provisioned.attached_inbound_ids:
                     stats["enabled"] = 1
+                remaining_after_provision = set(remaining_out_of_scope)
+                if provisioned.snapshot is not None:
+                    confirmed_state = provisioned.snapshot.get_client(email)
+                    if confirmed_state is not None:
+                        remaining_after_provision = set(
+                            confirmed_state.out_of_scope_inbound_ids
+                        )
+                if remaining_after_provision:
+                    bulk_detach = getattr(client, "bulk_detach_clients", None)
+                    if not callable(bulk_detach):
+                        stats["errors"] += len(remaining_after_provision)
+                    else:
+                        confirmed = await bulk_detach(
+                            [email],
+                            remaining_after_provision,
+                        )
+                        if email.lower() in {
+                            str(value).strip().lower() for value in confirmed
+                        }:
+                            stats["deleted"] += len(remaining_after_provision)
+                        else:
+                            stats["errors"] += len(remaining_after_provision)
             else:
-                stats["skipped"] = 1
+                stats["skipped"] = int(stats["deleted"] == 0)
             stats["ok"] = int(stats["errors"] == 0)
             return stats
         except Exception:
@@ -623,6 +884,7 @@ async def ensure_subscription_keys_on_server(
     reset_traffic: bool = False,
     panel_snapshot: Optional[PanelServerSnapshot] = None,
     dry_run: bool = False,
+    device_limit_mode: Optional[str] = None,
 ) -> Dict[str, int]:
     """Reconcile one key and make every non-preview failure observable."""
     context = _unlocked_preview() if dry_run else panel_sync_coordinator.regular()
@@ -633,6 +895,7 @@ async def ensure_subscription_keys_on_server(
                 reset_traffic=reset_traffic,
                 panel_snapshot=panel_snapshot,
                 dry_run=dry_run,
+                device_limit_mode=device_limit_mode,
             )
         except Exception as error:
             if not dry_run:
@@ -717,17 +980,23 @@ async def get_subscription_url_for_key(
 __all__ = [
     "VPNAPIError",
     "PanelRejectedError",
+    "PanelClientDevice",
+    "PanelClientLimits",
     "calculate_panel_total_for_key",
     "close_all_clients",
     "ensure_subscription_keys_on_server",
+    "delete_key_device_for_user",
     "extend_key_on_server",
     "format_traffic",
     "get_client",
     "get_client_external_links",
+    "get_key_devices_for_user",
     "get_client_from_server_data",
     "get_client_inbound_descriptors",
     "get_key_expiry_time_ms",
     "get_key_limit_ip",
+    "resolve_key_panel_limits",
+    "resolve_panel_client_limits",
     "get_key_traffic_snapshot",
     "get_subscription_url_for_key",
     "invalidate_client_cache",
@@ -740,5 +1009,6 @@ __all__ = [
     "restore_traffic_limit_in_db",
     "sync_key_to_panel_state",
     "supports_client_external_links",
+    "supports_client_hwids",
     "test_server_connection",
 ]

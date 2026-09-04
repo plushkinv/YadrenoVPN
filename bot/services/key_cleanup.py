@@ -43,6 +43,14 @@ class PanelCleanupReport:
     """Aggregated inactive-client cleanup result."""
 
     servers: List[PanelCleanupServerReport] = field(default_factory=list)
+    confirmed_absent: set[tuple[int, str]] = field(
+        default_factory=set,
+        repr=False,
+    )
+    retained_for_active: set[tuple[int, str]] = field(
+        default_factory=set,
+        repr=False,
+    )
 
     @property
     def deleted(self) -> int:
@@ -65,6 +73,7 @@ class ExpiredKeyCleanupReport:
     notified: int = 0
     notification_errors: int = 0
     notifications_enabled: bool = True
+    pending_panel: int = 0
     skipped_reason: Optional[str] = None
 
 
@@ -93,11 +102,71 @@ def _managed_rows_by_email(
     return dict(rows)
 
 
+def _normalized_binding(
+    server_id: Any,
+    panel_email: Any,
+) -> Optional[tuple[int, str]]:
+    if server_id is None or not is_managed_panel_email(panel_email):
+        return None
+    return int(server_id), str(panel_email).strip().lower()
+
+
+def _should_keep_panel_client(
+    key: Mapping[str, Any],
+    expiry_due_key_ids: Optional[set[int]],
+) -> bool:
+    """Return whether one DB row still protects its logical panel client."""
+    if should_panel_client_exist(key):
+        return True
+    if expiry_due_key_ids is None:
+        return False
+
+    from database.requests import is_traffic_exhausted
+
+    if bool(key.get("is_banned", 0)) or is_traffic_exhausted(dict(key)):
+        return False
+    try:
+        key_id = int(key.get("id"))
+    except (TypeError, ValueError):
+        return True
+    return key_id not in expiry_due_key_ids
+
+
+def _expiry_due_key_ids_for_daily_cleanup() -> set[int]:
+    """Load exact DB-backed expiry candidates for the effective panel delay."""
+    from database.requests import (
+        get_expired_key_panel_cleanup_delay_days,
+        get_expired_key_retention_days,
+        get_expired_keys_older_than,
+    )
+
+    try:
+        retention_days = get_expired_key_retention_days()
+    except ValueError as exc:
+        logger.error(
+            "Expired panel-client cleanup skipped because retention is invalid: %s",
+            exc,
+        )
+        return set()
+
+    delay_days = get_expired_key_panel_cleanup_delay_days()
+    effective_days = (
+        retention_days
+        if delay_days is None
+        else min(delay_days, retention_days)
+    )
+    return {
+        int(row["id"])
+        for row in get_expired_keys_older_than(effective_days)
+    }
+
+
 async def cleanup_inactive_panel_clients(
     *,
     keys: Optional[Iterable[Dict[str, Any]]] = None,
     servers: Optional[Iterable[Dict[str, Any]]] = None,
     snapshots: Optional[SnapshotCollection] = None,
+    expiry_due_key_ids: Optional[Iterable[int]] = None,
 ) -> PanelCleanupReport:
     """Delete DB-linked inactive bot clients from every available panel."""
     from bot.services.vpn_api import get_client_from_server_data
@@ -105,6 +174,15 @@ async def cleanup_inactive_panel_clients(
 
     selected_keys = list(keys) if keys is not None else get_all_panel_sync_keys()
     selected_servers = list(servers) if servers is not None else get_all_servers()
+    if expiry_due_key_ids is not None:
+        due_key_ids: Optional[set[int]] = {
+            int(key_id) for key_id in expiry_due_key_ids
+        }
+    elif keys is None:
+        due_key_ids = _expiry_due_key_ids_for_daily_cleanup()
+    else:
+        # Keep the existing immediate-expiry behavior for injected callers.
+        due_key_ids = None
     grouped = group_keys_by_server(selected_keys)
     servers_by_id = _server_map(selected_servers)
     result = PanelCleanupReport()
@@ -142,15 +220,23 @@ async def cleanup_inactive_panel_clients(
             rows_by_email = _managed_rows_by_email(server_keys)
             for normalized_email, email_rows in rows_by_email.items():
                 report.checked += 1
-                desired_states = [
+                active_states = [
                     should_panel_client_exist(key)
                     for key in email_rows
                 ]
+                desired_states = [
+                    _should_keep_panel_client(key, due_key_ids)
+                    for key in email_rows
+                ]
                 if any(desired_states):
+                    if any(active_states):
+                        result.retained_for_active.add(
+                            (server_id, normalized_email)
+                        )
                     if any(not state for state in desired_states):
                         logger.warning(
                             "Daily panel cleanup kept conflicting panel_email=%s "
-                            "on server %s because at least one DB key is active",
+                            "on server %s because at least one DB key still requires it",
                             normalized_email,
                             server_id,
                         )
@@ -159,6 +245,7 @@ async def cleanup_inactive_panel_clients(
 
                 state = snapshot.get_client(normalized_email)
                 if state is None:
+                    result.confirmed_absent.add((server_id, normalized_email))
                     report.skipped += 1
                     continue
                 candidates.append(state.email)
@@ -168,24 +255,20 @@ async def cleanup_inactive_panel_clients(
                 continue
 
             client = get_client_from_server_data(server)
-            bulk_delete = getattr(client, "bulk_delete_clients", None)
-            if callable(bulk_delete):
-                try:
-                    report.deleted += int(
-                        await bulk_delete(candidates)
-                    )
-                except Exception as exc:
-                    report.errors += len(candidates)
-                    logger.warning(
-                        "Daily panel cleanup bulk delete failed for server %s: %s",
-                        server_id,
-                        exc,
-                    )
-                continue
-
             for email in candidates:
+                normalized_email = str(email).strip().lower()
                 try:
-                    report.deleted += int(await client.delete_client(email))
+                    deleted = bool(await client.delete_client(email))
+                    if not deleted:
+                        report.errors += 1
+                        logger.warning(
+                            "Daily panel cleanup was not confirmed for %s on server %s",
+                            normalized_email,
+                            server_id,
+                        )
+                        continue
+                    report.deleted += 1
+                    result.confirmed_absent.add((server_id, normalized_email))
                 except Exception as exc:
                     report.errors += 1
                     logger.warning(
@@ -241,8 +324,10 @@ def build_deleted_keys_html(
 
 async def cleanup_expired_database_keys(
     bot: Bot,
+    *,
+    panel_report: Optional[PanelCleanupReport] = None,
 ) -> ExpiredKeyCleanupReport:
-    """Atomically delete retained expired keys, then notify each user once."""
+    """Delete retained keys only after their managed panel state is safe."""
     from bot.utils.delivery import is_bot_blocked_error
     from bot.utils.page_renderer import (
         PreparedPageRender,
@@ -252,6 +337,7 @@ async def cleanup_expired_database_keys(
     from database.requests import (
         delete_expired_keys_older_than,
         get_expired_key_retention_days,
+        get_expired_keys_older_than,
         is_expired_key_deletion_notifications_enabled,
         mark_user_bot_blocked,
     )
@@ -268,7 +354,48 @@ async def cleanup_expired_database_keys(
         return report
 
     report.retention_days = retention_days
-    deleted = delete_expired_keys_older_than(retention_days)
+    candidates = get_expired_keys_older_than(retention_days)
+    if not candidates:
+        return report
+
+    due_ids_by_binding: Dict[tuple[int, str], set[int]] = defaultdict(set)
+    eligible_key_ids: set[int] = set()
+    for key in candidates:
+        key_id = int(key["id"])
+        binding = _normalized_binding(
+            key.get("server_id"),
+            key.get("panel_email"),
+        )
+        if binding is None:
+            eligible_key_ids.add(key_id)
+            continue
+        due_ids_by_binding[binding].add(key_id)
+
+    confirmed_absent = (
+        panel_report.confirmed_absent if panel_report is not None else set()
+    )
+    retained_for_active = (
+        panel_report.retained_for_active
+        if panel_report is not None
+        else set()
+    )
+    for binding, due_ids in due_ids_by_binding.items():
+        if binding in confirmed_absent or binding in retained_for_active:
+            eligible_key_ids.update(due_ids)
+        else:
+            report.pending_panel += len(due_ids)
+
+    if not eligible_key_ids:
+        logger.info(
+            "Expired-key cleanup retained %s keys pending panel confirmation",
+            report.pending_panel,
+        )
+        return report
+
+    deleted = delete_expired_keys_older_than(
+        retention_days,
+        eligible_key_ids=eligible_key_ids,
+    )
     report.deleted = len(deleted)
     if not deleted:
         return report
@@ -329,8 +456,10 @@ async def cleanup_expired_database_keys(
             )
 
     logger.info(
-        "Expired-key cleanup completed: deleted=%s users=%s notified=%s errors=%s",
+        "Expired-key cleanup completed: deleted=%s pending_panel=%s users=%s "
+        "notified=%s errors=%s",
         report.deleted,
+        report.pending_panel,
         report.users,
         report.notified,
         report.notification_errors,

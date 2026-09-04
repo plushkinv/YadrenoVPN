@@ -87,7 +87,7 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
                 COALESCE((SELECT value FROM settings WHERE key = 'base_currency'), 'RUB') AS base_currency,
                 s.name as server_name, s.host, s.port, s.web_base_path,
                 s.login, s.password, s.protocol, s.api_token,
-                s.panel_version, s.panel_checked_at,
+                s.panel_version, s.panel_checked_at, s.inbound_group_id,
                 s.is_active as server_active,
                 u.telegram_id, u.username, u.is_banned
             FROM vpn_keys vk

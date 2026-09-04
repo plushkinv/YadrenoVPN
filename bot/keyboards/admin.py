@@ -28,6 +28,7 @@ __all__ = [
     'admin_logs_menu_kb',
     'stop_bot_confirm_kb',
     'bot_settings_kb',
+    'device_limit_mode_kb',
     'extensions_diagnostics_kb',
     'force_overwrite_confirm_kb',
     'update_confirm_kb',

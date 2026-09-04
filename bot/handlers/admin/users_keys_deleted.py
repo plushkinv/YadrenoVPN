@@ -729,5 +729,9 @@ def _build_server_data(key: dict) -> dict:
         'web_base_path': key.get('web_base_path', ''),
         'login': key.get('login'),
         'password': key.get('password'),
-        'protocol': key.get('protocol', 'https')
+        'protocol': key.get('protocol', 'https'),
+        'api_token': key.get('api_token'),
+        'panel_version': key.get('panel_version'),
+        'panel_checked_at': key.get('panel_checked_at'),
+        'inbound_group_id': key.get('inbound_group_id'),
     }

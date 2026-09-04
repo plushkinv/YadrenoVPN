@@ -134,7 +134,7 @@ def add_tariff(
         display_order: Display order
         traffic_limit_gb: Traffic limit in GB (0 = unlimited)
         group_id: tariff group ID (default 1 - “Main”)
-        max_ips: Device (IP address) limit (default 1)
+        max_ips: Device/IP limit selected by the global panel mode (default 1)
         
     Returns:
         ID of the created tariff

@@ -35,6 +35,7 @@ from bot.utils.user_ui_texts import (
     validate_user_ui_text_custom,
 )
 from database.requests import (
+    EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
     REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX,
     TRIAL_OFFER_ACTION_PREFIX,
     apply_page_custom_patch,
@@ -103,6 +104,7 @@ CUSTOM_SETTING_KEYS = (
     'referral_new_ref_notification_text',
     'referral_purchase_notification_text',
     'referral_attribution_window_hours',
+    'expired_key_panel_cleanup_delay_days',
 )
 _CUSTOM_SETTING_KEY_SET = frozenset(CUSTOM_SETTING_KEYS)
 _TRIAL_USAGE_SCOPES = frozenset({'once_per_user', 'once_per_group'})
@@ -930,6 +932,20 @@ def _validate_setting_value(key: str, value: Any) -> str:
                 'from 0 to 8760'
             )
         return str(hours)
+    if key == 'expired_key_panel_cleanup_delay_days':
+        normalized = value.strip()
+        if not normalized.isascii() or not normalized.isdecimal():
+            raise ValueError(
+                'expired_key_panel_cleanup_delay_days must be a whole number '
+                'from 0 to 36500'
+            )
+        days = int(normalized)
+        if days > EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX:
+            raise ValueError(
+                'expired_key_panel_cleanup_delay_days must be a whole number '
+                'from 0 to 36500'
+            )
+        return str(days)
     return value
 
 

@@ -16,10 +16,19 @@ __all__ = [
     'set_setting',
     'delete_setting',
     'is_update_notifications_enabled',
+    'DEVICE_LIMIT_MODE_SETTING',
+    'DEVICE_LIMIT_MODE_IP',
+    'DEVICE_LIMIT_MODE_HWID',
+    'DEVICE_LIMIT_MODES',
+    'get_device_limit_mode',
+    'set_device_limit_mode',
     'REFERRAL_ATTRIBUTION_WINDOW_HOURS_SETTING',
     'REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX',
     'get_referral_attribution_window_hours',
     'get_expired_key_retention_days',
+    'EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_SETTING',
+    'EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX',
+    'get_expired_key_panel_cleanup_delay_days',
     'is_expired_key_deletion_notifications_enabled',
     'get_display_timezone',
     'set_display_timezone',
@@ -71,11 +80,19 @@ __all__ = [
 DEFAULT_DISPLAY_TIMEZONE = 'Europe/Moscow'
 DISPLAY_TIMEZONE_SETTING = 'display_timezone'
 UPDATE_NOTIFICATIONS_ENABLED_SETTING = 'update_notifications_enabled'
+DEVICE_LIMIT_MODE_SETTING = 'device_limit_mode'
+DEVICE_LIMIT_MODE_IP = 'ip'
+DEVICE_LIMIT_MODE_HWID = 'hwid'
+DEVICE_LIMIT_MODES = frozenset({DEVICE_LIMIT_MODE_IP, DEVICE_LIMIT_MODE_HWID})
 REFERRAL_ATTRIBUTION_WINDOW_HOURS_SETTING = (
     'referral_attribution_window_hours'
 )
 REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX = 8760
 EXPIRED_KEY_RETENTION_DAYS_SETTING = 'expired_key_retention_days'
+EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_SETTING = (
+    'expired_key_panel_cleanup_delay_days'
+)
+EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX = 36_500
 EXPIRED_KEY_DELETION_NOTIFICATIONS_SETTING = (
     'expired_key_deletion_notifications_enabled'
 )
@@ -169,6 +186,33 @@ def is_update_notifications_enabled() -> bool:
     return get_setting(UPDATE_NOTIFICATIONS_ENABLED_SETTING, '1') == '1'
 
 
+def get_device_limit_mode() -> str:
+    """Return the validated operational client-limit mode."""
+    raw = get_setting(DEVICE_LIMIT_MODE_SETTING, DEVICE_LIMIT_MODE_IP)
+    normalized = str(raw or '').strip().lower()
+    if normalized not in DEVICE_LIMIT_MODES:
+        logger.warning(
+            'Invalid %s value %r; falling back to %s',
+            DEVICE_LIMIT_MODE_SETTING,
+            raw,
+            DEVICE_LIMIT_MODE_IP,
+        )
+        return DEVICE_LIMIT_MODE_IP
+    return normalized
+
+
+def set_device_limit_mode(value: str) -> str:
+    """Persist a validated operational client-limit mode."""
+    normalized = str(value or '').strip().lower()
+    if normalized not in DEVICE_LIMIT_MODES:
+        raise ValueError(
+            f'{DEVICE_LIMIT_MODE_SETTING} must be one of: '
+            + ', '.join(sorted(DEVICE_LIMIT_MODES))
+        )
+    set_setting(DEVICE_LIMIT_MODE_SETTING, normalized)
+    return normalized
+
+
 def get_referral_attribution_window_hours() -> int:
     """Return the validated referral-attribution window in whole hours."""
     raw = get_setting(REFERRAL_ATTRIBUTION_WINDOW_HOURS_SETTING, '0')
@@ -204,6 +248,32 @@ def get_expired_key_retention_days() -> int:
         raise ValueError(
             f"{EXPIRED_KEY_RETENTION_DAYS_SETTING} must be a positive integer"
         )
+    return days
+
+
+def get_expired_key_panel_cleanup_delay_days() -> Optional[int]:
+    """Return the validated delay before expired panel-client cleanup.
+
+    ``None`` disables only early panel cleanup. The retention-bound cleanup
+    still has to attempt and confirm panel deletion before removing a key.
+    """
+    raw = get_setting(EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_SETTING, '0')
+    normalized = str(raw).strip() if raw is not None else ''
+    if not normalized.isascii() or not normalized.isdecimal():
+        logger.warning(
+            'Invalid %s value %r; early expired-client cleanup is disabled',
+            EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_SETTING,
+            raw,
+        )
+        return None
+    days = int(normalized)
+    if days > EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX:
+        logger.warning(
+            'Out-of-range %s value %r; early expired-client cleanup is disabled',
+            EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_SETTING,
+            raw,
+        )
+        return None
     return days
 
 
@@ -331,9 +401,38 @@ def set_yadreno_admin_active_request_id(telegram_id: int, topic_id: int, request
     )
 
 
-def clear_yadreno_admin_active_request_id(telegram_id: int, topic_id: int) -> bool:
-    """Removes active request_id Yadreno Admin from settings."""
-    return delete_setting(_yadreno_admin_request_key('active', telegram_id, topic_id))
+def _clear_yadreno_admin_request_id(
+    kind: str,
+    telegram_id: int,
+    topic_id: int,
+    *,
+    expected_request_id: Optional[int] = None,
+) -> bool:
+    """Remove one lane request id, optionally only for the expected cycle."""
+    key = _yadreno_admin_request_key(kind, telegram_id, topic_id)
+    if expected_request_id is None:
+        return delete_setting(key)
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM settings WHERE key = ? AND value = ?",
+            (key, str(int(expected_request_id))),
+        )
+        return cursor.rowcount > 0
+
+
+def clear_yadreno_admin_active_request_id(
+    telegram_id: int,
+    topic_id: int,
+    *,
+    expected_request_id: Optional[int] = None,
+) -> bool:
+    """Remove the active request id without deleting a newer cycle."""
+    return _clear_yadreno_admin_request_id(
+        'active',
+        telegram_id,
+        topic_id,
+        expected_request_id=expected_request_id,
+    )
 
 
 def list_yadreno_admin_active_requests() -> List[Dict[str, int]]:
@@ -375,9 +474,19 @@ def set_yadreno_admin_last_request_id(telegram_id: int, topic_id: int, request_i
     )
 
 
-def clear_yadreno_admin_last_request_id(telegram_id: int, topic_id: int) -> bool:
-    """Removes last request_id Yadreno Admin from settings."""
-    return delete_setting(_yadreno_admin_request_key('last', telegram_id, topic_id))
+def clear_yadreno_admin_last_request_id(
+    telegram_id: int,
+    topic_id: int,
+    *,
+    expected_request_id: Optional[int] = None,
+) -> bool:
+    """Remove the last request id without deleting a newer cycle."""
+    return _clear_yadreno_admin_request_id(
+        'last',
+        telegram_id,
+        topic_id,
+        expected_request_id=expected_request_id,
+    )
 
 
 def _yadreno_admin_tool_call_key(request_id: int, tool_call_id: str) -> str:

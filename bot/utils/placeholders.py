@@ -47,6 +47,7 @@ _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
     'key_link_url': ('%ключ_ссылка_url%',),
     'key_info': ('%ключ_информация%',),
     'key_history': ('%ключ_история_операций%',),
+    'devices_list': (),
     'keys_list': ('%список_ключей%',),
     'screen_data': ('%экран_данные%',),
     'key_replace_data': ('%замена_ключа_данные%',),
@@ -455,6 +456,8 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'key_info_html'), mode, html_ready=True)
     if name == 'key_history':
         return _format_value(_context_value(context, 'key_history_html'), mode, html_ready=True)
+    if name == 'devices_list':
+        return _format_value(_context_value(context, 'devices_list_html'), mode, html_ready=True)
     if name == 'screen_data':
         return _format_value(_context_value(context, 'screen_data_html'), mode, html_ready=True)
     if name == 'key_replace_data':

@@ -17,9 +17,14 @@ import aiohttp
 
 from config import RETRY_CONFIG
 
-from bot.utils.inbounds import filter_visible_inbounds, is_mtproto_inbound
+from bot.utils.inbounds import (
+    filter_visible_inbounds,
+    inbound_matches_group,
+    is_mtproto_inbound,
+)
 from bot.utils.panel_version import (
     CLIENT_EXTERNAL_LINKS_MIN_VERSION,
+    CLIENT_HWID_LIMITS_MIN_VERSION,
     MINIMUM_SUPPORTED_3X_UI_VERSION,
     panel_version_at_least,
     parse_panel_version,
@@ -27,6 +32,7 @@ from bot.utils.panel_version import (
 
 from .base import (
     BaseVPNClient,
+    PanelClientDevice,
     PanelClientState,
     PanelDatabaseBackup,
     PanelErrorKind,
@@ -47,6 +53,7 @@ CAPABILITY_REFRESH_INTERVAL_SECONDS = 300
 BOT_API_TOKEN_NAME = "YadrenoVPN Bot"
 MTPROTO_MULTI_CLIENT_MIN_VERSION = (3, 5, 0)
 JSON_INBOUND_FIELDS = ("settings", "streamSettings", "sniffing")
+_PANEL_AUTH_LOCKS: Dict[str, asyncio.Lock] = {}
 
 
 class XUIClient(BaseVPNClient):
@@ -61,10 +68,20 @@ class XUIClient(BaseVPNClient):
         path = str(server.get("web_base_path") or "").strip("/")
         path = f"/{path}" if path else ""
         self.base_url = f"{self.protocol}://{self.host}:{self.port}{path}"
+        self._panel_auth_key = (
+            f"{self.protocol.casefold()}://{self.host.casefold()}:{self.port}{path}"
+        )
 
         self.session: Optional[aiohttp.ClientSession] = None
         self.api_token: Optional[str] = str(server.get("api_token") or "") or None
         self.panel_version: Optional[str] = str(server.get("panel_version") or "") or None
+        raw_inbound_group_id = server.get("inbound_group_id")
+        if raw_inbound_group_id in (None, ""):
+            self.inbound_group_id: Optional[int] = None
+        else:
+            self.inbound_group_id = int(raw_inbound_group_id)
+            if self.inbound_group_id <= 0:
+                raise ValueError("inbound_group_id must be a positive integer")
         self.is_authenticated = False
         self._validated_token: Optional[str] = None
         self._session_lock = asyncio.Lock()
@@ -400,6 +417,56 @@ class XUIClient(BaseVPNClient):
             await self.session.close()
         self.session = None
 
+    def _physical_panel_fields(self) -> Dict[str, Any]:
+        return {
+            "protocol": self.protocol,
+            "host": self.host,
+            "port": self.port,
+            "web_base_path": str(self.server.get("web_base_path") or ""),
+        }
+
+    def _panel_auth_lock(self) -> asyncio.Lock:
+        return _PANEL_AUTH_LOCKS.setdefault(self._panel_auth_key, asyncio.Lock())
+
+    def _get_reusable_panel_token(self) -> Optional[str]:
+        from database.db_servers import get_panel_recovery_api_token
+
+        return get_panel_recovery_api_token(**self._physical_panel_fields())
+
+    def _can_share_panel_auth(self) -> bool:
+        return (
+            self._has_password_credentials()
+            or self.server.get("_shared_panel_auth") is True
+        )
+
+    def _has_shared_panel_auth_scope(self) -> bool:
+        return self._can_share_panel_auth() and (
+            self.server_id is not None
+            or self.server.get("_shared_panel_auth") is True
+        )
+
+    def _load_reusable_panel_token(self) -> Optional[str]:
+        return (
+            self._get_reusable_panel_token()
+            if self._has_shared_panel_auth_scope()
+            else None
+        )
+
+    def _replace_matching_panel_tokens(
+        self,
+        expected_token: str,
+        replacement_token: Optional[str],
+    ) -> None:
+        if not self._has_shared_panel_auth_scope():
+            return
+        from database.db_servers import replace_panel_api_token_for_endpoint
+
+        replace_panel_api_token_for_endpoint(
+            **self._physical_panel_fields(),
+            expected_token=expected_token,
+            replacement_token=replacement_token,
+        )
+
     def _persist_api_token(self, token: Optional[str]) -> None:
         self.api_token = token or None
         self.server["api_token"] = token or None
@@ -420,9 +487,36 @@ class XUIClient(BaseVPNClient):
     async def _clear_token_if_current(self, rejected_token: str) -> None:
         if self.api_token != rejected_token:
             return
-        self._persist_api_token(None)
+        if self._can_share_panel_auth():
+            self._replace_matching_panel_tokens(rejected_token, None)
+        else:
+            self._persist_api_token(None)
+        self.api_token = None
+        self.server["api_token"] = None
         self._validated_token = None
         self.is_authenticated = False
+
+    def _accept_validated_token(
+        self,
+        token: str,
+        version: str,
+        *,
+        replaced_token: Optional[str] = None,
+    ) -> None:
+        current_token_was_rejected = bool(
+            replaced_token and self.api_token == replaced_token
+        )
+        if replaced_token:
+            self._replace_matching_panel_tokens(replaced_token, token)
+        if current_token_was_rejected and self._can_share_panel_auth():
+            self.api_token = token
+            self.server["api_token"] = token
+        else:
+            self._persist_api_token(token)
+        self._persist_panel_version(version)
+        self._validated_token = token
+        self.is_authenticated = True
+        self._panel_settings = None
 
     @staticmethod
     def _token_rows(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -565,13 +659,98 @@ class XUIClient(BaseVPNClient):
             )
         return version
 
-    async def _activate_candidate(self, candidate: str) -> None:
+    async def _activate_candidate(
+        self,
+        candidate: str,
+        *,
+        replaced_token: Optional[str] = None,
+    ) -> None:
         version = await self._validate_bearer_contract(candidate)
-        self._persist_api_token(candidate)
-        self._persist_panel_version(version)
-        self._validated_token = candidate
-        self.is_authenticated = True
-        self._panel_settings = None
+        self._accept_validated_token(
+            candidate,
+            version,
+            replaced_token=replaced_token,
+        )
+
+    async def _recover_rejected_token_locked(
+        self,
+        rejected_token: str,
+        rejection: PanelRequestError,
+    ) -> str:
+        """Recover one rejected token while the logical-client lock is held."""
+        async with self._panel_auth_lock():
+            if self.api_token and self.api_token != rejected_token:
+                return self.api_token
+
+            reusable = self._load_reusable_panel_token()
+            rejected_reusable: Optional[str] = None
+            if reusable and reusable != rejected_token:
+                try:
+                    version = await self._validate_bearer_contract(reusable)
+                except PanelRequestError as exc:
+                    if exc.kind != PanelErrorKind.UNAUTHORIZED:
+                        raise
+                    rejected_reusable = reusable
+                else:
+                    self._accept_validated_token(
+                        reusable,
+                        version,
+                        replaced_token=rejected_token,
+                    )
+                    return reusable
+
+            if not self._has_password_credentials():
+                await self._clear_token_if_current(rejected_token)
+                raise rejection
+
+            try:
+                candidate = await self._bootstrap_candidate_token()
+                await self._activate_candidate(
+                    candidate,
+                    replaced_token=rejected_token,
+                )
+                if rejected_reusable:
+                    self._replace_matching_panel_tokens(
+                        rejected_reusable,
+                        candidate,
+                    )
+            except Exception:
+                await self._clear_token_if_current(rejected_token)
+                if rejected_reusable:
+                    self._replace_matching_panel_tokens(
+                        rejected_reusable,
+                        None,
+                    )
+                raise
+            return candidate
+
+    async def _bootstrap_or_reuse_token_locked(self) -> str:
+        """Reuse a peer token or bootstrap one while the logical lock is held."""
+        async with self._panel_auth_lock():
+            reusable = self._load_reusable_panel_token()
+            rejected_reusable: Optional[str] = None
+            if reusable:
+                try:
+                    version = await self._validate_bearer_contract(reusable)
+                except PanelRequestError as exc:
+                    if exc.kind != PanelErrorKind.UNAUTHORIZED:
+                        raise
+                    rejected_reusable = reusable
+                else:
+                    self._accept_validated_token(reusable, version)
+                    return reusable
+
+            try:
+                candidate = await self._bootstrap_candidate_token()
+                await self._activate_candidate(
+                    candidate,
+                    replaced_token=rejected_reusable,
+                )
+            except Exception:
+                if rejected_reusable:
+                    self._replace_matching_panel_tokens(rejected_reusable, None)
+                raise
+            return candidate
 
     async def _recover_after_401(
         self,
@@ -581,12 +760,10 @@ class XUIClient(BaseVPNClient):
         async with self._auth_lock:
             if self.api_token and self.api_token != rejected_token:
                 return self.api_token
-            await self._clear_token_if_current(rejected_token)
-            if not self._has_password_credentials():
-                raise rejection
-            candidate = await self._bootstrap_candidate_token()
-            await self._activate_candidate(candidate)
-            return candidate
+            return await self._recover_rejected_token_locked(
+                rejected_token,
+                rejection,
+            )
 
     async def login(self) -> bool:
         if (
@@ -609,17 +786,15 @@ class XUIClient(BaseVPNClient):
                 except PanelRequestError as exc:
                     if exc.kind != PanelErrorKind.UNAUTHORIZED:
                         raise
-                    await self._clear_token_if_current(candidate)
-                    if not self._has_password_credentials():
-                        raise
+                    await self._recover_rejected_token_locked(candidate, exc)
+                    return True
                 else:
                     self._persist_panel_version(version)
                     self._validated_token = candidate
                     self.is_authenticated = True
                     return True
 
-            candidate = await self._bootstrap_candidate_token()
-            await self._activate_candidate(candidate)
+            await self._bootstrap_or_reuse_token_locked()
             return True
 
     async def validate_connection(self) -> bool:
@@ -636,13 +811,13 @@ class XUIClient(BaseVPNClient):
             and time.monotonic() - checked_at < CAPABILITY_REFRESH_INTERVAL_SECONDS
         )
 
-    async def refresh_capabilities(self) -> bool:
+    async def refresh_capabilities(self, *, force: bool = False) -> bool:
         """Refresh the live panel version with a short per-client TTL."""
         await self.login()
-        if self._capability_refresh_is_fresh():
+        if not force and self._capability_refresh_is_fresh():
             return True
         async with self._capability_refresh_lock:
-            if self._capability_refresh_is_fresh():
+            if not force and self._capability_refresh_is_fresh():
                 return True
             payload = await self._request("GET", "/panel/api/server/status")
             version = self._extract_version(payload)
@@ -774,7 +949,12 @@ class XUIClient(BaseVPNClient):
 
     async def get_inbounds(self, include_ignored: bool = False) -> List[Dict[str, Any]]:
         inbounds = await self._all_inbounds()
-        return inbounds if include_ignored else filter_visible_inbounds(inbounds)
+        scoped = [
+            item
+            for item in inbounds
+            if inbound_matches_group(item.get("tag"), self.inbound_group_id)
+        ]
+        return scoped if include_ignored else filter_visible_inbounds(scoped)
 
     async def get_nodes(self) -> List[Dict[str, Any]]:
         try:
@@ -800,26 +980,27 @@ class XUIClient(BaseVPNClient):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
 
-    async def get_inbound_descriptors(
-        self,
-        *,
-        include_ignored: bool = False,
-    ) -> List[PanelInboundDescriptor]:
-        raw: Optional[List[Dict[str, Any]]] = None
-        try:
-            payload = await self._request(
-                "GET",
-                "/panel/api/inbounds/options",
-                retry=False,
-            )
-            obj = payload.get("obj")
-            if isinstance(obj, list):
-                raw = [item for item in obj if isinstance(item, dict)]
-        except PanelRequestError as exc:
-            if exc.kind != PanelErrorKind.NOT_FOUND:
-                raise
-        if raw is None:
-            raw = await self.get_inbounds(include_ignored=True)
+    async def _get_all_inbound_descriptors(self) -> List[PanelInboundDescriptor]:
+        """Return the complete supported physical topology before logical scoping."""
+        raw: Optional[List[Dict[str, Any]]]
+        if self.inbound_group_id is not None:
+            raw = await self._all_inbounds()
+        else:
+            raw = None
+            try:
+                payload = await self._request(
+                    "GET",
+                    "/panel/api/inbounds/options",
+                    retry=False,
+                )
+                obj = payload.get("obj")
+                if isinstance(obj, list):
+                    raw = [item for item in obj if isinstance(item, dict)]
+            except PanelRequestError as exc:
+                if exc.kind != PanelErrorKind.NOT_FOUND:
+                    raise
+            if raw is None:
+                raw = await self._all_inbounds()
 
         descriptors = [
             descriptor
@@ -846,7 +1027,24 @@ class XUIClient(BaseVPNClient):
                     else item
                     for item in descriptors
                 ]
-        return descriptors if include_ignored else [item for item in descriptors if not item.ignored]
+        return descriptors
+
+    def _descriptor_is_in_scope(self, descriptor: PanelInboundDescriptor) -> bool:
+        return inbound_matches_group(descriptor.tag, self.inbound_group_id)
+
+    async def get_inbound_descriptors(
+        self,
+        *,
+        include_ignored: bool = False,
+    ) -> List[PanelInboundDescriptor]:
+        descriptors = [
+            item
+            for item in await self._get_all_inbound_descriptors()
+            if self._descriptor_is_in_scope(item)
+        ]
+        return descriptors if include_ignored else [
+            item for item in descriptors if not item.ignored
+        ]
 
     @staticmethod
     def _split_record(record: Dict[str, Any]) -> tuple[Dict[str, Any], set[int]]:
@@ -924,10 +1122,23 @@ class XUIClient(BaseVPNClient):
 
     async def get_sync_snapshot(self) -> PanelServerSnapshot:
         async with self.operation_metrics("sync_snapshot"):
-            descriptors = await self.get_inbound_descriptors(include_ignored=False)
-            available = [item for item in descriptors if item.available]
+            descriptors = await self._get_all_inbound_descriptors()
+            visible = [item for item in descriptors if not item.ignored]
+            available = [
+                item
+                for item in visible
+                if item.available and self._descriptor_is_in_scope(item)
+            ]
             available_ids = {item.id for item in available}
-            unavailable_ids = {item.id for item in descriptors if not item.available}
+            out_of_scope_available_ids = {
+                item.id
+                for item in visible
+                if item.available and not self._descriptor_is_in_scope(item)
+            }
+            reconcilable_ids = available_ids | out_of_scope_available_ids
+            unavailable_ids = {
+                item.id for item in descriptors if item.id not in reconcilable_ids
+            }
             snapshot = PanelServerSnapshot(
                 inbounds=[item.as_inbound() for item in available],
                 clients={},
@@ -942,7 +1153,10 @@ class XUIClient(BaseVPNClient):
                     int(value) for value in raw_ids if str(value).lstrip("-").isdigit()
                 } if isinstance(raw_ids, list) else set()
                 usable_ids = attached.intersection(available_ids)
-                unavailable_attached = attached - usable_ids
+                out_of_scope_attached = attached.intersection(
+                    out_of_scope_available_ids
+                )
+                unavailable_attached = attached - usable_ids - out_of_scope_attached
                 traffic = self._traffic_used(row.get("traffic"))
                 if traffic is None:
                     traffic = self._traffic_used(row)
@@ -950,6 +1164,7 @@ class XUIClient(BaseVPNClient):
                     email=email,
                     client=dict(row),
                     inbound_ids=usable_ids,
+                    out_of_scope_inbound_ids=out_of_scope_attached,
                     unavailable_inbound_ids=unavailable_attached,
                     traffic_used=traffic or 0,
                     traffic_known=True,
@@ -958,6 +1173,7 @@ class XUIClient(BaseVPNClient):
                     enable=self._api_bool(row.get("enable"), True),
                     sub_id=str(row.get("subId") or ""),
                     limit_ip=self._int(row.get("limitIp"), 1),
+                    limit_hwid=self._int(row.get("limitHwid")),
                     reset=self._int(row.get("reset")),
                     details_complete=False,
                 )
@@ -976,9 +1192,15 @@ class XUIClient(BaseVPNClient):
             )
         client, inbound_ids = self._split_record(record)
         known_available = set(state.inbound_ids)
+        known_out_of_scope = set(state.out_of_scope_inbound_ids)
         state.client = client
         state.inbound_ids = inbound_ids.intersection(known_available)
-        state.unavailable_inbound_ids = inbound_ids - state.inbound_ids
+        state.out_of_scope_inbound_ids = inbound_ids.intersection(
+            known_out_of_scope
+        )
+        state.unavailable_inbound_ids = (
+            inbound_ids - state.inbound_ids - state.out_of_scope_inbound_ids
+        )
         state.placements = {value: dict(client) for value in state.inbound_ids}
         state.sub_id = str(client.get("subId") or state.sub_id)
         state.details_complete = True
@@ -1016,6 +1238,8 @@ class XUIClient(BaseVPNClient):
             "comment": str(source.get("comment") or ""),
             "reset": self._int(source.get("reset")),
         }
+        if "limitHwid" in source:
+            payload["limitHwid"] = self._int(source.get("limitHwid"))
         if identifier:
             payload["id"] = identifier
         for field_name in ("password", "auth", "flow", "secret", "adTag", "reverse"):
@@ -1111,6 +1335,7 @@ class XUIClient(BaseVPNClient):
         expiry_time_ms: Optional[int] = None,
         enable: Optional[bool] = None,
         limit_ip: Optional[int] = None,
+        limit_hwid: Optional[int] = None,
         sub_id: Optional[str] = None,
         flow: Optional[str] = None,
         reset: Optional[int] = None,
@@ -1129,6 +1354,16 @@ class XUIClient(BaseVPNClient):
         if not record:
             return False
         client, inbound_ids = self._split_record(record)
+        if (
+            self.supports_client_hwids()
+            and limit_hwid is None
+            and "limitHwid" not in client
+        ):
+            raise PanelRequestError(
+                PanelErrorKind.INVALID_RESPONSE,
+                endpoint="/panel/api/clients/get/:email",
+                detail="client record omits limitHwid required for a safe full update",
+            )
         payload = self._client_payload(client, email=email)
         if total_gb_bytes is not None:
             payload["totalGB"] = max(0, int(total_gb_bytes))
@@ -1138,6 +1373,14 @@ class XUIClient(BaseVPNClient):
             payload["enable"] = bool(enable)
         if limit_ip is not None:
             payload["limitIp"] = max(0, int(limit_ip))
+        if limit_hwid is not None:
+            if not self.supports_client_hwids():
+                raise PanelRequestError(
+                    PanelErrorKind.UNSUPPORTED_VERSION,
+                    endpoint="/panel/api/clients/update/:email",
+                    detail="client HWID limits require 3X-UI 3.7.0+",
+                )
+            payload["limitHwid"] = max(0, int(limit_hwid))
         if sub_id is not None:
             payload["subId"] = str(sub_id)
         if flow is not None:
@@ -1158,7 +1401,7 @@ class XUIClient(BaseVPNClient):
             confirmed, confirmed_inbound_ids = self._split_record(value)
             if inbound_ids and not inbound_ids.issubset(confirmed_inbound_ids):
                 return False
-            checks = (
+            checks = [
                 (self._int(confirmed.get("totalGB")), self._int(payload.get("totalGB"))),
                 (self._int(confirmed.get("expiryTime")), self._int(payload.get("expiryTime"))),
                 (
@@ -1171,7 +1414,12 @@ class XUIClient(BaseVPNClient):
                 ),
                 (str(confirmed.get("subId") or ""), str(payload.get("subId") or "")),
                 (self._int(confirmed.get("reset")), self._int(payload.get("reset"))),
-            )
+            ]
+            if "limitHwid" in payload:
+                checks.append((
+                    self._int(confirmed.get("limitHwid")),
+                    self._int(payload.get("limitHwid")),
+                ))
             if any(actual != expected for actual, expected in checks):
                 return False
             if flow is not None or "flow" in payload:
@@ -1202,15 +1450,34 @@ class XUIClient(BaseVPNClient):
         expire_days: int = 0,
         expiry_time_ms: Optional[int] = None,
         limit_ip: int = 1,
+        limit_hwid: int = 0,
         enable: bool = True,
         tg_id: str = "",
         sub_id: Optional[str] = None,
         inbound_ids: Optional[Iterable[int]] = None,
     ) -> PanelProvisionResult:
+        if int(limit_hwid) > 0 and not self.supports_client_hwids():
+            raise PanelRequestError(
+                PanelErrorKind.UNSUPPORTED_VERSION,
+                endpoint="/panel/api/clients/add",
+                detail="client HWID limits require 3X-UI 3.7.0+",
+            )
         async with self.operation_metrics("provision_client"):
-            descriptors = await self.get_inbound_descriptors(include_ignored=False)
+            all_descriptors = await self._get_all_inbound_descriptors()
+            descriptors = [
+                item
+                for item in all_descriptors
+                if not item.ignored and self._descriptor_is_in_scope(item)
+            ]
             by_id = {item.id: item for item in descriptors}
             available_ids = {item.id for item in descriptors if item.available}
+            out_of_scope_available_ids = {
+                item.id
+                for item in all_descriptors
+                if not item.ignored
+                and item.available
+                and not self._descriptor_is_in_scope(item)
+            }
             requested = (
                 {int(value) for value in inbound_ids}
                 if inbound_ids is not None
@@ -1270,6 +1537,8 @@ class XUIClient(BaseVPNClient):
                     "subId": canonical_sub_id,
                     "reset": 0,
                 }
+                if self.supports_client_hwids():
+                    client_payload["limitHwid"] = max(0, int(limit_hwid))
                 if common_flow:
                     client_payload["flow"] = common_flow
 
@@ -1310,20 +1579,31 @@ class XUIClient(BaseVPNClient):
                         email=email,
                         client=update_client,
                         inbound_ids=update_attached.intersection(available_ids),
-                        unavailable_inbound_ids=update_attached - available_ids,
+                        out_of_scope_inbound_ids=update_attached.intersection(
+                            out_of_scope_available_ids
+                        ),
+                        unavailable_inbound_ids=(
+                            update_attached
+                            - available_ids
+                            - out_of_scope_available_ids
+                        ),
                         details_complete=True,
                     )
-                    await self.update_client_full(
-                        email=email,
-                        total_gb_bytes=total_bytes,
-                        expiry_time_ms=expiry,
-                        enable=enable,
-                        limit_ip=limit_ip,
-                        sub_id=canonical_sub_id,
-                        flow=common_flow,
-                        reset=0,
-                        known_state=update_state,
-                    )
+                    if not update_state.unavailable_inbound_ids:
+                        await self.update_client_full(
+                            email=email,
+                            total_gb_bytes=total_bytes,
+                            expiry_time_ms=expiry,
+                            enable=enable,
+                            limit_ip=limit_ip,
+                            limit_hwid=(
+                                limit_hwid if self.supports_client_hwids() else None
+                            ),
+                            sub_id=canonical_sub_id,
+                            flow=common_flow,
+                            reset=0,
+                            known_state=update_state,
+                        )
                 except PanelRequestError as exc:
                     for inbound_id in sorted(targets.intersection(attached)):
                         failed.setdefault(inbound_id, self._safe_detail(exc))
@@ -1345,7 +1625,12 @@ class XUIClient(BaseVPNClient):
                     email=email,
                     client=dict(client),
                     inbound_ids=actual_ids.intersection(available_ids),
-                    unavailable_inbound_ids=actual_ids - available_ids,
+                    out_of_scope_inbound_ids=actual_ids.intersection(
+                        out_of_scope_available_ids
+                    ),
+                    unavailable_inbound_ids=(
+                        actual_ids - available_ids - out_of_scope_available_ids
+                    ),
                     placements={value: dict(client) for value in actual_ids.intersection(available_ids)},
                     traffic_used=self._traffic_used(client.get("traffic")) or 0,
                     traffic_known=isinstance(client.get("traffic"), dict),
@@ -1354,13 +1639,18 @@ class XUIClient(BaseVPNClient):
                     enable=self._api_bool(client.get("enable"), True),
                     sub_id=confirmed_sub_id,
                     limit_ip=self._int(client.get("limitIp"), 1),
+                    limit_hwid=self._int(client.get("limitHwid")),
                     reset=self._int(client.get("reset")),
                     details_complete=True,
                 )
                 snapshot = PanelServerSnapshot(
                     inbounds=[item.as_inbound() for item in available_descriptors],
                     clients={email.lower(): state},
-                    unavailable_inbound_ids={item.id for item in descriptors if not item.available},
+                    unavailable_inbound_ids={
+                        item.id
+                        for item in all_descriptors
+                        if item.ignored or not item.available
+                    },
                 )
             return PanelProvisionResult(
                 email=email,
@@ -1615,6 +1905,103 @@ class XUIClient(BaseVPNClient):
             self.panel_version,
             CLIENT_EXTERNAL_LINKS_MIN_VERSION,
         )
+
+    def supports_client_hwids(self) -> bool:
+        """Return whether the detected panel exposes client HWID limits."""
+        return panel_version_at_least(
+            self.panel_version,
+            CLIENT_HWID_LIMITS_MIN_VERSION,
+        )
+
+    @staticmethod
+    def _optional_device_timestamp(value: Any) -> Optional[int]:
+        if value in (None, ""):
+            return None
+        try:
+            parsed = int(float(value))
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    async def get_client_devices(self, email: str) -> List[PanelClientDevice]:
+        """Read registered client devices through the official HWID route."""
+        if not self.supports_client_hwids():
+            raise PanelRequestError(
+                PanelErrorKind.UNSUPPORTED_API,
+                endpoint="/panel/api/clients/hwids/:email",
+                detail="client HWIDs require 3X-UI 3.7.0+",
+            )
+        normalized_email = str(email or "").strip()
+        if not normalized_email:
+            raise ValueError("email is required")
+        encoded = urllib.parse.quote(normalized_email, safe="")
+        payload = await self._request(
+            "POST",
+            f"/panel/api/clients/hwids/{encoded}",
+        )
+        rows = payload.get("obj")
+        if not isinstance(rows, list):
+            raise PanelRequestError(
+                PanelErrorKind.INVALID_RESPONSE,
+                endpoint="/panel/api/clients/hwids/:email",
+                detail="obj is not a list",
+            )
+        devices: List[PanelClientDevice] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise PanelRequestError(
+                    PanelErrorKind.INVALID_RESPONSE,
+                    endpoint="/panel/api/clients/hwids/:email",
+                    detail="device row is not an object",
+                )
+            raw_device_id = row.get("id")
+            if (
+                isinstance(raw_device_id, bool)
+                or not str(raw_device_id or "").strip().isascii()
+                or not str(raw_device_id or "").strip().isdecimal()
+                or int(str(raw_device_id).strip()) <= 0
+            ):
+                raise PanelRequestError(
+                    PanelErrorKind.INVALID_RESPONSE,
+                    endpoint="/panel/api/clients/hwids/:email",
+                    detail="device row has no positive numeric id",
+                )
+            device_id = str(int(str(raw_device_id).strip()))
+            devices.append(PanelClientDevice(
+                id=device_id,
+                first_seen=self._optional_device_timestamp(row.get("firstSeen")),
+                last_seen=self._optional_device_timestamp(row.get("lastSeen")),
+                user_agent=str(row.get("userAgent") or "").strip(),
+                device_os=str(row.get("deviceOs") or "").strip(),
+                os_version=str(row.get("osVersion") or "").strip(),
+                device_model=str(row.get("deviceModel") or "").strip(),
+            ))
+        return devices
+
+    async def delete_client_device(self, email: str, device_id: str) -> bool:
+        """Delete exactly one registered client device."""
+        if not self.supports_client_hwids():
+            raise PanelRequestError(
+                PanelErrorKind.UNSUPPORTED_API,
+                endpoint="/panel/api/clients/hwids/:email/:id",
+                detail="client HWIDs require 3X-UI 3.7.0+",
+            )
+        normalized_email = str(email or "").strip()
+        normalized_device_id = str(device_id or "").strip()
+        if (
+            not normalized_email
+            or not normalized_device_id.isascii()
+            or not normalized_device_id.isdecimal()
+            or int(normalized_device_id) <= 0
+        ):
+            raise ValueError("email and a positive numeric device_id are required")
+        encoded_email = urllib.parse.quote(normalized_email, safe="")
+        encoded_device_id = urllib.parse.quote(normalized_device_id, safe="")
+        await self._request(
+            "DELETE",
+            f"/panel/api/clients/hwids/{encoded_email}/{encoded_device_id}",
+        )
+        return True
 
     async def get_client_external_links(self, email: str) -> List[Dict[str, Any]]:
         """Read the complete external-link collection for one logical client."""

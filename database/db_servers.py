@@ -16,6 +16,8 @@ __all__ = [
     'update_server',
     'update_server_field',
     'update_server_api_token',
+    'get_panel_recovery_api_token',
+    'replace_panel_api_token_for_endpoint',
     'update_server_panel_info',
     'delete_server',
     'toggle_server_active',
@@ -23,7 +25,7 @@ __all__ = [
 
 SERVER_SELECT_FIELDS = """
     id, name, host, port, web_base_path, login, password, is_active, protocol,
-    api_token, panel_version, panel_checked_at
+    api_token, panel_version, panel_checked_at, inbound_group_id
 """
 
 def get_all_servers() -> List[Dict[str, Any]]:
@@ -87,6 +89,7 @@ def add_server(
     group_id: int = 1,
     api_token: Optional[str] = None,
     panel_version: Optional[str] = None,
+    inbound_group_id: Optional[int] = None,
 ) -> int:
     """
     Adds a new VPN server.
@@ -102,6 +105,7 @@ def add_server(
         group_id: tariff group ID (default 1 - “Main”)
         api_token: Existing 3X-UI Bearer token, if provided by the administrator
         panel_version: Version detected during the connection test
+        inbound_group_id: optional virtual inbound group on this physical panel
         
     Returns:
         ID of the created server
@@ -114,12 +118,13 @@ def add_server(
         cursor = conn.execute("""
             INSERT INTO servers (
                 name, host, port, web_base_path, login, password, is_active,
-                protocol, api_token, panel_version, panel_checked_at
+                protocol, api_token, panel_version, panel_checked_at,
+                inbound_group_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
         """, (
             name, host, port, web_base_path, login, password, protocol,
-            api_token, panel_version, panel_checked_at,
+            api_token, panel_version, panel_checked_at, inbound_group_id,
         ))
         server_id = cursor.lastrowid
         
@@ -146,7 +151,7 @@ def update_server(server_id: int, **fields) -> bool:
     allowed_fields = {
         'name', 'host', 'port', 'web_base_path', 'login', 'password',
         'is_active', 'protocol', 'api_token', 'panel_version',
-        'panel_checked_at',
+        'panel_checked_at', 'inbound_group_id',
     }
     fields = {k: v for k, v in fields.items() if k in allowed_fields}
     
@@ -197,6 +202,70 @@ def update_server_api_token(server_id: int, token: Optional[str]) -> bool:
             else:
                 logger.info(f"Очищен api_token для сервера ID {server_id}")
         return success
+
+
+def get_panel_recovery_api_token(
+    *,
+    protocol: str,
+    host: str,
+    port: int,
+    web_base_path: str,
+) -> Optional[str]:
+    """Return a reusable token from a recovery-capable row of one physical panel."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT api_token
+            FROM servers
+            WHERE LOWER(protocol) = LOWER(?)
+              AND LOWER(host) = LOWER(?)
+              AND port = ?
+              AND TRIM(web_base_path, '/') = TRIM(?, '/')
+              AND TRIM(login) != ''
+              AND TRIM(password) != ''
+              AND api_token IS NOT NULL
+              AND TRIM(api_token) != ''
+            ORDER BY id
+            LIMIT 1
+            """,
+            (protocol, host, int(port), web_base_path),
+        ).fetchone()
+        return str(row['api_token']) if row else None
+
+
+def replace_panel_api_token_for_endpoint(
+    *,
+    protocol: str,
+    host: str,
+    port: int,
+    web_base_path: str,
+    expected_token: str,
+    replacement_token: Optional[str],
+) -> int:
+    """Compare-and-swap one rejected token across matching logical panel rows."""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE servers
+            SET api_token = ?
+            WHERE LOWER(protocol) = LOWER(?)
+              AND LOWER(host) = LOWER(?)
+              AND port = ?
+              AND TRIM(web_base_path, '/') = TRIM(?, '/')
+              AND api_token = ?
+              AND TRIM(login) != ''
+              AND TRIM(password) != ''
+            """,
+            (
+                replacement_token,
+                protocol,
+                host,
+                int(port),
+                web_base_path,
+                expected_token,
+            ),
+        )
+        return int(cursor.rowcount)
 
 
 def update_server_panel_info(

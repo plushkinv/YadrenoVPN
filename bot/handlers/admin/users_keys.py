@@ -23,6 +23,7 @@ from bot.services.vpn_api import (
     VPNAPIError,
     format_traffic,
     provision_client_on_server,
+    resolve_panel_client_limits,
 )
 from bot.handlers.admin.users_manage import format_user_display, _show_user_view_edit
 from bot.handlers.admin.users_list import show_users_menu
@@ -555,13 +556,15 @@ async def _confirm_add_key_locked(
 
         sub_id = uuid.uuid4().hex
         panel_client = get_client_from_server_data(server)
+        panel_limits = resolve_panel_client_limits(devices)
         provisioned = await provision_client_on_server(
             server_id=server_id,
             email=email,
             total_gb=traffic_gb,
             total_gb_bytes=traffic_limit_bytes,
             expire_days=days,
-            limit_ip=devices,
+            limit_ip=panel_limits.limit_ip,
+            limit_hwid=panel_limits.limit_hwid,
             tg_id=str(user_telegram_id),
             sub_id=sub_id,
             client=panel_client,
