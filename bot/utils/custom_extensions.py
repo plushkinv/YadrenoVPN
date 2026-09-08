@@ -9,6 +9,7 @@ import logging
 import re
 import sqlite3
 import sys
+from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -43,6 +44,8 @@ _BLOCKED_IMPORT_PREFIXES = {
     'bot.utils.page_flow',
     'bot.utils.payment_provider_registry',
     'bot.utils.policy_registry',
+    'bot.utils.extension_finance',
+    'bot.utils.extension_event_registry',
 }
 _BLOCKED_IMPORT_MODULES = {'bot', 'bot.utils'}
 _ALLOWED_IMPORT_PREFIXES = {'bot.utils.custom_extensions'}
@@ -71,6 +74,8 @@ _PUBLIC_CUSTOM_EXTENSIONS_API = {
     'register_guard',
     'register_key_lifecycle_hook',
     'register_payment_completion_handler',
+    'register_event_handler',
+    'register_task_handler',
     'register_page_hook',
     'register_payment_provider',
     'register_pricing_policy',
@@ -104,6 +109,8 @@ _REGISTRATION_KINDS = (
     'referral_reward_policies',
     'key_lifecycle_hooks',
     'completion_handlers',
+    'event_handlers',
+    'task_handlers',
     'payment_providers',
     'callback_handlers',
     'command_handlers',
@@ -266,7 +273,9 @@ def register_action_policy(
     _record_registration('action_policies', policy_name)
 
 
-def register_pricing_policy(name: str, func: Callable, *, replace: bool = False) -> None:
+def register_pricing_policy(
+    name: str, func: Callable, *, replace: bool = False, mode: str = 'provider',
+) -> None:
     """Registers the pricing policy of the extension."""
     _ensure_extension_mutation_allowed('register_pricing_policy')
     from bot.utils.policy_registry import register_pricing_policy as _register_pricing_policy
@@ -277,6 +286,7 @@ def register_pricing_policy(name: str, func: Callable, *, replace: bool = False)
         policy_name,
         _bind_extension_callable(func, invocation_kind='policy'),
         replace=replace,
+        mode=mode,
     )
     _record_registration('pricing_policies', policy_name)
 
@@ -357,6 +367,38 @@ def register_payment_completion_handler(
     return key
 
 
+def register_event_handler(
+    name: str, *, events, handler: Callable, replace: bool = False,
+) -> str:
+    """Subscribe an owner-local handler to committed core events."""
+    _ensure_extension_mutation_allowed('register_event_handler')
+    from bot.utils.extension_event_registry import register_extension_event_handler
+
+    key = register_extension_event_handler(
+        _require_current_extension(), name, events=events,
+        handler=_bind_extension_callable(handler, invocation_kind='event_handler'),
+        replace=replace,
+    )
+    _record_registration('event_handlers', key)
+    return key
+
+
+def register_task_handler(name: str, handler: Callable, *, replace: bool = False) -> str:
+    """Register an owner-local callable for durable one-off invocations."""
+    _ensure_extension_mutation_allowed('register_task_handler')
+    if not callable(handler):
+        raise ValueError('handler must be callable')
+    from bot.utils.extension_task_registry import register_extension_task_handler
+
+    key = register_extension_task_handler(
+        _require_current_extension(), name,
+        handler=_bind_extension_callable(handler, invocation_kind='task_handler'),
+        replace=replace,
+    )
+    _record_registration('task_handlers', key)
+    return key
+
+
 def register_payment_provider(
     provider_id: str,
     *,
@@ -386,7 +428,7 @@ def register_payment_provider(
         create_payment=_bind_extension_callable(create_payment, invocation_kind='payment_provider'),
         check_payment=_bind_extension_callable(check_payment, invocation_kind='payment_provider'),
         webhook_handler=(
-            _bind_extension_callable(webhook_handler, invocation_kind='payment_provider')
+            _bind_extension_callable(webhook_handler, invocation_kind='payment_provider', bind_user=False)
             if webhook_handler is not None
             else None
         ),
@@ -552,6 +594,19 @@ def get_custom_extensions_diagnostics(
         restart_required = True
     from bot.utils.extension_settings import get_all_extension_settings
     from bot.utils.page_flow import get_page_flow_runtime_diagnostics
+    from bot.utils.extension_event_registry import CORE_EVENT_NAMES, EXTENSION_EVENT_HANDLERS
+    from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
+    from database.requests import get_core_event_diagnostics, get_extension_task_diagnostics
+
+    try:
+        event_deliveries = get_core_event_diagnostics()
+    except sqlite3.Error:
+        event_deliveries = {'totals': {}, 'handlers': [], 'issues': [], 'status': 'unavailable'}
+
+    try:
+        scheduled_tasks = get_extension_task_diagnostics()
+    except sqlite3.Error:
+        scheduled_tasks = {'totals': {}, 'handlers': [], 'issues': [], 'status': 'unavailable'}
 
     try:
         page_classification = get_page_classification_diagnostics(limit=8)
@@ -588,6 +643,44 @@ def get_custom_extensions_diagnostics(
         'page_flow_runtime': get_page_flow_runtime_diagnostics(),
         'page_classification': page_classification,
         'settings': get_all_extension_settings(),
+        'core_events': {
+            'catalog': list(CORE_EVENT_NAMES),
+            'subscriptions': [
+                {key: item[key] for key in ('extension_id', 'handler_name', 'events')}
+                for item in list(EXTENSION_EVENT_HANDLERS.values())[:100]
+            ],
+            'deliveries': event_deliveries,
+        },
+        'scheduled_tasks': {
+            'registrations': [
+                {key: item[key] for key in ('extension_id', 'handler_name')}
+                for item in list(EXTENSION_TASK_HANDLERS.values())[:100]
+            ],
+            'jobs': scheduled_tasks,
+        },
+        'task_capabilities': {
+            'contract_version': 1,
+            'methods': ['schedule_task'],
+            'scheduling_modes': ['delay_seconds', 'run_at'],
+            'delivery_policy': 'at_least_once',
+        },
+        'messaging_capabilities': {
+            'contract_version': 1,
+            'methods': ['send_user_page', 'send_current_user_page'],
+            'recipient': 'explicit_or_current_user',
+            'delivery_policy': 'single_attempt',
+        },
+        'finance_capabilities': {
+            'contract_version': 1,
+            'payment_read_access': 'installation', 'promo_management_access': 'installation',
+            'pricing_modes': ['provider', 'base'],
+            'methods': [
+                'get_payment', 'list_user_payments', 'get_user_payment_summary',
+                'get_promo_code', 'list_promo_codes', 'check_promo_code', 'create_promo_code',
+                'update_promo_code', 'set_promo_code_active', 'activate_promo_code',
+                'clear_active_promo_code', 'preview_payment_price',
+            ],
+        },
     }
 
 
@@ -812,6 +905,12 @@ def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) ->
                 if actions is not None:
                     normalize_action_policy_actions(actions)
                 break
+        elif func_name == 'register_task_handler':
+            from bot.utils.action_origin_context import normalize_completion_handler_name
+
+            name = _literal_string_arg(node.args[0]) if node.args else _literal_keyword_string_arg(node, 'name')
+            if name is not None:
+                normalize_completion_handler_name(name)
         elif func_name == 'register_command_handler':
             command = _literal_string_arg(node.args[0]) if node.args else None
             if command is None:
@@ -1425,7 +1524,9 @@ def _require_extension_payment_provider_id(provider_id: str) -> str:
     raise ValueError('provider_id расширения должен совпадать с namespace текущего расширения')
 
 
-def _bind_extension_callable(func: Callable, *, invocation_kind: str) -> Callable:
+def _bind_extension_callable(
+    func: Callable, *, invocation_kind: str, bind_user: bool = True,
+) -> Callable:
     extension_id = _CURRENT_EXTENSION.get()
     if extension_id is None:
         return func
@@ -1433,12 +1534,12 @@ def _bind_extension_callable(func: Callable, *, invocation_kind: str) -> Callabl
     if inspect.iscoroutinefunction(func):
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
+            bot = _extract_extension_bot(args, kwargs)
+            telegram_id = _extract_extension_telegram_id(args, kwargs, invocation_kind=invocation_kind) if bind_user else None
             token = _CURRENT_EXTENSION.set(extension_id)
             invocation_token = _CURRENT_EXTENSION_INVOCATION_KIND.set(invocation_kind)
-            bot = _extract_extension_bot(args, kwargs)
-            telegram_id = _extract_extension_telegram_id(args, kwargs)
             bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
-            telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id) if telegram_id is not None else None
+            telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id)
             try:
                 return await func(*args, **kwargs)
             finally:
@@ -1453,12 +1554,12 @@ def _bind_extension_callable(func: Callable, *, invocation_kind: str) -> Callabl
 
     @wraps(func)
     def wrapper(*args, **kwargs):
+        bot = _extract_extension_bot(args, kwargs)
+        telegram_id = _extract_extension_telegram_id(args, kwargs, invocation_kind=invocation_kind) if bind_user else None
         token = _CURRENT_EXTENSION.set(extension_id)
         invocation_token = _CURRENT_EXTENSION_INVOCATION_KIND.set(invocation_kind)
-        bot = _extract_extension_bot(args, kwargs)
-        telegram_id = _extract_extension_telegram_id(args, kwargs)
         bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
-        telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id) if telegram_id is not None else None
+        telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id)
         try:
             result = func(*args, **kwargs)
             if inspect.isawaitable(result):
@@ -1492,7 +1593,7 @@ async def _await_with_extension_context(
     token = _CURRENT_EXTENSION.set(extension_id)
     invocation_token = _CURRENT_EXTENSION_INVOCATION_KIND.set(invocation_kind)
     bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
-    telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id) if telegram_id is not None else None
+    telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id)
     try:
         return await awaitable
     finally:
@@ -1550,17 +1651,34 @@ def _extract_extension_bot(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
     return None
 
 
-def _extract_extension_telegram_id(args: tuple[Any, ...], kwargs: dict[str, Any]) -> int | None:
+def _extract_extension_telegram_id(
+    args: tuple[Any, ...], kwargs: dict[str, Any], *, invocation_kind: str | None = None,
+) -> int | None:
+    """Resolve core-provided identity; an internal id always denotes its payer."""
     for item in list(args) + list(kwargs.values()):
-        if isinstance(item, dict) and isinstance(item.get('telegram_id'), int):
-            return item['telegram_id']
-        if hasattr(item, 'get'):
-            try:
-                value = item.get('telegram_id')
-            except Exception:
-                value = None
-            if isinstance(value, int):
-                return value
+        if isinstance(item, Mapping):
+            internal_id = item.get('payer_id', item.get('user_id'))
+            telegram_id = item.get('telegram_id')
+            if type(internal_id) is int and internal_id > 0:
+                from database.requests import get_extension_user_identity
+
+                identity = get_extension_user_identity(user_id=internal_id)
+                if identity is None:
+                    if invocation_kind in {'event_handler', 'task_handler'} and type(telegram_id) is int and telegram_id > 0:
+                        return telegram_id
+                    return None
+                resolved = int(identity['telegram_id'])
+                if invocation_kind not in {'event_handler', 'task_handler'} and type(telegram_id) is int and telegram_id != resolved:
+                    raise ValueError('extension user_id and telegram_id do not match')
+                return resolved
+            if type(telegram_id) is int and telegram_id > 0:
+                return telegram_id
+            key_id = item.get('key_id')
+            if invocation_kind == 'lifecycle_hook' and type(key_id) is int and key_id > 0:
+                from database.requests import get_extension_key_user_identity
+
+                identity = get_extension_key_user_identity(key_id)
+                return int(identity['telegram_id']) if identity else None
         user = getattr(item, 'from_user', None)
         if user is not None and isinstance(getattr(user, 'id', None), int):
             return user.id
@@ -1645,6 +1763,8 @@ def _clone_extension_registrations(
 
 
 def _remove_extension_runtime_registrations(extension_id: str) -> None:
+    from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
+    from bot.utils.policy_registry import BASE_PRICING_POLICIES
     registrations = _EXTENSION_REGISTRATIONS.get(extension_id)
     if not registrations:
         return
@@ -1655,6 +1775,7 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
     from bot.utils.extension_callbacks import remove_extension_callback_handlers
     from bot.utils.extension_commands import remove_extension_command_handlers
     from bot.utils.extension_completion_registry import remove_extension_completion_handlers
+    from bot.utils.extension_event_registry import EXTENSION_EVENT_HANDLERS
     from bot.utils.extension_settings import remove_extension_settings
     from bot.utils.lifecycle_registry import KEY_LIFECYCLE_HOOKS
     from bot.utils.payment_provider_registry import PAYMENT_PROVIDERS
@@ -1674,6 +1795,7 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
         page_flow.remove_page_flow_registration('hook', name)
     for name in registrations.get('pricing_policies', set()):
         PRICING_POLICIES.pop(name, None)
+        BASE_PRICING_POLICIES.pop(name, None)
     for name in registrations.get('promo_reward_policies', set()):
         PROMO_REWARD_POLICIES.pop(name, None)
     for name in registrations.get('referral_reward_policies', set()):
@@ -1684,6 +1806,10 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
         extension_id,
         registrations.get('completion_handlers', set()),
     )
+    for name in registrations.get('event_handlers', set()):
+        EXTENSION_EVENT_HANDLERS.pop(name, None)
+    for name in registrations.get('task_handlers', set()):
+        EXTENSION_TASK_HANDLERS.pop(name, None)
     for name in registrations.get('payment_providers', set()):
         PAYMENT_PROVIDERS.pop(name, None)
     remove_extension_callback_handlers(extension_id, registrations.get('callback_handlers', set()))
@@ -1694,6 +1820,9 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
 
 
 def _snapshot_runtime_registries() -> dict[str, Any]:
+    from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
+    from bot.utils.policy_registry import BASE_PRICING_POLICIES
+    from bot.utils.extension_event_registry import EXTENSION_EVENT_HANDLERS
     from bot.utils import page_flow
     from bot.utils.action_policy import ACTION_POLICIES
     from bot.utils.action_registry import ACTION_REGISTRY
@@ -1720,10 +1849,13 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
         'page_hooks': dict(page_flow.PAGE_HOOKS),
         'page_flow_runtime': page_flow.snapshot_page_flow_runtime_state(),
         'pricing_policies': dict(PRICING_POLICIES),
+        'base_pricing_policies': dict(BASE_PRICING_POLICIES),
         'promo_reward_policies': dict(PROMO_REWARD_POLICIES),
         'referral_reward_policies': dict(REFERRAL_REWARD_POLICIES),
         'key_lifecycle_hooks': dict(KEY_LIFECYCLE_HOOKS),
         'completion_handlers': dict(EXTENSION_COMPLETION_HANDLERS),
+        'event_handlers': dict(EXTENSION_EVENT_HANDLERS),
+        'task_handlers': dict(EXTENSION_TASK_HANDLERS),
         'payment_providers': dict(PAYMENT_PROVIDERS),
         'callback_handlers': dict(EXTENSION_CALLBACK_HANDLERS),
         'access_check_callbacks': set(EXTENSION_ACCESS_CHECK_CALLBACKS),
@@ -1738,6 +1870,9 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
 
 
 def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
+    from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
+    from bot.utils.policy_registry import BASE_PRICING_POLICIES
+    from bot.utils.extension_event_registry import EXTENSION_EVENT_HANDLERS
     from bot.utils import page_flow
     from bot.utils.action_policy import ACTION_POLICIES
     from bot.utils.action_registry import ACTION_REGISTRY
@@ -1765,6 +1900,8 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
     page_flow.restore_page_flow_runtime_state(snapshot.get('page_flow_runtime', {}))
     PRICING_POLICIES.clear()
     PRICING_POLICIES.update(snapshot['pricing_policies'])
+    BASE_PRICING_POLICIES.clear()
+    BASE_PRICING_POLICIES.update(snapshot.get('base_pricing_policies', {}))
     PROMO_REWARD_POLICIES.clear()
     PROMO_REWARD_POLICIES.update(snapshot['promo_reward_policies'])
     REFERRAL_REWARD_POLICIES.clear()
@@ -1773,6 +1910,10 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
     KEY_LIFECYCLE_HOOKS.update(snapshot['key_lifecycle_hooks'])
     EXTENSION_COMPLETION_HANDLERS.clear()
     EXTENSION_COMPLETION_HANDLERS.update(snapshot.get('completion_handlers', {}))
+    EXTENSION_EVENT_HANDLERS.clear()
+    EXTENSION_EVENT_HANDLERS.update(snapshot.get('event_handlers', {}))
+    EXTENSION_TASK_HANDLERS.clear()
+    EXTENSION_TASK_HANDLERS.update(snapshot.get('task_handlers', {}))
     PAYMENT_PROVIDERS.clear()
     PAYMENT_PROVIDERS.update(snapshot['payment_providers'])
     EXTENSION_CALLBACK_HANDLERS.clear()
@@ -1790,6 +1931,9 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
 
 
 def _registry_totals() -> dict[str, int]:
+    from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
+    from bot.utils.policy_registry import BASE_PRICING_POLICIES
+    from bot.utils.extension_event_registry import EXTENSION_EVENT_HANDLERS
     from bot.utils import page_flow
     from bot.utils.action_policy import ACTION_POLICIES
     from bot.utils.action_registry import ACTION_REGISTRY
@@ -1811,11 +1955,13 @@ def _registry_totals() -> dict[str, int]:
         'action_policies': len(ACTION_POLICIES),
         'guards': len(page_flow.PAGE_GUARDS),
         'page_hooks': len(page_flow.PAGE_HOOKS),
-        'pricing_policies': len(PRICING_POLICIES),
+        'pricing_policies': len(PRICING_POLICIES) + len(BASE_PRICING_POLICIES),
         'promo_reward_policies': len(PROMO_REWARD_POLICIES),
         'referral_reward_policies': len(REFERRAL_REWARD_POLICIES),
         'key_lifecycle_hooks': len(KEY_LIFECYCLE_HOOKS),
         'completion_handlers': len(EXTENSION_COMPLETION_HANDLERS),
+        'event_handlers': len(EXTENSION_EVENT_HANDLERS),
+        'task_handlers': len(EXTENSION_TASK_HANDLERS),
         'payment_providers': len(PAYMENT_PROVIDERS),
         'callback_handlers': len(EXTENSION_CALLBACK_HANDLERS),
         'command_handlers': len(EXTENSION_COMMAND_DEFINITIONS),
@@ -1875,6 +2021,8 @@ __all__ = [
     'register_referral_reward_policy',
     'register_user_access_guard',
     'reset_custom_extensions_runtime',
+    'register_event_handler',
+    'register_task_handler',
     'validate_custom_extension_file',
     'validate_custom_extensions_dir',
 ]

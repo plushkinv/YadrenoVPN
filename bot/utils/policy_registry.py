@@ -4,6 +4,7 @@ from __future__ import annotations
 import inspect
 import logging
 import re
+from contextlib import nullcontext
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -16,6 +17,7 @@ PromoRewardPolicy = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 ReferralRewardPolicy = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 
 PRICING_POLICIES: dict[str, PricingPolicy] = {}
+BASE_PRICING_POLICIES: dict[str, PricingPolicy] = {}
 PROMO_REWARD_POLICIES: dict[str, PromoRewardPolicy] = {}
 REFERRAL_REWARD_POLICIES: dict[str, ReferralRewardPolicy] = {}
 
@@ -47,9 +49,21 @@ _ALLOWED_REFERRAL_REWARD_KEYS = {
 }
 
 
-def register_pricing_policy(name: str, func: PricingPolicy, *, replace: bool = False) -> None:
+def register_pricing_policy(
+    name: str, func: PricingPolicy, *, replace: bool = False, mode: str = 'provider',
+) -> None:
     """Registers the pricing policy."""
-    _register_policy(PRICING_POLICIES, name, func, replace=replace)
+    if mode not in ('provider', 'base'):
+        raise ValueError('pricing mode must be provider or base')
+    key = _normalize_policy_name(name)
+    target, other = (
+        (BASE_PRICING_POLICIES, PRICING_POLICIES) if mode == 'base'
+        else (PRICING_POLICIES, BASE_PRICING_POLICIES)
+    )
+    if key in other and not replace:
+        raise ValueError('pricing policy is already registered in another mode')
+    _register_policy(target, key, func, replace=replace)
+    other.pop(key, None)
 
 
 def register_promo_reward_policy(name: str, func: PromoRewardPolicy, *, replace: bool = False) -> None:
@@ -65,18 +79,25 @@ def register_referral_reward_policy(name: str, func: ReferralRewardPolicy, *, re
 def apply_pricing_policies(
     quote: Mapping[str, Any],
     context: Mapping[str, Any],
+    *, mode: str = 'provider',
 ) -> dict[str, Any]:
     """Consistently applies pricing policies to quote."""
     result = dict(quote)
     result.setdefault('pricing_policies', [])
     _validate_quote_amounts(result)
 
-    for name, policy in list(PRICING_POLICIES.items()):
+    registry = BASE_PRICING_POLICIES if mode == 'base' else PRICING_POLICIES
+    for name, policy in list(registry.items()):
         policy_context = dict(context)
         policy_context['quote'] = dict(result)
         try:
-            raw_decision = policy(policy_context)
+            from bot.utils.action_policy import _action_policy_context
+
+            with (_action_policy_context('base_pricing') if mode == 'base' else nullcontext()):
+                raw_decision = policy(policy_context)
             if inspect.isawaitable(raw_decision):
+                if inspect.iscoroutine(raw_decision):
+                    raw_decision.close()
                 raise ValueError('pricing policy должна быть синхронной')
             decision = _normalize_pricing_decision(raw_decision)
         except Exception as e:
@@ -329,6 +350,7 @@ def _normalize_referral_reward_decision(raw_decision: Mapping[str, Any] | None) 
 
 __all__ = [
     'PRICING_POLICIES',
+    'BASE_PRICING_POLICIES',
     'PROMO_REWARD_POLICIES',
     'REFERRAL_REWARD_POLICIES',
     'apply_pricing_policies',

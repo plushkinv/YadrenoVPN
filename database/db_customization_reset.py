@@ -305,6 +305,20 @@ def _reset_user_ui_texts(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
 def _reset_extension_tables(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
     actions: list[str] = []
 
+    for table, label in (
+        ('extension_event_deliveries', 'core event deliveries'),
+        ('extension_scheduled_tasks', 'scheduled extension tasks'),
+    ):
+        if not _table_exists(conn, table):
+            continue
+        count = _count_where(conn, table, "state IN ('pending', 'processing')")
+        actions.append(f'{label} to stop: {count}')
+        if count and not dry_run:
+            conn.execute(f"""UPDATE {table}
+                SET state = 'degraded', last_error_code = 'customization_reset',
+                    completed_at = CURRENT_TIMESTAMP, claim_token = NULL, lease_until = NULL
+                WHERE state IN ('pending', 'processing')""")
+
     for table_name in ("extension_storage", "extension_schema_versions", "extension_core_operations"):
         if not _table_exists(conn, table_name):
             actions.append(f"{table_name} table is missing; skipped")

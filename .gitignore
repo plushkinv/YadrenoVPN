@@ -6,6 +6,7 @@
 config.py
 logs/
 tests/
+/pytest.ini
 docs/
 results.md
 AGENTS.md

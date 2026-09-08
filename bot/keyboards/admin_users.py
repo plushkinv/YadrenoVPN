@@ -140,20 +140,41 @@ def user_ban_confirm_kb(telegram_id: int, is_banned: bool) -> InlineKeyboardMark
     builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin_user_view:{telegram_id}'))
     return builder.as_markup()
 
-def key_view_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMarkup:
+def key_view_kb(
+    key_id: int,
+    user_telegram_id: int,
+    *,
+    show_subscription: bool = False,
+) -> InlineKeyboardMarkup:
     """
     VPN key management keyboard.
     
     Args:
         key_id: Key ID
         user_telegram_id: Telegram owner ID (for return)
+        show_subscription: Whether the current key can display its subscription
     """
     builder = InlineKeyboardBuilder()
+    if show_subscription:
+        builder.row(InlineKeyboardButton(
+            text='📋 Показать подписку',
+            callback_data=f'admin_key_show:{key_id}',
+        ))
     builder.row(InlineKeyboardButton(text='📅 Продлить', callback_data=f'admin_key_extend:{key_id}'))
     builder.row(InlineKeyboardButton(text='🔄 Сбросить трафик', callback_data=f'admin_key_reset_traffic:{key_id}'))
     builder.row(InlineKeyboardButton(text='📋 Изменить тарифный план', callback_data=f'admin_key_change_plan:{key_id}'))
     builder.row(InlineKeyboardButton(text='🗑️ Удалить ключ', callback_data=f'admin_key_delete_ask:{key_id}'))
     builder.row(back_button(f'admin_user_view:{user_telegram_id}'), home_button())
+    return builder.as_markup()
+
+
+def key_delivery_admin_kb(key_id: int) -> InlineKeyboardMarkup:
+    """Return from subscription delivery to its administrator key card."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        back_button(f'admin_key_view:{key_id}'),
+        InlineKeyboardButton(text='🈴 На главную', callback_data='admin_panel'),
+    )
     return builder.as_markup()
 
 

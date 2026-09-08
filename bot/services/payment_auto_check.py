@@ -470,6 +470,26 @@ async def run_payment_auto_check_scheduler(bot: Any) -> None:
                 'Extension completion scheduler tick failed type=%s',
                 type(error).__name__,
             )
+        try:
+            from bot.services.extension_events import process_due_extension_events
+
+            event_summary = await process_due_extension_events(bot=bot)
+            if event_summary['queued']:
+                logger.info('Core event deliveries: %s', event_summary)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error('Core event scheduler tick failed type=%s', type(error).__name__)
+        try:
+            from bot.services.extension_tasks import process_due_extension_tasks
+
+            task_summary = await process_due_extension_tasks(bot=bot)
+            if task_summary['queued']:
+                logger.info('Scheduled extension tasks: %s', task_summary)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error('Extension task scheduler tick failed type=%s', type(error).__name__)
         await asyncio.sleep(60)
 
 

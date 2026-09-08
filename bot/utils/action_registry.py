@@ -12,6 +12,8 @@ Rules:
 import logging
 from typing import Optional, Dict, Any, Callable, Mapping
 
+from database.page_button_styles import ITEM_COLOR_COLLECTIONS, is_collection_item_id
+
 logger = logging.getLogger(__name__)
 
 MAX_CALLBACK_DATA_BYTES = 64
@@ -479,6 +481,8 @@ def resolve_system_collection(button_id: str, context: Mapping[str, Any]) -> lis
     resolved: list[dict] = []
     for index, raw_item in enumerate(handler(dict(context))):
         allowed = {'callback_data', 'url', 'data', 'hidden', 'row', 'col'}
+        if button_id in ITEM_COLOR_COLLECTIONS:
+            allowed.add('item_id')
         unknown = set(raw_item) - allowed
         if unknown:
             raise ValueError(
@@ -486,6 +490,10 @@ def resolve_system_collection(button_id: str, context: Mapping[str, Any]) -> lis
                 f"{', '.join(sorted(unknown))}"
             )
         item = dict(raw_item)
+        if 'item_id' in item and not is_collection_item_id(item['item_id']):
+            raise ValueError(
+                f"system collection '{button_id}' item {index} item_id must be a positive id string"
+            )
         data = item.get('data') or {}
         if not isinstance(data, Mapping):
             raise ValueError(f"system collection '{button_id}' item {index} data must be a mapping")

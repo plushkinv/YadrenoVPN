@@ -439,7 +439,7 @@ def trial_offer_action_value(offer_id: int) -> str:
     return f'{TRIAL_OFFER_ACTION_PREFIX}{normalized}'
 
 
-def claim_trial_offer(user_id: int, offer_id: int) -> dict[str, Any]:
+def claim_trial_offer(user_id: int, offer_id: int, *, event_subscribers=()) -> dict[str, Any]:
     """Atomically consumes eligibility and creates a paid draft trial order."""
     normalized_user_id = int(user_id)
     normalized_offer_id = int(offer_id)
@@ -522,6 +522,19 @@ def claim_trial_offer(user_id: int, offer_id: int) -> dict[str, Any]:
         conn.execute(
             "UPDATE users SET used_trial = 1 WHERE id = ?",
             (normalized_user_id,),
+        )
+
+        from .db_core_events import record_core_event_with_conn
+
+        record_core_event_with_conn(
+            conn, event_name='trial.activated', source_id=str(activation_id),
+            order_id=order_id, subscribers=event_subscribers,
+            trial={
+                'activation_id': activation_id, 'offer_id': normalized_offer_id,
+                'tariff_id': int(offer['tariff_id']), 'group_id': int(offer['group_id']),
+                'key_id': key_id, 'duration_days': duration_days,
+                'traffic_limit_bytes': traffic_limit, 'scope': eligibility['scope'],
+            },
         )
 
         logger.info(

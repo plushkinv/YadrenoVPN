@@ -155,38 +155,19 @@ def build_quote(
     )
     snapshot = dict(rate_snapshot or get_payment_rate_snapshot())
     amount_unit = _amount_unit(payment_type)
-    promo = None
-    promo_error = None
-    promo_skipped_reason = None
+    from bot.services.payment_pricing import calculate_base_price
 
-    if explicit_code:
-        availability = get_promo_code_availability(
-            explicit_code,
-            order_id=order_id,
-            user_id=user_id,
-        )
-        if availability.get("ok"):
-            promo = availability.get("promo")
-        else:
-            promo_error = str(availability.get("reason") or "unavailable")
-    elif _use_active_promo:
-        promo = get_user_active_promo_code(user_id, order_id=order_id)
-        if promo:
-            availability = get_promo_code_availability(
-                promo["code"],
-                order_id=order_id,
-                user_id=user_id,
-                block_user_reservations=True,
-            )
-            if not availability.get("ok"):
-                promo_skipped_reason = str(
-                    availability.get("reason") or "unavailable"
-                )
-                promo = None
-
-    discount_percent = int(promo.get("discount_percent") or 0) if promo else 0
-    discount_minor = _discount_amount(nominal_minor, discount_percent) if promo else 0
-    payable_minor = max(0, nominal_minor - discount_minor)
+    base_quote = calculate_base_price(
+        user_id=user_id, tariff=dict(tariff or {}), nominal_minor=nominal_minor,
+        snapshot=snapshot, purpose=purpose, order_id=order_id,
+        explicit_code=explicit_code, use_active_promo=_use_active_promo,
+    )
+    promo = base_quote['promo']
+    promo_error = base_quote['promo_error']
+    promo_skipped_reason = base_quote['promo_skipped_reason']
+    discount_percent = base_quote['discount_percent']
+    discount_minor = base_quote['discount_amount_minor']
+    payable_minor = base_quote['payable_amount_minor']
     original_amount, charge_currency = provider_amount_from_base_minor(
         nominal_minor,
         payment_type,
@@ -200,7 +181,8 @@ def build_quote(
     discount_amount = max(0, original_amount - final_amount)
 
     quote = {
-        "ok": promo_error is None,
+        "ok": base_quote['ok'],
+        "pricing_policies": list(base_quote['pricing_policies']),
         "promo": promo,
         "promo_error": promo_error,
         "promo_skipped_reason": promo_skipped_reason,
@@ -221,7 +203,7 @@ def build_quote(
         "rate_snapshot": snapshot,
         "purpose": purpose,
         "is_free": final_amount == 0 and promo is not None,
-        "unavailable_reason": promo_error,
+        "unavailable_reason": base_quote['unavailable_reason'],
         "unavailable_code": promo_error,
         "minimum_amount_label": _payment_minimum_label(
             payment_type,
@@ -229,7 +211,7 @@ def build_quote(
         ),
     }
 
-    if promo_error is None:
+    if promo_error is None and base_quote['ok']:
         from bot.utils.policy_registry import apply_pricing_policies
 
         quote = apply_pricing_policies(
@@ -252,7 +234,7 @@ def build_quote(
 
         amount_policy_applied = any(
             'final_amount' in policy or 'discount_amount' in policy
-            for policy in quote.get('pricing_policies') or []
+            for policy in (quote.get('pricing_policies') or [])[len(base_quote['pricing_policies']):]
         )
         if quote.get('ok') is not False and amount_policy_applied:
             payable_minor = provider_units_to_base_minor(
@@ -398,26 +380,9 @@ def prepare_order_pricing(
 
 def activate_promo_code_for_user(user_id: int, code: str, *, allow_coupons: bool = True) -> Dict[str, Any]:
     """Checks the code and saves it to the user as active for the next payment."""
-    availability = get_promo_code_availability(
-        (code or "").strip(),
-        user_id=user_id,
-        block_user_reservations=True,
-    )
-    if not availability.get("ok"):
-        return {
-            "ok": False,
-            "reason": str(availability.get("reason") or "unavailable"),
-            "promo": availability.get("promo"),
-        }
-    promo = availability["promo"]
-    if promo.get("type") == "coupon" and not allow_coupons:
-        return {
-            "ok": False,
-            "reason": "coupon_link_disallowed",
-            "promo": promo,
-        }
-    set_user_active_promo_code(user_id, promo["id"])
-    return {"ok": True, "reason": "applied", "promo": promo}
+    from database.requests import activate_user_promo_code
+
+    return activate_user_promo_code(user_id, code, allow_coupons=allow_coupons)
 
 
 def describe_quote_lines(quote: Dict[str, Any]) -> str:

@@ -2,6 +2,7 @@ import datetime
 import logging
 import re
 import secrets
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
 
 from .connection import get_db
@@ -29,6 +30,7 @@ __all__ = [
     "get_promo_code_by_source",
     "get_promo_codes",
     "get_promo_code_availability",
+    "activate_user_promo_code",
     "has_available_promo_codes",
     "update_promo_code",
     "set_promo_code_active",
@@ -111,6 +113,7 @@ def create_promo_code(
     code_type: str = "promo",
     issued_to_user_id: Optional[int] = None,
     snapshot_lifetime_days: Optional[int] = None,
+    _conn=None,
 ) -> int:
     """Generates a promotional code or coupon and returns the post ID."""
     code = (code or "").strip()
@@ -131,7 +134,7 @@ def create_promo_code(
     now = _format_dt(_utcnow())
     expires_value = _normalize_expires_at(expires_at)
 
-    with get_db() as conn:
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         cursor = conn.execute(
             """
             INSERT INTO promo_codes (
@@ -402,8 +405,9 @@ def get_promo_code_availability(
     *,
     user_id: Optional[int] = None,
     block_user_reservations: bool = False,
+    _conn=None,
 ) -> Dict[str, Any]:
-    with get_db() as conn:
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         row = conn.execute(
             "SELECT * FROM promo_codes WHERE code = ?",
             ((code or "").strip(),),
@@ -462,6 +466,7 @@ def update_promo_code(
     expires_at: Any = "__unchanged__",
     activation_limit: Any = "__unchanged__",
     is_active: Optional[bool] = None,
+    _conn=None,
 ) -> bool:
     fields: List[str] = []
     params: List[Any] = []
@@ -487,7 +492,7 @@ def update_promo_code(
 
     fields.append("updated_at = CURRENT_TIMESTAMP")
     params.append(int(promo_code_id))
-    with get_db() as conn:
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         cursor = conn.execute(
             f"UPDATE promo_codes SET {', '.join(fields)} WHERE id = ?",
             params,
@@ -499,8 +504,8 @@ def set_promo_code_active(promo_code_id: int, is_active: bool) -> bool:
     return update_promo_code(promo_code_id, is_active=is_active)
 
 
-def set_user_active_promo_code(user_id: int, promo_code_id: int) -> bool:
-    with get_db() as conn:
+def set_user_active_promo_code(user_id: int, promo_code_id: int, *, _conn=None) -> bool:
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         cursor = conn.execute(
             "UPDATE users SET active_promo_code_id = ? WHERE id = ?",
             (promo_code_id, user_id),
@@ -511,8 +516,9 @@ def set_user_active_promo_code(user_id: int, promo_code_id: int) -> bool:
 def clear_user_active_promo_code(
     user_id: int,
     promo_code_id: Optional[int] = None,
+    *, _conn=None,
 ) -> bool:
-    with get_db() as conn:
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         if promo_code_id is None:
             cursor = conn.execute(
                 "UPDATE users SET active_promo_code_id = NULL WHERE id = ?",
@@ -528,6 +534,27 @@ def clear_user_active_promo_code(
                 (user_id, promo_code_id),
             )
         return cursor.rowcount > 0
+
+
+def activate_user_promo_code(
+    user_id: int, code: str, *, allow_coupons: bool = True, _conn=None,
+) -> Dict[str, Any]:
+    """Share the native activation rules with atomic extension commands."""
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
+        if _conn is None:
+            conn.execute('BEGIN IMMEDIATE')
+        availability = get_promo_code_availability(
+            (code or '').strip(), user_id=user_id,
+            block_user_reservations=True, _conn=conn,
+        )
+        if not availability.get('ok'):
+            return availability
+        promo = availability['promo']
+        if promo.get('type') == 'coupon' and not allow_coupons:
+            return {'ok': False, 'reason': 'coupon_link_disallowed', 'promo': promo}
+        if not set_user_active_promo_code(user_id, promo['id'], _conn=conn):
+            return {'ok': False, 'reason': 'user_not_found', 'promo': promo}
+        return {'ok': True, 'reason': 'applied', 'promo': promo}
 
 
 def get_user_active_promo_code(user_id: int, order_id: Optional[str] = None) -> Optional[Dict[str, Any]]:

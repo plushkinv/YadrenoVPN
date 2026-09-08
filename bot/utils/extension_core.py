@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from bot.utils.extension_finance import ExtensionFinanceAPI
 
-class ExtensionCoreAPI:
+
+class ExtensionCoreAPI(ExtensionFinanceAPI):
     """Safe kernel read/command operations for one extension_id."""
 
     def __init__(self, extension_id: str):
@@ -43,6 +45,65 @@ class ExtensionCoreAPI:
             'is_bot_blocked': bool(user.get('is_bot_blocked')),
             'personal_balance': user.get('personal_balance') or 0,
         }
+
+    async def send_user_page(
+        self,
+        page_key: str,
+        *,
+        user_id: int | None = None,
+        telegram_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Send one stored page; the extension owns retries and deduplication."""
+        _ensure_new_mutation_allowed('send_user_page')
+        from bot.utils.custom_extensions import (
+            _get_current_extension_bot,
+            _get_current_extension_telegram_id,
+        )
+        from bot.services.extension_pages import send_extension_user_page
+
+        if user_id is not None and telegram_id is not None:
+            raise ValueError('pass only user_id or telegram_id')
+        if user_id is not None:
+            from database.requests import get_user_by_id
+
+            user = get_user_by_id(_normalize_positive_int(user_id, 'user_id'))
+            if user is None:
+                return {'ok': False, 'status': 'not_sent'}
+            telegram_id = user['telegram_id']
+        if telegram_id is None:
+            telegram_id = _get_current_extension_telegram_id()
+            if telegram_id is None:
+                raise RuntimeError('send_user_page requires a recipient or current user')
+        return await send_extension_user_page(
+            _get_current_extension_bot(),
+            telegram_id=_normalize_positive_int(telegram_id, 'telegram_id'),
+            page_key=page_key,
+        )
+
+    async def send_current_user_page(self, page_key: str) -> dict[str, Any]:
+        """Compatibility shorthand for sending a page to the current user."""
+        return await self.send_user_page(page_key)
+
+    async def schedule_task(
+        self, name: str, *, idempotency_key: str, delay_seconds=None, run_at=None,
+        payload=None, user_id: int | None = None, telegram_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Persist one owner-local invocation; success acknowledges scheduling only."""
+        _ensure_new_mutation_allowed('schedule_task')
+        from bot.utils.action_origin_context import normalize_completion_handler_name
+        from bot.utils.custom_extensions import _get_current_extension_telegram_id
+        from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
+        from database.requests import schedule_extension_task
+
+        name = normalize_completion_handler_name(name)
+        if user_id is None and telegram_id is None:
+            telegram_id = _get_current_extension_telegram_id()
+        return schedule_extension_task(
+            extension_id=self.extension_id, handler_name=name,
+            handler_registered=f'{self.extension_id}.{name}' in EXTENSION_TASK_HANDLERS,
+            idempotency_key=idempotency_key, delay_seconds=delay_seconds,
+            run_at=run_at, payload=payload, user_id=user_id, telegram_id=telegram_id,
+        )
 
     def get_user_keys(self, telegram_id: int) -> list[dict[str, Any]]:
         """Returns display data of the user's keys without VPN secrets."""
@@ -451,6 +512,8 @@ def _ensure_new_mutation_allowed(operation: str) -> None:
         'command',
         'lifecycle_hook',
         'completion_handler',
+        'event_handler',
+        'task_handler',
     }:
         raise RuntimeError(
             f'{operation} is allowed only in extension callbacks, commands, or '

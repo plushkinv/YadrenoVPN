@@ -131,16 +131,23 @@ async def emit_key_lifecycle_event_safe(event: str, context: Dict[str, Any]) -> 
 
 
 async def process_expired_key_lifecycle_events(limit: Optional[int] = None) -> list[Dict[str, Any]]:
-    """Issue key_expired once for each key_id+expires_at."""
+    """Record key.expired and invoke legacy hooks once for each key_id+expires_at."""
+    from bot.utils.extension_event_registry import event_subscribers
     from database.requests import (
         get_pending_expired_key_events,
-        record_key_lifecycle_event_once,
+        record_expired_key_event_once,
     )
 
     processed: list[Dict[str, Any]] = []
     for key in get_pending_expired_key_events(limit=limit):
         key_id = int(key['id'])
         event_token = str(key.get('expires_at') or '')
+        key = record_expired_key_event_once(
+            key_id=key_id, event_token=event_token,
+            subscribers=event_subscribers('key.expired'),
+        )
+        if key is None:
+            continue
         context = {
             'key_id': key_id,
             'user_id': key.get('user_id'),
@@ -156,20 +163,6 @@ async def process_expired_key_lifecycle_events(limit: Optional[int] = None) -> l
             'traffic_used': key.get('traffic_used'),
             'is_banned': key.get('is_banned'),
         }
-        claimed = record_key_lifecycle_event_once(
-            key_id=key_id,
-            event_name='key_expired',
-            event_token=event_token,
-            metadata={
-                'expires_at': key.get('expires_at'),
-                'telegram_id': key.get('telegram_id'),
-                'tariff_id': key.get('tariff_id'),
-                'server_id': key.get('server_id'),
-            },
-        )
-        if not claimed:
-            continue
-
         hook_results = await emit_key_lifecycle_event_safe('key_expired', context)
         processed.append({
             'key_id': key_id,

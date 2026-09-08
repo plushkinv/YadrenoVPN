@@ -45,6 +45,7 @@ from database.requests import (
     create_trial_offer,
     delete_trial_offer,
     get_all_groups,
+    get_all_servers,
     get_all_tariffs,
     get_all_trial_offers,
     get_all_user_ui_texts,
@@ -70,6 +71,12 @@ from database.page_registry import (
     PAGE_KIND_CUSTOM,
     PAGE_KINDS,
     is_valid_custom_page_key,
+)
+from database.page_button_styles import (
+    BUTTON_COLORS,
+    collection_item_color_override,
+    resolve_collection_item_color,
+    validate_page_item_colors,
 )
 
 
@@ -140,6 +147,7 @@ _PAGE_BUTTON_FIELDS = frozenset({
     'id',
     'label',
     'color',
+    'item_colors',
     'icon_custom_emoji_id',
     'row',
     'col',
@@ -148,7 +156,7 @@ _PAGE_BUTTON_FIELDS = frozenset({
     'action_value',
 })
 _PAGE_BUTTON_ID_RE = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
-_PAGE_BUTTON_COLORS = frozenset({'secondary', 'primary', 'success', 'danger'})
+_PAGE_BUTTON_COLORS = BUTTON_COLORS
 _PAGE_BUTTON_ACTION_TYPES = frozenset({
     'internal',
     'system',
@@ -283,6 +291,34 @@ def _inspect_pages(
             raise KeyError(f'unknown page_key: {key}')
         if kind is not None and state['page_kind'] != kind:
             raise KeyError(f'page_key {key!r} does not have page_kind {kind!r}')
+        effective = state['effective']
+        for button in effective['buttons']:
+            info = effective['collections'].get(button.get('id'))
+            if not info or not info['item_colors_supported']:
+                continue
+            catalog = (
+                get_all_tariffs(include_hidden=True)
+                if button['id'] == 'btn_tariff_items'
+                else get_all_servers()
+            )
+            items = []
+            for record in catalog[cursor:cursor + limit]:
+                item_id = str(record['id'])
+                items.append({
+                    'item_id': item_id,
+                    'name': record['name'],
+                    'is_active': bool(record['is_active']),
+                    'color_override': collection_item_color_override(button, item_id),
+                    'effective_color': resolve_collection_item_color(button, item_id),
+                })
+            next_cursor = cursor + len(items)
+            info.update({
+                'cursor': cursor,
+                'limit': limit,
+                'total': len(catalog),
+                'next_cursor': next_cursor if next_cursor < len(catalog) else None,
+                'items': items,
+            })
         return {'status': 'ok', 'scope': 'page', 'item': state}
     items = []
     for row in get_pages(kind=kind):
@@ -438,6 +474,26 @@ def _extension_file_states(diagnostics: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _inspect_extensions(cursor: int, limit: int) -> dict[str, Any]:
     diagnostics = get_custom_extensions_diagnostics()
+    core_events = dict(diagnostics.get('core_events') or {})
+    deliveries = dict(core_events.get('deliveries') or {})
+    core_events['deliveries'] = deliveries
+    scheduled_tasks = dict(diagnostics.get('scheduled_tasks') or {})
+    task_jobs = dict(scheduled_tasks.get('jobs') or {})
+    scheduled_tasks['jobs'] = task_jobs
+    for snapshot, list_names in (
+        (core_events, ('subscriptions',)),
+        (deliveries, ('handlers', 'issues')),
+        (scheduled_tasks, ('registrations',)),
+        (task_jobs, ('handlers', 'issues')),
+    ):
+        pagination = {}
+        for name in list_names:
+            page = _paginated('extensions', snapshot.get(name) or [], cursor, limit)
+            snapshot[name] = page['items']
+            pagination[name] = {
+                key: page[key] for key in ('cursor', 'limit', 'total', 'next_cursor')
+            }
+        snapshot['pagination'] = pagination
     last_load = diagnostics.get('last_load') or {}
     loader = {
         'configured_value': diagnostics.get('configured_value'),
@@ -462,6 +518,11 @@ def _inspect_extensions(cursor: int, limit: int) -> dict[str, Any]:
         extra={
             'loader': loader,
             'page_classification': diagnostics.get('page_classification') or {},
+            'core_events': core_events,
+            'scheduled_tasks': scheduled_tasks,
+            'task_capabilities': diagnostics.get('task_capabilities') or {},
+            'messaging_capabilities': diagnostics.get('messaging_capabilities') or {},
+            'finance_capabilities': diagnostics.get('finance_capabilities') or {},
         },
     )
 
@@ -743,6 +804,9 @@ def _normalize_page_create_buttons(value: Any, *, page_key: str) -> list[dict[st
         }
         if emoji_id is not None:
             button['icon_custom_emoji_id'] = emoji_id
+        if 'item_colors' in raw:
+            button['item_colors'] = raw['item_colors']
+        validate_page_item_colors([button])
         _validate_page_button_action(button, index=index, page_key=page_key)
         normalized.append(button)
     return normalized

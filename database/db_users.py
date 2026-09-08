@@ -65,6 +65,7 @@ def get_or_create_user(
         - is_new: True if the user was created, False if already existed
     """
     with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
         cursor = conn.execute(
             "SELECT * FROM users WHERE telegram_id = ?",
             (telegram_id,)
@@ -118,6 +119,14 @@ def get_or_create_user(
         cursor = conn.execute(
             f"INSERT INTO users ({', '.join(fields)}) VALUES ({placeholders})",
             values
+        )
+        from .db_core_events import record_core_event_with_conn
+        from bot.utils.extension_event_registry import event_subscribers
+
+        record_core_event_with_conn(
+            conn, event_name='user.registered', source_id=str(cursor.lastrowid),
+            registered_user_id=cursor.lastrowid,
+            subscribers=event_subscribers('user.registered'),
         )
         logger.info(f"Новый пользователь: {telegram_id} (@{username}), referral_code: {referral_code}")
         

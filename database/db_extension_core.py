@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+from contextlib import nullcontext
 from typing import Any
 
 from .connection import get_db
@@ -25,6 +26,11 @@ _ALLOWED_OPERATIONS = {
     'bind_key_subscription',
     'unbind_key_subscription',
     'request_key_subscription_reconcile',
+    'create_promo_code',
+    'update_promo_code',
+    'activate_promo_code',
+    'clear_active_promo_code',
+    'schedule_task',
 }
 _PUBLIC_STATUSES = {'pending', 'applied', 'already_applied', 'no_op', 'rejected', 'failed'}
 
@@ -60,6 +66,7 @@ def claim_extension_core_operation(
     amount: int | None,
     reason: str | None,
     request_fingerprint: str,
+    _conn=None,
 ) -> dict[str, Any]:
     """
     Registers a facade command as pending or returns an existing result.
@@ -75,7 +82,7 @@ def claim_extension_core_operation(
     reason_text = None if reason is None else _normalize_reason(reason)
     fingerprint = _normalize_request_fingerprint(request_fingerprint)
 
-    with get_db() as conn:
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         create_extension_core_operation_table(conn)
         cursor = conn.execute(
             """
@@ -151,6 +158,7 @@ def finalize_extension_core_operation(
     idempotency_key: str,
     status: str,
     metadata: dict[str, Any] | None = None,
+    _conn=None,
 ) -> dict[str, Any]:
     """Fixes the result of an already declared facade command."""
     ext_id = normalize_extension_id(extension_id)
@@ -158,7 +166,7 @@ def finalize_extension_core_operation(
     status_value = _normalize_status(status)
     metadata_value = _json_metadata(metadata or {})
 
-    with get_db() as conn:
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         create_extension_core_operation_table(conn)
         cursor = conn.execute(
             """
@@ -344,6 +352,12 @@ def _normalize_positive_int(value: Any, field: str) -> int:
 
 
 def _normalize_operation_target(operation: str, value: Any) -> int | None:
+    if operation == 'schedule_task' and value is None:
+        return None
+    if operation in {'create_promo_code', 'update_promo_code'}:
+        if value is not None:
+            raise ValueError('promo management does not use target_user_id')
+        return None
     if operation == 'set_support_ticket_status':
         if value is not None:
             raise ValueError(

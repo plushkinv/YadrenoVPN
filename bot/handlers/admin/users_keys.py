@@ -61,6 +61,15 @@ async def _admin_key_input_target(
         pass
     return target, data
 
+
+def _can_show_key_subscription(key: dict) -> bool:
+    """Use the existing activity rule and require a complete subscription."""
+    from database.requests import is_key_active
+
+    configured = all((key.get('server_id'), key.get('panel_email'), key.get('sub_id')))
+    return configured and is_key_active(key)
+
+
 @router.callback_query(F.data.startswith('admin_key_view:'))
 async def show_key_view(callback: CallbackQuery, state: FSMContext):
     """Shows the key management screen."""
@@ -136,8 +145,53 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
     else:
         text += '\n📜 <b>История операций:</b> пусто\n'
     user_telegram_id = key.get('telegram_id')
-    await safe_edit_or_send(callback.message, text, reply_markup=key_view_kb(key_id, user_telegram_id))
+    await safe_edit_or_send(
+        callback.message,
+        text,
+        reply_markup=key_view_kb(
+            key_id,
+            user_telegram_id,
+            show_subscription=_can_show_key_subscription(key),
+        ),
+    )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith('admin_key_show:'))
+async def show_key_subscription(callback: CallbackQuery, state: FSMContext):
+    """Show the selected user's subscription through the common QR delivery."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+    try:
+        key_id = int(callback.data.partition(':')[2])
+    except ValueError:
+        await callback.answer('Ключ не найден', show_alert=True)
+        return
+
+    from database.requests import get_key_details_for_user
+    from bot.utils.key_sender import send_key_with_qr
+
+    selected_key = get_vpn_key_by_id(key_id)
+    key = (
+        get_key_details_for_user(key_id, selected_key.get('telegram_id'))
+        if selected_key else None
+    )
+    if not key:
+        await callback.answer('Ключ не найден', show_alert=True)
+        return
+    if not _can_show_key_subscription(key):
+        await callback.answer(
+            'Подписка недоступна. Откройте карточку ключа заново.',
+            show_alert=True,
+        )
+        return
+
+    await state.set_state(AdminStates.key_view)
+    await state.update_data(current_key_id=key_id)
+    await callback.answer()
+    await send_key_with_qr(callback, key, admin_return_key_id=key_id)
+
 
 @router.callback_query(F.data.startswith('admin_key_extend:'))
 async def start_key_extend(callback: CallbackQuery, state: FSMContext):

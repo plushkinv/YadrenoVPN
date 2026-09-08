@@ -61,7 +61,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 110
+LATEST_VERSION = 112
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -3659,6 +3659,22 @@ def migration_110(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_111(conn: sqlite3.Connection) -> None:
+    """Add a future-only transactional outbox without rewriting business data."""
+    from database.db_core_events import create_core_event_tables
+
+    create_core_event_tables(conn)
+    conn.execute('''CREATE INDEX IF NOT EXISTS idx_payments_extension_history
+        ON payments(user_id, id DESC)''')
+
+
+def migration_112(conn: sqlite3.Connection) -> None:
+    """Add one-off extension tasks without changing installed business data."""
+    from database.db_extension_tasks import create_extension_task_table
+
+    create_extension_task_table(conn)
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -3673,6 +3689,8 @@ MIGRATIONS = {
     108: migration_108,
     109: migration_109,
     110: migration_110,
+    111: migration_111,
+    112: migration_112,
 }
 
 

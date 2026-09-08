@@ -446,7 +446,7 @@ def begin_payment_fulfillment(order_id: str) -> bool:
         return cursor.rowcount > 0
 
 
-def complete_payment_fulfillment(order_id: str) -> bool:
+def complete_payment_fulfillment(order_id: str, *, event_subscribers=()) -> bool:
     """Marks the core order paid only after all required fulfillment succeeds."""
     with get_db() as conn:
         cursor = conn.execute(
@@ -465,7 +465,15 @@ def complete_payment_fulfillment(order_id: str) -> bool:
             """,
             (str(order_id),),
         )
-        return cursor.rowcount > 0
+        if cursor.rowcount > 0:
+            from .db_core_events import record_core_event_with_conn
+
+            record_core_event_with_conn(
+                conn, event_name='payment.completed', source_id=str(order_id),
+                order_id=str(order_id), subscribers=event_subscribers,
+            )
+            return True
+        return False
 
 
 def fail_payment_fulfillment(order_id: str, error: str) -> bool:

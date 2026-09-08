@@ -25,6 +25,10 @@ from database.db_payment_auto_checks import *
 from database.db_payment_intents import *
 from database.db_action_contexts import *
 from database.db_extension_completion import *
+from database.db_extension_payments import *
+from database.db_extension_promotions import *
+from database.db_core_events import *
+from database.db_extension_tasks import *
 from database.db_currency import *
 from database.db_broadcast_editor import *
 from database.db_backup import *

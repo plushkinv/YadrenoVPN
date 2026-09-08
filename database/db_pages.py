@@ -14,6 +14,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from .db_page_flow import normalize_registry_names
 from .connection import get_db
+from .page_button_styles import validate_page_item_colors
 from .page_registry import (
     CORE_PAGE_KEYS,
     PAGE_KIND_CORE,
@@ -216,6 +217,7 @@ def create_custom_page(
     """Insert one validated custom page without overwriting an existing row."""
     if not is_valid_custom_page_key(page_key) or page_key in CORE_PAGE_KEYS:
         raise ValueError('custom page_key must be an unreserved custom_* key')
+    validate_page_item_colors(buttons)
     with get_db() as conn:
         cursor = conn.execute(
             """
@@ -265,6 +267,7 @@ def normalize_page_custom_patch(patch: dict[str, Any]) -> dict[str, Any]:
                 not isinstance(item, dict) for item in value
             ):
                 raise TypeError('buttons_custom items must be objects')
+            validate_page_item_colors(value)
             normalized[field] = (
                 None
                 if value is None
@@ -328,6 +331,11 @@ def update_page_custom(
         else:
             updates.append("media_type_custom = NULL")
     if buttons is not None:
+        try:
+            parsed_buttons = json.loads(buttons)
+        except (TypeError, ValueError):
+            parsed_buttons = None
+        validate_page_item_colors(parsed_buttons)
         updates.append("buttons_custom = ?")
         params.append(buttons)
 

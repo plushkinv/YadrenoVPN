@@ -16,12 +16,6 @@ def build_tariff_button_items(
     action_context_token: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return tariff data/actions; the visible label remains page-owned."""
-    discount_percent = 0
-    if user_id:
-        from bot.services.promotions import get_active_promo_discount_percent
-
-        discount_percent = get_active_promo_discount_percent(user_id)
-
     items: list[dict[str, Any]] = []
     for tariff in tariffs:
         price_minor = int(tariff.get('price_minor') or 0)
@@ -30,13 +24,13 @@ def build_tariff_button_items(
         tariff_id = int(tariff['id'])
         currency = str(tariff.get('base_currency') or 'RUB')
         price_text = format_money_minor(price_minor, currency)
-        if discount_percent:
-            from bot.services.promotions import discounted_amount_minor
+        if user_id:
+            from bot.services.payment_pricing import preview_tariff_price
 
-            discounted_minor = discounted_amount_minor(
-                price_minor,
-                discount_percent,
+            preview = preview_tariff_price(
+                user_id=user_id, tariff=tariff, purpose=purpose, key_id=key_id,
             )
+            discounted_minor = int(preview['payable_amount_minor']) if preview['ok'] else price_minor
             if discounted_minor != price_minor:
                 price_text = (
                     f"{price_text} → "
@@ -48,6 +42,7 @@ def build_tariff_button_items(
         if action_context_token is not None:
             callback_data = f'{callback_data}:{action_context_token}'
         items.append({
+            'item_id': str(tariff_id),
             'callback_data': callback_data,
             'data': {
                 'item_name': str(tariff.get('name') or tariff_id),
@@ -65,6 +60,7 @@ def build_server_button_items(
     """Return server business names and technical callbacks."""
     return [
         {
+            'item_id': str(int(server['id'])),
             'callback_data': f"{callback_prefix}:{int(server['id'])}",
             'data': {'item_name': str(server.get('name') or server['id'])},
         }

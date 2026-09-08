@@ -84,6 +84,7 @@ __all__ = [
     'user_view_kb',
     'user_ban_confirm_kb',
     'key_view_kb',
+    'key_delivery_admin_kb',
     'key_plan_select_kb',
     'key_plan_confirm_kb',
     'key_plan_custom_confirm_kb',

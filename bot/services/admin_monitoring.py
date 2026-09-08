@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from database.requests import (
     get_all_servers,
@@ -233,10 +233,30 @@ async def _collect_server_entry(server: Dict[str, Any]) -> Dict[str, Any]:
     return entry
 
 
+def _deduplicate_panel_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep one observation per panel URL, preferring active reachable rows."""
+    panels: Dict[Tuple[str, str, int, str], Dict[str, Any]] = {}
+    for entry in entries:
+        server = entry["server"]
+        endpoint = (
+            str(server.get("protocol") or "https").casefold(),
+            str(server.get("host") or "").casefold(),
+            _safe_int(server.get("port")),
+            str(server.get("web_base_path") or "").strip("/"),
+        )
+        current = panels.get(endpoint)
+        if current is None or (entry["is_active"], entry["panel_online"]) > (
+            current["is_active"], current["panel_online"]
+        ):
+            panels[endpoint] = entry
+    return list(panels.values())
+
+
 async def collect_admin_monitoring_snapshot() -> Dict[str, Any]:
     """Collects a common snapshot for the main admin panel and the servers section."""
     servers = get_all_servers()
     entries = await asyncio.gather(*[_collect_server_entry(server) for server in servers]) if servers else []
+    entries = _deduplicate_panel_entries(entries)
 
     users = get_users_stats()
     keys = get_keys_stats()

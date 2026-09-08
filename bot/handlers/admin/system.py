@@ -117,6 +117,8 @@ _EXTENSION_REGISTRATION_LABELS = {
     'promo_reward_policies': 'promo rewards',
     'referral_reward_policies': 'referral rewards',
     'key_lifecycle_hooks': 'key lifecycle',
+    'event_handlers': 'события ядра',
+    'task_handlers': 'отложенные задачи',
     'payment_providers': 'payment providers',
     'callback_handlers': 'callbacks',
     'user_access_guards': 'user access',
@@ -454,6 +456,36 @@ def _format_extensions_diagnostics(diagnostics: dict) -> str:
                     )
             if len(unhealthy) > 6:
                 lines.append(f"• ещё {len(unhealthy) - 6}")
+
+    for section, title, registration_key, jobs_key, registration_label in (
+        (diagnostics.get('core_events'), 'События ядра', 'subscriptions', 'deliveries', 'подписок'),
+        (diagnostics.get('scheduled_tasks'), 'Отложенные задачи', 'registrations', 'jobs', 'обработчиков'),
+    ):
+        if not section:
+            continue
+        deliveries = section.get(jobs_key) or {}
+        event_totals = deliveries.get('totals') or {}
+        lines.extend(['', f'<b>{title}:</b>'])
+        lines.append(
+            '• {label}: {subscriptions}, ожидают: {pending}, выполняются: {processing}, '
+            'завершены: {completed}, остановлены: {degraded}'.format(
+                label=registration_label,
+                subscriptions=len(section.get(registration_key) or []),
+                **{state: int(event_totals.get(state) or 0)
+                   for state in ('pending', 'processing', 'completed', 'degraded')},
+            )
+        )
+        for handler in (deliveries.get('handlers') or [])[:6]:
+            name = f"{handler['extension_id']}.{handler['handler_name']}"
+            lines.append(
+                f"• <code>{escape_html(name)}</code>: завершено {handler['completed']}, "
+                f"ожидает {handler['pending']}, попыток до {handler['max_attempts']}"
+            )
+        for issue in (deliveries.get('issues') or [])[:4]:
+            lines.append(
+                f"• #{int(issue['id'])}: <code>{escape_html(str(issue['last_error_code']))}</code>, "
+                f"попыток {int(issue['attempts'])}"
+            )
 
     return "\n".join(lines)
 

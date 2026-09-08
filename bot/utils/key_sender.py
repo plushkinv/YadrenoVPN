@@ -28,10 +28,24 @@ KEY_DELIVERY_CONTEXT_RAW = 'key_delivery_raw_value'
 KEY_DELIVERY_CONTEXT_IS_NEW = 'key_delivery_is_new'
 KEY_DELIVERY_CONTEXT_ATTACH_MARKUP = 'key_delivery_attach_markup'
 KEY_DELIVERY_CONTEXT_ORDER_ID = 'order_id'
+KEY_DELIVERY_CONTEXT_ADMIN_RETURN_KEY_ID = 'key_delivery_admin_return_key_id'
 
 
 class KeyDeliveryError(RuntimeError):
     """Signals that a configured key could not be delivered to Telegram."""
+
+
+def _key_delivery_navigation(admin_return_key_id: int | None) -> dict:
+    """Keep administrator navigation in the normal page render inputs."""
+    if admin_return_key_id is None:
+        return {}
+    from bot.keyboards.admin_users import key_delivery_admin_kb
+
+    return {
+        'context': {KEY_DELIVERY_CONTEXT_ADMIN_RETURN_KEY_ID: admin_return_key_id},
+        'visibility': {'btn_my_keys': False, 'btn_back_main': False},
+        'append_buttons': key_delivery_admin_kb(admin_return_key_id).inline_keyboard,
+    }
 
 
 def format_key_copy_value(raw_value: str) -> str:
@@ -204,6 +218,7 @@ async def _prepare_key_delivery_page(
     key_fields: Optional[Mapping[str, object]],
     order_id: str | None,
     route_key: str | None = None,
+    admin_return_key_id: int | None = None,
 ):
     """Prepares key-delivery text, media and keyboard through one page flow."""
     from bot.utils.page_renderer import PreparedPageRender, prepare_page_render, render_page_text
@@ -219,6 +234,8 @@ async def _prepare_key_delivery_page(
         render_context['bot_username'] = bot_username
     render_context = _add_key_fields(render_context, key_fields)
     render_context = _add_payment_order(render_context, order_id)
+    navigation = _key_delivery_navigation(admin_return_key_id)
+    render_context.update(navigation.pop('context', {}))
 
     prepared = await prepare_page_render(
         _get_key_delivery_page_flow_target(messageable),
@@ -226,6 +243,7 @@ async def _prepare_key_delivery_page(
         route_key=route_key,
         context=render_context,
         text_replacements=build_key_delivery_replacements(raw_value),
+        **navigation,
     )
     if not isinstance(prepared, PreparedPageRender):
         return prepared
@@ -277,6 +295,9 @@ async def render_key_delivery_page(
     key_fields: Optional[Mapping[str, object]] = None,
     order_id: str | None = None,
     route_key: str | None = None,
+    *,
+    admin_return_key_id: int | None = None,
+    notify_new_delivery: bool = False,
 ) -> Optional[Message]:
     """Renders a special page for issuing a key with a QR and remembers it for /yaa."""
     target_message = _get_target_message(messageable)
@@ -295,12 +316,27 @@ async def render_key_delivery_page(
         key_fields=key_fields,
         order_id=order_id,
         route_key=route_key,
+        admin_return_key_id=admin_return_key_id,
     )
-    return await _deliver_prepared_key_delivery(
+    rendered_message = await _deliver_prepared_key_delivery(
         messageable,
         prepared,
         attach_markup=attach_markup,
     )
+    if (
+        notify_new_delivery and is_new and order_id and resolved_viewer_id
+        and admin_return_key_id is None and rendered_message is not None
+        and getattr(prepared, 'page_key', None) == KEY_DELIVERY_PAGE
+    ):
+        from bot.services.extension_events import notify_key_delivered
+
+        await notify_key_delivered(
+            order_id,
+            key_id=(key_fields or {}).get('id'),
+            telegram_id=resolved_viewer_id,
+            bot=getattr(messageable, 'bot', None) or getattr(target_message, 'bot', None),
+        )
+    return rendered_message
 
 
 async def rerender_key_delivery_page_context(page_context, viewer_id: int) -> bool:
@@ -319,6 +355,7 @@ async def rerender_key_delivery_page_context(page_context, viewer_id: int) -> bo
         key_fields=context.get(KEY_FIELDS_CONTEXT_KEY),
         order_id=context.get(KEY_DELIVERY_CONTEXT_ORDER_ID),
         route_key=getattr(page_context, 'route_key', None),
+        admin_return_key_id=context.get(KEY_DELIVERY_CONTEXT_ADMIN_RETURN_KEY_ID),
     )
     return True
 
@@ -330,6 +367,7 @@ async def send_key_with_qr(
     *,
     order_id: str | None = None,
     raise_on_error: bool = False,
+    admin_return_key_id: int | None = None,
 ):
     """
     Sends the user a subscription URL with its QR code.
@@ -342,15 +380,20 @@ async def send_key_with_qr(
         is_new: Whether the key is newly created
         order_id: Payment order that made this delivery available, if any
         raise_on_error: Surface a retryable delivery failure to a shared flow
+        admin_return_key_id: Return to this administrator key card, if supplied
     """
     from bot.services.vpn_api import get_subscription_url_for_key
     from bot.utils.key_pages import build_key_page_context
 
+    navigation_kwargs = (
+        {'admin_return_key_id': admin_return_key_id}
+        if admin_return_key_id is not None else {}
+    )
     try:
         # We check the availability of the necessary data
         if not key_data:
             logger.warning('Key delivery requested without key data')
-            await _send_error(messageable, order_id=order_id)
+            await _send_error(messageable, order_id=order_id, **navigation_kwargs)
             if raise_on_error:
                 raise KeyDeliveryError('missing_key_data')
             return
@@ -363,7 +406,7 @@ async def send_key_with_qr(
             )
         ):
             logger.warning('Key %s has incomplete delivery data', key_data.get('id'))
-            await _send_error(messageable, order_id=order_id)
+            await _send_error(messageable, order_id=order_id, **navigation_kwargs)
             if raise_on_error:
                 raise KeyDeliveryError('incomplete_key_data')
             return
@@ -371,7 +414,7 @@ async def send_key_with_qr(
         sub_url = await get_subscription_url_for_key(key_data)
         if not sub_url:
             logger.error('Subscription URL is unavailable for key %s', key_data.get('id'))
-            await _send_error(messageable, order_id=order_id)
+            await _send_error(messageable, order_id=order_id, **navigation_kwargs)
             if raise_on_error:
                 raise KeyDeliveryError('subscription_url_unavailable')
             return
@@ -384,6 +427,8 @@ async def send_key_with_qr(
             attach_markup=True,
             key_fields=key_fields,
             order_id=order_id,
+            **({'notify_new_delivery': True} if is_new and order_id else {}),
+            **navigation_kwargs,
         )
 
     except KeyDeliveryError:
@@ -391,21 +436,32 @@ async def send_key_with_qr(
     except Exception as e:
         logger.error(f"Error sending key: {e}")
         try:
-            await _send_error(messageable, order_id=order_id)
+            await _send_error(messageable, order_id=order_id, **navigation_kwargs)
         except Exception as render_error:
             logger.warning("Failed to render key delivery error: %s", render_error)
         if raise_on_error:
             raise KeyDeliveryError('key_delivery_failed') from e
 
 
-async def _send_error(messageable, *, order_id: str | None = None):
+async def _send_error(
+    messageable,
+    *,
+    order_id: str | None = None,
+    admin_return_key_id: int | None = None,
+):
     """Render the database-backed key delivery failure page."""
     from bot.utils.page_renderer import render_page
 
     target_message = _get_target_message(messageable)
     if target_message is None:
         raise ValueError("Key delivery target has no message")
-    render_kwargs = {'page_key': 'key_delivery_failed'}
+    render_kwargs = {
+        'page_key': 'key_delivery_failed',
+        **_key_delivery_navigation(admin_return_key_id),
+    }
     if order_id:
-        render_kwargs['context'] = {'order_id': order_id}
+        render_kwargs.setdefault('context', {})['order_id'] = order_id
+    if admin_return_key_id is not None:
+        render_kwargs['context']['telegram_id'] = _get_viewer_id(messageable)
+        target_message = _get_key_delivery_transport_target(messageable)
     await render_page(target_message, **render_kwargs)

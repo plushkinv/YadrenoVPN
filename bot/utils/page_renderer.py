@@ -22,6 +22,8 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from database.page_button_styles import describe_collection_colors, resolve_collection_item_color
+
 from bot.utils.placeholders import (
     apply_page_placeholders,
     apply_placeholder_replacements,
@@ -372,13 +374,15 @@ def get_page_stored_data(page_key: str) -> Optional[Dict[str, Any]]:
     if not row:
         return None
 
+    buttons = _merge_buttons_by_id_with_source(
+        buttons_default_json=row.get('buttons_default', '[]'),
+        buttons_custom_json=row.get('buttons_custom'),
+    )
     return {
         'text': _stored_text_value(row),
         'image': _stored_image_value(row),
-        'buttons': _merge_buttons_by_id_with_source(
-            buttons_default_json=row.get('buttons_default', '[]'),
-            buttons_custom_json=row.get('buttons_custom'),
-        ),
+        'buttons': buttons,
+        'collections': describe_collection_colors(buttons),
     }
 
 
@@ -546,7 +550,9 @@ def _build_keyboard(
                     'icon_custom_emoji_id': icon_custom_emoji_id,
                     'callback_data': item_callback,
                     'url': item_url,
-                    'style': _resolve_button_style(color),
+                    'style': _resolve_button_style(
+                        resolve_collection_item_color(btn, item.get('item_id')),
+                    ),
                     'row': item.get('row') if item.get('row') is not None else row + item_index,
                     'col': item.get('col') if item.get('col') is not None else col,
                 })

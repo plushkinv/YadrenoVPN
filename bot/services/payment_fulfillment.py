@@ -122,7 +122,11 @@ async def _fulfill_payment_intent_unlocked(
                 await _apply_referrals_once(order, bot=bot)
             await _issue_coupon_once(order)
 
-        if not complete_payment_fulfillment(intent.order_id):
+        from bot.utils.extension_event_registry import event_subscribers
+
+        if not complete_payment_fulfillment(
+            intent.order_id, event_subscribers=event_subscribers('payment.completed'),
+        ):
             current = load_payment_intent(intent.order_id)
             if not current or current.fulfillment_status != 'completed':
                 raise RuntimeError('Payment fulfillment could not be finalized')
