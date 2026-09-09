@@ -272,36 +272,47 @@ def _count_active_keys(keys: list[dict[str, Any]]) -> int:
     return sum(1 for key in keys if bool(key.get('is_active')))
 
 
+def build_user_context_values(telegram_id: int | None) -> dict[str, Any]:
+    """Return the common recipient identity and balance without loading keys."""
+    if isinstance(telegram_id, bool) or not isinstance(telegram_id, int):
+        return {}
+
+    from database.requests import get_user_balance, get_user_by_telegram_id
+
+    user = get_user_by_telegram_id(telegram_id)
+    if not user:
+        return {'telegram_id': telegram_id}
+
+    user_id = int(user.get('id') or 0)
+    balance = get_user_balance(user_id) if user_id else 0
+    return {
+        'telegram_id': telegram_id,
+        'user_display_name': _format_user_display_name(user),
+        'user_username': _format_username(user.get('username')),
+        'user_registered_at': format_date_for_display(user.get('created_at')),
+        'user_balance_text': format_price_compact(balance),
+    }
+
+
 def build_user_profile_context_values(telegram_id: int | None) -> dict[str, Any]:
     """Returns context values of profile widgets placeholders."""
     telegram_id = _optional_int(telegram_id)
     if not telegram_id:
         return {}
-
-    from database.requests import get_user_balance, get_user_by_telegram_id, get_user_keys_for_display
-
-    user = get_user_by_telegram_id(telegram_id)
-    if not user:
+    identity = build_user_context_values(telegram_id)
+    if 'user_display_name' not in identity:
         return {}
+
+    from database.requests import get_user_keys_for_display
 
     keys = get_user_keys_for_display(telegram_id)
     total_keys = len(keys)
     active_keys = _count_active_keys(keys)
-    expired_keys = max(total_keys - active_keys, 0)
-    balance_cents = get_user_balance(int(user['id']))
-    balance_text = format_price_compact(balance_cents)
-    username = _format_username(user.get('username'))
-    display_name = _format_user_display_name(user)
-    created_at = format_date_for_display(user.get('created_at'))
-
     return {
-        'user_display_name': display_name,
-        'user_username': username,
-        'user_registered_at': created_at,
-        'user_balance_text': balance_text,
+        **{key: value for key, value in identity.items() if key != 'telegram_id'},
         'keys_total_count': total_keys,
         'keys_active_count': active_keys,
-        'keys_expired_count': expired_keys,
+        'keys_expired_count': max(total_keys - active_keys, 0),
     }
 
 

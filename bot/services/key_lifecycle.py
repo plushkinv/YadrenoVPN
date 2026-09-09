@@ -131,7 +131,7 @@ async def emit_key_lifecycle_event_safe(event: str, context: Dict[str, Any]) -> 
 
 
 async def process_expired_key_lifecycle_events(limit: Optional[int] = None) -> list[Dict[str, Any]]:
-    """Record key.expired and invoke legacy hooks once for each key_id+expires_at."""
+    """Record key.expired and invoke legacy hooks once per inactivity episode."""
     from bot.utils.extension_event_registry import event_subscribers
     from database.requests import (
         get_pending_expired_key_events,
@@ -141,7 +141,7 @@ async def process_expired_key_lifecycle_events(limit: Optional[int] = None) -> l
     processed: list[Dict[str, Any]] = []
     for key in get_pending_expired_key_events(limit=limit):
         key_id = int(key['id'])
-        event_token = str(key.get('expires_at') or '')
+        event_token = str(key['event_token'])
         key = record_expired_key_event_once(
             key_id=key_id, event_token=event_token,
             subscribers=event_subscribers('key.expired'),

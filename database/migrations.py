@@ -61,7 +61,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 112
+LATEST_VERSION = 113
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -3675,6 +3675,84 @@ def migration_112(conn: sqlite3.Connection) -> None:
     create_extension_task_table(conn)
 
 
+def migration_113(conn: sqlite3.Connection) -> None:
+    """Track continuous time/traffic inactivity without rewriting custom values."""
+    from database.key_inactivity import (
+        expired_term_sql, inactive_key_sql, inactive_since_sql, inactivity_token_sql,
+    )
+
+    if not conn.in_transaction:
+        conn.execute('BEGIN IMMEDIATE')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(vpn_keys)')}
+    for column in ('inactive_since', 'inactive_event_token'):
+        if column not in columns:
+            conn.execute(f'ALTER TABLE vpn_keys ADD COLUMN {column} TEXT')
+
+    # Old traffic-only rows have no reliable exhaustion time. Start at upgrade;
+    # expired terms retain their deadline and legacy deduplication token.
+    def start_sql(alias: str) -> str:
+        return (
+            f'CASE WHEN {expired_term_sql(alias)} THEN {alias}.expires_at '
+            'ELSE CURRENT_TIMESTAMP END'
+        )
+
+    def token_sql(alias: str, *, preserve_legacy: bool = False) -> str:
+        unused = '' if preserve_legacy else (
+            ' AND NOT EXISTS (SELECT 1 FROM key_lifecycle_event_log ev '
+            f"WHERE ev.vpn_key_id = {alias}.id AND ev.event_name = 'key_expired' "
+            f'AND ev.event_token = {alias}.expires_at)'
+        )
+        return (
+            f'CASE WHEN {expired_term_sql(alias)}{unused} THEN {alias}.expires_at '
+            "ELSE 'inactive:' || lower(hex(randomblob(16))) END"
+        )
+
+    conn.execute(f'''UPDATE vpn_keys AS vk
+        SET inactive_since = {start_sql('vk')},
+            inactive_event_token = {token_sql('vk', preserve_legacy=True)}
+        WHERE {inactive_key_sql('vk')} AND inactive_since IS NULL''')
+
+    # Observe transitions at the common persistence boundary, including bulk
+    # traffic sync, plan changes, resets, panel imports and direct DB helpers.
+    conn.execute(f'''CREATE TRIGGER IF NOT EXISTS trg_key_inactivity_insert
+        AFTER INSERT ON vpn_keys WHEN {inactive_key_sql('NEW')}
+        BEGIN
+            UPDATE vpn_keys SET inactive_since = {start_sql('NEW')},
+                inactive_event_token = {token_sql('NEW')}
+            WHERE id = NEW.id;
+        END''')
+    conn.execute(f'''CREATE TRIGGER IF NOT EXISTS trg_key_inactivity_update
+        AFTER UPDATE OF expires_at, traffic_used, traffic_limit ON vpn_keys
+        WHEN (NEW.expires_at IS NOT OLD.expires_at
+            OR NEW.traffic_used IS NOT OLD.traffic_used
+            OR NEW.traffic_limit IS NOT OLD.traffic_limit)
+          AND (({inactive_key_sql('NEW')} AND OLD.inactive_since IS NULL)
+            OR (NOT {inactive_key_sql('NEW')} AND OLD.inactive_since IS NOT NULL))
+        BEGIN
+            UPDATE vpn_keys SET inactive_since = CASE
+                WHEN NOT {inactive_key_sql('NEW')} THEN NULL
+                WHEN {inactive_key_sql('OLD')}
+                    THEN COALESCE({inactive_since_sql('OLD')}, {start_sql('NEW')})
+                ELSE {start_sql('NEW')} END,
+                inactive_event_token = CASE
+                WHEN NOT {inactive_key_sql('NEW')} THEN NULL
+                WHEN {inactive_key_sql('OLD')}
+                    THEN COALESCE({inactivity_token_sql('OLD')}, {token_sql('NEW')})
+                ELSE {token_sql('NEW')} END
+            WHERE id = NEW.id;
+        END''')
+
+    conn.execute('''UPDATE pages SET text_default = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE page_key = 'expired_keys_deleted' AND page_kind = 'core' ''', (
+        '🗑️ <b>Неактивные ключи удалены</b>\n\n'
+        'Эти VPN-ключи неактивны не менее %retention_days% дней: у них закончился '
+        'срок действия или трафик, поэтому мы удалили их из бота:\n\n'
+        '%deleted_keys%\n\n'
+        'Если VPN снова понадобится, нажмите «Купить ключ» — новый доступ можно '
+        'оформить в любое время.',
+    ))
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -3691,6 +3769,7 @@ MIGRATIONS = {
     110: migration_110,
     111: migration_111,
     112: migration_112,
+    113: migration_113,
 }
 
 

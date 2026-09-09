@@ -25,6 +25,7 @@ from bot.utils.custom_extensions import (
 from bot.utils.page_flow import PAGE_GUARDS, PAGE_HOOKS
 from bot.utils.page_routes import build_page_route_callback, page_route_exists
 from bot.utils.page_renderer import get_page_stored_data
+from bot.utils.placeholders import get_placeholder_contract
 from bot.utils.text import (
     TELEGRAM_CAPTION_LIMIT,
     TELEGRAM_TEXT_LIMIT,
@@ -114,6 +115,12 @@ CUSTOM_SETTING_KEYS = (
     'expired_key_panel_cleanup_delay_days',
 )
 _CUSTOM_SETTING_KEY_SET = frozenset(CUSTOM_SETTING_KEYS)
+_NOTIFICATION_EVENT_TYPES = {
+    'notification_text': 'key_expiring',
+    'traffic_notification_text': 'key_traffic_low',
+    'referral_new_ref_notification_text': 'referral_new_ref',
+    'referral_purchase_notification_text': 'referral_purchase',
+}
 _TRIAL_USAGE_SCOPES = frozenset({'once_per_user', 'once_per_group'})
 _APPLY_ARGUMENTS = {
     'page.create': frozenset({'operation', 'page_key', 'page'}),
@@ -363,7 +370,13 @@ def _inspect_settings(key: str | None, cursor: int, limit: int) -> dict[str, Any
         raise KeyError(f'setting is not customizable through this tool: {key}')
     keys = [key] if key else list(CUSTOM_SETTING_KEYS)
     rows = [{'setting_key': item, 'value': get_setting(item)} for item in keys]
-    return _paginated('settings', rows, cursor, limit)
+    for row in rows:
+        if row['setting_key'] in _NOTIFICATION_EVENT_TYPES:
+            row['event_type'] = _NOTIFICATION_EVENT_TYPES[row['setting_key']]
+    result = _paginated('settings', rows, cursor, limit)
+    if any('event_type' in row for row in result['items']):
+        result['placeholder_contract'] = get_placeholder_contract(include_events=True)
+    return result
 
 
 def _trial_offer_state(offer: dict[str, Any]) -> dict[str, Any]:

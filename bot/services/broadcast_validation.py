@@ -9,8 +9,12 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlparse
 
-from bot.utils.event_placeholders import render_event_placeholders
-from bot.utils.text import TELEGRAM_CAPTION_LIMIT, TELEGRAM_TEXT_LIMIT
+from bot.utils.placeholders import (
+    apply_page_placeholders,
+    get_template_placeholder_specs,
+    valid_placeholder_parameters,
+)
+from bot.utils.text import TELEGRAM_CAPTION_LIMIT, TELEGRAM_TEXT_LIMIT, escape_html
 
 
 class BroadcastValidationError(ValueError):
@@ -36,7 +40,6 @@ _ALLOWED_TAGS = frozenset({
     "u",
 })
 _ALLOWED_LINK_SCHEMES = frozenset({"http", "https", "tg"})
-_PLACEHOLDER_RE = re.compile(r"%[^%\s]+%")
 _LANGUAGE_CLASS_RE = re.compile(r"language-[A-Za-z0-9_+.-]{1,64}\Z")
 
 
@@ -137,31 +140,26 @@ class _TelegramHtmlParser(HTMLParser):
             raise BroadcastValidationError(f"Telegram HTML: атрибуты тега <{tag}> не поддерживаются")
 
 
-def _placeholder_test_context() -> dict[str, Any]:
-    sample = "Я" * 64
+def _placeholder_test_value(name: str) -> str:
+    """Use synthetic values so validation never loads recipient or catalogue data."""
+    if name in {
+        "referral_link", "referral_link_url", "key_link", "key_link_url",
+        "payment_link", "payment_link_url",
+    }:
+        return "https://example.test/link?value=sample"
+    if name.endswith("telegram_id"):
+        return "9" * 20
     return {
-        "telegram_id": 99999999999999999999,
-        "user_display_name": sample,
+        "event_type": "broadcast",
+        "bot_username": "b" * 32,
+        "telegram_link_domain": "example.test",
         "user_username": "@" + "u" * 32,
         "user_registered_at": "31.12.2099",
-        "user_balance_text": sample,
-        "key_name": sample,
         "key_days_left": "99999",
         "key_traffic_remaining_percent": "100",
-        "key_traffic_used_text": sample,
-        "key_traffic_limit_text": sample,
-        "referral_name": sample,
-        "referral_login": sample,
-        "referral_telegram_id": 99999999999999999999,
         "referral_level": "999",
-        "buyer_name": sample,
-        "buyer_login": sample,
-        "buyer_telegram_id": 99999999999999999999,
-        "payment_tariff_name": sample,
-        "payment_amount_text": sample,
-        "payment_period_text": sample,
-        "referral_reward_text": sample,
-    }
+        "no_tariffs": "",
+    }.get(name, "Я" * 64)
 
 
 def validate_broadcast_message(text: Any, *, has_photo: bool = False) -> str:
@@ -169,17 +167,20 @@ def validate_broadcast_message(text: Any, *, has_photo: bool = False) -> str:
     if not isinstance(text, str) or not text.strip():
         raise BroadcastValidationError("Текст рассылки не должен быть пустым")
     normalized = text.strip()
-    rendered = render_event_placeholders(
-        normalized,
-        "broadcast",
-        _placeholder_test_context(),
-        mode="html",
-    )
-    unknown = sorted(set(_PLACEHOLDER_RE.findall(rendered)))
+    specs = get_template_placeholder_specs(normalized, event_type="broadcast")
+    unknown = sorted(token for token, spec in specs.items() if spec is None)
     if unknown:
         raise BroadcastValidationError(
             "Неизвестные плейсхолдеры: " + ", ".join(unknown[:5])
         )
+    replacements = {}
+    for token, (name, params) in specs.items():
+        if not valid_placeholder_parameters(name, params):
+            raise BroadcastValidationError(f"Некорректные параметры плейсхолдера: {token}")
+        replacements[token] = escape_html(_placeholder_test_value(name))
+    rendered = apply_page_placeholders(
+        normalized, replacements=replacements, event_type="broadcast",
+    )
 
     parser = _TelegramHtmlParser()
     try:

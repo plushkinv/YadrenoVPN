@@ -9,6 +9,8 @@ import secrets
 import time
 from typing import Any, Callable, Optional
 
+from bot.utils.placeholders import get_placeholder_contract
+
 from bot.services.broadcast_content import (
     BROADCAST_KIND_MESSAGE,
     BROADCAST_KIND_POLL,
@@ -346,6 +348,7 @@ def _state_payload(
         "changed_fields": changed_fields or [],
         "dirty_fields": dirty_fields,
         "material": _material_state(stage.get("content")),
+        "placeholder_contract": get_placeholder_contract(include_events=True),
         "audience": audience,
         "filter": {
             "key": legacy_filter_key,

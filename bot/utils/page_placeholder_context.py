@@ -1,7 +1,6 @@
 """Before-render context filling for canonical placeholders of pages."""
 from __future__ import annotations
 
-import re
 from typing import Any, Mapping
 
 from bot.utils.page_dynamic_data import (
@@ -12,10 +11,7 @@ from bot.utils.page_dynamic_data import (
     build_tariff_text,
     build_user_profile_context_values,
 )
-from bot.utils.placeholders import PAYMENT_COUPON_PAGE_FIELDS
-
-
-_PLACEHOLDER_RE = re.compile(r'%[^%\s]+%')
+from bot.utils.placeholders import PAYMENT_COUPON_PAGE_FIELDS, get_template_placeholder_specs
 
 TARIFF_PLACEHOLDERS = {'%tariffs%', '%тарифы%', '%no_tariffs%', '%без_тарифов%'}
 REFERRAL_PLACEHOLDERS = {
@@ -88,7 +84,7 @@ def _collect_page_placeholder_names(page_data: Mapping[str, Any]) -> set[str]:
 
     result: set[str] = set()
     for source in sources:
-        result.update(match.group(0).casefold() for match in _PLACEHOLDER_RE.finditer(source))
+        result.update(token.casefold() for token in get_template_placeholder_specs(source))
     return result
 
 

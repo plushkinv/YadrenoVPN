@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .connection import get_db
+from .key_inactivity import inactive_key_sql, inactive_since_sql, inactivity_token_sql
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +17,11 @@ __all__ = [
 ]
 
 
-_PENDING_EXPIRED_KEYS = """
+_PENDING_EXPIRED_KEYS = f"""
         SELECT
             vk.*,
+            {inactive_since_sql('vk')} AS effective_inactive_since,
+            {inactivity_token_sql('vk')} AS event_token,
             u.telegram_id,
             u.username,
             u.is_banned,
@@ -31,15 +34,16 @@ _PENDING_EXPIRED_KEYS = """
         LEFT JOIN key_lifecycle_event_log ev
             ON ev.vpn_key_id = vk.id
            AND ev.event_name = 'key_expired'
-           AND ev.event_token = COALESCE(vk.expires_at, '')
-        WHERE datetime(vk.expires_at) <= datetime('now')
+           AND ev.event_token = {inactivity_token_sql('vk')}
+        WHERE {inactive_key_sql('vk')}
+          AND {inactivity_token_sql('vk')} IS NOT NULL
           AND ev.id IS NULL
     """
 
 
 def get_pending_expired_key_events(limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Returns expired keys for which key_expired has not yet been written."""
-    sql = _PENDING_EXPIRED_KEYS + " ORDER BY vk.expires_at ASC, vk.id ASC"
+    """Return inactive keys whose current episode has not emitted key_expired."""
+    sql = _PENDING_EXPIRED_KEYS + " ORDER BY datetime(effective_inactive_since), vk.id"
     params: tuple[Any, ...] = ()
     if limit is not None:
         sql += " LIMIT ?"
@@ -52,18 +56,22 @@ def get_pending_expired_key_events(limit: Optional[int] = None) -> List[Dict[str
 def record_expired_key_event_once(
     *, key_id: int, event_token: str, subscribers=(),
 ) -> Optional[Dict[str, Any]]:
-    """Atomically claim a current expiry and its outbox; return legacy hook data."""
+    """Atomically claim a current inactivity episode and its event/legacy data."""
     from .db_core_events import record_core_event_with_conn
 
     with get_db() as conn:
         conn.execute('BEGIN IMMEDIATE')
         row = conn.execute(
-            _PENDING_EXPIRED_KEYS + ' AND vk.id = ? AND vk.expires_at = ?',
+            _PENDING_EXPIRED_KEYS + f' AND vk.id = ? AND {inactivity_token_sql("vk")} = ?',
             (key_id, event_token),
         ).fetchone()
         if row is None:
             return None
         key = dict(row)
+        conn.execute('''UPDATE vpn_keys SET inactive_since = ?, inactive_event_token = ?
+            WHERE id = ? AND inactive_since IS NULL''',
+            (key['effective_inactive_since'], event_token, key_id),
+        )
         lifecycle_id = _record_key_lifecycle_event_with_conn(
             conn, key_id=key_id, event_name='key_expired', event_token=event_token,
             metadata={

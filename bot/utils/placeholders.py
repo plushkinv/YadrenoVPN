@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 from html import unescape as unescape_html_entities
 from html.parser import HTMLParser
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Iterator, Literal, Optional
 from urllib.parse import quote
 
 from bot.utils.text import escape_html
@@ -16,7 +16,13 @@ _PARAMETERIZED_PLACEHOLDER_RE = re.compile(r'%([A-Za-z][A-Za-z0-9_]*)(?:\(([^%()
 _PARAMETER_NAME_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
 _UNRESOLVED_PLACEHOLDER_RE = re.compile(r'%[^%\s]*[A-Za-zА-Яа-я_][^%\s]*%')
 _URL_ESCAPE_RE = re.compile(r'%[0-9A-Fa-f]{2}')
-PagePlaceholderMode = Literal['html', 'button_label', 'url']
+PagePlaceholderMode = Literal['html', 'button_label', 'url', 'plain', 'url_component']
+EventType = Literal[
+    'broadcast', 'key_expiring', 'key_traffic_low', 'referral_new_ref', 'referral_purchase',
+]
+EVENT_TYPES = frozenset({
+    'broadcast', 'key_expiring', 'key_traffic_low', 'referral_new_ref', 'referral_purchase',
+})
 
 
 _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
@@ -90,11 +96,34 @@ _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
 CANONICAL_PAGE_PLACEHOLDERS = frozenset(
     f'%{name}%' for name in _PAGE_PLACEHOLDER_ALIASES_BY_NAME
 )
-_PAGE_PLACEHOLDER_ALIASES: dict[str, str] = {}
-for _name, _aliases in _PAGE_PLACEHOLDER_ALIASES_BY_NAME.items():
-    _PAGE_PLACEHOLDER_ALIASES[f'%{_name}%'.casefold()] = _name
+
+# Event-only names retain their published scope; common names are defined above.
+_EVENT_ONLY_ALIASES_BY_NAME = {
+    'event_type': (),
+    'key_name': ('%ключ_имя%',),
+    'key_days_left': ('%ключ_дней_до_окончания%',),
+    'key_traffic_remaining_percent': ('%ключ_трафик_процент_остатка%',),
+    'key_traffic_used': ('%ключ_трафик_использовано%',),
+    'key_traffic_limit': ('%ключ_трафик_лимит%',),
+    'referral_name': ('%реферал_имя%',),
+    'referral_login': ('%реферал_логин%',),
+    'referral_telegram_id': ('%реферал_telegram_id%',),
+    'referral_level': ('%реферальный_уровень%',),
+    'buyer_name': ('%покупатель_имя%',),
+    'buyer_login': ('%покупатель_логин%',),
+    'buyer_telegram_id': ('%покупатель_telegram_id%',),
+    'referral_reward': ('%реферальное_вознаграждение%',),
+}
+CANONICAL_EVENT_PLACEHOLDERS = CANONICAL_PAGE_PLACEHOLDERS | frozenset(
+    f'%{name}%' for name in _EVENT_ONLY_ALIASES_BY_NAME
+)
+_PLACEHOLDER_ALIASES: dict[str, str] = {}
+for _name, _aliases in {
+    **_PAGE_PLACEHOLDER_ALIASES_BY_NAME, **_EVENT_ONLY_ALIASES_BY_NAME,
+}.items():
+    _PLACEHOLDER_ALIASES[f'%{_name}%'.casefold()] = _name
     for _alias in _aliases:
-        _PAGE_PLACEHOLDER_ALIASES[_alias.casefold()] = _name
+        _PLACEHOLDER_ALIASES[_alias.casefold()] = _name
 _PARAMETERIZED_PAGE_PLACEHOLDERS = frozenset({
     'key',
     'payment_coupon',
@@ -129,6 +158,52 @@ TRIAL_OFFER_PAGE_FIELDS = frozenset({
     'traffic',
     'device_limit',
 })
+_PARAMETER_FIELDS = {
+    'key': KEY_PAGE_FIELDS,
+    'payment_coupon': PAYMENT_COUPON_PAGE_FIELDS,
+    'trial_offer': TRIAL_OFFER_PAGE_FIELDS,
+}
+_EVENT_VALUE_KEYS = {
+    'key_name': ('key_name', 'key_display_name', 'custom_name'),
+    'key_days_left': ('key_days_left', 'days_left'),
+    'key_traffic_remaining_percent': ('key_traffic_remaining_percent', 'traffic_remaining_percent'),
+    'key_traffic_used': ('key_traffic_used_text', 'traffic_used_text'),
+    'key_traffic_limit': ('key_traffic_limit_text', 'traffic_limit_text'),
+    'referral_level': ('referral_level', 'level'),
+    'referral_reward': ('referral_reward_text',),
+}
+
+
+def _iter_placeholder_matches(text: str) -> Iterator[re.Match[str]]:
+    """Scan source tokens without letting URL escapes consume the next token."""
+    offset = 0
+    escape_end = -1
+    while match := _PLACEHOLDER_RE.search(text, offset):
+        token = match.group(0)
+        in_escape_sequence = len(token) == 4 and (
+            match.start() == escape_end or _URL_ESCAPE_RE.match(text, match.start() + 3)
+        )
+        if (
+            token.casefold() not in _PLACEHOLDER_ALIASES
+            and _URL_ESCAPE_RE.match(text, match.start())
+            and (in_escape_sequence or not _PARAMETERIZED_PLACEHOLDER_RE.fullmatch(token))
+        ):
+            offset = match.start() + 3
+            escape_end = offset
+            continue
+        yield match
+        offset = match.end()
+
+
+def _substitute_placeholders(text: str, replace: Callable[[re.Match[str]], str]) -> str:
+    """Replace source tokens once; inserted values are never scanned again."""
+    parts: list[str] = []
+    offset = 0
+    for match in _iter_placeholder_matches(text):
+        parts.extend((text[offset:match.start()], replace(match)))
+        offset = match.end()
+    parts.append(text[offset:])
+    return ''.join(parts)
 
 
 class _HtmlToTextParser(HTMLParser):
@@ -171,7 +246,7 @@ def apply_placeholder_replacements(
         placeholder = match.group(0)
         return normalized.get(placeholder.casefold(), placeholder)
 
-    return _PLACEHOLDER_RE.sub(replace_match, text)
+    return _substitute_placeholders(text, replace_match)
 
 
 def contains_placeholder(text: str | None) -> bool:
@@ -225,6 +300,10 @@ def _format_value(
     if mode == 'button_label':
         return _html_to_plain_text(raw) if html_ready else ' '.join(raw.split())
 
+    if mode in {'plain', 'url_component'}:
+        plain = _html_to_plain_text(raw)
+        return quote(plain, safe='') if mode == 'url_component' else plain
+
     if mode == 'url':
         plain = _html_to_plain_text(raw) if html_ready else raw
         return quote(plain, safe='') if url_encode else plain
@@ -257,10 +336,15 @@ def _parse_placeholder_parameters(raw: str | None) -> dict[str, str] | None:
     return params
 
 
-def _resolve_placeholder_name(placeholder: str) -> tuple[str, dict[str, str]] | None:
+def _resolve_placeholder_name(
+    placeholder: str,
+    event_type: str | None = None,
+) -> tuple[str, dict[str, str]] | None:
     normalized = placeholder.casefold()
-    alias_name = _PAGE_PLACEHOLDER_ALIASES.get(normalized)
+    alias_name = _PLACEHOLDER_ALIASES.get(normalized)
     if alias_name is not None:
+        if alias_name in _EVENT_ONLY_ALIASES_BY_NAME and event_type is None:
+            return None
         return alias_name, {}
 
     match = _PARAMETERIZED_PLACEHOLDER_RE.fullmatch(placeholder)
@@ -284,6 +368,70 @@ def _parse_positive_int(value: Any) -> int | None:
     return number if number > 0 else None
 
 
+def valid_placeholder_parameters(name: str, params: Mapping[str, str]) -> bool:
+    """Apply the same bounded parameter contract in rendering and validation."""
+    if not params:
+        return name != 'key'
+    if name == 'tariffs':
+        return set(params) == {'group_id'} and _parse_positive_int(params['group_id']) is not None
+    fields = _PARAMETER_FIELDS.get(name)
+    return bool(fields and set(params) == {'field'} and params['field'].casefold() in fields)
+
+
+def normalize_event_placeholder_context(
+    event_type: str,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Adapt released event context keys to the page engine without changing inputs."""
+    if event_type not in EVENT_TYPES:
+        raise ValueError(f'неизвестный event_type: {event_type}')
+    normalized = _normalize_context(context)
+    normalized.setdefault('event_type', event_type)
+    for canonical, sources in {
+        'user_display_name': ('user_display_name', 'user_name'),
+        'user_username': ('user_username', 'username'),
+        'user_balance_text': ('user_balance_text', 'balance_text'),
+        'payment_term_text': ('payment_period_text', 'period_text', 'payment_term_text'),
+    }.items():
+        value = _context_value(normalized, *sources)
+        if value is not None:
+            normalized[canonical] = value
+    return normalized
+
+
+def get_template_placeholder_specs(
+    text: str,
+    *,
+    event_type: str | None = None,
+) -> dict[str, tuple[str, dict[str, str]] | None]:
+    """Inspect source tokens without resolving values or accessing runtime data."""
+    if event_type is not None and event_type not in EVENT_TYPES:
+        raise ValueError(f'неизвестный event_type: {event_type}')
+    return {
+        match.group(0): _resolve_placeholder_name(match.group(0), event_type)
+        for match in _iter_placeholder_matches(text)
+    }
+
+
+def get_placeholder_contract(*, include_events: bool = False) -> dict[str, Any]:
+    """Describe installed placeholder capabilities without recipient values."""
+    return {
+        'engine': 'page',
+        'common': {f'%{name}%': list(aliases) for name, aliases in _PAGE_PLACEHOLDER_ALIASES_BY_NAME.items()},
+        'event_only': {
+            f'%{name}%': list(aliases) for name, aliases in _EVENT_ONLY_ALIASES_BY_NAME.items()
+        } if include_events else {},
+        'event_types': sorted(EVENT_TYPES) if include_events else [],
+        'parameter_syntax': '%name(parameter=value)%',
+        'parameters': {
+            **{name: {'field': sorted(fields)} for name, fields in _PARAMETER_FIELDS.items()},
+            'tariffs': {'group_id': 'positive_integer'},
+        },
+        'missing_context': 'empty',
+        'unknown': 'preserved_at_render',
+    }
+
+
 def _resolve_tariffs_placeholder(
     context: Mapping[str, Any],
     mode: PagePlaceholderMode,
@@ -292,11 +440,7 @@ def _resolve_tariffs_placeholder(
     if not params:
         return _format_value(_context_value(context, 'tariffs_html'), mode, html_ready=True)
 
-    if set(params) != {'group_id'}:
-        return ''
-    group_id = _parse_positive_int(params.get('group_id'))
-    if group_id is None:
-        return ''
+    group_id = int(params['group_id'])
 
     from bot.utils.page_dynamic_data import build_tariff_text
 
@@ -313,12 +457,7 @@ def _resolve_key_placeholder(
     params: Mapping[str, str],
 ) -> str:
     """Resolves one allowlisted display field of the current key."""
-    if set(params) != {'field'}:
-        return ''
-
-    field = params.get('field', '').casefold()
-    if field not in KEY_PAGE_FIELDS:
-        return ''
+    field = params['field'].casefold()
 
     values = context.get(KEY_FIELDS_CONTEXT_KEY)
     if not isinstance(values, Mapping):
@@ -338,12 +477,7 @@ def _resolve_payment_coupon_placeholder(
             mode,
             html_ready=True,
         )
-    if set(params) != {'field'}:
-        return ''
-
-    field = params.get('field', '').casefold()
-    if field not in PAYMENT_COUPON_PAGE_FIELDS:
-        return ''
+    field = params['field'].casefold()
 
     values = context.get(PAYMENT_COUPON_FIELDS_CONTEXT_KEY)
     if not isinstance(values, Mapping):
@@ -363,11 +497,7 @@ def _resolve_trial_offer_placeholder(
             mode,
             html_ready=True,
         )
-    if set(params) != {'field'}:
-        return ''
-    field = params.get('field', '').casefold()
-    if field not in TRIAL_OFFER_PAGE_FIELDS:
-        return ''
+    field = params['field'].casefold()
     values = context.get(TRIAL_OFFER_FIELDS_CONTEXT_KEY)
     if not isinstance(values, Mapping):
         return ''
@@ -378,11 +508,16 @@ def _resolve_registered_placeholder(
     placeholder: str,
     context: Mapping[str, Any],
     mode: PagePlaceholderMode,
+    event_type: str | None = None,
 ) -> str:
-    resolved = _resolve_placeholder_name(placeholder)
+    resolved = _resolve_placeholder_name(placeholder, event_type)
     if resolved is None:
         return placeholder
     name, params = resolved
+    if not valid_placeholder_parameters(name, params):
+        return ''
+    if name in _EVENT_ONLY_ALIASES_BY_NAME:
+        return _format_value(_context_value(context, *_EVENT_VALUE_KEYS.get(name, (name,))), mode)
 
     if name == 'telegram_id':
         return _format_value(_context_value(context, 'telegram_id'), mode)
@@ -473,7 +608,7 @@ def _resolve_registered_placeholder(
     if name == 'payment_key_line':
         return _format_value(_context_value(context, 'payment_key_line_html'), mode, html_ready=True)
     if name == 'payment_tariff':
-        value = _context_value(context, 'payment_tariff_html')
+        value = _context_value(context, 'payment_tariff_html') if event_type is None else None
         if value is not None:
             return _format_value(value, mode, html_ready=True)
         return _format_value(_context_value(context, 'payment_tariff_name', 'tariff_name'), mode)
@@ -587,6 +722,7 @@ def apply_page_placeholders(
     context: Mapping[str, Any] | None = None,
     *,
     mode: PagePlaceholderMode = 'html',
+    event_type: str | None = None,
 ) -> str:
     """
     Substitutes canonical placeholders for the page builder.
@@ -598,7 +734,10 @@ def apply_page_placeholders(
         return ''
 
     normalized_replacements = _normalize_replacements(replacements)
-    runtime_context = _normalize_context(context)
+    runtime_context = (
+        normalize_event_placeholder_context(event_type, context)
+        if event_type is not None else _normalize_context(context)
+    )
 
     def replace_match(match: re.Match[str]) -> str:
         placeholder = match.group(0)
@@ -610,6 +749,6 @@ def apply_page_placeholders(
                 html_ready=True,
                 url_encode=normalized.endswith('_url%') and mode == 'url',
             )
-        return _resolve_registered_placeholder(placeholder, runtime_context, mode)
+        return _resolve_registered_placeholder(placeholder, runtime_context, mode, event_type)
 
-    return _PLACEHOLDER_RE.sub(replace_match, str(text))
+    return _substitute_placeholders(str(text), replace_match)

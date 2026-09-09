@@ -11,7 +11,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
-from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
+from bot.utils.event_placeholders import render_event_message_text
 from bot.utils.text import escape_html
 from bot.utils.user_ui_texts import render_duration_days, render_ui_text
 
@@ -214,18 +214,18 @@ async def notify_referrers_new_referral(bot: Bot, referral_id: int) -> None:
             if level in enabled_levels:
                 referrer = get_user_by_id(referrer_id)
                 if referrer and referrer.get('telegram_id'):
-                    context = build_user_event_context(int(referrer['telegram_id']))
-                    context.update({
+                    context = {
                         'referral_name': _format_user_name(referral_user),
                         'referral_login': _format_user_login(referral_user),
                         'referral_telegram_id': str(referral_user.get('telegram_id') or ''),
                         'referral_level': level,
-                    })
-                    text = render_event_placeholders(
+                    }
+                    text = await render_event_message_text(
                         template,
                         'referral_new_ref',
-                        context,
-                        mode='html',
+                        bot=bot,
+                        telegram_id=int(referrer['telegram_id']),
+                        context=context,
                     )
                     try:
                         await bot.send_message(referrer['telegram_id'], text, parse_mode='HTML')
@@ -292,8 +292,7 @@ async def notify_referrers_purchase(
             if not referrer or not referrer.get('telegram_id'):
                 continue
 
-            context = build_user_event_context(int(referrer['telegram_id']))
-            context.update({
+            context = {
                 'buyer_name': _format_user_name(payer),
                 'buyer_login': _format_user_login(payer),
                 'buyer_telegram_id': str((payer or {}).get('telegram_id') or ''),
@@ -304,12 +303,13 @@ async def notify_referrers_purchase(
                     event.get('period_days', 0),
                 ),
                 'referral_reward_text': _format_referral_reward(event),
-            })
-            text = render_event_placeholders(
+            }
+            text = await render_event_message_text(
                 template,
                 'referral_purchase',
-                context,
-                mode='html',
+                bot=bot,
+                telegram_id=int(referrer['telegram_id']),
+                context=context,
             )
 
             try:

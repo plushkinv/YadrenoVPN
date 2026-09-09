@@ -236,7 +236,7 @@ def get_referral_attribution_window_hours() -> int:
 
 
 def get_expired_key_retention_days() -> int:
-    """Return the validated hidden retention period for expired VPN keys."""
+    """Return the hidden retention period for time/traffic-inactive VPN keys."""
     raw = get_setting(EXPIRED_KEY_RETENTION_DAYS_SETTING, '30')
     try:
         days = int(str(raw).strip())
@@ -252,7 +252,7 @@ def get_expired_key_retention_days() -> int:
 
 
 def get_expired_key_panel_cleanup_delay_days() -> Optional[int]:
-    """Return the validated delay before expired panel-client cleanup.
+    """Return the delay before time/traffic-inactive panel-client cleanup.
 
     ``None`` disables only early panel cleanup. The retention-bound cleanup
     still has to attempt and confirm panel deletion before removing a key.

@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.delivery import is_bot_blocked_error
-from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
+from bot.utils.event_placeholders import render_event_message_text
 from bot.services.broadcast_content import (
     BROADCAST_KIND_POLL,
     POLL_MODE_CLEAN,
@@ -93,10 +93,9 @@ def save_broadcast_message(text: str, photo_file_id: str | None = None) -> None:
     save_message_content(text, photo_file_id)
 
 
-def render_broadcast_message_text(text: str, telegram_id: int | None) -> str:
+async def render_broadcast_message_text(text: str, telegram_id: int | None, *, bot: Bot) -> str:
     """Renders the mailing text in the event context of a specific recipient."""
-    context = build_user_event_context(telegram_id)
-    return render_event_placeholders(text, 'broadcast', context, mode='html')
+    return await render_event_message_text(text, 'broadcast', bot=bot, telegram_id=telegram_id)
 
 
 def get_broadcast_filters() -> tuple[str, ...]:
@@ -308,6 +307,9 @@ async def broadcast_edit_message(callback: CallbackQuery, state: FSMContext):
         "• Текст (с форматированием)\n"
         "• Фото с подписью\n"
         "• Нативный опрос Telegram\n\n"
+        "В тексте и подписи доступны подстановки страниц: например, "
+        "%referral_link% — личная реферальная ссылка получателя. "
+        "В превью подставляются ваши данные.\n\n"
         "💡 Опрос можно создать прямо здесь или переслать из «Избранного», группы или канала."
     )
     
@@ -506,9 +508,10 @@ async def broadcast_preview(callback: CallbackQuery, bot: Bot):
 
     await callback.answer("📤 Отправляю превью...")
     
-    preview_text = render_broadcast_message_text(
+    preview_text = await render_broadcast_message_text(
         msg_data.get('text', ''),
         callback.from_user.id,
+        bot=bot,
     )
 
     # Send the preview as a separate message
@@ -844,7 +847,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                         chat_id=int(user_id),
                     )
                 elif photo_file_id:
-                    rendered_text = render_broadcast_message_text(text, int(user_id))
+                    rendered_text = await render_broadcast_message_text(text, int(user_id), bot=bot)
                     await bot.send_photo(
                         chat_id=user_id,
                         photo=photo_file_id,
@@ -852,7 +855,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                         parse_mode="HTML"
                     )
                 else:
-                    rendered_text = render_broadcast_message_text(text, int(user_id))
+                    rendered_text = await render_broadcast_message_text(text, int(user_id), bot=bot)
                     await bot.send_message(
                         chat_id=user_id,
                         text=rendered_text,

@@ -113,17 +113,12 @@ def _normalized_binding(
 
 def _should_keep_panel_client(
     key: Mapping[str, Any],
-    expiry_due_key_ids: Optional[set[int]],
+    expiry_due_key_ids: set[int],
 ) -> bool:
     """Return whether one DB row still protects its logical panel client."""
     if should_panel_client_exist(key):
         return True
-    if expiry_due_key_ids is None:
-        return False
-
-    from database.requests import is_traffic_exhausted
-
-    if bool(key.get("is_banned", 0)) or is_traffic_exhausted(dict(key)):
+    if bool(key.get("is_banned", 0)):
         return False
     try:
         key_id = int(key.get("id"))
@@ -133,7 +128,7 @@ def _should_keep_panel_client(
 
 
 def _expiry_due_key_ids_for_daily_cleanup() -> set[int]:
-    """Load exact DB-backed expiry candidates for the effective panel delay."""
+    """Load DB-backed inactivity candidates for the effective panel delay."""
     from database.requests import (
         get_expired_key_panel_cleanup_delay_days,
         get_expired_key_retention_days,
@@ -168,21 +163,18 @@ async def cleanup_inactive_panel_clients(
     snapshots: Optional[SnapshotCollection] = None,
     expiry_due_key_ids: Optional[Iterable[int]] = None,
 ) -> PanelCleanupReport:
-    """Delete DB-linked inactive bot clients from every available panel."""
+    """Delete due inactive clients; the legacy expiry allowlist includes traffic."""
     from bot.services.vpn_api import get_client_from_server_data
     from database.requests import get_all_panel_sync_keys, get_all_servers
 
     selected_keys = list(keys) if keys is not None else get_all_panel_sync_keys()
     selected_servers = list(servers) if servers is not None else get_all_servers()
     if expiry_due_key_ids is not None:
-        due_key_ids: Optional[set[int]] = {
+        due_key_ids = {
             int(key_id) for key_id in expiry_due_key_ids
         }
-    elif keys is None:
-        due_key_ids = _expiry_due_key_ids_for_daily_cleanup()
     else:
-        # Keep the existing immediate-expiry behavior for injected callers.
-        due_key_ids = None
+        due_key_ids = _expiry_due_key_ids_for_daily_cleanup()
     grouped = group_keys_by_server(selected_keys)
     servers_by_id = _server_map(selected_servers)
     result = PanelCleanupReport()
@@ -392,6 +384,11 @@ async def cleanup_expired_database_keys(
         )
         return report
 
+    # Retention must not erase an as-yet unobserved inactivity event. Legacy
+    # hooks run before the final age/state recheck and may restore the key.
+    from bot.services.key_lifecycle import process_expired_key_lifecycle_events
+
+    await process_expired_key_lifecycle_events()
     deleted = delete_expired_keys_older_than(
         retention_days,
         eligible_key_ids=eligible_key_ids,

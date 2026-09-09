@@ -1,4 +1,4 @@
-"""Atomic retention cleanup for expired VPN keys."""
+"""Atomic retention cleanup for time/traffic-inactive VPN keys."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Any, Dict, List, Optional
 
 from .connection import get_db
+from .key_inactivity import inactive_key_sql, inactive_since_sql
 
 logger = logging.getLogger(__name__)
 
@@ -54,17 +55,14 @@ def _select_expired_keys(
             vk.custom_name,
             vk.panel_email,
             vk.expires_at,
+            {inactive_since_sql('vk')} AS inactive_since,
             u.telegram_id
         FROM vpn_keys vk
         JOIN users u ON u.id = vk.user_id
-        WHERE vk.expires_at IS NOT NULL
-          AND TRIM(CAST(vk.expires_at AS TEXT)) <> ''
-          AND TRIM(CAST(vk.expires_at AS TEXT))
-              GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
-          AND datetime(vk.expires_at) IS NOT NULL
-          AND datetime(vk.expires_at) <= datetime('now', ?)
+        WHERE {inactive_key_sql('vk')}
+          AND datetime({inactive_since_sql('vk')}) <= datetime('now', ?)
           {eligible_clause}
-        ORDER BY u.telegram_id ASC, vk.expires_at ASC, vk.id ASC
+        ORDER BY u.telegram_id ASC, datetime({inactive_since_sql('vk')}) ASC, vk.id ASC
         """,
         params,
     ).fetchall()
@@ -72,7 +70,7 @@ def _select_expired_keys(
 
 
 def get_expired_keys_older_than(age_days: int) -> List[Dict[str, Any]]:
-    """Return keys expired for at least ``age_days`` without mutating them."""
+    """Return continuously time/traffic-inactive keys without mutating them."""
     normalized_days = _validate_age_days(age_days, allow_zero=True)
     with get_db() as conn:
         return _select_expired_keys(conn, normalized_days)

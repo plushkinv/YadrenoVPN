@@ -694,7 +694,7 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
     """
     logger.info("⏳ Запуск проверки истекающих ключей...")
     try:
-        from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
+        from bot.utils.event_placeholders import render_event_message_text
         from bot.utils.page_renderer import PreparedPageRender, prepare_page_render
         from bot.utils.text import send_media_or_text
         days = int(get_setting('notification_days', '3'))
@@ -720,16 +720,16 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
             if is_notification_sent_today(vpn_key_id):
                 continue
             
-            event_context = build_user_event_context(user_telegram_id)
-            event_context.update({
+            event_context = {
                 'key_name': keyname,
                 'key_days_left': days_left,
-            })
-            text = render_event_placeholders(
+            }
+            text = await render_event_message_text(
                 notification_text,
                 'key_expiring',
-                event_context,
-                mode='html',
+                bot=bot,
+                telegram_id=user_telegram_id,
+                context=event_context,
             )
             
             prepared_actions = await prepare_page_render(
@@ -1229,22 +1229,20 @@ async def sync_traffic_stats(
                     # Forming the key name
                     keyname = key.get('custom_name') or f"#{key['id']}"
                     
-                    from bot.utils.event_placeholders import build_user_event_context, render_event_placeholders
+                    from bot.utils.event_placeholders import render_event_message_text
 
-                    event_context = build_user_event_context(int(telegram_id))
-                    event_context.update(
-                        {
-                            'key_name': keyname,
-                            'key_traffic_remaining_percent': threshold,
-                            'key_traffic_used_text': format_traffic(traffic_used),
-                            'key_traffic_limit_text': format_traffic(traffic_limit),
-                        }
-                    )
-                    msg = render_event_placeholders(
+                    event_context = {
+                        'key_name': keyname,
+                        'key_traffic_remaining_percent': threshold,
+                        'key_traffic_used_text': format_traffic(traffic_used),
+                        'key_traffic_limit_text': format_traffic(traffic_limit),
+                    }
+                    msg = await render_event_message_text(
                         notification_text_template,
                         'key_traffic_low',
-                        event_context,
-                        mode='html',
+                        bot=bot,
+                        telegram_id=int(telegram_id),
+                        context=event_context,
                     )
                     
                     try:

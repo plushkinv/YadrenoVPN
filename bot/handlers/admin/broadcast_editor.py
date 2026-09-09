@@ -34,10 +34,7 @@ from bot.services.yadreno_admin import (
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
-from bot.utils.event_placeholders import (
-    build_user_event_context,
-    render_event_placeholders,
-)
+from bot.utils.event_placeholders import render_event_message_text
 from bot.utils.text import escape_html, safe_edit_or_send
 from database.requests import get_yadreno_admin_api_key
 
@@ -61,16 +58,18 @@ def _state_error_text(state: dict[str, Any]) -> str:
     )
 
 
-async def _send_content_preview(bot: Bot, message: Message, content: dict[str, Any]) -> None:
+async def _send_content_preview(
+    bot: Bot, message: Message, content: dict[str, Any], *, telegram_id: int,
+) -> None:
     """Send a real Telegram preview of staged or saved material."""
     if content.get("kind") == BROADCAST_KIND_POLL:
         await preview_poll(bot, content, chat_id=message.chat.id)
         return
-    rendered = render_event_placeholders(
+    rendered = await render_event_message_text(
         str(content.get("text") or ""),
         "broadcast",
-        build_user_event_context(message.chat.id),
-        mode="html",
+        bot=bot,
+        telegram_id=telegram_id,
     )
     photo_file_id = content.get("photo_file_id")
     if photo_file_id:
@@ -127,7 +126,7 @@ async def broadcast_editor_preview(callback: CallbackQuery, bot: Bot) -> None:
         )
         return
     try:
-        await _send_content_preview(bot, callback.message, content)
+        await _send_content_preview(bot, callback.message, content, telegram_id=callback.from_user.id)
     except (TelegramAPIError, ValueError, TypeError) as error:
         logger.warning("Broadcast editor preview failed: %s", error)
         await callback.answer("Не удалось показать превью. Проверьте материал.", show_alert=True)
@@ -183,7 +182,9 @@ async def broadcast_editor_launch(callback: CallbackQuery, bot: Bot) -> None:
         callback.from_user.id,
     )
     try:
-        await _send_content_preview(bot, callback.message, stage["content"])
+        await _send_content_preview(
+            bot, callback.message, stage["content"], telegram_id=callback.from_user.id,
+        )
         confirmation = await asyncio.to_thread(
             create_broadcast_confirmation,
             callback.from_user.id,
