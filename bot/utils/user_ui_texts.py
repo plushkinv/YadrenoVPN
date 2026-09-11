@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import RLock
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from bot.utils.text import escape_html
 from database.requests import get_all_user_ui_texts, get_user_ui_text
@@ -94,10 +95,29 @@ def _build_cache(rows: list[dict[str, Any]]) -> Mapping[str, CachedUserUIText]:
 def load_user_ui_text_cache() -> int:
     """Loads and validates the complete catalog in one database query."""
     global _CACHE
-    candidate = _build_cache(get_all_user_ui_texts())
     with _CACHE_LOCK:
+        candidate = _build_cache(get_all_user_ui_texts())
         _CACHE = candidate
     return len(candidate)
+
+
+@contextmanager
+def user_ui_text_cache_write_lock() -> Iterator[None]:
+    """Serialize typed DB mutations with cache readers and reload publication."""
+    with _CACHE_LOCK:
+        yield
+
+
+def prepare_user_ui_text_cache(rows: list[dict[str, Any]]) -> Mapping[str, CachedUserUIText]:
+    """Validate a complete future catalog without publishing uncommitted values."""
+    return _build_cache(rows)
+
+
+def publish_user_ui_text_cache(candidate: Mapping[str, CachedUserUIText]) -> None:
+    """Publish a previously prepared immutable catalog after successful commit."""
+    global _CACHE
+    with _CACHE_LOCK:
+        _CACHE = candidate
 
 
 def reload_user_ui_text_cache() -> int:

@@ -28,9 +28,11 @@ from bot.services.yadreno_admin_core_guard import (
     run_with_core_guard,
 )
 from bot.services.yadreno_admin_page_binding import (
+    YaaPageBinding,
     YaaPageBindingContextError,
-    build_bound_yaa_runtime_context,
+    build_yaa_binding_runtime_context,
     get_yaa_page_binding,
+    set_yaa_page_binding,
 )
 from bot.services.yadreno_admin_customization_tools import (
     CUSTOMIZATION_TOOL_NAMES,
@@ -86,7 +88,7 @@ PROGRESS_EVENTS_CAPABILITY = "progress_events"
 BROADCAST_EDITOR_CAPABILITY = "broadcast_editor_v1"
 RICH_MESSAGES_CAPABILITY = "rich_messages_v1"
 RUNTIME_CONTEXT_CAPABILITY = "runtime_context_v1"
-CUSTOMIZATION_TOOLS_CAPABILITY = "customization_tools_v1"
+CUSTOMIZATION_TOOLS_CAPABILITY = "customization_tools_v2"
 YADRENO_ADMIN_TELEGRAM_HTML_TASK_FORMAT = "telegram_html"
 SATELLITE_PROTOCOL_VERSION = "v1"
 SATELLITE_CAPABILITIES: tuple[str, ...] = (
@@ -248,6 +250,7 @@ def _capabilities_for_skill(
             == {
                 'satellite_customization_inspect',
                 'satellite_customization_apply',
+                'satellite_customization_replace',
             }
         ):
             capabilities.append(CUSTOMIZATION_TOOLS_CAPABILITY)
@@ -334,19 +337,14 @@ def _runtime_context_factory_for_turn(
     telegram_id: int,
     topic_id: int,
     extra_context: Optional[dict[str, Any]],
+    page_binding: YaaPageBinding | None = None,
 ) -> Callable[[], dict[str, Any]]:
     """Return a builder that prefers the active pinned /yaa page snapshot."""
     task_format = yadreno_admin_task_format_for_topic(topic_id)
-    if (
-        topic_id == YADRENO_ADMIN_YAA_TOPIC_ID
-        and get_yaa_page_binding(telegram_id, topic_id) is not None
-    ):
+    binding = page_binding or get_yaa_page_binding(telegram_id, topic_id)
+    if topic_id == YADRENO_ADMIN_YAA_TOPIC_ID and binding is not None:
         def build_bound() -> dict[str, Any]:
-            context = build_bound_yaa_runtime_context(telegram_id, topic_id)
-            if context is None:
-                raise YaaPageBindingContextError(
-                    "The active /yaa binding disappeared during the request"
-                )
+            context = build_yaa_binding_runtime_context(binding)
             return build_agent_runtime_context(
                 context,
                 task_format=task_format,
@@ -438,6 +436,7 @@ class YadrenoAdminError(RuntimeError):
         *,
         status_code: int | None = None,
         user_message: str | None = None,
+        cancel_button_text: str | None = None,
         kind: Literal[
             "transport",
             "authentication",
@@ -452,6 +451,7 @@ class YadrenoAdminError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.user_message = user_message
+        self.cancel_button_text = cancel_button_text
         if kind is None:
             if status_code in {401, 403}:
                 kind = "authentication"
@@ -495,6 +495,7 @@ class YadrenoAdminProgressEvent:
     event: str
     content: str
     slot: str = ""
+    cancel_button_text: str | None = None
 
 
 @dataclass
@@ -515,6 +516,7 @@ class YadrenoAdminLatest:
     final: Optional[YadrenoAdminFinal] = None
     progress: Optional[YadrenoAdminProgressEvent] = None
     resume_allowed: bool = True
+    cancel_button_text: str | None = None
 
 
 @dataclass
@@ -523,6 +525,7 @@ class YadrenoAdminNewChatResult:
 
     status: str
     response_text: str = ""
+    cancel_button_text: str | None = None
     closed_session_id: Optional[int] = None
 
 
@@ -532,6 +535,7 @@ class YadrenoAdminHubStatus:
 
     status: str
     response_text: str = ""
+    cancel_button_text: str | None = None
     request_id: Optional[int] = None
     retry_after_sec: Optional[float] = None
     local_tool_running: bool = False
@@ -545,6 +549,7 @@ class YadrenoAdminCancelResult:
 
     status: str
     response_text: str = ""
+    cancel_button_text: str | None = None
     request_id: Optional[int] = None
     retry_after_sec: Optional[float] = None
 
@@ -585,20 +590,6 @@ def get_last_request_id(
         telegram_id,
         topic_id,
     )
-
-
-def is_local_request_starting(
-    telegram_id: int,
-    topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
-) -> bool:
-    """Return whether local work has not received a Hub request id yet."""
-    return satellite_lane_controller.is_starting(_lane_key(telegram_id, topic_id))
-
-
-def _raise_if_cycle_cancelled(cycle: SatelliteLaneCycle) -> None:
-    """Stop a cancelled cycle before it can create Hub work."""
-    if cycle.cancel_requested.is_set() and cycle.request_id is None:
-        raise YadrenoAdminRequestStopped()
 
 
 def is_local_request_active(
@@ -1306,6 +1297,7 @@ def _raise_for_hub_rejection(data: dict[str, Any], operation: str) -> None:
     raise YadrenoAdminError(
         f"Hub rejected {operation} (status={status})",
         user_message=response_text.strip(),
+        cancel_button_text=data.get("cancel_button_text"),
         kind="maintenance" if status == "maintenance" else "hub_rejection",
     )
 
@@ -1916,6 +1908,7 @@ async def _notify_progress(
         event=str(event.get("event") or ""),
         content=str(event.get("content") or ""),
         slot=str(event.get("slot") or ""),
+        cancel_button_text=event.get("cancel_button_text"),
     )
     try:
         await progress_callback(progress_event)
@@ -1997,6 +1990,7 @@ async def _poll_until_final(
     topic_id: int,
     request_id: int,
     cycle: SatelliteLaneCycle,
+    initial_status: dict[str, Any] | None = None,
     satellite_type: str | None = None,
     server_ip: str = "",
     progress_callback: Optional[ProgressCallback] = None,
@@ -2004,8 +1998,6 @@ async def _poll_until_final(
     runtime_context_factory: Callable[[], dict[str, Any]] | None = None,
 ) -> YadrenoAdminFinal:
     """Single poll/tool/final loop for text and upload requests."""
-    cycle.request_id = request_id
-    cycle.phase = "polling"
     _remember_request(telegram_id, topic_id, request_id, active=True)
     logger.info(
         "Yadreno Admin request accepted: admin=%s topic=%s request_id=%s satellite_type=%s server_ip=%s",
@@ -2015,26 +2007,14 @@ async def _poll_until_final(
         satellite_type,
         server_ip,
     )
+    if initial_status and initial_status.get("response_text"):
+        await _notify_progress(
+            {"event": "status", "content": initial_status["response_text"],
+             "cancel_button_text": initial_status.get("cancel_button_text")},
+            progress_callback,
+        )
     final_received = False
     try:
-        if cycle.cancel_requested.is_set():
-            try:
-                await _cancel_request(
-                    telegram_id,
-                    api_key,
-                    topic_id=topic_id,
-                    request_id=request_id,
-                    session=session,
-                )
-            except YadrenoAdminError as error:
-                logger.warning(
-                    "Deferred Yadreno Admin cancel failed: "
-                    "admin=%s topic=%s request_id=%s kind=%s",
-                    telegram_id,
-                    topic_id,
-                    request_id,
-                    error.kind,
-                )
         while True:
             poll_result = await _poll_next_or_stop(
                 session,
@@ -2057,7 +2037,6 @@ async def _poll_until_final(
                 raise YadrenoAdminError("Хаб вернул пустое событие")
 
             if event.get("event") == "tool_call":
-                cycle.phase = "tool"
                 tool_call_id = str(event.get("tool_call_id") or "")
                 tool_started_here = False
                 runtime = _runtime_context_from_event(event, topic_id=topic_id)
@@ -2134,7 +2113,6 @@ async def _poll_until_final(
                 finally:
                     if tool_started_here:
                         _clear_tool_runtime(request_id, tool_call_id)
-                    cycle.phase = "polling"
                 continue
 
             event_type = event.get("event")
@@ -2171,95 +2149,93 @@ async def run_dialog(
     skill_id: Optional[str] = None,
     runtime_context: Optional[dict[str, Any]] = None,
     progress_callback: Optional[ProgressCallback] = None,
+    page_binding: YaaPageBinding | None = None,
 ) -> YadrenoAdminFinal:
     """
     Performs a full cycle of dialogue with the Yadreno Admin agent.
 
-    One administrator simultaneously handles only one request in one lane
-    Yadreno Admin. Regular chat and /yaa use different topic_ids.
+    The Hub admits one active request per topic and rejects overlapping turns.
+    Local polling ownership is acquired only after acceptance.
     """
     key = _lane_key(telegram_id, topic_id)
-    async with satellite_lane_controller.cycle(key) as cycle:
-        timeout = aiohttp.ClientTimeout(total=70)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            _raise_if_cycle_cancelled(cycle)
-            effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
-            negotiated_capabilities: set[str] = set()
-            runtime_context_supported = await _negotiate_runtime_context_support(
-                session,
-                api_key,
+    runtime_context_factory = _runtime_context_factory_for_turn(
+        telegram_id, topic_id, runtime_context, page_binding,
+    )
+    timeout = aiohttp.ClientTimeout(total=70)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
+        negotiated_capabilities: set[str] = set()
+        runtime_context_supported = await _negotiate_runtime_context_support(
+            session,
+            api_key,
+            effective_skill_id,
+            negotiated_capabilities,
+        )
+        server_ip = await _get_server_ip(session)
+        core_changes_allowed = _core_policy_for_skill(effective_skill_id)
+        agent_runtime_context = (
+            None
+            if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+            else _build_runtime_context_or_error(runtime_context_factory)
+        )
+        agent_message = (
+            message
+            if (
+                effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                or runtime_context_supported
+            )
+            else _with_agent_runtime_context(
+                message,
+                agent_runtime_context or {},
+            )
+        )
+        payload: dict[str, Any] = {
+            "message": agent_message,
+            "server_ip": server_ip,
+            "topic_id": topic_id,
+            "skill_id": effective_skill_id,
+            "capabilities": _capabilities_for_skill(
                 effective_skill_id,
-                negotiated_capabilities,
-            )
-            _raise_if_cycle_cancelled(cycle)
-            server_ip = await _get_server_ip(session)
-            _raise_if_cycle_cancelled(cycle)
-            core_changes_allowed = _core_policy_for_skill(effective_skill_id)
-            runtime_context_factory = _runtime_context_factory_for_turn(
-                telegram_id,
-                topic_id,
-                runtime_context,
-            )
-            agent_runtime_context = (
-                None
-                if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-                else _build_runtime_context_or_error(runtime_context_factory)
-            )
-            agent_message = (
-                message
-                if (
-                    effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-                    or runtime_context_supported
-                )
-                else _with_agent_runtime_context(
-                    message,
-                    agent_runtime_context or {},
-                )
-            )
-            payload: dict[str, Any] = {
-                "message": agent_message,
-                "server_ip": server_ip,
-                "topic_id": topic_id,
-                "skill_id": effective_skill_id,
-                "capabilities": _capabilities_for_skill(
-                    effective_skill_id,
-                    runtime_context_supported=runtime_context_supported,
-                    customization_tools_supported=(
-                        CUSTOMIZATION_TOOLS_CAPABILITY in negotiated_capabilities
-                    ),
+                runtime_context_supported=runtime_context_supported,
+                customization_tools_supported=(
+                    CUSTOMIZATION_TOOLS_CAPABILITY in negotiated_capabilities
                 ),
-            }
-            if runtime_context_supported:
-                if agent_runtime_context is None:
-                    raise YadrenoAdminError(
-                        "Hub runtime-context negotiation invariant failed"
-                    )
-                payload["runtime_context"] = agent_runtime_context
-            if core_changes_allowed is not None:
-                payload["core_changes_allowed"] = core_changes_allowed
-            _raise_if_cycle_cancelled(cycle)
-            cycle.phase = "posting"
-            _, process_data = await _request_json(
-                session,
-                api_key,
-                "POST",
-                "/api/v1/satellite/process",
-                json_payload=payload,
-            )
-            if not process_data:
-                raise YadrenoAdminError("Хаб вернул пустой ответ на /process")
+            ),
+        }
+        if runtime_context_supported:
+            if agent_runtime_context is None:
+                raise YadrenoAdminError(
+                    "Hub runtime-context negotiation invariant failed"
+                )
+            payload["runtime_context"] = agent_runtime_context
+        if core_changes_allowed is not None:
+            payload["core_changes_allowed"] = core_changes_allowed
+        _, process_data = await _request_json(
+            session,
+            api_key,
+            "POST",
+            "/api/v1/satellite/process",
+            json_payload=payload,
+        )
+        if not process_data:
+            raise YadrenoAdminError("Хаб вернул пустой ответ на /process")
 
-            _validate_specialized_hub_response(process_data, effective_skill_id)
-            _raise_for_hub_rejection(process_data, "process request")
+        _validate_specialized_hub_response(process_data, effective_skill_id)
+        _raise_for_hub_rejection(process_data, "process request")
 
-            request_id = _accepted_request_id(process_data, "process request")
-            cycle.request_id = request_id
+        request_id = _accepted_request_id(process_data, "process request")
+        async with satellite_lane_controller.cycle(key, request_id) as cycle:
+            if cycle is None:
+                raise YadrenoAdminError("Hub returned an already polled request", kind="protocol")
+            if page_binding is not None:
+                set_yaa_page_binding(telegram_id, topic_id, page_binding)
             return await _poll_until_final(
                 session,
                 api_key,
                 telegram_id=telegram_id,
                 topic_id=topic_id,
                 request_id=request_id,
+                initial_status=process_data,
                 satellite_type=process_data.get("satellite_type"),
                 server_ip=server_ip,
                 progress_callback=progress_callback,
@@ -2283,6 +2259,7 @@ async def run_dialog_with_uploads(
     skill_id: Optional[str] = None,
     runtime_context: Optional[dict[str, Any]] = None,
     progress_callback: Optional[ProgressCallback] = None,
+    page_binding: YaaPageBinding | None = None,
     overflow_count: int = 0,
 ) -> YadrenoAdminFinal:
     """Sends files to Yadreno Admin and waits for the final response from the agent."""
@@ -2295,103 +2272,101 @@ async def run_dialog_with_uploads(
             skill_id=skill_id,
             runtime_context=runtime_context,
             progress_callback=progress_callback,
+            page_binding=page_binding,
         )
 
     key = _lane_key(telegram_id, topic_id)
-    async with satellite_lane_controller.cycle(key) as cycle:
-        timeout = aiohttp.ClientTimeout(total=70)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            _raise_if_cycle_cancelled(cycle)
-            effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
-            negotiated_capabilities: set[str] = set()
-            runtime_context_supported = await _negotiate_runtime_context_support(
-                session,
-                api_key,
+    runtime_context_factory = _runtime_context_factory_for_turn(
+        telegram_id, topic_id, runtime_context, page_binding,
+    )
+    timeout = aiohttp.ClientTimeout(total=70)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
+        negotiated_capabilities: set[str] = set()
+        runtime_context_supported = await _negotiate_runtime_context_support(
+            session,
+            api_key,
+            effective_skill_id,
+            negotiated_capabilities,
+        )
+        server_ip = await _get_server_ip(session)
+        core_changes_allowed = _core_policy_for_skill(effective_skill_id)
+        agent_runtime_context = (
+            None
+            if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+            else _build_runtime_context_or_error(runtime_context_factory)
+        )
+        agent_message = (
+            message
+            if (
+                effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
+                or runtime_context_supported
+            )
+            else _with_agent_runtime_context(
+                message,
+                agent_runtime_context or {},
+            )
+        )
+        is_batch = len(uploads) > 1
+        path = (
+            "/api/v1/satellite/upload_batch"
+            if is_batch
+            else "/api/v1/satellite/upload"
+        )
+        fields: dict[str, str | int] = {
+            "message": agent_message,
+            "topic_id": topic_id,
+            "server_ip": server_ip,
+            "skill_id": effective_skill_id,
+            "capabilities": ",".join(_capabilities_for_skill(
                 effective_skill_id,
-                negotiated_capabilities,
-            )
-            _raise_if_cycle_cancelled(cycle)
-            server_ip = await _get_server_ip(session)
-            _raise_if_cycle_cancelled(cycle)
-            core_changes_allowed = _core_policy_for_skill(effective_skill_id)
-            runtime_context_factory = _runtime_context_factory_for_turn(
-                telegram_id,
-                topic_id,
-                runtime_context,
-            )
-            agent_runtime_context = (
-                None
-                if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-                else _build_runtime_context_or_error(runtime_context_factory)
-            )
-            agent_message = (
-                message
-                if (
-                    effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-                    or runtime_context_supported
+                runtime_context_supported=runtime_context_supported,
+                customization_tools_supported=(
+                    CUSTOMIZATION_TOOLS_CAPABILITY in negotiated_capabilities
+                ),
+            )),
+        }
+        if runtime_context_supported:
+            if agent_runtime_context is None:
+                raise YadrenoAdminError(
+                    "Hub runtime-context negotiation invariant failed"
                 )
-                else _with_agent_runtime_context(
-                    message,
-                    agent_runtime_context or {},
-                )
+            fields["runtime_context"] = json.dumps(
+                agent_runtime_context,
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
-            is_batch = len(uploads) > 1
-            path = (
-                "/api/v1/satellite/upload_batch"
-                if is_batch
-                else "/api/v1/satellite/upload"
-            )
-            fields: dict[str, str | int] = {
-                "message": agent_message,
-                "topic_id": topic_id,
-                "server_ip": server_ip,
-                "skill_id": effective_skill_id,
-                "capabilities": ",".join(_capabilities_for_skill(
-                    effective_skill_id,
-                    runtime_context_supported=runtime_context_supported,
-                    customization_tools_supported=(
-                        CUSTOMIZATION_TOOLS_CAPABILITY in negotiated_capabilities
-                    ),
-                )),
-            }
-            if runtime_context_supported:
-                if agent_runtime_context is None:
-                    raise YadrenoAdminError(
-                        "Hub runtime-context negotiation invariant failed"
-                    )
-                fields["runtime_context"] = json.dumps(
-                    agent_runtime_context,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
-            if core_changes_allowed is not None:
-                fields["core_changes_allowed"] = "true" if core_changes_allowed else "false"
-            if is_batch:
-                fields["overflow_count"] = overflow_count
-            _raise_if_cycle_cancelled(cycle)
-            cycle.phase = "posting"
-            _, upload_data = await _request_multipart(
-                session,
-                api_key,
-                path,
-                fields=fields,
-                uploads=uploads,
-                file_field="files" if is_batch else "file",
-            )
-            if not upload_data:
-                raise YadrenoAdminError("Хаб вернул пустой ответ на upload")
+        if core_changes_allowed is not None:
+            fields["core_changes_allowed"] = "true" if core_changes_allowed else "false"
+        if is_batch:
+            fields["overflow_count"] = overflow_count
+        _, upload_data = await _request_multipart(
+            session,
+            api_key,
+            path,
+            fields=fields,
+            uploads=uploads,
+            file_field="files" if is_batch else "file",
+        )
+        if not upload_data:
+            raise YadrenoAdminError("Хаб вернул пустой ответ на upload")
 
-            _validate_specialized_hub_response(upload_data, effective_skill_id)
-            _raise_for_hub_rejection(upload_data, "upload request")
+        _validate_specialized_hub_response(upload_data, effective_skill_id)
+        _raise_for_hub_rejection(upload_data, "upload request")
 
-            request_id = _accepted_request_id(upload_data, "upload request")
-            cycle.request_id = request_id
+        request_id = _accepted_request_id(upload_data, "upload request")
+        async with satellite_lane_controller.cycle(key, request_id) as cycle:
+            if cycle is None:
+                raise YadrenoAdminError("Hub returned an already polled request", kind="protocol")
+            if page_binding is not None:
+                set_yaa_page_binding(telegram_id, topic_id, page_binding)
             return await _poll_until_final(
                 session,
                 api_key,
                 telegram_id=telegram_id,
                 topic_id=topic_id,
                 request_id=request_id,
+                initial_status=upload_data,
                 satellite_type=upload_data.get("satellite_type"),
                 server_ip=server_ip,
                 progress_callback=progress_callback,
@@ -2418,12 +2393,9 @@ async def resume_active_dialog(
         return None
 
     key = _lane_key(telegram_id, topic_id)
-    async with satellite_lane_controller.cycle(key) as cycle:
-        request_id = get_active_request_id(telegram_id, topic_id)
-        if request_id is None:
+    async with satellite_lane_controller.cycle(key, request_id) as cycle:
+        if cycle is None:
             return None
-        cycle.request_id = request_id
-        cycle.phase = "polling"
         timeout = aiohttp.ClientTimeout(total=70)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             server_ip = await _get_server_ip(session)
@@ -2447,6 +2419,10 @@ async def resume_active_dialog(
                 topic_id=topic_id,
                 request_id=request_id,
                 server_ip=server_ip,
+                initial_status={
+                    "response_text": hub_status.response_text,
+                    "cancel_button_text": hub_status.cancel_button_text,
+                },
                 progress_callback=progress_callback,
                 cycle=cycle,
             )
@@ -2477,6 +2453,7 @@ def _latest_from_event(request_id: int, event: Optional[dict[str, Any]]) -> Yadr
                 event=event_type,
                 content=str(event.get("content") or ""),
                 slot=str(event.get("slot") or ""),
+                cancel_button_text=event.get("cancel_button_text"),
             ),
         )
 
@@ -2503,11 +2480,8 @@ def _status_from_data(
         retry_after_sec=data.get("retry_after_sec"),
         local_tool_running=bool(data.get("local_tool_running")),
         local_tool_call_id=data.get("local_tool_call_id"),
-        resume_allowed=status in {
-            "running",
-            "cancel_requested",
-            "accepted_running",
-        },
+        resume_allowed=data.get("resume_allowed") is True,
+        cancel_button_text=data.get("cancel_button_text"),
     )
 
 
@@ -2516,20 +2490,17 @@ def _latest_from_hub_status(
     hub_status: YadrenoAdminHubStatus,
 ) -> YadrenoAdminLatest:
     """Shows read-only /status as a progress event without running /poll."""
-    text = hub_status.response_text or "Состояние задачи пока не определено."
-    if hub_status.status in {"orphan_suspected", "orphan_confirmed"}:
-        text += "\n\nНажмите «Отмена», чтобы выполнить безопасную двухфазную проверку."
-    if hub_status.status == "unsafe_unknown":
-        text += "\n\nЛокальные флаги не очищены."
     return YadrenoAdminLatest(
         request_id=request_id,
         event="hub_status",
         progress=YadrenoAdminProgressEvent(
             event="status",
-            content=text,
+            content=hub_status.response_text,
             slot="hub_status",
+            cancel_button_text=hub_status.cancel_button_text,
         ),
         resume_allowed=hub_status.resume_allowed,
+        cancel_button_text=hub_status.cancel_button_text,
     )
 
 
@@ -2563,7 +2534,6 @@ async def fetch_dialog_status(
         hub_status.local_tool_call_id = str(
             local_diag.get("local_tool_call_id") or ""
         ) or None
-        hub_status.resume_allowed = True
     elif hub_status.status in {"idle", "orphan_cleared"}:
         _signal_poll_stop(telegram_id, topic_id, request_id)
         _clear_active_request(
@@ -2649,6 +2619,7 @@ async def fetch_latest_dialog_event(
         return None
     if hub_status is not None:
         latest.resume_allowed = hub_status.resume_allowed
+        latest.cancel_button_text = hub_status.cancel_button_text
     if latest.final is not None:
         _signal_poll_stop(telegram_id, topic_id, request_id)
         _clear_active_request(
@@ -2667,55 +2638,49 @@ async def start_new_chat(
     skill_id: Optional[str] = None,
 ) -> YadrenoAdminNewChatResult:
     """Asks the hub to close the active satellite session if the lane is free."""
-    key = _lane_key(telegram_id, topic_id)
-    async with satellite_lane_controller.new_chat(key) as allowed:
-        if not allowed:
-            return YadrenoAdminNewChatResult(
-                status="busy",
-                response_text=(
-                    "Я ещё работаю над вашей предыдущей задачей. "
-                    "Дождитесь завершения или нажмите «Отмена»."
-                ),
-            )
-
-        timeout = aiohttp.ClientTimeout(total=20)
-        effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Discovery chooses a reachable trusted endpoint before the only
-            # side-effectful request is sent.
-            await _negotiate_runtime_context_support(
-                session,
-                api_key,
-                effective_skill_id,
-            )
-            payload: dict[str, Any] = {
-                "topic_id": topic_id,
-                "skill_id": effective_skill_id,
-            }
-            if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
-                payload["capabilities"] = _capabilities_for_skill(
-                    effective_skill_id
-                )
-            _, data = await _request_json(
-                session,
-                api_key,
-                "POST",
-                "/api/v1/satellite/new_chat",
-                json_payload=payload,
-            )
-        if not data:
-            raise YadrenoAdminError("Хаб вернул пустой ответ на /new_chat")
-
-        _validate_specialized_hub_response(data, effective_skill_id)
-        result = YadrenoAdminNewChatResult(
-            status=str(data.get("status") or ""),
-            response_text=str(data.get("response_text") or ""),
-            closed_session_id=data.get("closed_session_id"),
+    timeout = aiohttp.ClientTimeout(total=20)
+    effective_skill_id = yadreno_admin_skill_id_for_topic(topic_id, skill_id)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        # Discovery chooses a reachable trusted endpoint before the only
+        # side-effectful request is sent.
+        await _negotiate_runtime_context_support(
+            session,
+            api_key,
+            effective_skill_id,
         )
-        if result.status == "ok":
-            _clear_active_request(telegram_id, topic_id)
-            _clear_last_request(telegram_id, topic_id)
-        return result
+        previous_active = get_active_request_id(telegram_id, topic_id)
+        previous_last = get_last_request_id(telegram_id, topic_id)
+        payload: dict[str, Any] = {
+            "topic_id": topic_id,
+            "skill_id": effective_skill_id,
+        }
+        if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
+            payload["capabilities"] = _capabilities_for_skill(
+                effective_skill_id
+            )
+        _, data = await _request_json(
+            session,
+            api_key,
+            "POST",
+            "/api/v1/satellite/new_chat",
+            json_payload=payload,
+        )
+    if not data:
+        raise YadrenoAdminError("Хаб вернул пустой ответ на /new_chat")
+
+    _validate_specialized_hub_response(data, effective_skill_id)
+    result = YadrenoAdminNewChatResult(
+        status=str(data.get("status") or ""),
+        response_text=str(data.get("response_text") or ""),
+        closed_session_id=data.get("closed_session_id"),
+        cancel_button_text=data.get("cancel_button_text"),
+    )
+    if result.status == "ok":
+        if previous_active is not None:
+            _clear_active_request(telegram_id, topic_id, expected_request_id=previous_active)
+        if previous_last is not None:
+            _clear_last_request(telegram_id, topic_id, expected_request_id=previous_last)
+    return result
 
 
 async def _cancel_request(
@@ -2724,33 +2689,18 @@ async def _cancel_request(
     *,
     topic_id: int,
     request_id: int,
-    session: aiohttp.ClientSession | None = None,
 ) -> YadrenoAdminCancelResult:
     """Send cancellation for one known Hub request."""
     local_diag = get_local_tool_diagnostics(request_id, topic_id)
 
-    async def send_cancel(
-        active_session: aiohttp.ClientSession,
-    ) -> Optional[dict[str, Any]]:
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         _, data = await _request_json(
-            active_session,
-            api_key,
-            "POST",
-            "/api/v1/satellite/cancel",
+            session, api_key, "POST", "/api/v1/satellite/cancel",
             json_payload={
-                "request_id": request_id,
-                "topic_id": topic_id,
-                **local_diag,
+                "request_id": request_id, "topic_id": topic_id, **local_diag,
             },
         )
-        return data
-
-    if session is None:
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession(timeout=timeout) as owned_session:
-            data = await send_cancel(owned_session)
-    else:
-        data = await send_cancel(session)
 
     hub_status = _status_from_data(request_id, data)
     logger.info(
@@ -2765,10 +2715,12 @@ async def _cancel_request(
         hub_status.local_tool_running
         or current_local_diag.get("local_tool_running")
     )
-    effective_status = hub_status.status
-    if local_tool_running and effective_status in {"orphan_cleared", "idle"}:
-        effective_status = "cancel_requested"
-    elif effective_status in {"orphan_cleared", "idle"}:
+    if hub_status.status in {"orphan_cleared", "idle"}:
+        if local_tool_running:
+            raise YadrenoAdminError(
+                "Hub terminal status conflicts with a running local tool",
+                kind="protocol",
+            )
         _signal_poll_stop(telegram_id, topic_id, request_id)
         _clear_active_request(
             telegram_id,
@@ -2781,8 +2733,9 @@ async def _cancel_request(
             expected_request_id=request_id,
         )
     return YadrenoAdminCancelResult(
-        status=effective_status,
+        status=hub_status.status,
         response_text=hub_status.response_text,
+        cancel_button_text=hub_status.cancel_button_text,
         request_id=request_id,
         retry_after_sec=hub_status.retry_after_sec,
     )
@@ -2795,25 +2748,22 @@ async def cancel_active_dialog(
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
 ) -> YadrenoAdminCancelResult:
     """Cancel the cycle that is current in this conversation lane."""
-    key = _lane_key(telegram_id, topic_id)
-    target = satellite_lane_controller.request_cancel(key)
-    if target.status == "active" and target.request_id is None:
-        posting = target.phase in {"posting", "cancelling"}
-        return YadrenoAdminCancelResult(
-            status="cancel_requested" if posting else "local_cancelled",
-            response_text=(
-                "Запрос будет отменён сразу после получения его идентификатора."
-                if posting
-                else "Запрос остановлен до отправки агенту."
-            ),
-        )
-
-    request_id = target.request_id or get_active_request_id(telegram_id, topic_id)
+    request_id = get_active_request_id(telegram_id, topic_id)
     if request_id is None:
-        return YadrenoAdminCancelResult(
-            status="idle",
-            response_text="Активного запроса нет.",
-        )
+        timeout = aiohttp.ClientTimeout(total=20)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            _, data = await _request_json(
+                session, api_key, "GET",
+                f"/api/v1/satellite/status?topic_id={topic_id}",
+            )
+        hub_status = _status_from_data(None, data)
+        request_id = hub_status.request_id
+        if request_id is None or hub_status.status == "idle":
+            return YadrenoAdminCancelResult(
+                status=hub_status.status, response_text=hub_status.response_text,
+                cancel_button_text=hub_status.cancel_button_text,
+                request_id=request_id,
+            )
     return await _cancel_request(
         telegram_id,
         api_key,

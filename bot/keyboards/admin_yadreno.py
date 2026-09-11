@@ -1,4 +1,6 @@
 """Keyboards of the Yadreno Admin section."""
+from __future__ import annotations
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -56,6 +58,7 @@ def yadreno_admin_agent_kb(
     *,
     active_request: bool = True,
     viewer_url: str | None = None,
+    cancel_button_text: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Build controls for an active request or a completed agent response."""
     builder = InlineKeyboardBuilder()
@@ -67,19 +70,19 @@ def yadreno_admin_agent_kb(
             )
         )
 
-    primary_button = (
-        InlineKeyboardButton(
-            text='❌ Отмена',
+    buttons: list[InlineKeyboardButton] = []
+    if active_request and cancel_button_text:
+        buttons.append(InlineKeyboardButton(
+            text=cancel_button_text,
             callback_data=f'admin_yadreno_cancel:{int(topic_id)}',
-        )
-        if active_request
-        else InlineKeyboardButton(
+        ))
+    elif not active_request:
+        buttons.append(InlineKeyboardButton(
             text='🚪 Выйти',
             callback_data='admin_panel',
-        )
-    )
+        ))
     builder.row(
-        primary_button,
+        *buttons,
         InlineKeyboardButton(
             text='🔄 Ну чё там?',
             callback_data=f'admin_yadreno_nudge:{int(topic_id)}',
@@ -92,6 +95,7 @@ def yadreno_admin_request_error_kb(
     topic_id: int = 0,
     *,
     active_request: bool,
+    cancel_button_text: str | None = None,
     configuration_error: bool = False,
     show_api_key_action: bool = True,
 ) -> InlineKeyboardMarkup:
@@ -99,7 +103,7 @@ def yadreno_admin_request_error_kb(
     if configuration_error:
         return yadreno_admin_chat_kb(topic_id)
     if active_request:
-        return yadreno_admin_agent_kb(topic_id)
+        return yadreno_admin_agent_kb(topic_id, cancel_button_text=cancel_button_text)
     return yadreno_admin_chat_kb(
         topic_id,
         show_api_key_action=show_api_key_action,

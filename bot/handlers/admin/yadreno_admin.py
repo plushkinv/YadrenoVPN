@@ -29,6 +29,7 @@ from bot.services.yadreno_admin_page_binding import (
     YaaPageBinding,
     clear_yaa_page_binding,
     get_yaa_page_binding,
+    make_yaa_page_binding,
     remember_yaa_page_binding,
 )
 from bot.services.yadreno_admin import (
@@ -48,7 +49,6 @@ from bot.services.yadreno_admin import (
     fetch_latest_dialog_event,
     get_active_request_id,
     is_local_request_active,
-    is_local_request_starting,
     normalize_yadreno_admin_api_key,
     run_dialog,
     run_dialog_with_uploads,
@@ -124,8 +124,10 @@ def _yadreno_request_error_keyboard(
     return yadreno_admin_request_error_kb(
         topic_id,
         active_request=(
-            get_active_request_id(admin_id, topic_id=topic_id) is not None
+            (error is not None and error.cancel_button_text is not None)
+            or get_active_request_id(admin_id, topic_id=topic_id) is not None
         ),
+        cancel_button_text=error.cancel_button_text if error is not None else None,
         configuration_error=(
             error is not None and error.kind == "configuration"
         ),
@@ -337,12 +339,13 @@ class _YadrenoProgressRenderer:
     def __init__(self, anchor: Message, topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID):
         self._anchor = anchor
         self._topic_id = topic_id
+        self._cancel_button_text: str | None = None
         self._live_status_message: Message | None = anchor
         self._status_messages: dict[str, Message] = {}
         self._task_message: Message | None = None
         self._last_live_status_text = _progress_text(
             "🤖 <b>Yadreno Admin</b>",
-            "⏳ Ведётся агентская работа...",
+            "⏳ Отправляю запрос...",
         )
 
     @property
@@ -352,6 +355,8 @@ class _YadrenoProgressRenderer:
 
     async def handle(self, event: YadrenoAdminProgressEvent) -> None:
         """Shows status/task_update and continues polling."""
+        if event.cancel_button_text is not None:
+            self._cancel_button_text = event.cancel_button_text
         if event.event == "status":
             await self._show_status(event)
             return
@@ -369,7 +374,9 @@ class _YadrenoProgressRenderer:
             updated = await safe_edit_or_send(
                 target,
                 text,
-                reply_markup=yadreno_admin_agent_kb(self._topic_id),
+                reply_markup=yadreno_admin_agent_kb(
+                    self._topic_id, cancel_button_text=self._cancel_button_text,
+                ),
             )
             self._live_status_message = updated
             self._status_messages[slot] = updated
@@ -385,7 +392,9 @@ class _YadrenoProgressRenderer:
         updated = await safe_edit_or_send(
             target,
             text,
-            reply_markup=yadreno_admin_agent_kb(self._topic_id),
+            reply_markup=yadreno_admin_agent_kb(
+                self._topic_id, cancel_button_text=self._cancel_button_text,
+            ),
             force_new=force_new,
         )
         self._status_messages[slot] = updated
@@ -396,7 +405,9 @@ class _YadrenoProgressRenderer:
             self._task_message = await safe_edit_or_send(
                 self._task_message,
                 text,
-                reply_markup=yadreno_admin_agent_kb(self._topic_id),
+                reply_markup=yadreno_admin_agent_kb(
+                    self._topic_id, cancel_button_text=self._cancel_button_text,
+                ),
             )
             return
 
@@ -404,13 +415,17 @@ class _YadrenoProgressRenderer:
         self._task_message = await safe_edit_or_send(
             target,
             text,
-            reply_markup=yadreno_admin_agent_kb(self._topic_id),
+            reply_markup=yadreno_admin_agent_kb(
+                self._topic_id, cancel_button_text=self._cancel_button_text,
+            ),
         )
         self._anchor = self._task_message
         self._live_status_message = await safe_edit_or_send(
             self._task_message,
             self._last_live_status_text,
-            reply_markup=yadreno_admin_agent_kb(self._topic_id),
+            reply_markup=yadreno_admin_agent_kb(
+                self._topic_id, cancel_button_text=self._cancel_button_text,
+            ),
             force_new=True,
         )
         self._status_messages["status"] = self._live_status_message
@@ -518,6 +533,7 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
         return
 
     topic_id = _callback_topic_id(callback.data, "admin_yadreno_new_chat")
+    previous_binding = get_yaa_page_binding(callback.from_user.id, topic_id)
     try:
         result = await start_new_chat(
             callback.from_user.id,
@@ -528,23 +544,29 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
         await _show_yadreno_callback_error(callback, e, topic_id)
         return
 
-    if result.status == "busy":
-        await callback.answer(
-            result.response_text or "Агент ещё работает. Нажмите «Отмена».",
-            show_alert=True,
+    if result.status != "ok":
+        await safe_edit_or_send(
+            callback.message,
+            escape_html(result.response_text),
+            reply_markup=yadreno_admin_agent_kb(
+                topic_id, cancel_button_text=result.cancel_button_text,
+            ),
         )
+        await callback.answer()
         return
 
-    if topic_id == YADRENO_ADMIN_YAA_TOPIC_ID:
+    if (
+        topic_id == YADRENO_ADMIN_YAA_TOPIC_ID
+        and get_yaa_page_binding(callback.from_user.id, topic_id) is previous_binding
+    ):
         clear_yaa_page_binding(callback.from_user.id, topic_id)
     await _activate_yadreno_chat_lane(state, topic_id)
     await safe_edit_or_send(
         callback.message,
-        "🆕 <b>Новый чат открыт</b>\n\n"
-        "Контекст сброшен. Напишите новую задачу обычным сообщением.",
+        escape_html(result.response_text),
         reply_markup=yadreno_admin_chat_kb(topic_id),
     )
-    await callback.answer("Новый чат открыт")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_yadreno_cancel"))
@@ -570,70 +592,16 @@ async def cancel_yadreno_dialog_button(callback: CallbackQuery):
         await _show_yadreno_callback_error(callback, e, topic_id)
         return
 
-    if cancel_result.status == "idle":
-        await _show_idle_agent_controls(callback.message, topic_id)
-        await callback.answer("Активного запроса нет", show_alert=False)
-        return
-
-    if cancel_result.status == "local_cancelled":
-        await safe_edit_or_send(
-            callback.message,
-            "🛑 <b>Запрос остановлен</b>\n\n"
-            "Он не успел уйти агенту. Можно отправить новую задачу.",
-            reply_markup=yadreno_admin_chat_kb(topic_id),
-        )
-        await callback.answer("Запрос остановлен")
-        return
-
-    if cancel_result.status == "cancel_requested" and cancel_result.request_id is None:
-        await safe_edit_or_send(
-            callback.message,
-            "🛑 <b>Запрос отменяется</b>\n\n"
-            "Он уже отправляется. Сразу после подтверждения хабу будет передана отмена.",
-            reply_markup=yadreno_admin_agent_kb(topic_id),
-        )
-        await callback.answer("Отмена принята")
-        return
-
-    if cancel_result.status == "orphan_cleared":
-        await safe_edit_or_send(
-            callback.message,
-            "🛑 <b>Запрос остановлен</b>\n\n"
-            "Хаб подтвердил, что задача уже не выполнялась, и безопасно снял зависший lock. "
-            "Можно начать новый диалог.",
-            reply_markup=yadreno_admin_chat_kb(topic_id),
-        )
-        await callback.answer("Зависший запрос очищен")
-        return
-
-    if cancel_result.status == "unsafe_unknown":
-        await safe_edit_or_send(
-            callback.message,
-            "⚠️ <b>Состояние не определено</b>\n\n"
-            f"{escape_html(cancel_result.response_text or 'Безопасно очистить запрос не удалось.')}",
-            reply_markup=yadreno_admin_agent_kb(topic_id),
-        )
-        await callback.answer("Lock не очищен", show_alert=True)
-        return
-
-    if cancel_result.status in {"orphan_suspected", "orphan_confirmed"}:
-        await safe_edit_or_send(
-            callback.message,
-            "⚠️ <b>Проверяю зависший запрос</b>\n\n"
-            f"{escape_html(cancel_result.response_text or 'Повторите отмену через несколько секунд.')}",
-            reply_markup=yadreno_admin_agent_kb(topic_id),
-        )
-        await callback.answer("Повторите отмену через пару секунд", show_alert=True)
-        return
-
     await safe_edit_or_send(
         callback.message,
-        "🛑 <b>Запрос отменяется</b>\n\n"
-        "Хаб видит живую задачу. Агент завершит работу на ближайшей безопасной точке "
-        "и сам снимет lock.",
-        reply_markup=yadreno_admin_agent_kb(topic_id),
+        escape_html(cancel_result.response_text),
+        reply_markup=yadreno_admin_agent_kb(
+            topic_id,
+            active_request=cancel_result.cancel_button_text is not None,
+            cancel_button_text=cancel_result.cancel_button_text,
+        ),
     )
-    await callback.answer("Отмена отправлена")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_yadreno_nudge"))
@@ -649,9 +617,6 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
         return
 
     topic_id = _callback_topic_id(callback.data, "admin_yadreno_nudge")
-    if is_local_request_starting(callback.from_user.id, topic_id=topic_id):
-        await callback.answer("Запрос ещё отправляется", show_alert=False)
-        return
     try:
         latest = await fetch_latest_dialog_event(
             callback.from_user.id,
@@ -731,6 +696,7 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
                 reply_markup=yadreno_admin_agent_kb(
                     topic_id,
                     active_request=active_request_id is not None,
+                    cancel_button_text=latest.cancel_button_text,
                 ),
             ),
             topic_id=topic_id,
@@ -767,6 +733,7 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
         else yadreno_admin_agent_kb(
             topic_id,
             active_request=active_request_id is not None,
+            cancel_button_text=latest.cancel_button_text,
         )
     )
     await safe_edit_or_send(
@@ -900,26 +867,13 @@ async def cancel_yadreno_dialog(message: Message, state: FSMContext):
         )
         return
 
-    request_active = cancelled.status not in {
-        "idle",
-        "local_cancelled",
-        "orphan_cleared",
-    }
-    if cancelled.status in {"local_cancelled", "orphan_cleared"}:
-        text = "🛑 <b>Запрос остановлен</b>"
-    elif request_active:
-        text = (
-            "🛑 <b>Запрос отменяется</b>\n\n"
-            "Агент завершит работу на следующей безопасной точке."
-        )
-    else:
-        text = "ℹ️ <b>Активного запроса нет</b>"
     await safe_edit_or_send(
         message,
-        text,
+        escape_html(cancelled.response_text),
         reply_markup=yadreno_admin_agent_kb(
             topic_id,
-            active_request=request_active,
+            active_request=cancelled.cancel_button_text is not None,
+            cancel_button_text=cancelled.cancel_button_text,
         ),
         force_new=True,
     )
@@ -945,8 +899,8 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
     text = _message_prompt_text(message, topic_id)
     thinking = await safe_edit_or_send(
         message,
-        "🤖 <b>Yadreno Admin</b>\n\n⏳ Думаю...",
-        reply_markup=yadreno_admin_agent_kb(topic_id),
+        "🤖 <b>Yadreno Admin</b>\n\n⏳ Отправляю запрос...",
+        reply_markup=None,
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(
@@ -1119,6 +1073,8 @@ def _refresh_yaa_binding_after_rerender(
     previous: YaaPageBinding,
 ) -> None:
     """Pins the fresh base/effective snapshot produced by the rerender."""
+    if get_yaa_page_binding(telegram_id, topic_id) is not previous:
+        return
     latest = get_page_context(telegram_id)
     if latest is None:
         return
@@ -1515,8 +1471,8 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
     )
     thinking = await safe_edit_or_send(
         buffer.first_message,
-        "🤖 <b>Yadreno Admin</b>\n\n⏳ Загружаю файлы и запускаю агента...",
-        reply_markup=yadreno_admin_agent_kb(buffer.topic_id),
+        "🤖 <b>Yadreno Admin</b>\n\n⏳ Отправляю файлы...",
+        reply_markup=None,
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(
@@ -1712,8 +1668,8 @@ async def _handle_broadcast_yaa(
     )
     status_message = await safe_edit_or_send(
         message,
-        "✍️ <b>Редактор рассылки</b>\n\n⏳ Готовлю черновик...",
-        reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_BROADCAST_TOPIC_ID),
+        "✍️ <b>Редактор рассылки</b>\n\n⏳ Отправляю запрос...",
+        reply_markup=None,
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(
@@ -1852,9 +1808,7 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
 
     before = _serialize_for_compare(_get_yaa_editable_state(page_context.page_key))
     attachment = _extract_yaa_attachment_data(message)
-    binding = remember_yaa_page_binding(
-        message.from_user.id,
-        YADRENO_ADMIN_YAA_TOPIC_ID,
+    binding = make_yaa_page_binding(
         page_context,
         backup_path=backup_path,
         attachment=attachment,
@@ -1863,8 +1817,8 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
     status_message = await safe_edit_or_send(
         message,
         "🤖 <b>Yadreno Admin</b>\n\n"
-        "⏳ Ведётся агентская работа...",
-        reply_markup=yadreno_admin_agent_kb(YADRENO_ADMIN_YAA_TOPIC_ID),
+        "⏳ Отправляю запрос...",
+        reply_markup=None,
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(
@@ -1887,6 +1841,7 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
                 uploads,
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
                 progress_callback=progress.handle,
+                page_binding=binding,
             )
         else:
             final = await run_dialog(
@@ -1895,6 +1850,7 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
                 task_html,
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
                 progress_callback=progress.handle,
+                page_binding=binding,
             )
     except YadrenoAdminRequestStopped:
         return
@@ -2015,7 +1971,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
     thinking = await safe_edit_or_send(
         message,
         f"🤖 <b>Yadreno Admin</b>\n\n{status_text}",
-        reply_markup=yadreno_admin_agent_kb(topic_id),
+        reply_markup=None,
         force_new=True,
     )
     progress = _YadrenoProgressRenderer(

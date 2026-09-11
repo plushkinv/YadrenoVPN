@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
 
-from bot.utils.action_registry import (
-    ACTION_REGISTRY,
-    SYSTEM_BUTTONS,
-    SYSTEM_COLLECTIONS,
-    normalize_callback_data,
+from bot.services.yadreno_admin_page_validation import _normalize_page_create_payload
+from bot.services.yadreno_admin_page_patch import PAGE_CHANGE_FIELDS, PagePatch
+from bot.services.yadreno_admin_replacement import (
+    MESSAGE_TEMPLATE_KEYS, REPLACE_SCOPES, REPLACE_TYPES,
+    prepare_replacement, validate_replace_args,
 )
+
 from bot.utils.custom_pages import build_page_callback
 from bot.utils.custom_extensions import (
     CUSTOM_EXTENSIONS_DIR,
@@ -22,25 +22,19 @@ from bot.utils.custom_extensions import (
     get_custom_extensions_diagnostics,
     validate_custom_extension_file,
 )
-from bot.utils.page_flow import PAGE_GUARDS, PAGE_HOOKS
-from bot.utils.page_routes import build_page_route_callback, page_route_exists
 from bot.utils.page_renderer import get_page_stored_data
 from bot.utils.placeholders import get_placeholder_contract
-from bot.utils.text import (
-    TELEGRAM_CAPTION_LIMIT,
-    TELEGRAM_TEXT_LIMIT,
-    html_to_plain_text,
-)
 from bot.utils.user_ui_texts import (
-    reload_user_ui_text_cache,
+    prepare_user_ui_text_cache,
+    publish_user_ui_text_cache,
+    user_ui_text_cache_write_lock,
     validate_user_ui_text_custom,
 )
 from database.requests import (
+    CustomizationChanges,
+    mutate_customization_data,
     EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
     REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX,
-    TRIAL_OFFER_ACTION_PREFIX,
-    apply_page_custom_patch,
-    clear_user_ui_text_custom,
     create_custom_page,
     create_bot_database_backup,
     create_trial_offer,
@@ -61,10 +55,8 @@ from database.requests import (
     get_trial_usage_scope,
     get_user_ui_text,
     is_trial_offer_storage_ready,
-    normalize_page_custom_patch,
     set_setting,
     set_trial_usage_scope,
-    set_user_ui_text_custom,
     update_trial_offer,
 )
 from database.page_registry import (
@@ -74,16 +66,15 @@ from database.page_registry import (
     is_valid_custom_page_key,
 )
 from database.page_button_styles import (
-    BUTTON_COLORS,
     collection_item_color_override,
     resolve_collection_item_color,
-    validate_page_item_colors,
 )
 
 
 CUSTOMIZATION_TOOL_NAMES = frozenset({
     'satellite_customization_inspect',
     'satellite_customization_apply',
+    'satellite_customization_replace',
 })
 INSPECT_SCOPES = frozenset({
     'overview',
@@ -95,7 +86,7 @@ INSPECT_SCOPES = frozenset({
 })
 APPLY_OPERATIONS = frozenset({
     'page.create',
-    'page.update',
+    'page.patch',
     'ui_text.set',
     'setting.set',
     'trial.scope.set',
@@ -124,7 +115,7 @@ _NOTIFICATION_EVENT_TYPES = {
 _TRIAL_USAGE_SCOPES = frozenset({'once_per_user', 'once_per_group'})
 _APPLY_ARGUMENTS = {
     'page.create': frozenset({'operation', 'page_key', 'page'}),
-    'page.update': frozenset({'operation', 'page_key', 'page_patch'}),
+    'page.patch': frozenset({'operation', 'page_key', 'changes'}),
     'ui_text.set': frozenset({'operation', 'text_key', 'value'}),
     'setting.set': frozenset({'operation', 'setting_key', 'value'}),
     'trial.scope.set': frozenset({'operation', 'scope'}),
@@ -142,38 +133,6 @@ _APPLY_ARGUMENTS = {
 }
 _MAX_RESULT_CHARS = 12_000
 _MAX_STATE_STRING_CHARS = 8_000
-_PAGE_CREATE_FIELDS = frozenset({
-    'text',
-    'image',
-    'media_type',
-    'buttons',
-    'guard_names',
-    'hook_names',
-})
-_PAGE_BUTTON_FIELDS = frozenset({
-    'id',
-    'label',
-    'color',
-    'item_colors',
-    'icon_custom_emoji_id',
-    'row',
-    'col',
-    'is_hidden',
-    'action_type',
-    'action_value',
-})
-_PAGE_BUTTON_ID_RE = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
-_PAGE_BUTTON_COLORS = BUTTON_COLORS
-_PAGE_BUTTON_ACTION_TYPES = frozenset({
-    'internal',
-    'system',
-    'system_collection',
-    'url',
-    'page',
-    'route',
-})
-_PAGE_CREATE_MAX_BUTTONS = 50
-_PAGE_CREATE_MAX_BUTTONS_PER_ROW = 2
 
 
 def _json_result(payload: dict[str, Any]) -> str:
@@ -568,6 +527,11 @@ def inspect_customization(args: dict[str, Any]) -> str:
             payload = {
                 'status': 'ok',
                 'scope': 'overview',
+                'customization_contract': 'customization_tools_v2',
+                'apply_operations': sorted(APPLY_OPERATIONS),
+                'page_change_types': sorted(PAGE_CHANGE_FIELDS),
+                'replace_scopes': list(REPLACE_SCOPES),
+                'replace_rule_types': list(REPLACE_TYPES),
                 'counts': {
                     'pages': len(get_page_keys()),
                     'pages_by_kind': get_page_kind_counts(),
@@ -629,251 +593,6 @@ def _changed(
     })
 
 
-def _normalize_page_flow_names(
-    value: Any,
-    field: str,
-    registry: dict[str, Any],
-) -> list[str]:
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise TypeError(f'page.{field} must be an array')
-    normalized: list[str] = []
-    for item in value:
-        if not isinstance(item, str) or not item.strip():
-            raise ValueError(f'page.{field} items must be non-empty strings')
-        name = item.strip().casefold()
-        if name not in registry:
-            raise ValueError(f'page.{field} references unregistered name: {name}')
-        if name not in normalized:
-            normalized.append(name)
-    return normalized
-
-
-def _require_button_text(value: Any, field: str, index: int) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f'page.buttons[{index}].{field} must be a non-empty string')
-    return value.strip()
-
-
-def _validate_page_button_action(
-    button: dict[str, Any],
-    *,
-    index: int,
-    page_key: str,
-) -> None:
-    button_id = str(button['id'])
-    action_type = str(button['action_type'])
-    action_value = button.get('action_value')
-    if action_type in {'system', 'system_collection'}:
-        registry = SYSTEM_BUTTONS if action_type == 'system' else SYSTEM_COLLECTIONS
-        if button_id not in registry:
-            raise ValueError(
-                f'page.buttons[{index}] references unregistered {action_type} id: {button_id}'
-            )
-        if action_value not in {None, ''}:
-            raise ValueError(
-                f'page.buttons[{index}].action_value must be empty for {action_type}'
-            )
-        return
-
-    value = _require_button_text(action_value, 'action_value', index)
-    if action_type == 'internal':
-        callback_data = ACTION_REGISTRY.get(value)
-        if callback_data is not None:
-            normalize_callback_data(callback_data)
-            return
-        if value.startswith(TRIAL_OFFER_ACTION_PREFIX):
-            raw_offer_id = value[len(TRIAL_OFFER_ACTION_PREFIX):]
-            if raw_offer_id.isdecimal() and int(raw_offer_id) > 0:
-                offer = get_trial_offer_by_id(int(raw_offer_id))
-                if offer is not None:
-                    normalize_callback_data(f'trial_offer:{int(raw_offer_id)}')
-                    return
-        raise ValueError(
-            f'page.buttons[{index}] references unregistered internal action: {value}'
-        )
-    if action_type == 'url':
-        parsed = urlparse(value)
-        if parsed.scheme.lower() not in {'http', 'https', 'tg'}:
-            raise ValueError(
-                f'page.buttons[{index}].action_value must use http, https, or tg'
-            )
-        return
-    if action_type == 'page':
-        classification = get_page_classification(value)
-        if value != page_key and not classification.render_allowed:
-            raise ValueError(
-                f'page.buttons[{index}] references unavailable page: {value}'
-            )
-        if build_page_callback(value) is None:
-            raise ValueError(
-                f'page.buttons[{index}] page callback exceeds Telegram limits'
-            )
-        return
-    if action_type == 'route':
-        if not page_route_exists(value):
-            raise ValueError(
-                f'page.buttons[{index}] references unavailable route: {value}'
-            )
-        if build_page_route_callback(value) is None:
-            raise ValueError(
-                f'page.buttons[{index}] route callback exceeds Telegram limits'
-            )
-        return
-    raise ValueError(f'page.buttons[{index}] has unsupported action_type: {action_type}')
-
-
-def _normalize_page_create_buttons(value: Any, *, page_key: str) -> list[dict[str, Any]]:
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise TypeError('page.buttons must be an array')
-    if len(value) > _PAGE_CREATE_MAX_BUTTONS:
-        raise ValueError(
-            f'page.buttons exceeds {_PAGE_CREATE_MAX_BUTTONS} buttons'
-        )
-
-    normalized: list[dict[str, Any]] = []
-    ids: set[str] = set()
-    positions: set[tuple[int, int]] = set()
-    row_counts: dict[int, int] = {}
-    for index, raw in enumerate(value):
-        if not isinstance(raw, dict):
-            raise TypeError(f'page.buttons[{index}] must be an object')
-        unknown = sorted(set(raw) - _PAGE_BUTTON_FIELDS)
-        if unknown:
-            raise ValueError(f'page.buttons[{index}] has unknown fields: {unknown}')
-        button_id = _require_button_text(raw.get('id'), 'id', index)
-        if not _PAGE_BUTTON_ID_RE.fullmatch(button_id):
-            raise ValueError(
-                f'page.buttons[{index}].id must be lowercase snake_case'
-            )
-        if button_id in ids:
-            raise ValueError(f'duplicate page button id: {button_id}')
-        ids.add(button_id)
-
-        label = _require_button_text(raw.get('label'), 'label', index)
-        if '<' in label or '>' in label:
-            raise ValueError(f'page.buttons[{index}].label must not contain HTML')
-        if len(label) > 64:
-            raise ValueError(f'page.buttons[{index}].label exceeds 64 characters')
-
-        action_type = _require_button_text(
-            raw.get('action_type'),
-            'action_type',
-            index,
-        )
-        if action_type not in _PAGE_BUTTON_ACTION_TYPES:
-            raise ValueError(
-                f'page.buttons[{index}].action_type is unsupported: {action_type}'
-            )
-        row = raw.get('row')
-        col = raw.get('col')
-        if (
-            isinstance(row, bool)
-            or not isinstance(row, int)
-            or row < 0
-            or isinstance(col, bool)
-            or not isinstance(col, int)
-            or col < 0
-        ):
-            raise ValueError(
-                f'page.buttons[{index}].row and col must be non-negative integers'
-            )
-        position = (row, col)
-        if position in positions:
-            raise ValueError(f'duplicate page button position: row={row}, col={col}')
-        positions.add(position)
-        row_counts[row] = row_counts.get(row, 0) + 1
-        if row_counts[row] > _PAGE_CREATE_MAX_BUTTONS_PER_ROW:
-            raise ValueError(
-                f'page button row {row} exceeds {_PAGE_CREATE_MAX_BUTTONS_PER_ROW} buttons'
-            )
-
-        is_hidden = raw.get('is_hidden', False)
-        if not isinstance(is_hidden, bool):
-            raise TypeError(f'page.buttons[{index}].is_hidden must be bool')
-        color = raw.get('color', 'secondary')
-        if color not in _PAGE_BUTTON_COLORS:
-            raise ValueError(f'page.buttons[{index}].color is unsupported')
-        emoji_id = raw.get('icon_custom_emoji_id')
-        if emoji_id is not None and (
-            not isinstance(emoji_id, str) or not emoji_id.isdecimal()
-        ):
-            raise ValueError(
-                f'page.buttons[{index}].icon_custom_emoji_id must be a numeric string or null'
-            )
-
-        button = {
-            'id': button_id,
-            'label': label,
-            'color': color,
-            'row': row,
-            'col': col,
-            'is_hidden': is_hidden,
-            'action_type': action_type,
-            'action_value': raw.get('action_value'),
-        }
-        if emoji_id is not None:
-            button['icon_custom_emoji_id'] = emoji_id
-        if 'item_colors' in raw:
-            button['item_colors'] = raw['item_colors']
-        validate_page_item_colors([button])
-        _validate_page_button_action(button, index=index, page_key=page_key)
-        normalized.append(button)
-    return normalized
-
-
-def _normalize_page_create_payload(page_key: str, value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise TypeError('page is required and must be an object')
-    unknown = sorted(set(value) - _PAGE_CREATE_FIELDS)
-    if unknown:
-        raise ValueError(f'page has unknown fields: {unknown}')
-    text = value.get('text')
-    if not isinstance(text, str) or not text.strip():
-        raise ValueError('page.text must be a non-empty string')
-    image = value.get('image')
-    if image is not None and (not isinstance(image, str) or not image.strip()):
-        raise ValueError('page.image must be a non-empty string or null')
-    media_type = value.get('media_type')
-    if image is None:
-        if media_type is not None:
-            raise ValueError('page.media_type must be null when page.image is null')
-    elif media_type not in {'photo', 'video', 'animation'}:
-        raise ValueError(
-            'page.media_type must be photo, video, or animation when media is set'
-        )
-    visible_text = html_to_plain_text(text)
-    if not visible_text:
-        raise ValueError('page.text must contain visible text')
-    text_limit = TELEGRAM_CAPTION_LIMIT if image is not None else TELEGRAM_TEXT_LIMIT
-    if len(visible_text) > text_limit:
-        raise ValueError(
-            f'page.text exceeds Telegram limit: {len(visible_text)} of {text_limit}'
-        )
-    return {
-        'text': text,
-        'image': image,
-        'media_type': media_type,
-        'buttons': _normalize_page_create_buttons(
-            value.get('buttons', []),
-            page_key=page_key,
-        ),
-        'guard_names': _normalize_page_flow_names(
-            value.get('guard_names', []),
-            'guard_names',
-            PAGE_GUARDS,
-        ),
-        'hook_names': _normalize_page_flow_names(
-            value.get('hook_names', []),
-            'hook_names',
-            PAGE_HOOKS,
-        ),
-    }
-
-
 def _page_create_matches(row: dict[str, Any], page: dict[str, Any]) -> bool:
     return all((
         row.get('page_kind') == PAGE_KIND_CUSTOM,
@@ -904,7 +623,7 @@ def _apply_page_create(args: dict[str, Any]) -> str:
         if _page_create_matches(before, page):
             return _unchanged('page.create', _page_state(page_key))
         raise ValueError(
-            'page_key already exists with different content; use page.update'
+            'page_key already exists with different content; use page.patch'
         )
 
     backup_path = create_bot_database_backup()
@@ -916,25 +635,63 @@ def _apply_page_create(args: dict[str, Any]) -> str:
     return _changed('page.create', backup_path, _page_state(page_key))
 
 
+def _mutate_content(
+    transform: Callable[[dict[str, Any]], CustomizationChanges],
+    *,
+    scope: str,
+    page_keys: list[str] | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    with user_ui_text_cache_write_lock() if scope in {'all', 'ui_texts'} else nullcontext():
+        return mutate_customization_data(
+            transform,
+            page_keys=page_keys,
+            include_pages=scope in {"all", "pages"},
+            include_ui_texts=scope in {"all", "ui_texts"},
+            setting_keys=MESSAGE_TEMPLATE_KEYS if scope in {"all", "message_templates"} else (),
+            dry_run=dry_run,
+            backup=create_bot_database_backup,
+            prepare_cache=prepare_user_ui_text_cache,
+            publish_cache=publish_user_ui_text_cache,
+        )
+
+
 def _apply_page(args: dict[str, Any]) -> str:
-    page_key = str(args.get('page_key') or '').strip()
-    patch = args.get('page_patch')
-    if not page_key or not isinstance(patch, dict) or not patch:
-        raise ValueError('page_key and non-empty page_patch are required')
-    before = get_page(page_key)
-    if before is None:
-        raise KeyError(f'unknown page_key: {page_key}')
-    comparable_patch = normalize_page_custom_patch(patch)
-    if all(before.get(field) == value for field, value in comparable_patch.items()):
-        return _unchanged('page.update', _page_state(page_key))
-    backup_path = create_bot_database_backup()
-    apply_page_custom_patch(page_key, patch)
-    after = get_page(page_key)
-    if after is None or any(
-        after.get(field) != value for field, value in comparable_patch.items()
-    ):
-        raise RuntimeError('page read-back mismatch')
-    return _changed('page.update', backup_path, _page_state(page_key))
+    page_key = args.get("page_key")
+    if not isinstance(page_key, str) or not page_key.strip():
+        raise ValueError("page_key is required")
+
+    def transform(snapshot: dict[str, Any]) -> CustomizationChanges:
+        page = PagePatch(snapshot["pages"][page_key])
+        page.apply(args.get("changes"))
+        patch = page.patch()
+        return CustomizationChanges(
+            pages={page_key: patch} if patch else {},
+            result={"operation": "page.patch", "page_key": page_key},
+        )
+
+    result = _mutate_content(transform, scope="pages", page_keys=[page_key])
+    state = _page_state(page_key)
+    if len(json.dumps(state, ensure_ascii=False, default=str)) <= 8_000:
+        result["read_back"] = state
+    else:
+        result["read_back"] = {"page_key": page_key, "inspect_required": True}
+        result["content_truncated"] = True
+    return _json_result(result)
+
+
+def replace_customization(args: dict[str, Any]) -> str:
+    """Preview or atomically save ordered literal replacement rules."""
+    try:
+        scope, page_keys, rules = validate_replace_args(args)
+        result = _mutate_content(
+            lambda snapshot: prepare_replacement(snapshot, scope, rules),
+            scope=scope, page_keys=page_keys, dry_run=args["dry_run"],
+        )
+        result["page_filter_count"] = len(page_keys) if page_keys is not None else None
+        return _json_result(result)
+    except (KeyError, TypeError, ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
+        return _error(str(exc))
 
 
 def _apply_ui_text(args: dict[str, Any]) -> str:
@@ -943,41 +700,19 @@ def _apply_ui_text(args: dict[str, Any]) -> str:
         raise ValueError('text_key and value are required')
     value = args.get('value')
     validate_user_ui_text_custom(text_key, value)
-    before = get_user_ui_text(text_key)
-    if before is None:
-        raise KeyError(f'unknown text_key: {text_key}')
-    previous = before.get('text_custom')
-    if previous == value:
-        return _unchanged('ui_text.set', _ui_row(before))
-    backup_path = create_bot_database_backup()
-    changed = (
-        clear_user_ui_text_custom(text_key)
-        if value is None
-        else set_user_ui_text_custom(text_key, value)
-    )
-    if not changed:
-        raise RuntimeError('UI text mutation did not update an existing row')
-    after = get_user_ui_text(text_key)
-    if after is None or after.get('text_custom') != value:
-        if previous is None:
-            clear_user_ui_text_custom(text_key)
-        else:
-            set_user_ui_text_custom(text_key, str(previous))
-        raise RuntimeError('UI text read-back mismatch')
-    try:
-        reload_user_ui_text_cache()
-    except RuntimeError:
-        if previous is None:
-            clear_user_ui_text_custom(text_key)
-        else:
-            set_user_ui_text_custom(text_key, str(previous))
-        reload_user_ui_text_cache()
-        raise
-    return _changed(
-        'ui_text.set',
-        backup_path,
-        _ui_row(after),
-    )
+
+    def transform(snapshot: dict[str, Any]) -> CustomizationChanges:
+        before = next((row for row in snapshot['ui_texts'] if row['text_key'] == text_key), None)
+        if before is None:
+            raise KeyError(f'unknown text_key: {text_key}')
+        return CustomizationChanges(
+            ui_texts={text_key: value} if before.get('text_custom') != value else {},
+            result={'operation': 'ui_text.set'},
+        )
+
+    result = _mutate_content(transform, scope='ui_texts')
+    result['read_back'] = _ui_row(get_user_ui_text(text_key))
+    return _json_result(result)
 
 
 def _validate_setting_value(key: str, value: Any) -> str:
@@ -1248,7 +983,7 @@ def apply_customization(args: dict[str, Any]) -> str:
         return _error(f'unknown arguments for {operation}: {unknown}')
     handlers: dict[str, Callable[[], str]] = {
         'page.create': lambda: _apply_page_create(args),
-        'page.update': lambda: _apply_page(args),
+        'page.patch': lambda: _apply_page(args),
         'ui_text.set': lambda: _apply_ui_text(args),
         'setting.set': lambda: _apply_setting(args),
         'trial.scope.set': lambda: _apply_trial_scope(args),
@@ -1271,4 +1006,6 @@ def execute_customization_tool(tool: str, args: dict[str, Any]) -> str:
         return inspect_customization(args)
     if tool == 'satellite_customization_apply':
         return apply_customization(args)
+    if tool == 'satellite_customization_replace':
+        return replace_customization(args)
     return _error(f'unknown typed customization tool: {tool}')

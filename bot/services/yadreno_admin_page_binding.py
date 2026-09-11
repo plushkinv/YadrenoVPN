@@ -109,15 +109,13 @@ def _copy_button_rows(
     return [list(row) for row in rows]
 
 
-def remember_yaa_page_binding(
-    telegram_id: int,
-    topic_id: int,
+def make_yaa_page_binding(
     page_context: PageContext,
     *,
     backup_path: str,
     attachment: dict[str, str] | None = None,
 ) -> YaaPageBinding:
-    """Replace the process-local binding for one administrator/lane."""
+    """Prepare a page snapshot without replacing the accepted conversation."""
     binding = YaaPageBinding(
         page_key=page_context.page_key,
         message=page_context.message,
@@ -157,7 +155,25 @@ def remember_yaa_page_binding(
             )
         ),
     )
+    return binding
+
+
+def set_yaa_page_binding(
+    telegram_id: int, topic_id: int, binding: YaaPageBinding,
+) -> None:
+    """Publish the page of a request accepted by the Hub."""
     _bindings[(int(telegram_id), int(topic_id))] = binding
+
+
+def remember_yaa_page_binding(
+    telegram_id: int, topic_id: int, page_context: PageContext, *,
+    backup_path: str, attachment: dict[str, str] | None = None,
+) -> YaaPageBinding:
+    """Refresh the accepted page after rerendering."""
+    binding = make_yaa_page_binding(
+        page_context, backup_path=backup_path, attachment=attachment,
+    )
+    set_yaa_page_binding(telegram_id, topic_id, binding)
     return binding
 
 
