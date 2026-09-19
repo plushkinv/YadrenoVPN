@@ -717,14 +717,26 @@ async def _ensure_subscription_keys_on_server_impl(
                     state.placements.pop(inbound_id, None)
                 stats["deleted"] += len(inbound_ids)
 
+            async def update_existing_state() -> bool:
+                return await client.update_client_full(
+                    email=email,
+                    total_gb_bytes=total_bytes,
+                    expiry_time_ms=expiry_time_ms,
+                    enable=active,
+                    limit_ip=(state.limit_ip if preserve_limits else target_limit_ip),
+                    limit_hwid=(None if preserve_limits else target_limit_hwid),
+                    sub_id=str(key["sub_id"]),
+                    reset=0,
+                    known_state=state,
+                )
+
             if not active:
                 if state is None:
                     stats["skipped"] = 1
                     stats["ok"] = 1
                     return stats
                 inactive_needs_update = (
-                    not state.unavailable_inbound_ids
-                    and bool(state.inbound_ids)
+                    bool(state.update_inbound_ids)
                     and _client_needs_update(
                         state,
                         expiry_time_ms=expiry_time_ms,
@@ -749,17 +761,9 @@ async def _ensure_subscription_keys_on_server_impl(
                     await detach_out_of_scope()
                     changed = False
                     if inactive_needs_update:
-                        changed = await client.update_client_full(
-                            email=email,
-                            total_gb_bytes=total_bytes,
-                            expiry_time_ms=expiry_time_ms,
-                            enable=False,
-                            limit_ip=(state.limit_ip if preserve_limits else target_limit_ip),
-                            limit_hwid=(None if preserve_limits else target_limit_hwid),
-                            sub_id=str(key["sub_id"]),
-                            reset=0,
-                            known_state=state,
-                        )
+                        changed = await update_existing_state()
+                        if not changed:
+                            stats["errors"] += 1
                     if changed:
                         stats["disabled"] = int(state.enable)
                         stats["updated"] = 1
@@ -779,7 +783,7 @@ async def _ensure_subscription_keys_on_server_impl(
             remaining_out_of_scope = (
                 set(state.out_of_scope_inbound_ids) if state is not None else set()
             )
-            if not target_ids:
+            if not target_ids and not (state and state.disabled_inbound_ids):
                 if dry_run:
                     stats["deleted"] = len(out_of_scope_before)
                 stats["errors"] += 1
@@ -791,7 +795,6 @@ async def _ensure_subscription_keys_on_server_impl(
                 or bool(remaining_out_of_scope)
                 or (
                     state is not None
-                    and not state.unavailable_inbound_ids
                     and _client_needs_update(
                         state,
                         expiry_time_ms=expiry_time_ms,
@@ -820,7 +823,12 @@ async def _ensure_subscription_keys_on_server_impl(
                 total_bytes = calculate_panel_total_for_key(key, 0)
                 needs_update = True
 
-            if needs_update:
+            if needs_update and not target_ids:
+                changed = await update_existing_state()
+                stats["updated"] = int(changed)
+                stats["enabled"] = int(changed and not state.enable)
+                stats["errors"] += int(not changed)
+            elif needs_update:
                 provision_limit_ip = (
                     state.limit_ip if preserve_limits and state is not None
                     else int(target_limit_ip or 0)
@@ -845,6 +853,8 @@ async def _ensure_subscription_keys_on_server_impl(
                 stats["created"] = len(provisioned.attached_inbound_ids - attached_before)
                 stats["updated"] = int(bool(attached_before))
                 stats["errors"] += len(provisioned.failed_inbound_ids)
+                if not provisioned.complete and not provisioned.failed_inbound_ids:
+                    stats["errors"] += 1
                 if state is not None and not state.enable and provisioned.attached_inbound_ids:
                     stats["enabled"] = 1
                 remaining_after_provision = set(remaining_out_of_scope)

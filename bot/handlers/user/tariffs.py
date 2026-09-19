@@ -123,18 +123,11 @@ async def _execute_purchase_start(request: CoreActionRequest) -> None:
     if request.origin_context is not None:
         from database.requests import (
             create_semantic_action_context,
-            get_or_create_user,
+            get_user_internal_id,
         )
 
-        telegram_user = request.target.from_user
-        user, _ = get_or_create_user(
-            telegram_user.id,
-            telegram_user.username,
-            telegram_user.first_name,
-            telegram_user.last_name,
-        )
         action_context_token = create_semantic_action_context(
-            user_id=int(user['id']),
+            user_id=get_user_internal_id(request.telegram_id),
             action=request.action,
             **request.origin_context.as_storage_dict(),
         )

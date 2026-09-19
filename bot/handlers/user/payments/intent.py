@@ -47,7 +47,7 @@ from database.requests import (
     get_setting,
     get_tariff_by_id,
     get_user_balance,
-    get_or_create_user,
+    get_user_internal_id,
     is_referral_enabled,
     get_referral_reward_type,
     save_payment_balance_deduction,
@@ -205,7 +205,7 @@ async def start_tariff_payment_intent(
 
     telegram_id = int(target.from_user.id)
     tariff = get_tariff_by_id(tariff_id)
-    user_id = _get_or_create_internal_user_id(target)
+    user_id = get_user_internal_id(telegram_id)
     if not is_tariff_available_for_payment(tariff):
         await _render_target_page(target, 'action_unavailable')
         return
@@ -742,7 +742,7 @@ async def _owned_intent(callback: CallbackQuery):
     except (AttributeError, IndexError):
         order_id = ''
     intent = load_payment_intent(order_id)
-    user_id = _get_or_create_internal_user_id(callback)
+    user_id = get_user_internal_id(callback.from_user.id)
     if not intent or intent.user_id != user_id:
         logger.warning(
             "Payment Intent is missing or not owned order=%s telegram_id=%s",
@@ -756,16 +756,6 @@ async def _owned_intent(callback: CallbackQuery):
 
 async def _show_unavailable(callback: CallbackQuery) -> None:
     await _render_callback_page(callback, "payment_unavailable")
-
-
-def _get_or_create_internal_user_id(target: CallbackQuery | Message) -> int:
-    user, _ = get_or_create_user(
-        target.from_user.id,
-        target.from_user.username,
-        target.from_user.first_name,
-        target.from_user.last_name,
-    )
-    return int(user["id"])
 
 
 async def _render_target_page(

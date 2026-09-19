@@ -630,6 +630,7 @@ def get_custom_extensions_diagnostics(
 
     return {
         'enabled': configured_enabled,
+        'user_registration_before_guards': True,
         'configured_value': configured_value,
         'configured_enabled': configured_enabled,
         'runtime_loader_enabled': runtime_loader_enabled,

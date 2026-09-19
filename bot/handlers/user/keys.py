@@ -8,7 +8,7 @@ from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramForbiddenError
 from config import ADMIN_IDS
-from database.requests import get_or_create_user, is_user_banned, get_all_servers, get_setting, is_referral_enabled, get_user_by_referral_code, set_user_referrer
+from database.requests import is_user_banned, get_all_servers, get_setting
 from bot.states.user_states import RenameKey, ReplaceKey
 from bot.utils.action_dispatcher import (
     CoreActionRequest,

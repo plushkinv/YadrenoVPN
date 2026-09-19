@@ -114,19 +114,13 @@ async def handle_payment_deeplink(
 @router.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout: PreCheckoutQuery):
     """Validates ownership and the immutable amount of a v1 invoice."""
-    from database.requests import get_or_create_user
+    from database.requests import get_user_internal_id
     from bot.services.payment_intents import load_payment_intent
     from bot.utils.user_ui_texts import get_ui_text
 
     order_id = str(pre_checkout.invoice_payload or '')
     intent = load_payment_intent(order_id)
-    owner, _ = get_or_create_user(
-        pre_checkout.from_user.id,
-        pre_checkout.from_user.username,
-        pre_checkout.from_user.first_name,
-        pre_checkout.from_user.last_name,
-    )
-    owner_id = int(owner["id"])
+    owner_id = get_user_internal_id(pre_checkout.from_user.id)
     expected_amount = _native_invoice_amount(intent) if intent else 0
     if (
         intent is None

@@ -505,6 +505,7 @@ class YadrenoAdminUpload:
     path: Path
     filename: str
     content_type: str = "application/octet-stream"
+    audio_kind: Literal["voice", "recording"] | None = None
 
 
 @dataclass
@@ -1996,6 +1997,7 @@ async def _poll_until_final(
     progress_callback: Optional[ProgressCallback] = None,
     runtime_context_supported: bool = False,
     runtime_context_factory: Callable[[], dict[str, Any]] | None = None,
+    accepted_callback: Callable[[], Awaitable[None]] | None = None,
 ) -> YadrenoAdminFinal:
     """Single poll/tool/final loop for text and upload requests."""
     _remember_request(telegram_id, topic_id, request_id, active=True)
@@ -2007,6 +2009,8 @@ async def _poll_until_final(
         satellite_type,
         server_ip,
     )
+    if accepted_callback is not None:
+        await accepted_callback()
     if initial_status and initial_status.get("response_text"):
         await _notify_progress(
             {"event": "status", "content": initial_status["response_text"],
@@ -2150,6 +2154,7 @@ async def run_dialog(
     runtime_context: Optional[dict[str, Any]] = None,
     progress_callback: Optional[ProgressCallback] = None,
     page_binding: YaaPageBinding | None = None,
+    accepted_callback: Callable[[], Awaitable[None]] | None = None,
 ) -> YadrenoAdminFinal:
     """
     Performs a full cycle of dialogue with the Yadreno Admin agent.
@@ -2246,6 +2251,7 @@ async def run_dialog(
                     else None
                 ),
                 cycle=cycle,
+                **({"accepted_callback": accepted_callback} if accepted_callback else {}),
             )
 
 
@@ -2261,6 +2267,7 @@ async def run_dialog_with_uploads(
     progress_callback: Optional[ProgressCallback] = None,
     page_binding: YaaPageBinding | None = None,
     overflow_count: int = 0,
+    accepted_callback: Callable[[], Awaitable[None]] | None = None,
 ) -> YadrenoAdminFinal:
     """Sends files to Yadreno Admin and waits for the final response from the agent."""
     if not uploads:
@@ -2273,6 +2280,7 @@ async def run_dialog_with_uploads(
             runtime_context=runtime_context,
             progress_callback=progress_callback,
             page_binding=page_binding,
+            **({"accepted_callback": accepted_callback} if accepted_callback else {}),
         )
 
     key = _lane_key(telegram_id, topic_id)
@@ -2340,6 +2348,10 @@ async def run_dialog_with_uploads(
             fields["core_changes_allowed"] = "true" if core_changes_allowed else "false"
         if is_batch:
             fields["overflow_count"] = overflow_count
+        elif getattr(uploads[0], "audio_kind", None) is not None:
+            if uploads[0].audio_kind not in {"voice", "recording"}:
+                raise YadrenoAdminError("Invalid audio_kind", kind="protocol")
+            fields["audio_kind"] = uploads[0].audio_kind
         _, upload_data = await _request_multipart(
             session,
             api_key,
@@ -2377,6 +2389,7 @@ async def run_dialog_with_uploads(
                     else None
                 ),
                 cycle=cycle,
+                **({"accepted_callback": accepted_callback} if accepted_callback else {}),
             )
 
 

@@ -120,3 +120,12 @@ def yadreno_admin_cancel_key_kb() -> InlineKeyboardMarkup:
         )
     )
     return builder.as_markup()
+
+
+def yadreno_admin_input_kb(task_controls: InlineKeyboardMarkup | None = None) -> InlineKeyboardMarkup:
+    """Local navigation before a contextual task has been sent to the Hub."""
+    builder = InlineKeyboardBuilder()
+    if task_controls:
+        builder.attach(InlineKeyboardBuilder.from_markup(task_controls))
+    builder.row(back_button('admin_yadreno_input_exit'), home_button())
+    return builder.as_markup()

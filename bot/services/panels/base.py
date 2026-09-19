@@ -151,6 +151,13 @@ class PanelClientState:
     limit_hwid: int = 0
     reset: int = 0
     details_complete: bool = True
+    # Known supported, non-hidden disabled memberships, also in unavailable ids.
+    disabled_inbound_ids: set[int] = field(default_factory=set)
+
+    @property
+    def update_inbound_ids(self) -> set[int]:
+        """Existing memberships whose stored client settings can be updated."""
+        return self.inbound_ids | self.disabled_inbound_ids
 
 
 @dataclass(frozen=True)

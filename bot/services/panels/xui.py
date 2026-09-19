@@ -1120,22 +1120,30 @@ class XUIClient(BaseVPNClient):
                 )
         return rows
 
+    def _inbound_sync_scopes(
+        self, descriptors: Iterable[PanelInboundDescriptor],
+    ) -> tuple[set[int], set[int], set[int]]:
+        """Separate attachment targets, explicit exclusions and retained disabled ids."""
+        available, excluded, disabled = set(), set(), set()
+        for item in descriptors:
+            if item.ignored:
+                excluded.add(item.id)
+            elif not item.available:
+                disabled.add(item.id)
+            elif self._descriptor_is_in_scope(item):
+                available.add(item.id)
+            else:
+                excluded.add(item.id)
+        return available, excluded, disabled
+
     async def get_sync_snapshot(self) -> PanelServerSnapshot:
         async with self.operation_metrics("sync_snapshot"):
             descriptors = await self._get_all_inbound_descriptors()
-            visible = [item for item in descriptors if not item.ignored]
-            available = [
-                item
-                for item in visible
-                if item.available and self._descriptor_is_in_scope(item)
-            ]
-            available_ids = {item.id for item in available}
-            out_of_scope_available_ids = {
-                item.id
-                for item in visible
-                if item.available and not self._descriptor_is_in_scope(item)
-            }
-            reconcilable_ids = available_ids | out_of_scope_available_ids
+            available_ids, excluded_ids, disabled_ids = self._inbound_sync_scopes(
+                descriptors
+            )
+            available = [item for item in descriptors if item.id in available_ids]
+            reconcilable_ids = available_ids | excluded_ids
             unavailable_ids = {
                 item.id for item in descriptors if item.id not in reconcilable_ids
             }
@@ -1154,7 +1162,7 @@ class XUIClient(BaseVPNClient):
                 } if isinstance(raw_ids, list) else set()
                 usable_ids = attached.intersection(available_ids)
                 out_of_scope_attached = attached.intersection(
-                    out_of_scope_available_ids
+                    excluded_ids
                 )
                 unavailable_attached = attached - usable_ids - out_of_scope_attached
                 traffic = self._traffic_used(row.get("traffic"))
@@ -1166,6 +1174,7 @@ class XUIClient(BaseVPNClient):
                     inbound_ids=usable_ids,
                     out_of_scope_inbound_ids=out_of_scope_attached,
                     unavailable_inbound_ids=unavailable_attached,
+                    disabled_inbound_ids=attached.intersection(disabled_ids),
                     traffic_used=traffic or 0,
                     traffic_known=True,
                     total_gb=self._int(row.get("totalGB", row.get("total"))),
@@ -1193,6 +1202,7 @@ class XUIClient(BaseVPNClient):
         client, inbound_ids = self._split_record(record)
         known_available = set(state.inbound_ids)
         known_out_of_scope = set(state.out_of_scope_inbound_ids)
+        state.disabled_inbound_ids.intersection_update(inbound_ids)
         state.client = client
         state.inbound_ids = inbound_ids.intersection(known_available)
         state.out_of_scope_inbound_ids = inbound_ids.intersection(
@@ -1343,17 +1353,21 @@ class XUIClient(BaseVPNClient):
     ) -> bool:
         if known_state is not None:
             await self.hydrate_client_state(known_state)
-            if not known_state.inbound_ids:
+            if not known_state.update_inbound_ids:
                 return False
             record = {
                 "client": dict(known_state.client),
-                "inboundIds": sorted(known_state.inbound_ids),
+                "inboundIds": sorted(known_state.update_inbound_ids),
             }
         else:
             record = await self._get_client_record(email)
         if not record:
             return False
         client, inbound_ids = self._split_record(record)
+        preserved_ids = set(inbound_ids)
+        if known_state is not None:
+            preserved_ids.update(known_state.out_of_scope_inbound_ids)
+            preserved_ids.update(known_state.unavailable_inbound_ids)
         if (
             self.supports_client_hwids()
             and limit_hwid is None
@@ -1399,7 +1413,7 @@ class XUIClient(BaseVPNClient):
             if not value:
                 return False
             confirmed, confirmed_inbound_ids = self._split_record(value)
-            if inbound_ids and not inbound_ids.issubset(confirmed_inbound_ids):
+            if not preserved_ids.issubset(confirmed_inbound_ids):
                 return False
             checks = [
                 (self._int(confirmed.get("totalGB")), self._int(payload.get("totalGB"))),
@@ -1470,14 +1484,9 @@ class XUIClient(BaseVPNClient):
                 if not item.ignored and self._descriptor_is_in_scope(item)
             ]
             by_id = {item.id: item for item in descriptors}
-            available_ids = {item.id for item in descriptors if item.available}
-            out_of_scope_available_ids = {
-                item.id
-                for item in all_descriptors
-                if not item.ignored
-                and item.available
-                and not self._descriptor_is_in_scope(item)
-            }
+            available_ids, excluded_ids, disabled_ids = self._inbound_sync_scopes(
+                all_descriptors
+            )
             requested = (
                 {int(value) for value in inbound_ids}
                 if inbound_ids is not None
@@ -1580,29 +1589,35 @@ class XUIClient(BaseVPNClient):
                         client=update_client,
                         inbound_ids=update_attached.intersection(available_ids),
                         out_of_scope_inbound_ids=update_attached.intersection(
-                            out_of_scope_available_ids
+                            excluded_ids
                         ),
                         unavailable_inbound_ids=(
                             update_attached
                             - available_ids
-                            - out_of_scope_available_ids
+                            - excluded_ids
                         ),
+                        disabled_inbound_ids=update_attached.intersection(disabled_ids),
                         details_complete=True,
                     )
-                    if not update_state.unavailable_inbound_ids:
-                        await self.update_client_full(
-                            email=email,
-                            total_gb_bytes=total_bytes,
-                            expiry_time_ms=expiry,
-                            enable=enable,
-                            limit_ip=limit_ip,
-                            limit_hwid=(
-                                limit_hwid if self.supports_client_hwids() else None
-                            ),
-                            sub_id=canonical_sub_id,
-                            flow=common_flow,
-                            reset=0,
-                            known_state=update_state,
+                    updated = await self.update_client_full(
+                        email=email,
+                        total_gb_bytes=total_bytes,
+                        expiry_time_ms=expiry,
+                        enable=enable,
+                        limit_ip=limit_ip,
+                        limit_hwid=(
+                            limit_hwid if self.supports_client_hwids() else None
+                        ),
+                        sub_id=canonical_sub_id,
+                        flow=common_flow,
+                        reset=0,
+                        known_state=update_state,
+                    )
+                    if not updated:
+                        raise PanelRequestError(
+                            PanelErrorKind.INVALID_RESPONSE,
+                            endpoint="/panel/api/clients/update/:email",
+                            detail="client update was not confirmed",
                         )
                 except PanelRequestError as exc:
                     for inbound_id in sorted(targets.intersection(attached)):
@@ -1626,11 +1641,12 @@ class XUIClient(BaseVPNClient):
                     client=dict(client),
                     inbound_ids=actual_ids.intersection(available_ids),
                     out_of_scope_inbound_ids=actual_ids.intersection(
-                        out_of_scope_available_ids
+                        excluded_ids
                     ),
                     unavailable_inbound_ids=(
-                        actual_ids - available_ids - out_of_scope_available_ids
+                        actual_ids - available_ids - excluded_ids
                     ),
+                    disabled_inbound_ids=actual_ids.intersection(disabled_ids),
                     placements={value: dict(client) for value in actual_ids.intersection(available_ids)},
                     traffic_used=self._traffic_used(client.get("traffic")) or 0,
                     traffic_known=isinstance(client.get("traffic"), dict),
@@ -1646,11 +1662,7 @@ class XUIClient(BaseVPNClient):
                 snapshot = PanelServerSnapshot(
                     inbounds=[item.as_inbound() for item in available_descriptors],
                     clients={email.lower(): state},
-                    unavailable_inbound_ids={
-                        item.id
-                        for item in all_descriptors
-                        if item.ignored or not item.available
-                    },
+                    unavailable_inbound_ids=(disabled_ids | state.unavailable_inbound_ids),
                 )
             return PanelProvisionResult(
                 email=email,

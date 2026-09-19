@@ -6,12 +6,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramForbiddenError
 from config import ADMIN_IDS
 from database.requests import (
-    get_or_create_user,
-    get_referral_attribution_window_hours,
-    get_user_by_referral_code,
+    get_user_by_telegram_id,
     is_referral_enabled,
     is_user_banned,
-    set_user_referrer,
 )
 from bot.utils.user_pages import render_access_blocked_page
 
@@ -90,15 +87,9 @@ async def _render_main_page(target, force_new: bool = False) -> bool:
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     """/start command handler."""
     user_id = message.from_user.id
-    username = message.from_user.username
     logger.info(f'CMD_START: User {user_id} started bot')
 
-    (user, is_new) = get_or_create_user(
-        user_id,
-        username,
-        first_name=getattr(message.from_user, 'first_name', None),
-        last_name=getattr(message.from_user, 'last_name', None),
-    )
+    user = get_user_by_telegram_id(user_id)
     if user.get('is_banned'):
         await render_access_blocked_page(message, force_new=True)
         return
@@ -185,27 +176,6 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
                 promo=promo_result.get('promo'),
                 force_new=True,
             )
-
-    if args and args.startswith('ref_'):
-        attribution_window_hours = get_referral_attribution_window_hours()
-        if is_new or attribution_window_hours > 0:
-            ref_code = args[4:]
-            referrer = get_user_by_referral_code(ref_code)
-        else:
-            referrer = None
-        if referrer and referrer['id'] != user['id']:
-            if set_user_referrer(
-                user['id'],
-                referrer['id'],
-                is_new_registration=is_new,
-                attribution_window_hours=attribution_window_hours,
-            ):
-                logger.info(f"User {user_id} привязан к рефереру {referrer['telegram_id']}")
-                try:
-                    from bot.services.notifications import notify_referrers_new_referral
-                    await notify_referrers_new_referral(message.bot, user['id'])
-                except Exception as notify_err:
-                    logger.warning(f'Ошибка уведомления о новом реферале: {notify_err}')
 
     try:
         await _render_main_page(message, force_new=True)

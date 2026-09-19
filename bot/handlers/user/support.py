@@ -19,7 +19,7 @@ from bot.utils.page_renderer import render_page
 from bot.utils.user_pages import render_access_blocked_page
 from database.requests import (
     create_support_thread,
-    get_or_create_user,
+    get_user_by_telegram_id,
     get_support_thread,
     is_user_banned,
     record_support_message,
@@ -115,12 +115,7 @@ async def process_support_message(message: Message, state: FSMContext):
 
     data = await state.get_data()
     thread_id = data.get("support_thread_id")
-    user, _ = get_or_create_user(
-        user_id,
-        message.from_user.username,
-        first_name=getattr(message.from_user, "first_name", None),
-        last_name=getattr(message.from_user, "last_name", None),
-    )
+    user = get_user_by_telegram_id(user_id)
 
     if thread_id:
         thread = get_support_thread(int(thread_id))

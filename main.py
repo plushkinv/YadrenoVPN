@@ -217,6 +217,12 @@ async def main():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
+    from bot.middlewares.user_registration import UserRegistrationMiddleware
+    user_registration = UserRegistrationMiddleware()
+    dp.message.outer_middleware(user_registration)
+    dp.callback_query.outer_middleware(user_registration)
+    dp.pre_checkout_query.outer_middleware(user_registration)
+
     from bot.middlewares.bot_blocked import BotBlockedResetMiddleware
     bot_blocked_reset = BotBlockedResetMiddleware()
     dp.message.outer_middleware(bot_blocked_reset)

@@ -489,6 +489,7 @@ def _inspect_extensions(cursor: int, limit: int) -> dict[str, Any]:
         limit,
         extra={
             'loader': loader,
+            'user_registration_before_guards': diagnostics.get('user_registration_before_guards') is True,
             'page_classification': diagnostics.get('page_classification') or {},
             'core_events': core_events,
             'scheduled_tasks': scheduled_tasks,

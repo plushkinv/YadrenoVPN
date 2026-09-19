@@ -244,6 +244,8 @@ async def _apply_clients_api_bulk_prelude(
         if state is None:
             continue
         states_by_email[normalized_email] = state
+        # Use the scoped point update for retained disabled/unknown memberships.
+        # It updates known disabled settings and verifies preserved attachments.
         has_unavailable_memberships = bool(
             state.unavailable_inbound_ids
         )

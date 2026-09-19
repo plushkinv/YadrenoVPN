@@ -130,7 +130,7 @@ async def _execute_trial_activate(request: CoreActionRequest) -> None:
     from bot.services.trials import activate_trial_offer
     from database.requests import (
         find_order_by_order_id,
-        get_or_create_user,
+        get_user_internal_id,
         get_primary_trial_offer,
     )
 
@@ -148,13 +148,8 @@ async def _execute_trial_activate(request: CoreActionRequest) -> None:
         await _render_trial_page(target, 'action_unavailable')
         return
 
-    user, _ = get_or_create_user(
-        request.telegram_id,
-        target.from_user.username,
-        first_name=getattr(target.from_user, 'first_name', None),
-        last_name=getattr(target.from_user, 'last_name', None),
-    )
-    result = await activate_trial_offer(int(user['id']), int(offer_id))
+    user_id = get_user_internal_id(request.telegram_id)
+    result = await activate_trial_offer(user_id, int(offer_id))
     if not result.get('ok'):
         page_key = (
             'trial_already_used'
@@ -185,7 +180,7 @@ async def _execute_trial_activate(request: CoreActionRequest) -> None:
             'key_created',
             {
                 'key_id': key_id,
-                'user_id': int(user['id']),
+                'user_id': user_id,
                 'tariff_id': int(offer['tariff_id']),
                 'days': duration_days,
                 'traffic_limit': traffic_limit_bytes,

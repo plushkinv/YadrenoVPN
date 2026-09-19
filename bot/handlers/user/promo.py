@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.states.user_states import PromoInput
 from bot.utils.page_renderer import render_page
 from bot.utils.text import get_message_text_for_storage
-from database.requests import get_or_create_user, has_available_promo_codes, is_base62_code
+from database.requests import get_user_internal_id, has_available_promo_codes, is_base62_code
 
 logger = logging.getLogger(__name__)
 
@@ -131,13 +131,8 @@ async def promo_code_input_handler(message: Message, state: FSMContext):
         )
         return
 
-    user, _ = get_or_create_user(
-        message.from_user.id,
-        message.from_user.username,
-        first_name=getattr(message.from_user, "first_name", None),
-        last_name=getattr(message.from_user, "last_name", None),
-    )
-    result = activate_promo_code_for_user(user["id"], code)
+    user_id = get_user_internal_id(message.from_user.id)
+    result = activate_promo_code_for_user(user_id, code)
     if not result["ok"]:
         await render_promo_result_page(
             message,

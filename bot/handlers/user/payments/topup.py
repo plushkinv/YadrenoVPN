@@ -21,7 +21,6 @@ from bot.utils.text import get_message_text_for_storage
 from database.requests import (
     get_referral_reward_type,
     get_base_currency,
-    get_or_create_user,
     get_user_internal_id,
     is_cardlink_configured,
     is_cards_configured,
@@ -95,15 +94,8 @@ async def balance_topup_amount_input(message: Message, state: FSMContext):
         await _render_amount_error(prompt or message)
         return
 
-    user, _ = get_or_create_user(
-        message.from_user.id,
-        message.from_user.username,
-        first_name=getattr(message.from_user, 'first_name', None),
-        last_name=getattr(message.from_user, 'last_name', None),
-    )
-
     intent = create_payment_intent(
-        user_id=user['id'],
+        user_id=get_user_internal_id(message.from_user.id),
         purpose=PURPOSE_BALANCE_TOPUP,
         nominal_amount_minor=amount_minor,
     )
