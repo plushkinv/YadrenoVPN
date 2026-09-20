@@ -40,6 +40,17 @@ async def renew_key_access(
     if not key_id or days is None:
         return result
 
+    from bot.services.imported_access import inspect_imported_renewal
+    try:
+        current = await inspect_imported_renewal(key_id)
+        if current:
+            from database.requests import observe_imported_key_state
+            observe_imported_key_state(key_id, **current)
+    except Exception as error:
+        logger.warning('Imported duration read failed key=%s type=%s', key_id, type(error).__name__)
+        result['sync_stats'] = {'errors': 1, 'ok': 0}
+        return result
+
     paid_traffic_limit: Optional[int] = None
     if tariff_id:
         from database.requests import get_tariff_by_id, get_vpn_key_by_id
@@ -59,9 +70,8 @@ async def renew_key_access(
             if not key:
                 logger.error(f"renew_key_access: ключ {key_id} не найден")
                 return result
-            if int(tariff.get('group_id') or 1) != int(
-                key.get('tariff_group_id') or 1
-            ):
+            from database.requests import is_key_tariff_group_allowed
+            if not is_key_tariff_group_allowed(key_id, int(tariff.get('group_id') or 1)):
                 logger.error(
                     "renew_key_access: тариф %s не принадлежит группе ключа %s",
                     tariff_id,
@@ -183,7 +193,19 @@ async def sync_user_keys_panel_access(telegram_id: int) -> Dict[str, Any]:
     The ban status itself remains in the database. sync_key_to_panel_state() rereads the key
     together with users.is_banned and sets enable on the panel according to the current status.
     """
-    from database.requests import get_user_by_telegram_id, get_user_vpn_keys
+    from database.requests import get_user_by_telegram_id
+    return await _sync_account_keys_panel_access(get_user_by_telegram_id(telegram_id))
+
+
+@regular_panel_operation
+async def sync_account_keys_panel_access(user_id: int) -> Dict[str, Any]:
+    """Apply the same ban/unban materializer for an internal account."""
+    from database.requests import get_user_by_id
+    return await _sync_account_keys_panel_access(get_user_by_id(user_id))
+
+
+async def _sync_account_keys_panel_access(user):
+    from database.requests import get_user_vpn_keys
     from bot.services.vpn_api import sync_key_to_panel_state
 
     result: Dict[str, Any] = {
@@ -194,7 +216,6 @@ async def sync_user_keys_panel_access(telegram_id: int) -> Dict[str, Any]:
         'details': [],
     }
 
-    user = get_user_by_telegram_id(telegram_id)
     if not user:
         return result
 
@@ -220,7 +241,7 @@ async def sync_user_keys_panel_access(telegram_id: int) -> Dict[str, Any]:
             result['details'].append({'key_id': key_id, 'error': str(e)})
             logger.warning(
                 f"sync_user_keys_panel_access: не удалось синхронизировать ключ "
-                f"{key_id} пользователя {telegram_id}: {e}"
+                f"{key_id} аккаунта {user['id']}: {e}"
             )
 
     return result

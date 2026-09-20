@@ -12,6 +12,7 @@ from bot.services.yadreno_admin_page_validation import (
     _normalize_page_create_buttons, _validate_page_button_action,
 )
 from bot.utils.page_renderer import _merge_buttons_by_id, _page_image_value, _page_media_type_value
+from bot.utils.payment_provider_buttons import prepare_payment_provider_buttons
 from bot.utils.text import TELEGRAM_CAPTION_LIMIT, TELEGRAM_TEXT_LIMIT, html_to_plain_text
 from database.page_button_styles import validate_page_item_colors
 
@@ -61,7 +62,7 @@ class PagePatch:
         self.before = copy.deepcopy(row)
         self.row = copy.deepcopy(row)
         self.key = row["page_key"]
-        self.defaults = _buttons(row["buttons_default"])
+        self.defaults = prepare_payment_provider_buttons(self.key, _buttons(row["buttons_default"]))
         self.customs = _buttons(row.get("buttons_custom"))
         self.original_customs = copy.deepcopy(self.customs)
         self.original_buttons = self.buttons()

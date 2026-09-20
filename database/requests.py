@@ -6,6 +6,13 @@ Direct SQL is prohibited in handlers - use functions from this module.
 """
 
 from database.db_users import *
+from database.db_account_auth import *
+from database.db_auth_challenges import *
+from database.db_account_links import *
+from database.db_panel_identity import *
+from database.db_subscription_imports import *
+from database.db_order_terms import *
+from database.db_payment_offers import *
 from database.db_keys import *
 from database.db_payments import *
 from database.db_servers import *
@@ -40,3 +47,8 @@ from database.db_lapsed_coupons import *
 from database.db_user_ui_texts import *
 from database.db_trial import *
 from database.db_subscription_composition import *
+from database.db_modules import *
+from database.db_key_operations import *
+from database.db_account_actions import *
+from database.db_account_reads import *
+from database.db_account_support import *

@@ -25,6 +25,7 @@ from bot.handlers.admin.coupon_generator import router as coupon_generator_route
 from bot.handlers.admin.groups import router as groups_router
 from bot.handlers.admin.yadreno_admin import router as yadreno_admin_router
 from bot.handlers.admin.support import router as support_router
+from bot.handlers.admin.web import router as web_router
 from bot.handlers.admin.customization_reset import router as customization_reset_router
 
 admin_router = Router()
@@ -41,6 +42,7 @@ admin_router.include_router(broadcast_editor_router)
 admin_router.include_router(users_list_router)
 admin_router.include_router(users_manage_router)
 admin_router.include_router(support_router)
+admin_router.include_router(web_router)
 admin_router.include_router(key_plans_router)
 admin_router.include_router(users_keys_router)
 admin_router.include_router(users_keys_deleted_router)

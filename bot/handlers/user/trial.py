@@ -174,30 +174,6 @@ async def _execute_trial_activate(request: CoreActionRequest) -> None:
     )
 
     try:
-        from bot.services.key_lifecycle import emit_key_lifecycle_event_safe
-
-        await emit_key_lifecycle_event_safe(
-            'key_created',
-            {
-                'key_id': key_id,
-                'user_id': user_id,
-                'tariff_id': int(offer['tariff_id']),
-                'days': duration_days,
-                'traffic_limit': traffic_limit_bytes,
-                'order_id': order_id,
-                'payment_type': 'trial',
-                'source': 'trial',
-                'trial_offer_id': int(offer_id),
-            },
-        )
-    except Exception as hook_err:
-        logger.warning(
-            "Failed to emit lifecycle hooks for trial key %s: %s",
-            key_id,
-            hook_err,
-        )
-
-    try:
         from bot.services.notifications import notify_admins_payment
 
         trial_order = find_order_by_order_id(order_id)
@@ -206,27 +182,32 @@ async def _execute_trial_activate(request: CoreActionRequest) -> None:
     except Exception as notify_err:
         logger.warning("Failed to notify administrators about trial: %s", notify_err)
 
-    await state.update_data(
-        new_key_order_id=order_id,
-        new_key_id=key_id,
-        new_key_owner_telegram_id=request.telegram_id,
-        new_key_owner_username=target.from_user.username,
-    )
-    target_message = target.message if isinstance(target, CallbackQuery) else target
-    if isinstance(target, CallbackQuery):
-        await target.answer()
-        try:
-            await target.message.delete()
-        except Exception:
-            pass
-    await run_new_key_setup_flow(
-        target_message,
-        order_id,
-        state=state,
-        owner_telegram_id=request.telegram_id,
-        owner_username=target.from_user.username,
-        force_new=True,
-    )
+    try:
+        await state.update_data(
+            new_key_order_id=order_id,
+            new_key_id=key_id,
+            new_key_owner_telegram_id=request.telegram_id,
+            new_key_owner_username=target.from_user.username,
+        )
+        target_message = target.message if isinstance(target, CallbackQuery) else target
+        if isinstance(target, CallbackQuery):
+            await target.answer()
+            try:
+                await target.message.delete()
+            except Exception:
+                pass
+        await run_new_key_setup_flow(
+            target_message,
+            order_id,
+            state=state,
+            owner_telegram_id=request.telegram_id,
+            owner_username=target.from_user.username,
+            force_new=True,
+        )
+    except Exception:
+        logger.exception('Trial presentation unavailable order=%s', order_id)
+        from bot.services.payment_completion import _run_key_setup_without_delivery
+        await _run_key_setup_without_delivery(order_id, telegram_id=request.telegram_id)
 
 
 async def _render_trial_page(

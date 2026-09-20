@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from config import ADMIN_IDS
 from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, create_vpn_key_admin, get_user_balance, get_user_referral_coefficient, add_to_balance, deduct_from_balance, set_user_referral_coefficient
 from bot.utils.admin import is_admin
+from bot.utils.admin_accounts import selected_user, account_selector
 from bot.utils.admin_dialog import (
     render_admin_dialog,
     render_admin_dialog_from_input,
@@ -144,7 +145,7 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
             text += f'• <code>{dt}</code>: {amount} — {tariff_safe}\n'
     else:
         text += '\n📜 <b>История операций:</b> пусто\n'
-    user_telegram_id = key.get('telegram_id')
+    user_telegram_id = account_selector(key)
     await safe_edit_or_send(
         callback.message,
         text,
@@ -169,12 +170,13 @@ async def show_key_subscription(callback: CallbackQuery, state: FSMContext):
         await callback.answer('Ключ не найден', show_alert=True)
         return
 
-    from database.requests import get_key_details_for_user
+    from database.requests import get_key_details_for_user, get_key_details_for_account
     from bot.utils.key_sender import send_key_with_qr
 
     selected_key = get_vpn_key_by_id(key_id)
     key = (
-        get_key_details_for_user(key_id, selected_key.get('telegram_id'))
+        (get_key_details_for_user(key_id, selected_key['telegram_id']) if selected_key.get('telegram_id') is not None
+         else get_key_details_for_account(key_id, selected_key['user_id']))
         if selected_key else None
     )
     if not key:
@@ -330,8 +332,8 @@ async def start_add_key(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    telegram_id = int(callback.data.split(':')[1])
-    user = get_user_by_telegram_id(telegram_id)
+    telegram_id = callback.data.split(':', 1)[1]
+    user = selected_user(telegram_id)
     if not user:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
@@ -344,7 +346,8 @@ async def start_add_key(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.add_key_group)
     await state.update_data(
         add_key_user_id=user['id'],
-        add_key_user_telegram_id=telegram_id,
+        add_key_user_telegram_id=user['telegram_id'],
+        add_key_user_selector=account_selector(user),
         add_key_dialog_message_id=callback.message.message_id,
     )
     rendered = await safe_edit_or_send(
@@ -565,7 +568,7 @@ async def _confirm_add_key_locked(
     devices = data.get('add_key_devices', 1)
     try:
         user_id = int(user_id)
-        user_telegram_id = int(user_telegram_id)
+        user_telegram_id = int(user_telegram_id) if user_telegram_id is not None else None
         server_id = int(server_id)
         group_id = int(group_id)
         traffic_gb = int(traffic_gb)
@@ -593,7 +596,8 @@ async def _confirm_add_key_locked(
     if not server or server_id not in allowed_server_ids:
         await callback.answer('Сервер не найден', show_alert=True)
         return
-    user = get_user_by_telegram_id(user_telegram_id)
+    from database.requests import get_user_by_id
+    user = get_user_by_id(user_id)
     if user is None or int(user['id']) != user_id:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
@@ -619,7 +623,8 @@ async def _confirm_add_key_locked(
             expire_days=days,
             limit_ip=panel_limits.limit_ip,
             limit_hwid=panel_limits.limit_hwid,
-            tg_id=str(user_telegram_id),
+            tg_id=str(user['telegram_id']) if user.get('telegram_id') is not None else '',
+            enable=not bool(user.get('is_banned')),
             sub_id=sub_id,
             client=panel_client,
         )
@@ -653,9 +658,9 @@ async def _confirm_add_key_locked(
                     sync_stats,
                 )
 
-        await state.set_data({'current_user_telegram_id': user_telegram_id})
+        await state.set_data({'current_user_telegram_id': user['telegram_id'], 'current_user_id': user['id'], 'current_user_selector': account_selector(user)})
         await callback.answer('✅ Ключ успешно создан!', show_alert=True)
-        await _show_user_view_edit(callback, state, user_telegram_id)
+        await _show_user_view_edit(callback, state, account_selector(user))
     except VPNAPIError as e:
         if panel_client is not None and key_id is None:
             try:
@@ -680,7 +685,8 @@ async def cancel_add_key(callback: CallbackQuery, state: FSMContext):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
     data = await state.get_data()
-    user_telegram_id = data.get('add_key_user_telegram_id') or data.get('current_user_telegram_id')
+    user_telegram_id = (data.get('add_key_user_selector') or data.get('current_user_selector')
+                        or data.get('add_key_user_telegram_id') or data.get('current_user_telegram_id'))
     if user_telegram_id:
         await _show_user_view_edit(callback, state, user_telegram_id)
     else:
@@ -707,7 +713,7 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
     elif current_state == AdminStates.add_key_traffic.state:
         servers = get_active_servers_by_group(group_id) if group_id else []
         await state.set_state(AdminStates.add_key_server)
-        user = get_user_by_telegram_id(data.get('add_key_user_telegram_id'))
+        user = selected_user(data.get('add_key_user_selector') or data.get('add_key_user_telegram_id'))
         await safe_edit_or_send(
             callback.message,
             f"➕ <b>Добавление ключа для {(format_user_display(user) if user else '?')}</b>\n\nВыберите сервер:",

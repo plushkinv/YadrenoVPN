@@ -22,6 +22,7 @@ from database.requests import (
     mark_lapsed_coupon_delivery_failed,
     mark_lapsed_coupon_delivery_retry,
     mark_lapsed_coupon_delivery_sent,
+    mark_lapsed_coupon_delivery_unavailable,
     mark_user_bot_blocked,
 )
 
@@ -72,6 +73,11 @@ async def _deliver_coupon(
 ) -> tuple[str, int, Optional[Exception]]:
     """Try one Telegram delivery cycle and return its stable result code."""
     delivery_id = int(coupon["delivery_id"])
+    if coupon.get('telegram_id') is None:
+        # Coupon ownership is already committed. No Telegram recipient is a
+        # terminal delivery outcome, not a reminder queued for a future link.
+        mark_lapsed_coupon_delivery_unavailable(delivery_id)
+        return 'not_sent', 0, None
     telegram_id = int(coupon["telegram_id"])
     context = {
         'telegram_id': telegram_id,
@@ -178,6 +184,8 @@ async def process_lapsed_coupon_deliveries(
             elif result == "blocked":
                 report.failed += 1
                 report.blocked += 1
+            elif result == 'not_sent':
+                report.failed += 1
             else:
                 report.deferred += 1
             if error is not None:

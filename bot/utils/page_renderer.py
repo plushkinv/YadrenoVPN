@@ -23,6 +23,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database.page_button_styles import describe_collection_colors, resolve_collection_item_color
+from bot.utils.payment_provider_buttons import prepare_payment_provider_buttons
 
 from bot.utils.placeholders import (
     apply_page_placeholders,
@@ -187,6 +188,7 @@ def get_page_data(page_key: str) -> Optional[Dict[str, Any]]:
     buttons = _merge_buttons_by_id(
         buttons_default_json=row.get('buttons_default', '[]'),
         buttons_custom_json=row.get('buttons_custom'),
+        page_key=page_key,
     )
 
     return {
@@ -245,19 +247,21 @@ def _collection_item_replacements(data: Mapping[str, Any]) -> Dict[str, Any]:
 def _merge_buttons_by_id(
     buttons_default_json: str,
     buttons_custom_json: Optional[str],
+    *,
+    page_key: Optional[str] = None,
 ) -> List[Dict]:
     """
     Merges two arrays of buttons based on the id field.
 
     Algorithm:
-    1. Parse buttons_default and buttons_custom.
-    2. If buttons_custom is empty (NULL) - return buttons_default as-is.
+    1. Parse stored buttons and prepare registry-derived defaults for the page.
+    2. If buttons_custom is empty (NULL) - return the prepared defaults.
     3. For each button from default: if in custom there is a button with the same id →
        take the custom version (custom priority).
     4. We add buttons from custom that are not in default → added by the admin.
     5. Sort by (row, col).
     """
-    defaults = _parse_buttons_json(buttons_default_json)
+    defaults = prepare_payment_provider_buttons(page_key, _parse_buttons_json(buttons_default_json))
     customs = _parse_buttons_json(buttons_custom_json)
 
     if not customs:
@@ -293,6 +297,8 @@ def _merge_buttons_by_id(
 def _merge_buttons_by_id_with_source(
     buttons_default_json: str,
     buttons_custom_json: Optional[str],
+    *,
+    page_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Merges buttons for /yaa snapshot and marks the source of each effective button.
@@ -300,7 +306,7 @@ def _merge_buttons_by_id_with_source(
     If a button has a custom version, default is not duplicated: to the agent for editing
     you need the current edited version and an understanding of where it came from.
     """
-    defaults = _parse_buttons_json(buttons_default_json)
+    defaults = prepare_payment_provider_buttons(page_key, _parse_buttons_json(buttons_default_json))
     customs = _parse_buttons_json(buttons_custom_json)
 
     custom_map = {btn.get('id'): btn for btn in customs if _valid_button_id(btn.get('id'))}
@@ -377,6 +383,7 @@ def get_page_stored_data(page_key: str) -> Optional[Dict[str, Any]]:
     buttons = _merge_buttons_by_id_with_source(
         buttons_default_json=row.get('buttons_default', '[]'),
         buttons_custom_json=row.get('buttons_custom'),
+        page_key=page_key,
     )
     return {
         'text': _stored_text_value(row),
@@ -401,7 +408,7 @@ def _build_keyboard(
     Placement rules: by row, max 2 buttons in a row, fallback in case of collisions.
     """
     from bot.utils.action_registry import (
-        SYSTEM_BUTTONS,
+        is_registered_system_button,
         normalize_callback_data,
         resolve_internal_button,
         resolve_system_collection,
@@ -559,7 +566,7 @@ def _build_keyboard(
             continue
 
         if action_type == 'system':
-            if btn_id not in SYSTEM_BUTTONS:
+            if not is_registered_system_button(btn_id):
                 logger.warning(f"System handler не найден для кнопки '{btn_id}' — пропускаем")
                 continue
 

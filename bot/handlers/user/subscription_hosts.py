@@ -20,55 +20,19 @@ HOST_BIND_SOURCE_NAMESPACE = 'core.group_parent'
 MAX_HOST_SELECTOR_ITEMS = 50
 
 
-def _host_id(host: Mapping[str, Any]) -> int | None:
-    raw_value = host.get('id', host.get('key_id'))
-    if raw_value is None or isinstance(raw_value, bool):
-        return None
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
+def _host_id(host):
+    from bot.services.subscription_host_flow import host_id
+    return host_id(host)
 
 
-def _load_default_hosts(component_key_id: int) -> list[dict[str, Any]]:
-    """Read the current eligible hosts through the composition facade."""
-    from bot.services.subscription_composition import get_default_subscription_hosts
-
-    raw_hosts = get_default_subscription_hosts(
-        component_key_id=int(component_key_id),
-    )
-    if raw_hosts is None:
-        return []
-    if isinstance(raw_hosts, (str, bytes, Mapping)):
-        raise TypeError('subscription host candidates must be a list')
-    hosts: list[dict[str, Any]] = []
-    for raw_host in raw_hosts:
-        if not isinstance(raw_host, Mapping):
-            continue
-        host = dict(raw_host)
-        if _host_id(host) is not None:
-            hosts.append(host)
-    return hosts
+def _load_default_hosts(component_key_id):
+    from bot.services.subscription_host_flow import load_default_hosts
+    return load_default_hosts(component_key_id)
 
 
-async def _bind_host(
-    *,
-    host_key_id: int,
-    component_key_id: int,
-) -> dict[str, Any]:
-    """Persist a binding; panel synchronization status is informational."""
-    from bot.services.subscription_composition import bind_key_subscription
-
-    result = await bind_key_subscription(
-        host_key_id=int(host_key_id),
-        component_key_id=int(component_key_id),
-        source_namespace=HOST_BIND_SOURCE_NAMESPACE,
-    )
-    return dict(result) if isinstance(result, Mapping) else {
-        'ok': False,
-        'status': 'invalid_result',
-    }
+async def _bind_host(*, host_key_id, component_key_id):
+    from bot.services.subscription_host_flow import bind_default_host
+    return await bind_default_host(host_key_id=host_key_id, component_key_id=component_key_id)
 
 
 def _viewer_id(target: Any, explicit_telegram_id: int | None) -> int | None:
@@ -212,109 +176,25 @@ async def offer_default_subscription_host(
     """Apply 0/1/N defaults after configuration, with optional UI delivery."""
     component_id = int(component_key_id)
     viewer_id = _viewer_id(target, telegram_id)
-    try:
-        hosts = _load_default_hosts(component_id)
-    except Exception as error:
-        logger.warning(
-            'Could not resolve subscription hosts for component key %s: %s',
-            component_id,
-            error,
-            exc_info=True,
-        )
-        if target is not None:
-            try:
-                await _render_bind_error(
-                    target,
-                    component_key_id=component_id,
-                    telegram_id=viewer_id,
-                    error_code='host_lookup_failed',
-                )
-            except Exception:
-                logger.exception(
-                    'Could not render subscription host lookup failure for key %s',
-                    component_id,
-                )
-        return {'ok': False, 'status': 'host_lookup_failed'}
-
-    if not hosts:
-        return {'ok': True, 'status': 'standalone'}
-    if len(hosts) > 1:
-        if target is None:
-            return {
-                'ok': True,
-                'status': 'selection_required',
-                'host_count': len(hosts),
-            }
-        try:
-            rendered = await _render_selector(
-                target,
-                component_key_id=component_id,
-                telegram_id=viewer_id,
-                hosts=hosts,
-            )
-        except Exception as error:
-            logger.warning(
-                'Could not render subscription host selector for key %s: %s',
-                component_id,
-                error,
-                exc_info=True,
-            )
-            return {'ok': False, 'status': 'selection_delivery_failed'}
-        return {
-            'ok': rendered is not None,
-            'status': 'selection_required',
-            'host_count': len(hosts),
-        }
-
-    host_id = _host_id(hosts[0])
-    if host_id is None:
-        return {'ok': False, 'status': 'invalid_host'}
-    try:
-        result = await _bind_host(
-            host_key_id=host_id,
-            component_key_id=component_id,
-        )
-    except Exception as error:
-        logger.warning(
-            'Automatic subscription host binding failed component=%s host=%s: %s',
-            component_id,
-            host_id,
-            error,
-            exc_info=True,
-        )
-        result = {'ok': False, 'status': 'bind_failed'}
-    if result.get('ok') is True:
-        return result
-    if result.get('error_code') == 'component_already_bound':
-        return {
-            'ok': True,
-            'status': 'already_bound',
-            'applied': False,
-            'already_applied': True,
-        }
-
-    # The component key is already usable. Give the user a retryable selector
-    # without replacing its normal delivery page.
+    from bot.services.subscription_host_flow import resolve_default_host
+    result, hosts = await resolve_default_host(component_id, _load=_load_default_hosts, _bind=_bind_host)
     if target is None:
         return result
-    try:
-        await _render_bind_error(
-            target,
-            component_key_id=component_id,
-            telegram_id=viewer_id,
-            error_code=_bind_error_code(result),
-        )
-        await _render_selector(
-            target,
-            component_key_id=component_id,
-            telegram_id=viewer_id,
-            hosts=hosts,
-        )
-    except Exception:
-        logger.exception(
-            'Could not render automatic host-binding recovery for key %s',
-            component_id,
-        )
+    if result.get('status') == 'selection_required':
+        try:
+            rendered = await _render_selector(target, component_key_id=component_id, telegram_id=viewer_id, hosts=hosts)
+            return {**result, 'ok': rendered is not None}
+        except Exception:
+            logger.exception('Could not render subscription host selector for key %s', component_id)
+            return {'ok': False, 'status': 'selection_delivery_failed'}
+    if not result.get('ok'):
+        try:
+            await _render_bind_error(target, component_key_id=component_id, telegram_id=viewer_id,
+                                     error_code=_bind_error_code(result))
+            if hosts and result.get('status') != 'invalid_host':
+                await _render_selector(target, component_key_id=component_id, telegram_id=viewer_id, hosts=hosts)
+        except Exception:
+            logger.exception('Could not render subscription host failure for key %s', component_id)
     return result
 
 

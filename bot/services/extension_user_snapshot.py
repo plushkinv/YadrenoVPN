@@ -10,23 +10,35 @@ CURRENT_USER_CONTRACT_VERSION = 1
 
 def build_extension_user_snapshot(telegram_id: int) -> dict[str, Any] | None:
     """Return a safe, read-only snapshot for one Telegram user."""
-    from database.requests import (
-        get_base_currency,
-        get_primary_trial_eligibility,
-        get_user_active_promo_snapshot,
-        get_user_key_snapshot_stats,
-        get_user_payment_snapshot_stats,
-        get_user_referral_snapshot_stats,
-        get_user_snapshot_profile,
-    )
+    from database.requests import get_primary_trial_eligibility, get_user_snapshot_profile
 
     user = get_user_snapshot_profile(int(telegram_id))
     if not user:
         return None
+    return _build_snapshot(user, get_primary_trial_eligibility(int(user['telegram_id'])))
+
+
+def build_extension_account_snapshot(account_id: int) -> dict[str, Any] | None:
+    """Keep v1 for linked users; v2 explicitly permits absent Telegram identity."""
+    from database.requests import get_account_snapshot_profile, get_account_trial_eligibility
+
+    user = get_account_snapshot_profile(int(account_id))
+    if not user:
+        return None
+    return _build_snapshot(user, get_account_trial_eligibility(int(account_id)))
+
+
+def _build_snapshot(user: Mapping[str, Any], trial: Mapping[str, Any]) -> dict[str, Any]:
+    from database.requests import (
+        get_base_currency,
+        get_user_active_promo_snapshot,
+        get_user_key_snapshot_stats,
+        get_user_payment_snapshot_stats,
+        get_user_referral_snapshot_stats,
+    )
 
     user_id = int(user['id'])
-    resolved_telegram_id = int(user['telegram_id'])
-    trial = get_primary_trial_eligibility(resolved_telegram_id)
+    resolved_telegram_id = int(user['telegram_id']) if user['telegram_id'] is not None else None
     key_stats = get_user_key_snapshot_stats(user_id)
     payment_stats = get_user_payment_snapshot_stats(user_id)
     referral_stats = get_user_referral_snapshot_stats(user_id)
@@ -59,7 +71,7 @@ def build_extension_user_snapshot(telegram_id: int) -> dict[str, Any] | None:
     })
 
     return {
-        'contract_version': CURRENT_USER_CONTRACT_VERSION,
+        'contract_version': CURRENT_USER_CONTRACT_VERSION if resolved_telegram_id is not None else 2,
         'identity': identity,
         'account': {
             'is_banned': bool(user.get('is_banned')),
@@ -133,7 +145,8 @@ def _display_name(user: Mapping[str, Any]) -> str:
     username = _optional_plain_text(user.get('username'))
     if username:
         return username if username.startswith('@') else f'@{username}'
-    return f"ID {int(user['telegram_id'])}"
+    identity = user['telegram_id'] if user['telegram_id'] is not None else user['id']
+    return f"ID {int(identity)}"
 
 
 def _iso_utc(value: Any) -> str | None:

@@ -221,13 +221,6 @@ async def run_new_key_setup_flow(
             context=_base_context(result),
             force_new=force_new,
         )
-        if isinstance(target, BackgroundKeyFlowTarget) and progress_message is None:
-            return replace(
-                result,
-                status=NewKeySetupStatus.RETRYABLE_FAILURE,
-                page_key="key_operation_failed",
-                error_code="progress_delivery_failed",
-            )
         result = await provision_new_key(
             result,
             expected_telegram_id=expected_telegram_id,

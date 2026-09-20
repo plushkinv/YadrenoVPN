@@ -145,6 +145,8 @@ def build_quote(
     nominal_amount_cents: int | None = None,
     rate_snapshot: Dict[str, Any] | None = None,
     _use_active_promo: bool = True,
+    _phase: str = 'quote',
+    _key_id: int | None = None,
 ) -> Dict[str, Any]:
     """Returns the price calculation taking into account the active promotional code or coupon."""
     raw_nominal = nominal_amount_minor if nominal_amount_minor is not None else nominal_amount_cents
@@ -160,7 +162,7 @@ def build_quote(
     base_quote = calculate_base_price(
         user_id=user_id, tariff=dict(tariff or {}), nominal_minor=nominal_minor,
         snapshot=snapshot, purpose=purpose, order_id=order_id,
-        explicit_code=explicit_code, use_active_promo=_use_active_promo,
+        explicit_code=explicit_code, use_active_promo=_use_active_promo, phase=_phase, key_id=_key_id,
     )
     promo = base_quote['promo']
     promo_error = base_quote['promo_error']
@@ -210,6 +212,13 @@ def build_quote(
             _payment_minimum(payment_type),
         ),
     }
+
+    if base_quote.get('first_purchase_benefit'):
+        quote['first_purchase_benefit'] = True
+    if base_quote.get('module_rewards'):
+        quote['module_rewards'] = base_quote['module_rewards']
+    if base_quote.get('module_events'):
+        quote['module_events'] = base_quote['module_events']
 
     if promo_error is None and base_quote['ok']:
         from bot.utils.policy_registry import apply_pricing_policies
@@ -356,6 +365,16 @@ def prepare_order_pricing(
                 return quote
     else:
         cancel_promo_reservation_for_order(order_id)
+
+    from database.requests import reserve_first_purchase_benefit, release_unbound_first_purchase_benefit
+    if quote.get('first_purchase_benefit'):
+        if not reserve_first_purchase_benefit(user_id, order_id):
+            cancel_promo_reservation_for_order(order_id)
+            quote.update(ok=False, is_free=False, unavailable_reason='first_purchase_reserved',
+                         unavailable_code='first_purchase_reserved')
+            return quote
+    else:
+        release_unbound_first_purchase_benefit(order_id)
 
     try:
         snapshot_saved = save_order_pricing_snapshot(

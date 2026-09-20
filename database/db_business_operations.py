@@ -219,7 +219,11 @@ def apply_key_days_operation_once(
             }
 
         key_id = int(key['id'])
-        if key['expires_at'] is None:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
+        from .db_subscription_imports import _extend_imported_terms
+        imported_change = _extend_imported_terms(conn, key_id, normalized_days)
+        if key['expires_at'] is None and (imported_change is None or imported_change['unlimited']):
             operation = conn.execute(
                 """
                 INSERT INTO key_operation_log (
@@ -252,9 +256,10 @@ def apply_key_days_operation_once(
                 'expires_before': None,
                 'expires_after': None,
             }
-        expires_before = str(key['expires_at'])
+        expires_before = str(key['expires_at']) if key['expires_at'] is not None else None
         modifier = f'{normalized_days:+} days'
-        conn.execute(
+        if imported_change is None:
+            conn.execute(
             """
             UPDATE vpn_keys
             SET expires_at = MAX(
@@ -273,7 +278,7 @@ def apply_key_days_operation_once(
             "SELECT expires_at FROM vpn_keys WHERE id = ?",
             (key_id,),
         ).fetchone()
-        expires_after = str(expires_after_row['expires_at'])
+        expires_after = str(expires_after_row['expires_at']) if expires_after_row['expires_at'] is not None else None
         operation = conn.execute(
             """
             INSERT INTO key_operation_log (

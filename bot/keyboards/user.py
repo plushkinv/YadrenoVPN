@@ -52,26 +52,14 @@ def payment_method_select_kb(
     back_callback: str = 'start',
 ) -> InlineKeyboardMarkup:
     """Deprecated wrapper around the page-owned provider controls."""
-    builtins = [provider.provider_id for provider in providers if not provider.custom]
-    custom_rows = [
-        [
-            InlineKeyboardButton(
-                text=str(provider.label),
-                callback_data=f'payment_intent_provider:{order_id}:{provider.provider_id}',
-            )
-        ]
-        for provider in providers
-        if provider.custom
-    ]
     return _required_page_keyboard(
         'payment_method_select',
         context={
             'order_id': order_id,
-            'payment_provider_ids': builtins,
+            'payment_provider_ids': [provider.provider_id for provider in providers],
             'payment_allow_balance': allow_balance,
             'payment_cancel_callback': back_callback,
         },
-        append_buttons=custom_rows or None,
     )
 
 

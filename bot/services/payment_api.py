@@ -77,6 +77,9 @@ async def run_payment_api_operation(
     max_attempts: int = PAYMENT_API_MAX_ATTEMPTS,
 ) -> T:
     """Runs one provider operation with bounded timing and optional retries."""
+    from runtime.readiness import require_active
+
+    require_active()
     attempts_allowed = max(1, int(max_attempts)) if retry else 1
     started = time.monotonic()
     last_error: BaseException | None = None

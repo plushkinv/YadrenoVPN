@@ -1,9 +1,10 @@
 """Assembling HTML blocks for editable key pages."""
 from __future__ import annotations
 
+from datetime import tzinfo
 from typing import Any, Iterable, Mapping
 
-from bot.utils.datetime_format import format_date_for_display
+from bot.utils.datetime_format import format_date_for_display, get_remaining_minutes
 from bot.utils.placeholders import KEY_FIELDS_CONTEXT_KEY
 from bot.utils.user_ui_texts import render_ui_text
 
@@ -52,6 +53,7 @@ def build_key_page_context(
     *,
     status: str | None = None,
     traffic: str | None = None,
+    display_tz: tzinfo | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Builds the allowlisted display context for ``%key(field=...)%``."""
     display_name = key.get('display_name') or f"#{key.get('id', '')}"
@@ -59,7 +61,7 @@ def build_key_page_context(
     expires = (
         render_ui_text('format.duration_unlimited')
         if key.get('expires_at') is None
-        else format_date_for_display(key.get('expires_at'))
+        else format_date_for_display(key.get('expires_at'), display_tz=display_tz)
     )
     tariff = (
         render_ui_text('key.tariff.custom')
@@ -74,6 +76,18 @@ def build_key_page_context(
     if device_limit is None:
         device_limit = '—'
 
+    days_left: int | str = ''
+    time_left = ''
+    remaining_minutes = get_remaining_minutes(key.get('expires_at'))
+    if remaining_minutes is not None:
+        days, remainder = divmod(remaining_minutes, 24 * 60)
+        hours, minutes = divmod(remainder, 60)
+        # Expiry notifications retain the whole-day value from their selection.
+        days_left = key.get('days_left', days)
+        time_left = render_ui_text('format.time_left', days=days, hours=hours, minutes=minutes)
+    elif 'expires_at' in key and key['expires_at'] is None:
+        time_left = render_ui_text('format.duration_unlimited')
+
     return {
         KEY_FIELDS_CONTEXT_KEY: {
             'id': key.get('id', ''),
@@ -84,6 +98,8 @@ def build_key_page_context(
             'server': server,
             'tariff': tariff,
             'device_limit': device_limit,
+            'days_left': days_left,
+            'time_left': time_left,
         },
     }
 

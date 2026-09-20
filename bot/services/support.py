@@ -103,7 +103,14 @@ def format_support_user_line(user: Dict[str, Any]) -> str:
         parts.append(str(user["last_name"]))
     if parts:
         return escape_html(" ".join(parts))
-    return f"ID: {user.get('telegram_id')}"
+    return f"ID: {user['telegram_id']}" if user.get('telegram_id') is not None else f"Аккаунт: {user['id']}"
+
+
+def support_identity_line(thread):
+    """Show the real identity without inventing a Telegram account."""
+    if thread.get('user_telegram_id') is not None:
+        return f"📱 Telegram ID: <code>{thread['user_telegram_id']}</code>"
+    return f"🌐 Аккаунт сайта: <code>{thread['user_id']}</code>"
 
 
 def format_admin_support_card(
@@ -118,7 +125,7 @@ def format_admin_support_card(
         f"💬 <b>{escape_html(title)}</b>",
         "",
         f"👤 Пользователь: {format_support_user_line(user)}",
-        f"📱 Telegram ID: <code>{thread['user_telegram_id']}</code>",
+        support_identity_line(thread),
         f"🧵 Диалог: <code>{thread['id']}</code>",
     ]
     if assigned_admin_id:
@@ -218,6 +225,7 @@ async def send_generated_user_message_to_admins(
     user: Dict[str, Any],
     support_message_id: int,
     text_html: str,
+    _respect_assignment: bool = False,
 ) -> Dict[str, int | str]:
     """Delivers an extension-origin user message without duplicating completed sends."""
     existing = get_support_admin_notifications(
@@ -229,7 +237,8 @@ async def send_generated_user_message_to_admins(
         int(item["admin_telegram_id"]): item
         for item in existing
     }
-    recipients = sorted({int(admin_id) for admin_id in ADMIN_IDS})
+    assigned = thread.get('assigned_admin_id') if _respect_assignment else None
+    recipients = [int(assigned)] if assigned else sorted({int(admin_id) for admin_id in ADMIN_IDS})
     sent = 0
     failed = 0
 
@@ -260,7 +269,7 @@ async def send_generated_user_message_to_admins(
                         title="Новое обращение в поддержку",
                         thread=thread,
                         user=user,
-                        assigned_admin_id=None,
+                        assigned_admin_id=assigned,
                     ),
                     reply_markup=admin_support_reply_kb(int(thread["id"])),
                 )
@@ -319,6 +328,8 @@ async def send_admin_message_to_user(
     source_message: Message,
 ) -> Optional[int]:
     """Sends a copy of the admin message to the user with a reply button."""
+    if thread.get('channel') == 'web' or thread.get('user_telegram_id') is None:
+        return None
     thread_id = int(thread["id"])
     user_telegram_id = int(thread["user_telegram_id"])
     reply_markup = await _prepare_support_reply_markup(
@@ -342,6 +353,8 @@ async def send_generated_admin_message_to_user(
     message: Dict[str, Any],
 ) -> Dict[str, int | str]:
     """Delivers one extension-origin admin-side message to its support user."""
+    if thread.get('channel') == 'web' or thread.get('user_telegram_id') is None:
+        return {'sent': 0, 'failed': 0, 'status': 'not_sent'}
     delivered_message_id = message.get("delivered_message_id")
     if delivered_message_id:
         return {"sent": 1, "failed": 0, "status": "sent"}

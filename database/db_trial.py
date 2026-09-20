@@ -32,6 +32,7 @@ __all__ = [
     'get_primary_trial_offer',
     'get_trial_offer_eligibility',
     'get_primary_trial_eligibility',
+    'get_account_trial_eligibility',
     'can_use_primary_trial',
     'set_primary_trial_enabled',
     'set_primary_trial_tariff',
@@ -40,6 +41,7 @@ __all__ = [
     'delete_trial_offer',
     'trial_offer_action_value',
     'claim_trial_offer',
+    'claim_trial_offer_once',
 ]
 
 
@@ -78,6 +80,9 @@ def _create_trial_history_with_conn(
         "UPDATE payments SET order_id = ? WHERE id = ?",
         (order_id, payment_id),
     )
+    from .db_order_terms import _save_order_terms_with_conn, _save_entitlement_with_conn
+    _save_order_terms_with_conn(conn, order_id, tariff_id, base_currency)
+    _save_entitlement_with_conn(conn, order_id, vpn_key_id)
     return payment_id, order_id
 
 
@@ -327,6 +332,13 @@ def can_use_primary_trial(telegram_id: int | None) -> bool:
     return bool(get_primary_trial_eligibility(telegram_id).get('eligible'))
 
 
+def get_account_trial_eligibility(user_id: int | None, offer_id: int | None = None) -> dict[str, Any]:
+    """Check existing trial rules by internal owner, without Telegram lookup."""
+    with get_db() as conn:
+        offer = _get_primary_offer_with_conn(conn) if offer_id is None else _get_offer_with_conn(conn, int(offer_id))
+        return _eligibility_with_conn(conn, offer, internal_user_id=int(user_id) if user_id is not None else None)
+
+
 def _require_normal_tariff(conn: sqlite3.Connection, tariff_id: int) -> None:
     row = conn.execute(
         "SELECT id, system_type FROM tariffs WHERE id = ?",
@@ -440,117 +452,145 @@ def trial_offer_action_value(offer_id: int) -> str:
 
 
 def claim_trial_offer(user_id: int, offer_id: int, *, event_subscribers=()) -> dict[str, Any]:
-    """Atomically consumes eligibility and creates a paid draft trial order."""
-    normalized_user_id = int(user_id)
-    normalized_offer_id = int(offer_id)
+    """Atomically consume the existing trial eligibility contract."""
+    normalized_user_id, normalized_offer_id = int(user_id), int(offer_id)
     if normalized_user_id <= 0 or normalized_offer_id <= 0:
         raise ValueError('user_id and offer_id must be positive')
-
     with get_db() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        user = conn.execute(
-            "SELECT id FROM users WHERE id = ?",
-            (normalized_user_id,),
-        ).fetchone()
-        if user is None:
-            return {'ok': False, 'reason': 'user_not_found'}
+        return _claim_trial_with_conn(conn, normalized_user_id, normalized_offer_id, event_subscribers)
 
-        offer = _get_offer_with_conn(conn, normalized_offer_id)
-        eligibility = _eligibility_with_conn(
-            conn,
-            offer,
-            internal_user_id=normalized_user_id,
-        )
-        if not eligibility['eligible']:
-            return {
-                'ok': False,
-                'reason': eligibility['reason'],
-                'scope': eligibility['scope'],
-                'offer': offer,
-            }
 
-        try:
-            activation_cursor = conn.execute(
-                """
-                INSERT INTO trial_activations (
-                    user_id, offer_id, tariff_id, group_id,
-                    legacy_global_block
-                ) VALUES (?, ?, ?, ?, 0)
-                """,
-                (
-                    normalized_user_id,
-                    normalized_offer_id,
-                    int(offer['tariff_id']),
-                    int(offer['group_id']),
-                ),
-            )
-        except sqlite3.IntegrityError:
-            conn.rollback()
-            return {
-                'ok': False,
-                'reason': 'group_trial_used',
-                'scope': eligibility['scope'],
-                'offer': offer,
-            }
+def claim_trial_offer_once(user_id, offer_id, idempotency_key, fingerprint, source, *, event_subscribers=()):
+    """Commit one durable receipt in the same transaction as trial consumption."""
+    import json
+    import secrets
+    import time
+    from core.results import CoreError
+    with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        previous = conn.execute("SELECT * FROM account_operations WHERE user_id=? AND kind='trial.activate' AND idempotency_key=?",
+                                (user_id, idempotency_key)).fetchone()
+        if previous:
+            if previous['fingerprint'] != fingerprint:
+                raise CoreError('idempotency_conflict')
+            return {'operation_id': previous['id'], 'result': json.loads(previous['result_json']), 'applied': False}
+        owner = conn.execute('SELECT is_banned FROM users WHERE id=?', (user_id,)).fetchone()
+        if not owner or owner['is_banned']:
+            raise CoreError('access_denied')
+        result = _claim_trial_with_conn(conn, int(user_id), int(offer_id), event_subscribers)
+        operation_id = secrets.token_urlsafe(24)
+        conn.execute('INSERT INTO account_operations(id,user_id,kind,idempotency_key,fingerprint,request_json,result_json,order_id,created_at) '
+                     "VALUES(?,?,'trial.activate',?,?,?,?,?,?)",
+                     (operation_id, user_id, idempotency_key, fingerprint,
+                      json.dumps({'source': source, 'inputs': {'offer_id': offer_id}}), json.dumps(result),
+                      result.get('order_id'), int(time.time())))
+        return {'operation_id': operation_id, 'result': result, 'applied': True}
 
-        duration_days = max(0, int(offer.get('duration_days') or 0))
-        traffic_limit = max(0, int(offer.get('traffic_limit_gb') or 0)) * 1024 ** 3
-        key_id = _create_initial_vpn_key_with_conn(
-            conn,
-            normalized_user_id,
-            int(offer['tariff_id']),
-            duration_days,
-            traffic_limit,
-        )
-        payment_id, order_id = _create_trial_history_with_conn(
-            conn,
-            user_id=normalized_user_id,
-            tariff_id=int(offer['tariff_id']),
-            vpn_key_id=key_id,
-            duration_days=duration_days,
-        )
 
-        activation_id = int(activation_cursor.lastrowid)
-        conn.execute(
-            """
-            UPDATE trial_activations
-            SET vpn_key_id = ?, payment_id = ?
-            WHERE id = ?
-            """,
-            (key_id, payment_id, activation_id),
-        )
-        conn.execute(
-            "UPDATE users SET used_trial = 1 WHERE id = ?",
-            (normalized_user_id,),
-        )
+def _claim_trial_with_conn(conn, normalized_user_id, normalized_offer_id, event_subscribers):
+    user = conn.execute(
+        "SELECT id FROM users WHERE id = ?",
+        (normalized_user_id,),
+    ).fetchone()
+    if user is None:
+        return {'ok': False, 'reason': 'user_not_found'}
 
-        from .db_core_events import record_core_event_with_conn
-
-        record_core_event_with_conn(
-            conn, event_name='trial.activated', source_id=str(activation_id),
-            order_id=order_id, subscribers=event_subscribers,
-            trial={
-                'activation_id': activation_id, 'offer_id': normalized_offer_id,
-                'tariff_id': int(offer['tariff_id']), 'group_id': int(offer['group_id']),
-                'key_id': key_id, 'duration_days': duration_days,
-                'traffic_limit_bytes': traffic_limit, 'scope': eligibility['scope'],
-            },
-        )
-
-        logger.info(
-            "Trial offer %s claimed by user %s: key=%s order=%s group=%s",
-            normalized_offer_id,
-            normalized_user_id,
-            key_id,
-            order_id,
-            offer['group_id'],
-        )
+    offer = _get_offer_with_conn(conn, normalized_offer_id)
+    eligibility = _eligibility_with_conn(
+        conn,
+        offer,
+        internal_user_id=normalized_user_id,
+    )
+    if not eligibility['eligible']:
         return {
-            'ok': True,
-            'activation_id': activation_id,
-            'key_id': key_id,
-            'payment_id': payment_id,
-            'order_id': order_id,
+            'ok': False,
+            'reason': eligibility['reason'],
             'scope': eligibility['scope'],
             'offer': offer,
         }
+
+    try:
+        activation_cursor = conn.execute(
+            """
+            INSERT INTO trial_activations (
+                user_id, offer_id, tariff_id, group_id,
+                legacy_global_block
+            ) VALUES (?, ?, ?, ?, 0)
+            """,
+            (
+                normalized_user_id,
+                normalized_offer_id,
+                int(offer['tariff_id']),
+                int(offer['group_id']),
+            ),
+        )
+    except sqlite3.IntegrityError:
+        return {
+            'ok': False,
+            'reason': 'group_trial_used',
+            'scope': eligibility['scope'],
+            'offer': offer,
+        }
+
+    duration_days = max(0, int(offer.get('duration_days') or 0))
+    traffic_limit = max(0, int(offer.get('traffic_limit_gb') or 0)) * 1024 ** 3
+    key_id = _create_initial_vpn_key_with_conn(
+        conn,
+        normalized_user_id,
+        int(offer['tariff_id']),
+        duration_days,
+        traffic_limit,
+    )
+    payment_id, order_id = _create_trial_history_with_conn(
+        conn,
+        user_id=normalized_user_id,
+        tariff_id=int(offer['tariff_id']),
+        vpn_key_id=key_id,
+        duration_days=duration_days,
+    )
+
+    activation_id = int(activation_cursor.lastrowid)
+    conn.execute(
+        """
+        UPDATE trial_activations
+        SET vpn_key_id = ?, payment_id = ?
+        WHERE id = ?
+        """,
+        (key_id, payment_id, activation_id),
+    )
+    conn.execute(
+        "UPDATE users SET used_trial = 1 WHERE id = ?",
+        (normalized_user_id,),
+    )
+
+    from .db_core_events import record_core_event_with_conn
+
+    record_core_event_with_conn(
+        conn, event_name='trial.activated', source_id=str(activation_id),
+        order_id=order_id, subscribers=event_subscribers,
+        trial={
+            'activation_id': activation_id, 'offer_id': normalized_offer_id,
+            'tariff_id': int(offer['tariff_id']), 'group_id': int(offer['group_id']),
+            'key_id': key_id, 'duration_days': duration_days,
+            'traffic_limit_bytes': traffic_limit, 'scope': eligibility['scope'],
+        },
+    )
+
+    logger.info(
+        "Trial offer %s claimed by user %s: key=%s order=%s group=%s",
+        normalized_offer_id,
+        normalized_user_id,
+        key_id,
+        order_id,
+        offer['group_id'],
+    )
+    return {
+        'ok': True,
+        'activation_id': activation_id,
+        'key_id': key_id,
+        'payment_id': payment_id,
+        'order_id': order_id,
+        'scope': eligibility['scope'],
+        'offer': offer,
+    }

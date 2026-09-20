@@ -26,8 +26,10 @@ __all__ = [
     'get_user_by_id',
     'get_user_by_telegram_id',
     'get_user_snapshot_profile',
+    'get_account_snapshot_profile',
     'get_user_by_username',
     'toggle_user_ban',
+    'toggle_account_ban',
     'get_new_users_count_today',
     'get_user_internal_id',
     'get_user_by_referral_code',
@@ -64,6 +66,9 @@ def get_or_create_user(
         - user_dict: dictionary with user data
         - is_new: True if the user was created, False if already existed
     """
+    if telegram_id is None:
+        import sqlite3
+        raise sqlite3.IntegrityError('NOT NULL constraint failed: users.telegram_id')
     with get_db() as conn:
         conn.execute('BEGIN IMMEDIATE')
         cursor = conn.execute(
@@ -93,56 +98,61 @@ def get_or_create_user(
 
             return user, False
         
+        return _insert_user_with_conn(conn, telegram_id, username, first_name, last_name), True
+
+
+def _insert_user_with_conn(conn, telegram_id, username=None, first_name=None, last_name=None):
+    """Insert one account and its registration event in the caller's transaction."""
+    referral_code = _generate_referral_code()
+    attempts = 0
+    while attempts < 100:
+        cursor = conn.execute("SELECT 1 FROM users WHERE referral_code = ?", (referral_code,))
+        if not cursor.fetchone():
+            break
         referral_code = _generate_referral_code()
-        attempts = 0
-        while attempts < 100:
-            cursor = conn.execute("SELECT 1 FROM users WHERE referral_code = ?", (referral_code,))
-            if not cursor.fetchone():
-                break
-            referral_code = _generate_referral_code()
-            attempts += 1
-        
-        user_columns = {
-            row['name']
-            for row in conn.execute("PRAGMA table_info(users)").fetchall()
-        }
-        fields = ['telegram_id', 'username', 'referral_code']
-        values = [telegram_id, username, referral_code]
-        if 'first_name' in user_columns:
-            fields.append('first_name')
-            values.append(first_name)
-        if 'last_name' in user_columns:
-            fields.append('last_name')
-            values.append(last_name)
+        attempts += 1
 
-        placeholders = ', '.join('?' for _ in fields)
-        cursor = conn.execute(
-            f"INSERT INTO users ({', '.join(fields)}) VALUES ({placeholders})",
-            values
-        )
-        from .db_core_events import record_core_event_with_conn
-        from bot.utils.extension_event_registry import event_subscribers
+    user_columns = {
+        row['name']
+        for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
+    fields = ['telegram_id', 'username', 'referral_code']
+    values = [telegram_id, username, referral_code]
+    if 'first_name' in user_columns:
+        fields.append('first_name')
+        values.append(first_name)
+    if 'last_name' in user_columns:
+        fields.append('last_name')
+        values.append(last_name)
 
-        record_core_event_with_conn(
-            conn, event_name='user.registered', source_id=str(cursor.lastrowid),
-            registered_user_id=cursor.lastrowid,
-            subscribers=event_subscribers('user.registered'),
-        )
-        logger.info(f"Новый пользователь: {telegram_id} (@{username}), referral_code: {referral_code}")
-        
-        return {
-            'id': cursor.lastrowid,
-            'telegram_id': telegram_id,
-            'username': username,
-            'first_name': first_name,
-            'last_name': last_name,
-            'is_banned': 0,
-            'is_bot_blocked': 0,
-            'referral_code': referral_code,
-            'referred_by': None,
-            'personal_balance': 0,
-            'referral_coefficient': 1.0
-        }, True
+    placeholders = ', '.join('?' for _ in fields)
+    cursor = conn.execute(
+        f"INSERT INTO users ({', '.join(fields)}) VALUES ({placeholders})",
+        values
+    )
+    from .db_core_events import record_core_event_with_conn
+    from bot.utils.extension_event_registry import event_subscribers
+
+    record_core_event_with_conn(
+        conn, event_name='user.registered', source_id=str(cursor.lastrowid),
+        registered_user_id=cursor.lastrowid,
+        subscribers=event_subscribers('user.registered'),
+    )
+    logger.info(f"Новый пользователь: {telegram_id} (@{username}), referral_code: {referral_code}")
+
+    return {
+        'id': cursor.lastrowid,
+        'telegram_id': telegram_id,
+        'username': username,
+        'first_name': first_name,
+        'last_name': last_name,
+        'is_banned': 0,
+        'is_bot_blocked': 0,
+        'referral_code': referral_code,
+        'referred_by': None,
+        'personal_balance': 0,
+        'referral_coefficient': 1.0
+    }
 
 def is_user_banned(telegram_id: int) -> bool:
     """
@@ -418,9 +428,18 @@ def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
 
 def get_user_snapshot_profile(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Returns only the user columns approved for the extension snapshot."""
+    return _get_snapshot_profile('telegram_id', int(telegram_id))
+
+
+def get_account_snapshot_profile(user_id: int) -> Optional[Dict[str, Any]]:
+    """Return the same bounded projection using the stable internal owner."""
+    return _get_snapshot_profile('id', int(user_id))
+
+
+def _get_snapshot_profile(column: str, value: int) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT
                 id,
                 telegram_id,
@@ -436,9 +455,9 @@ def get_user_snapshot_profile(telegram_id: int) -> Optional[Dict[str, Any]]:
                 personal_balance,
                 referral_coefficient
             FROM users
-            WHERE telegram_id = ?
+            WHERE {column} = ?
             """,
-            (int(telegram_id),),
+            (value,),
         ).fetchone()
     return dict(row) if row else None
 
@@ -463,6 +482,18 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+def toggle_account_ban(user_id: int) -> Optional[bool]:
+    """Toggle the same ban by internal identity, including site-only accounts."""
+    with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT is_banned FROM users WHERE id=?', (user_id,)).fetchone()
+        if row is None:
+            return None
+        banned = not bool(row['is_banned'])
+        conn.execute('UPDATE users SET is_banned=? WHERE id=?', (int(banned), user_id))
+        return banned
+
 
 def toggle_user_ban(telegram_id: int) -> Optional[bool]:
     """
@@ -546,6 +577,7 @@ def set_user_referrer(
     *,
     is_new_registration: bool = True,
     attribution_window_hours: int = 0,
+    _conn=None,
 ) -> bool:
     """
     Atomically link the referrer when the registration window permits it.
@@ -566,7 +598,8 @@ def set_user_referrer(
     if not 0 <= window_hours <= REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX:
         window_hours = 0
 
-    with get_db() as conn:
+    from contextlib import nullcontext
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         cursor = conn.execute(
             """
             UPDATE users

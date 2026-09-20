@@ -100,18 +100,24 @@ def get_tariff_by_id(tariff_id: int) -> Optional[Dict[str, Any]]:
         Dictionary with tariff data or None
     """
     with get_db() as conn:
-        cursor = conn.execute("""
-            SELECT id, name, duration_days, price_minor,
-                   display_order, is_active, traffic_limit_gb, group_id, max_ips,
-                   system_type
-            FROM tariffs
-            WHERE id = ?
-        """, (tariff_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        base, rub_rate = _base_currency_and_rub_rate(conn)
-        return normalize_tariff_money(dict(row), base_currency=base, rub_rate=rub_rate)
+        return _get_tariff_by_id_with_conn(conn, tariff_id)
+
+
+def _get_tariff_by_id_with_conn(conn, tariff_id):
+    """Keep the public projection identical when persisting immutable terms."""
+    cursor = conn.execute("""
+        SELECT id, name, duration_days, price_minor,
+               display_order, is_active, traffic_limit_gb, group_id, max_ips,
+               system_type
+        FROM tariffs
+        WHERE id = ?
+    """, (tariff_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+    base, rub_rate = _base_currency_and_rub_rate(conn)
+    return normalize_tariff_money(dict(row), base_currency=base, rub_rate=rub_rate)
+
 
 def add_tariff(
     name: str,

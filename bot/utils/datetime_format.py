@@ -55,7 +55,18 @@ def _parse_utc_datetime(value: Any) -> Optional[datetime]:
 
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(get_display_tzinfo())
+    return dt.astimezone(timezone.utc)
+
+
+def get_remaining_minutes(value: Any, *, now: datetime | None = None) -> int | None:
+    """Return complete nonnegative minutes until a UTC deadline, without I/O."""
+    expires = _parse_utc_datetime(value)
+    if expires is None:
+        return None
+    current = now if now is not None else datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return max(0, int((expires - current.astimezone(timezone.utc)).total_seconds() // 60))
 
 
 def format_datetime_for_display(value: Any, fallback: str = '—') -> str:
@@ -63,12 +74,12 @@ def format_datetime_for_display(value: Any, fallback: str = '—') -> str:
     dt = _parse_utc_datetime(value)
     if dt is None:
         return fallback if value is None or value == '' else str(value)
-    return dt.strftime('%Y-%m-%d %H:%M:%S')
+    return dt.astimezone(get_display_tzinfo()).strftime('%Y-%m-%d %H:%M:%S')
 
 
-def format_date_for_display(value: Any, fallback: str = '—') -> str:
+def format_date_for_display(value: Any, fallback: str = '—', *, display_tz: tzinfo | None = None) -> str:
     """Formats only the date after converting UTC to the display time zone."""
     dt = _parse_utc_datetime(value)
     if dt is None:
         return fallback if value is None or value == '' else str(value)
-    return dt.strftime('%Y-%m-%d')
+    return dt.astimezone(display_tz if display_tz is not None else get_display_tzinfo()).strftime('%Y-%m-%d')

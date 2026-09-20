@@ -17,6 +17,7 @@ class AdminStates(StatesGroup):
     yadreno_chat = State()  # Dialogue with agent Yadreno Admin
     yadreno_waiting_task = State()  # Local contextual invitation before Hub admission
     custom_reset_confirm_phrase = State()  # Hidden customization reset confirmation phrase
+    web_sms_key = State()  # SMS.RU authentication transport key
     
     # ========== Server management ==========
     servers_list = State()           # Server list

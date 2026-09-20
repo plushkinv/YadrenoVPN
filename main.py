@@ -7,17 +7,12 @@ import asyncio
 import logging
 from logging.handlers import RotatingFileHandler
 import os
-import signal
-import sys
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN
-from database.migrations import run_migrations
 
 from bot.services.vpn_api import close_all_clients
-from bot.services.scheduler import run_daily_tasks, run_update_check_scheduler, run_traffic_sync_scheduler
-from bot.services.payment_auto_check import run_payment_auto_check_scheduler
 
 # Importing routers
 from bot.handlers.user import router as user_router
@@ -53,161 +48,24 @@ logger = logging.getLogger(__name__)
 
 
 async def on_startup(bot: Bot):
-    """Actions when starting a bot."""
-    logger.info("🚀 Бот запускается...")
-    
-    # Applying database migrations
-    run_migrations()
+    """Compatibility entry for tools that start the shared runtime explicitly."""
+    from runtime.application import Application
 
-    from bot.utils.user_ui_texts import load_user_ui_text_cache
-
-    loaded_ui_texts = load_user_ui_text_cache()
-    logger.info("User UI text cache loaded: %s entries", loaded_ui_texts)
-
-    from bot.utils.page_renderer import validate_required_user_pages
-
-    required_pages = validate_required_user_pages()
-    logger.info("Required user pages validated: %s entries", required_pages)
-
-    from bot.utils.telegram_links import load_telegram_link_domain
-
-    load_telegram_link_domain()
-
-    from bot.utils.update_block import try_unblock
-
-    try_unblock()
-
-    from bot.services.yadreno_admin_core_guard import recover_core_guards_on_startup
-
-    await recover_core_guards_on_startup()
-
-    from bot.utils.custom_extensions import load_custom_extensions
-    extensions_result = load_custom_extensions()
-    if extensions_result.skipped:
-        logger.info("Custom extensions не загружены: %s", extensions_result.reason)
-    else:
-        logger.info(
-            "Custom extensions: загружено %s, ошибок %s",
-            len(extensions_result.loaded),
-            len(extensions_result.failed),
-        )
-
-    try:
-        from bot.services.custom_payment_webhooks import start_custom_payment_webhook_server
-
-        bot.custom_payment_webhook_server = await start_custom_payment_webhook_server(bot)
-    except Exception as e:
-        logger.warning(f"Не удалось запустить custom payment webhook server: {e}")
-    
-    # Bot information
-    bot_info = await bot.get_me()
-    bot.my_username = bot_info.username
-    logger.info(f"✅ Бот запущен: @{bot_info.username}")
-
-    from bot.services.update_rollback import (
-        acknowledge_pending_update,
-        notify_pending_rollback_result,
-        notify_pending_update_result,
-        pending_update_health_exists,
-        wait_for_pending_update_acceptance,
-    )
-
-    try:
-        await notify_pending_rollback_result(bot)
-    except Exception as e:
-        logger.warning(f"Не удалось отправить результат отката обновления: {e}")
-    
-    # If updates are blocked, we immediately notify the admins
-    from bot.utils.update_block import is_update_blocked, get_blocked_message
-    if is_update_blocked():
-        from config import ADMIN_IDS
-        from aiogram.types import InlineKeyboardButton
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
-        
-        msg = get_blocked_message()
-        builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="✅ OK", callback_data="dismiss_msg"))
-        kb = builder.as_markup()
-        
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_message(
-                    chat_id=admin_id,
-                    text=msg,
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.warning(f"Не удалось отправить уведомление о блокировке админу {admin_id}: {e}")
-
-    try:
-        from bot.services.yadreno_admin import recover_active_dialogs_on_startup
-
-        await recover_active_dialogs_on_startup(bot)
-    except Exception as e:
-        logger.warning(f"Не удалось запустить восстановление Yadreno Admin: {e}")
-
-    async def deliver_update_result_after_startup() -> None:
-        try:
-            await notify_pending_update_result(bot)
-        except Exception as e:
-            logger.warning(f"Не удалось отправить результат обновления: {e}")
-
-    update_result_task = asyncio.create_task(deliver_update_result_after_startup())
-    bot.pending_update_result_task = update_result_task
-
-    # No Telegram update is polled until the independent worker accepts the
-    # initialized PID after its stability window.
-    update_health_pending = pending_update_health_exists()
-    update_acknowledged = False
-    try:
-        update_acknowledged = acknowledge_pending_update()
-    except Exception as e:
-        logger.warning(f"Не удалось подтвердить запуск после обновления: {e}")
-    if update_health_pending and not update_acknowledged:
-        raise RuntimeError("Pending update health record could not be acknowledged")
-    if update_acknowledged:
-        update_accepted = await wait_for_pending_update_acceptance()
-        if not update_accepted:
-            raise RuntimeError(
-                "Update worker did not release the bot after startup acknowledgement"
-            )
-
-    # Background jobs start only after the managed-update activation gate. This
-    # prevents post-snapshot writes while automatic rollback is still possible.
-    bot.background_tasks = [
-        asyncio.create_task(run_daily_tasks(bot)),
-        asyncio.create_task(run_update_check_scheduler(bot)),
-        asyncio.create_task(run_traffic_sync_scheduler(bot)),
-        asyncio.create_task(run_payment_auto_check_scheduler(bot)),
-    ]
+    application = Application(bot)
+    bot.runtime_application = application
+    await application.start()
 
 
 async def on_shutdown(bot: Bot):
-    """Actions to take when stopping the bot."""
-    logger.info("🛑 Бот останавливается...")
-
-    update_result_task = getattr(bot, 'pending_update_result_task', None)
-    if update_result_task is not None and not update_result_task.done():
-        update_result_task.cancel()
-        await asyncio.gather(update_result_task, return_exceptions=True)
-
-    webhook_server = getattr(bot, 'custom_payment_webhook_server', None)
-    if webhook_server is not None:
-        try:
-            await webhook_server.stop()
-        except Exception as e:
-            logger.warning(f"Не удалось остановить custom payment webhook server: {e}")
-    
-    # Close all VPN API sessions
-    await close_all_clients()
-    
-    logger.info("✅ Бот остановлен")
+    """Stop the shared runtime and its single set of background tasks."""
+    application = getattr(bot, 'runtime_application', None)
+    if application is not None:
+        await application.stop()
 
 
 async def main():
     """The main function of launching the bot."""
-    # Importing a custom session with fallback for Markdown errors
+    # The Telegram transport remains an adapter over the shared runtime.
     from bot.middlewares.parse_mode_fallback import SafeParseSession
     
     # Creating a bot with a custom session and a dispatcher
@@ -216,7 +74,13 @@ async def main():
     from bot.utils.custom_extensions import _set_extension_runtime_bot
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
+    from bot.middlewares.runtime import RuntimeIngressMiddleware
+    dp.update.outer_middleware(RuntimeIngressMiddleware())
 
+    from bot.middlewares.account_links import AccountLinkMiddleware
+    account_links = AccountLinkMiddleware()
+    dp.message.outer_middleware(account_links)
+    dp.callback_query.outer_middleware(account_links)
     from bot.middlewares.user_registration import UserRegistrationMiddleware
     user_registration = UserRegistrationMiddleware()
     dp.message.outer_middleware(user_registration)
@@ -252,18 +116,11 @@ async def main():
         logger.error(f"Необработанная ошибка: {exception}", exc_info=True)
         return True
     
-    # Registering startup/shutdown
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
-    
-    # Remove old updates and run polling
-    await bot.delete_webhook(drop_pending_updates=True)
-    
-
-    
     _set_extension_runtime_bot(bot)
     try:
-        await dp.start_polling(bot)
+        from runtime.application import run_application
+
+        await run_application(bot, dp)
     finally:
         _set_extension_runtime_bot(None)
         background_tasks = getattr(bot, 'background_tasks', [])

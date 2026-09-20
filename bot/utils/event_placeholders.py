@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import tzinfo
 from typing import Any, Literal
 
 from bot.utils.placeholders import (
@@ -14,6 +15,27 @@ from bot.utils.placeholders import (
 
 
 EventPlaceholderMode = Literal['html', 'plain', 'url']
+
+
+def build_key_event_context(key: Mapping[str, Any], *, display_tz: tzinfo | None = None) -> dict[str, Any]:
+    """Build the complete safe key display context and released event values."""
+    from bot.utils.key_pages import build_key_page_context
+    from bot.utils.placeholders import KEY_FIELDS_CONTEXT_KEY
+    from database.requests import is_key_active
+
+    key_id = key.get('id', key.get('vpn_key_id'))
+    display_key = {
+        **key,
+        'id': key_id,
+        'display_name': key.get('custom_name') or f'#{key_id}',
+        'is_active': is_key_active(key),
+    }
+    context: dict[str, Any] = build_key_page_context(display_key, display_tz=display_tz)
+    fields = context[KEY_FIELDS_CONTEXT_KEY]
+    context['key_name'] = fields['name']
+    if 'days_left' in key:
+        context['key_days_left'] = fields['days_left']
+    return context
 
 
 def build_user_event_context(telegram_id: int | None) -> dict[str, Any]:
@@ -74,6 +96,7 @@ __all__ = [
     'CANONICAL_EVENT_PLACEHOLDERS',
     'EVENT_TYPES',
     'EventType',
+    'build_key_event_context',
     'build_user_event_context',
     'render_event_placeholders',
     'render_event_message_text',

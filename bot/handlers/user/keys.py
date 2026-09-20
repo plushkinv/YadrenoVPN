@@ -412,8 +412,10 @@ async def _execute_key_delete(request: CoreActionRequest) -> None:
     target = request.target
     key_id = request.params['key_id']
     telegram_id = request.telegram_id
-    from database.requests import get_key_details_for_user, delete_vpn_key
-    from bot.services.vpn_api import get_client
+    from database.requests import get_key_details_for_user, get_user_by_telegram_id, get_vpn_key_by_id
+    from core.context import AccountContext
+    from core.key_operations import mutate_key
+    from core.results import CoreError
     key = get_key_details_for_user(key_id, telegram_id)
     if not key:
         await _render_key_action_page(target, 'key_not_found')
@@ -421,66 +423,19 @@ async def _execute_key_delete(request: CoreActionRequest) -> None:
     if key['is_active']:
         await _render_key_action_page(target, 'key_operation_unavailable', key=key)
         return
-    reconcile_host_ids: tuple[int, ...] = ()
+    owner = get_user_by_telegram_id(telegram_id)
+    if not owner:
+        await _render_key_action_page(target, 'key_not_found')
+        return
     try:
-        from bot.services.subscription_composition import (
-            list_key_subscription_reconcile_host_ids,
-        )
-
-        reconcile_host_ids = list_key_subscription_reconcile_host_ids(
-            key_id=key_id,
-            include_self=False,
-        )
-    except Exception as error:
-        logger.warning(
-            'Could not capture subscription reconcile targets before key '
-            'deletion key=%s type=%s',
-            key_id,
-            type(error).__name__,
-        )
-    if (
-        key.get('server_id')
-        and is_managed_panel_email(key.get('panel_email'))
-    ):
-        try:
-            client = await get_client(key['server_id'])
-            await client.delete_client(key['panel_email'])
-            logger.info(
-                "Logical client for key %s was deleted from server %s",
-                key_id,
-                key['server_id'],
-            )
-        except Exception as e:
-            logger.warning(f"Не удалось удалить клиента {key.get('panel_email', 'unknown')} с сервера 3X-UI: {e}")
-    elif key.get('server_id'):
-        logger.warning(
-            "User key deletion skipped panel mutation for key %s with "
-            "unmanaged panel_email=%r",
-            key.get('id'),
-            key.get('panel_email'),
-        )
-    success = delete_vpn_key(key_id)
-    if success:
-        if reconcile_host_ids:
-            try:
-                from bot.services.subscription_composition import (
-                    schedule_subscription_host_reconciles,
-                )
-
-                schedule_subscription_host_reconciles(
-                    host_key_ids=reconcile_host_ids,
-                )
-            except Exception as error:
-                logger.warning(
-                    'Could not immediately schedule subscription cleanup after '
-                    'key deletion key=%s type=%s',
-                    key_id,
-                    type(error).__name__,
-                )
-        await _render_key_action_page(target, 'my_keys_key_deleted', key=key)
-    else:
-        logger.error('Failed to delete VPN key %s from the database', key_id)
-        await _render_key_action_page(target, 'key_operation_failed', key=key)
+        await mutate_key(AccountContext(owner['id'], telegram_id, 'telegram'), 'delete',
+                         {'key_id': key_id}, f'telegram:delete:{key_id}', _policy_checked=True)
+    except CoreError as error:
+        if get_vpn_key_by_id(key_id) is not None:
+            await _render_key_action_page(target, 'key_operation_failed', key=key)
+            return
+        logger.warning('Deleted key cleanup remains pending key=%s code=%s', key_id, error.code)
+    await _render_key_action_page(target, 'my_keys_key_deleted', key=key)
 
 @router.callback_query(F.data.startswith('key:'))
 async def key_details_handler(callback: CallbackQuery):
@@ -523,7 +478,7 @@ async def show_renew_payment_page(target, key: dict, key_id: int, force_new: boo
     from bot.utils.key_pages import build_key_page_context
     from bot.utils.page_renderer import render_page
     from bot.utils.page_button_items import build_tariff_button_items
-    from bot.utils.groups import get_tariffs_for_renewal
+    from bot.utils.groups import get_tariffs_for_key_renewal
     from database.requests import get_user_internal_id
 
     telegram_id = target.from_user.id
@@ -532,7 +487,7 @@ async def show_renew_payment_page(target, key: dict, key_id: int, force_new: boo
         'key_id': key_id,
         'telegram_id': telegram_id,
         'tariff_button_items': build_tariff_button_items(
-            get_tariffs_for_renewal(int(key.get('tariff_id') or 0)),
+            get_tariffs_for_key_renewal(key),
             'key_renewal',
             key_id=key_id,
             user_id=user_id,
@@ -675,12 +630,13 @@ async def _execute_key_replace_or_configure(request: CoreActionRequest) -> None:
                 await callback.answer()
             return
     tariff_id = key.get('tariff_id')
-    servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
+    from bot.services.order_terms import key_servers
+    servers = key_servers(key)
     if not servers:
         await _render_key_action_page(callback, 'key_operation_unavailable', key=key)
         return
     await state.set_state(ReplaceKey.users_server)
-    await state.update_data(replace_key_id=key_id)
+    await state.update_data(replace_key_id=key_id, replace_operation_key=None, replace_operation_kind=None)
     await render_page(
         callback,
         page_key='key_replace_server_select',
@@ -779,238 +735,55 @@ async def key_replace_execute(callback: CallbackQuery, state: FSMContext):
 
 async def _key_replace_execute_locked(callback: CallbackQuery, state: FSMContext):
     """Replace a logical subscription without risking the current binding."""
-    from database.requests import (
-        get_key_details_for_user,
-        get_server_by_id,
-        update_key_traffic,
-        update_vpn_key_binding,
-    )
-    from bot.services.vpn_api import (
-        calculate_panel_total_for_key,
-        get_client,
-        get_key_expiry_time_ms,
-        get_key_traffic_snapshot,
-        provision_client_on_server,
-        resolve_key_panel_limits,
-        VPNAPIError,
-    )
-    from bot.handlers.admin.users_keys import generate_unique_email
+    from core.context import AccountContext
+    from core.key_operations import mutate_key
+    from core.results import CoreError
+    from database.requests import get_key_details_for_user
     from bot.utils.key_sender import build_key_delivery_target, send_key_with_qr
     data = await state.get_data()
-    key_id = data.get('replace_key_id')
-    new_server_id = data.get('replace_server_id')
+    key_id, server_id = data.get('replace_key_id'), data.get('replace_server_id')
     telegram_id = callback.from_user.id
-    current_key = get_key_details_for_user(key_id, telegram_id)
-    new_server_data = get_server_by_id(new_server_id)
-    if not current_key or not new_server_data:
-        logger.warning(
-            'Replacement state is stale (user=%s, key=%s, server=%s)',
-            telegram_id,
-            key_id,
-            new_server_id,
-        )
+    key = get_key_details_for_user(key_id, telegram_id)
+    if not key:
         await _render_key_action_page(callback, 'key_operation_unavailable')
         return
-    delivery_target = callback
-    status_message = await _render_key_action_page(callback, 'key_progress', key=current_key)
-    delivery_target = build_key_delivery_target(callback, status_message)
-
-    candidate_email = None
-    candidate_client = None
-    binding_swapped = False
-
+    # Keep a stable request key before awaiting progress rendering or panel calls.
+    operation_key = data.get('replace_operation_key')
+    operation_kind = data.get('replace_operation_kind') or ('replace' if key.get('server_id') else 'configure')
+    if not operation_key:
+        operation_key = 'telegram:' + uuid.uuid4().hex
+        await state.update_data(replace_operation_key=operation_key, replace_operation_kind=operation_kind)
+    target = callback
     try:
-        traffic_limit = current_key.get('traffic_limit', 0) or 0
-        traffic_used = current_key.get('traffic_used', 0) or 0
-        old_client = None
-        old_panel_email_managed = is_managed_panel_email(
-            current_key.get('panel_email')
-        )
-
-        # === 1. Recording current traffic from the old client ===
-        if (
-            current_key.get('server_id')
-            and current_key.get('server_active')
-            and old_panel_email_managed
-        ):
-            old_client = await get_client(current_key['server_id'])
-            if traffic_limit > 0:
-                try:
-                    snapshot = await get_key_traffic_snapshot(
-                        old_client,
-                        current_key,
-                    )
-                    if not snapshot:
-                        raise VPNAPIError('панель не вернула счётчики трафика старого ключа')
-                    traffic_used = snapshot['traffic_used']
-                    update_key_traffic(key_id, traffic_used)
-                    current_key['traffic_used'] = traffic_used
-                    logger.info(
-                        f"Перед заменой ключа {key_id} зафиксирован трафик: "
-                        f"{traffic_used / 1024 ** 3:.1f} ГБ"
-                    )
-                except Exception as e:
-                    raise VPNAPIError(
-                        f'Не удалось обновить трафик старого ключа перед заменой: {e}'
-                    )
-        elif current_key.get('server_id') and current_key.get('server_active'):
-            logger.warning(
-                "Key replacement skipped previous logical client for key %s with "
-                "unmanaged panel_email=%r",
-                key_id,
-                current_key.get('panel_email'),
-            )
-
-        if traffic_limit > 0 and traffic_used >= traffic_limit:
-            await _render_key_action_page(
-                delivery_target,
-                'key_operation_unavailable',
-                key=current_key,
-            )
+        status_message = await _render_key_action_page(callback, 'key_progress', key=key)
+        target = build_key_delivery_target(callback, status_message)
+    except Exception:
+        logger.warning('Replacement progress presentation unavailable key=%s', key_id)
+    try:
+        actor = AccountContext(key['user_id'], telegram_id, 'telegram')
+        await mutate_key(actor, operation_kind,
+                         {'key_id': key_id, 'server_id': server_id}, operation_key,
+                         _policy_checked=True, _locked=True)
+    except CoreError as error:
+        logger.warning('Replacement pending/failed key=%s code=%s', key_id, error.code)
+        from database.requests import get_account_key_operation
+        operation = get_account_key_operation(key['user_id'], error.operation_id) if error.operation_id else None
+        if not operation or operation['request'].get('progress', {}).get('phase') != 'switched':
+            await _render_key_action_page(target, 'key_operation_failed', key=key)
             return
-
-        # === 2. Calculate the remaining entitlement ===
-        user_fake_dict = {'telegram_id': telegram_id, 'username': current_key.get('username')}
-        candidate_email = generate_unique_email(user_fake_dict)
-        remaining_bytes = (
-            calculate_panel_total_for_key(current_key, 0)
-            if traffic_limit > 0
-            else 0
-        )
-        exact_expiry_time_ms = get_key_expiry_time_ms(current_key)
-        panel_limits = resolve_key_panel_limits(current_key)
-
-        # === 3. Create the candidate before changing the database binding ===
-        candidate_sub_id = uuid.uuid4().hex
-        candidate_client = await get_client(new_server_id)
-        provisioned = await provision_client_on_server(
-            server_id=new_server_id,
-            email=candidate_email,
-            total_gb_bytes=remaining_bytes,
-            expiry_time_ms=exact_expiry_time_ms,
-            limit_ip=panel_limits.limit_ip,
-            limit_hwid=panel_limits.limit_hwid,
-            enable=True,
-            tg_id=str(telegram_id),
-            sub_id=candidate_sub_id,
-            client=candidate_client,
-        )
-        candidate_sub_id = provisioned.sub_id
-        if not provisioned.attached_inbound_ids or not candidate_sub_id:
-            raise VPNAPIError('Панель не создала пригодную подписку')
-
-        # === 4. Atomically switch ownership in the database ===
-        if not update_vpn_key_binding(
-            key_id,
-            new_server_id,
-            candidate_email,
-            candidate_sub_id,
-        ):
-            raise VPNAPIError('Не удалось сохранить новую привязку ключа')
-        binding_swapped = True
-        try:
-            from bot.services.subscription_composition import (
-                schedule_key_subscription_reconciles,
-            )
-
-            schedule_key_subscription_reconciles(key_id=int(key_id))
-        except Exception as error:
-            logger.warning(
-                'Could not immediately schedule subscription composition after '
-                'key replacement key=%s type=%s',
-                key_id,
-                type(error).__name__,
-            )
-
-        # === 5. Remove the old logical client only after the DB switch ===
-        if (
-            current_key.get('server_id')
-            and current_key.get('server_active')
-            and old_panel_email_managed
-        ):
-            try:
-                if old_client is None:
-                    old_client = await get_client(current_key['server_id'])
-                await old_client.delete_client(current_key['panel_email'])
-            except Exception:
-                logger.exception(
-                    'Old logical client cleanup failed after key replacement '
-                    '(key_id=%s, server_id=%s, email=%s)',
-                    key_id,
-                    current_key.get('server_id'),
-                    current_key.get('panel_email'),
-                )
-
-        # === 6. Traffic transfer and partial-placement repair ===
-        if traffic_limit > 0:
-            logger.info(
-                f'Перенос трафика ключа {key_id}: остаток {remaining_bytes / 1024 ** 3:.1f} ГБ, '
-                f'полный тариф {traffic_limit / 1024 ** 3:.1f} ГБ, '
-                f'использовано {traffic_used / 1024 ** 3:.1f} ГБ'
-            )
-        if not provisioned.complete:
-            from bot.services.vpn_api import sync_key_to_panel_state
-            sync_kwargs = (
-                {'panel_snapshot': provisioned.snapshot}
-                if provisioned.snapshot is not None
-                else {}
-            )
-            sync_stats = await sync_key_to_panel_state(key_id, **sync_kwargs)
-            if not sync_stats.get('ok'):
-                logger.warning(f"replace_execute: subscription-ключ {key_id} синхронизирован не полностью: {sync_stats}")
-
-        await state.clear()
-        updated_key = get_key_details_for_user(key_id, telegram_id)
-        from bot.services.key_lifecycle import emit_key_lifecycle_event_safe
-
-        await emit_key_lifecycle_event_safe(
-            'key_replaced',
-            {
-                'key_id': key_id,
-                'user_id': current_key.get('user_id'),
-                'telegram_id': telegram_id,
-                'old_key': dict(current_key),
-                'new_key': dict(updated_key or {}),
-                'old_server_id': current_key.get('server_id'),
-                'new_server_id': new_server_id,
-                'traffic_limit': traffic_limit,
-                'traffic_used': traffic_used,
-                'remaining_bytes': remaining_bytes,
-            },
-        )
-        await send_key_with_qr(delivery_target, updated_key, is_new=True)
-        try:
-            from bot.handlers.user.subscription_hosts import (
-                offer_default_subscription_host,
-            )
-
-            await offer_default_subscription_host(
-                callback,
-                component_key_id=int(key_id),
-                telegram_id=telegram_id,
-            )
-        except Exception:
-            logger.exception(
-                'Post-delivery subscription host flow failed after replacement key=%s',
-                key_id,
-            )
-    except Exception as e:
-        if candidate_client is not None and candidate_email and not binding_swapped:
-            try:
-                await candidate_client.delete_client(candidate_email)
-            except Exception:
-                logger.exception(
-                    'Failed to clean replacement candidate key_id=%s email=%s',
-                    key_id,
-                    candidate_email,
-                )
-        logger.exception(
-            'Key replacement failed user=%s key_id=%s: %s',
-            callback.from_user.id,
-            key_id,
-            e,
-        )
-        await _render_key_action_page(delivery_target, 'key_operation_failed', key=current_key)
+    await state.clear()
+    updated = get_key_details_for_user(key_id, telegram_id)
+    try:
+        await send_key_with_qr(target, updated, is_new=True)
+    except Exception:
+        logger.exception('Replaced key delivery failed key=%s', key_id)
+        await _render_key_action_page(target, 'key_operation_failed', key=updated)
+        return
+    try:
+        from bot.handlers.user.subscription_hosts import offer_default_subscription_host
+        await offer_default_subscription_host(callback, component_key_id=key_id, telegram_id=telegram_id)
+    except Exception:
+        logger.exception('Post-delivery subscription host flow failed after replacement key=%s', key_id)
 
 @router.callback_query(F.data.startswith('key_rename:'))
 async def key_rename_start_handler(callback: CallbackQuery, state: FSMContext):
@@ -1060,7 +833,10 @@ async def _execute_key_rename_start(request: CoreActionRequest) -> None:
 @router.message(RenameKey.waiting_for_name)
 async def key_rename_submit_handler(message: Message, state: FSMContext):
     """Processing the entry of a new key name."""
-    from database.requests import update_key_custom_name
+    from database.requests import get_user_by_telegram_id
+    from core.context import AccountContext
+    from core.key_operations import mutate_key
+    from core.results import CoreError
     from bot.utils.text import get_message_text_for_storage
     data = await state.get_data()
     key_id = data.get('key_id')
@@ -1072,7 +848,16 @@ async def key_rename_submit_handler(message: Message, state: FSMContext):
     if not new_name or len(new_name) > 30:
         await _render_key_action_page(message, 'key_rename_invalid', force_new=True)
         return
-    success = update_key_custom_name(key_id, message.from_user.id, new_name)
+    owner = get_user_by_telegram_id(message.from_user.id)
+    try:
+        if not owner:
+            raise CoreError('access_denied')
+        await mutate_key(AccountContext(owner['id'], message.from_user.id, 'telegram'), 'rename',
+                         {'key_id': key_id, 'name': new_name},
+                         f"telegram:rename:{message.chat.id}:{message.message_id}", _policy_checked=True)
+        success = True
+    except CoreError:
+        success = False
     await state.clear()
     if not success:
         logger.warning('Failed to rename key %s for user %s', key_id, message.from_user.id)

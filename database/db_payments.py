@@ -16,6 +16,7 @@ __all__ = [
     'get_daily_payments_stats',
     'get_key_payments_history',
     'is_tariff_payment_target_allowed',
+    'is_key_tariff_group_allowed',
     'find_order_by_order_id',
     'find_latest_paid_order_for_key',
     'update_payment_key_id',
@@ -69,18 +70,47 @@ def _tariff_payment_target_allowed(
         return True
     key = conn.execute(
         """
-        SELECT vk.user_id, t.group_id
+        SELECT vk.user_id, vk.tariff_id, vk.server_id,
+               COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) AS group_id
         FROM vpn_keys vk
-        JOIN tariffs t ON t.id = vk.tariff_id
+        LEFT JOIN tariffs t ON t.id = vk.tariff_id
+        LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
         WHERE vk.id = ?
         """,
         (int(vpn_key_id),),
     ).fetchone()
-    return bool(
-        key is not None
-        and int(key['user_id']) == int(user_id)
-        and int(key['group_id']) == int(tariff['group_id'])
-    )
+    return bool(key and int(key['user_id']) == int(user_id) and
+                _key_tariff_group_allowed_with_conn(conn, vpn_key_id, tariff['group_id'], key=key))
+
+
+def _key_tariff_group_allowed_with_conn(conn, key_id, group_id, *, key=None):
+    if key is None:
+        key = conn.execute('SELECT k.user_id,k.tariff_id,k.server_id, '
+                           "COALESCE(json_extract(e.tariff_json,'$.group_id'),t.group_id) AS group_id "
+                           'FROM vpn_keys k LEFT JOIN tariffs t ON t.id=k.tariff_id '
+                           'LEFT JOIN key_entitlements e ON e.key_id=k.id WHERE k.id=?', (key_id,)).fetchone()
+    if key and key['tariff_id'] is None:
+        from core.panel_identity import physical_panel_key
+        imported = conn.execute('SELECT 1 FROM subscription_import_members m '
+                                'JOIN subscription_imports i ON i.id=m.import_id WHERE m.key_id=? AND i.user_id=?',
+                                (key_id, key['user_id'])).fetchone()
+        if not imported:
+            return False
+        server = conn.execute('SELECT * FROM servers WHERE id=?', (key['server_id'],)).fetchone()
+        if not server:
+            return False
+        endpoint = physical_panel_key(dict(server))
+        peers = [row['id'] for row in conn.execute('SELECT * FROM servers')
+                 if physical_panel_key(dict(row)) == endpoint]
+        return any(conn.execute('SELECT 1 FROM server_groups WHERE server_id=? AND group_id=?',
+                                (server_id, group_id)).fetchone() for server_id in peers)
+    return bool(key and key['group_id'] is not None and int(key['group_id']) == int(group_id))
+
+
+def is_key_tariff_group_allowed(key_id, group_id):
+    """Use bought group terms, or the actual configured panel for unknown imports."""
+    with get_db() as conn:
+        return _key_tariff_group_allowed_with_conn(conn, key_id, group_id)
 
 
 def is_tariff_payment_target_allowed(

@@ -25,7 +25,7 @@ async def _deliver(delivery_id: int, *, bot: Any) -> str:
     retry_seconds = 0
     try:
         payload = json.loads(job['payload'])
-        if not isinstance(payload, dict) or payload.get('contract_version') != 1:
+        if not isinstance(payload, dict) or payload.get('contract_version') not in (1, 2):
             raise ValueError('unsupported event snapshot')
         if payload.get('event_id') != job['event_id'] or payload.get('event') != job['event_name']:
             raise ValueError('event identity mismatch')
@@ -52,11 +52,11 @@ async def notify_key_delivered(
 ) -> None:
     """Publish an already sent key and immediately attempt its subscribers."""
     try:
-        from bot.utils.extension_event_registry import event_subscribers
+        from core.extensions.events import subscribers_for_order
 
         event_id = record_key_delivery_event(
             order_id, key_id=key_id, telegram_id=telegram_id,
-            subscribers=event_subscribers('key.delivered'),
+            subscribers=subscribers_for_order('key.delivered', order_id),
         )
         if event_id is not None:
             await process_due_extension_events(bot=bot, event_id=event_id)

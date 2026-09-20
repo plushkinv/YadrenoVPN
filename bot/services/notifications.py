@@ -428,6 +428,10 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
             reply_markup = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text=btn_text, callback_data=f'admin_user_view:{telegram_id}')
             ]])
+        elif user_id_internal:
+            reply_markup = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=f'🌐 Аккаунт #{user_id_internal}', callback_data=f'admin_account_view:{user_id_internal}')
+            ]])
 
         # Sent to all admins
         for admin_id in ADMIN_IDS:

@@ -26,6 +26,43 @@ def create_payment_intent_record(
     origin_context: Mapping[str, Any] | None = None,
     origin_context_token: str | None = None,
 ) -> tuple[int, str]:
+    """Create one intent and its terms in the same SQLite transaction."""
+    with get_db() as conn:
+        return _create_payment_intent_record_with_conn(
+            conn,
+            user_id=user_id,
+            purpose=purpose,
+            purpose_data=purpose_data,
+            nominal_amount_minor=nominal_amount_minor,
+            base_currency=base_currency,
+            description=description,
+            success_target=success_target,
+            cancel_target=cancel_target,
+            tariff_id=tariff_id,
+            vpn_key_id=vpn_key_id,
+            period_days=period_days,
+            origin_context=origin_context,
+            origin_context_token=origin_context_token,
+        )
+
+
+def _create_payment_intent_record_with_conn(
+    conn,
+    *,
+    user_id: int,
+    purpose: str,
+    purpose_data: Mapping[str, Any],
+    nominal_amount_minor: int,
+    base_currency: str = 'RUB',
+    description: str,
+    success_target: Mapping[str, Any],
+    cancel_target: Mapping[str, Any],
+    tariff_id: int | None = None,
+    vpn_key_id: int | None = None,
+    period_days: int | None = None,
+    origin_context: Mapping[str, Any] | None = None,
+    origin_context_token: str | None = None,
+) -> tuple[int, str]:
     """Creates an unquoted core payment intent and returns its id/order_id."""
     payload = _json_object(purpose_data)
     success = _json_object(success_target)
@@ -37,95 +74,96 @@ def create_payment_intent_record(
     if origin_context is not None and origin_context_token is not None:
         raise ValueError('pass origin_context or origin_context_token, not both')
 
-    with get_db() as conn:
-        normalized_origin = _normalize_payment_origin_context(origin_context)
-        if origin_context_token is not None:
-            from .db_action_contexts import consume_semantic_action_context_with_conn
+    normalized_origin = _normalize_payment_origin_context(origin_context)
+    if origin_context_token is not None:
+        from .db_action_contexts import consume_semantic_action_context_with_conn
 
-            consumed_origin = consume_semantic_action_context_with_conn(
-                conn,
-                origin_context_token,
-                user_id=int(user_id),
-                action='key.purchase.start',
-            )
-            if consumed_origin is None:
-                raise ValueError('origin context token is unavailable or expired')
-            normalized_origin = _normalize_payment_origin_context(consumed_origin)
-        cursor = conn.execute(
-            """
-            INSERT INTO payments (
-                user_id, tariff_id, order_id, payment_type, vpn_key_id,
-                period_days, status, paid_at,
-                intent_version, purpose, purpose_data_json,
-                base_currency, nominal_amount_minor, payable_amount_minor,
-                description, success_target_json, cancel_target_json,
-                origin_extension_id, origin_context_version, origin_context_json,
-                origin_workflow_id, origin_completion_handler,
-                fulfillment_status, created_at
-            )
-            VALUES (
-                ?, ?, 'pending', NULL, ?,
-                ?, 'pending', NULL,
-                1, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP
-            )
-            """,
+        consumed_origin = consume_semantic_action_context_with_conn(
+            conn,
+            origin_context_token,
+            user_id=int(user_id),
+            action='key.purchase.start',
+        )
+        if consumed_origin is None:
+            raise ValueError('origin context token is unavailable or expired')
+        normalized_origin = _normalize_payment_origin_context(consumed_origin)
+    cursor = conn.execute(
+        """
+        INSERT INTO payments (
+            user_id, tariff_id, order_id, payment_type, vpn_key_id,
+            period_days, status, paid_at,
+            intent_version, purpose, purpose_data_json,
+            base_currency, nominal_amount_minor, payable_amount_minor,
+            description, success_target_json, cancel_target_json,
+            origin_extension_id, origin_context_version, origin_context_json,
+            origin_workflow_id, origin_completion_handler,
+            fulfillment_status, created_at
+        )
+        VALUES (
+            ?, ?, 'pending', NULL, ?,
+            ?, 'pending', NULL,
+            1, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP
+        )
+        """,
+        (
+            int(user_id),
+            tariff_id,
+            vpn_key_id,
+            period_days,
+            str(purpose),
+            payload,
+            currency,
+            amount,
+            amount,
+            str(description or ''),
+            success,
+            cancel,
             (
-                int(user_id),
-                tariff_id,
-                vpn_key_id,
-                period_days,
-                str(purpose),
-                payload,
-                currency,
-                amount,
-                amount,
-                str(description or ''),
-                success,
-                cancel,
-                (
-                    normalized_origin['owner_extension_id']
-                    if normalized_origin is not None
-                    else None
-                ),
-                (
-                    normalized_origin['schema_version']
-                    if normalized_origin is not None
-                    else None
-                ),
-                _json_object(
-                    normalized_origin['payload']
-                    if normalized_origin is not None
-                    else {}
-                ),
-                (
-                    normalized_origin['workflow_id']
-                    if normalized_origin is not None
-                    else None
-                ),
-                (
-                    normalized_origin['completion_handler']
-                    if normalized_origin is not None
-                    else None
-                ),
+                normalized_origin['owner_extension_id']
+                if normalized_origin is not None
+                else None
             ),
-        )
-        payment_id = int(cursor.lastrowid)
-        order_id = build_payment_order_id(payment_id)
-        conn.execute(
-            "UPDATE payments SET order_id = ? WHERE id = ?",
-            (order_id, payment_id),
-        )
-        if origin_context_token is not None:
-            from .db_action_contexts import attach_semantic_action_context_order_with_conn
+            (
+                normalized_origin['schema_version']
+                if normalized_origin is not None
+                else None
+            ),
+            _json_object(
+                normalized_origin['payload']
+                if normalized_origin is not None
+                else {}
+            ),
+            (
+                normalized_origin['workflow_id']
+                if normalized_origin is not None
+                else None
+            ),
+            (
+                normalized_origin['completion_handler']
+                if normalized_origin is not None
+                else None
+            ),
+        ),
+    )
+    payment_id = int(cursor.lastrowid)
+    order_id = build_payment_order_id(payment_id)
+    conn.execute(
+        "UPDATE payments SET order_id = ? WHERE id = ?",
+        (order_id, payment_id),
+    )
+    from .db_order_terms import _save_order_terms_with_conn
+    _save_order_terms_with_conn(conn, order_id, tariff_id, currency)
+    if origin_context_token is not None:
+        from .db_action_contexts import attach_semantic_action_context_order_with_conn
 
-            if not attach_semantic_action_context_order_with_conn(
-                conn,
-                origin_context_token,
-                order_id=order_id,
-            ):
-                raise RuntimeError('consumed origin context could not be linked to its order')
-        return payment_id, order_id
+        if not attach_semantic_action_context_order_with_conn(
+            conn,
+            origin_context_token,
+            order_id=order_id,
+        ):
+            raise RuntimeError('consumed origin context could not be linked to its order')
+    return payment_id, order_id
 
 
 def get_payment_intent(order_id: str) -> Optional[dict[str, Any]]:
@@ -533,11 +571,13 @@ def get_retryable_confirmed_payment_intents(
             FROM payments p
             LEFT JOIN payment_provider_orders ppo ON ppo.order_id = p.order_id
             WHERE p.intent_version = 1
-              AND p.status = 'pending'
               AND p.provider_confirmed_at IS NOT NULL
-              AND p.fulfillment_status IN (
-                    'provider_succeeded', 'failed', 'processing'
-              )
+              AND ((p.status = 'pending' AND p.fulfillment_status IN ('provider_succeeded', 'failed', 'processing'))
+                   OR (p.status = 'paid' AND EXISTS (
+                       SELECT 1 FROM key_entitlements ke JOIN vpn_keys k ON k.id=ke.key_id
+                       WHERE ke.order_id=p.order_id AND NOT EXISTS (
+                           SELECT 1 FROM payment_effects e WHERE e.order_id=p.order_id
+                           AND e.effect_name='panel_access' AND e.status='completed'))))
               AND (
                     ppo.status = 'succeeded'
                     OR (
@@ -742,6 +782,7 @@ def fulfill_key_purchase_once(
 ) -> dict[str, Any]:
     """Creates and links one draft key in the same transaction as its effect marker."""
     with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
         existing = conn.execute(
             """
             SELECT p.vpn_key_id
@@ -776,6 +817,8 @@ def fulfill_key_purchase_once(
             int(days),
             int(traffic_limit_bytes),
         )
+        from .db_order_terms import _save_entitlement_with_conn
+        _save_entitlement_with_conn(conn, order_id, key_id)
         payload = {'tariff_id': int(tariff_id), 'key_id': key_id}
         conn.execute(
             """
@@ -802,9 +845,11 @@ def fulfill_key_renewal_once(
     tariff_id: int,
     days: int,
     traffic_limit_bytes: int,
+    imported_state: dict | None = None,
 ) -> dict[str, Any]:
     """Extends one owned key exactly once and records the effect atomically."""
     with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
         effect = conn.execute(
             """
             SELECT status FROM payment_effects
@@ -815,12 +860,15 @@ def fulfill_key_renewal_once(
         if effect and effect['status'] == 'completed':
             return {'ok': True, 'already_applied': True, 'key_id': int(key_id)}
 
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
+
         key = conn.execute(
             """
-            SELECT vk.id, vk.traffic_limit, vk.traffic_used,
-                   t.group_id AS tariff_group_id
+            SELECT vk.*, COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) AS tariff_group_id
             FROM vpn_keys vk
-            JOIN tariffs t ON t.id = vk.tariff_id
+            LEFT JOIN tariffs t ON t.id = vk.tariff_id
+            LEFT JOIN key_entitlements ke ON ke.key_id=vk.id
             WHERE vk.id = ? AND vk.user_id = ?
             """,
             (int(key_id), int(user_id)),
@@ -832,13 +880,29 @@ def fulfill_key_renewal_once(
             """,
             (int(tariff_id),),
         ).fetchone()
-        if (
-            not key
-            or not tariff
-            or tariff['system_type'] is not None
-            or int(key['tariff_group_id']) != int(tariff['group_id'])
-        ):
+        terms_row = conn.execute('SELECT tariff_json FROM payment_order_terms WHERE order_id=?', (order_id,)).fetchone()
+        order = conn.execute('SELECT user_id,tariff_id,vpn_key_id FROM payments WHERE order_id=?', (order_id,)).fetchone()
+        if not key or not tariff or tariff['system_type'] is not None:
             return {'ok': False, 'reason': 'owned_key_or_tariff_not_found'}
+        if terms_row:
+            if not order or (order['user_id'], order['tariff_id'], order['vpn_key_id']) != (user_id, tariff_id, key_id):
+                return {'ok': False, 'reason': 'order_target_changed'}
+        elif key['tariff_group_id'] != tariff['group_id']:
+            return {'ok': False, 'reason': 'owned_key_or_tariff_not_found'}
+        key = dict(key)
+        if key['tariff_id'] is None:
+            import datetime
+            if (not imported_state or
+                    (key['server_id'], key['panel_email'], key['sub_id']) !=
+                    (imported_state['server_id'], imported_state['email'], imported_state['sub_id'])):
+                return {'ok': False, 'reason': 'imported_terms_unavailable'}
+            expiry = int(imported_state['expiry_ms'])
+            expires_at = (datetime.datetime.fromtimestamp(expiry / 1000, datetime.timezone.utc) if expiry > 0 else
+                          datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(milliseconds=-expiry) if expiry < 0 else None)
+            conn.execute('UPDATE vpn_keys SET expires_at=?,traffic_used=?,traffic_limit=? WHERE id=?',
+                         (expires_at.strftime('%Y-%m-%d %H:%M:%S') if expires_at else None,
+                          imported_state['traffic_used'], imported_state['traffic_limit'], key_id))
+            key['traffic_used'], key['traffic_limit'] = imported_state['traffic_used'], imported_state['traffic_limit']
 
         modifier = f"{int(days):+} days"
         current_limit = int(key['traffic_limit'] or 0)
@@ -883,6 +947,8 @@ def fulfill_key_renewal_once(
         )
         if cursor.rowcount <= 0:
             return {'ok': False, 'reason': 'key_update_failed'}
+        from .db_order_terms import _save_entitlement_with_conn
+        _save_entitlement_with_conn(conn, order_id, key_id)
         _complete_effect_in_connection(
             conn,
             order_id,

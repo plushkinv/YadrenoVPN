@@ -37,15 +37,19 @@ def register_extension_event_handler(
 
 def event_subscribers(event_name: str) -> list[dict[str, str]]:
     """Capture recipients without invoking extension code."""
+    from core.extensions.events import subscribers
     return [
         {'extension_id': item['extension_id'], 'handler_name': item['handler_name']}
         for item in list(EXTENSION_EVENT_HANDLERS.values()) if event_name in item['events']
-    ]
+    ] + subscribers(event_name)
 
 
 async def dispatch_extension_event(job: dict[str, Any], *, bot: Any = None) -> dict[str, Any]:
     key = f"{job['extension_id']}.{job['handler_name']}"
     registration = EXTENSION_EVENT_HANDLERS.get(key)
+    if registration is None and job['handler_name'].startswith(('core:', 'core_')):
+        from core.extensions.events import dispatch
+        return await dispatch(job)
     if registration is None or job['event_name'] not in registration['events']:
         raise LookupError('event handler is unavailable')
     context = dict(job['payload'])

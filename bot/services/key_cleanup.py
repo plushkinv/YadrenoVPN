@@ -16,7 +16,7 @@ from bot.services.panel_sync import (
     group_keys_by_server,
 )
 from bot.services.panel_sync_coordinator import panel_sync_coordinator
-from bot.utils.panel_email import is_managed_panel_email
+from bot.utils.panel_email import is_managed_key, is_managed_panel_binding
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ def _managed_rows_by_email(
     rows: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for key in keys:
         email = key.get("panel_email")
-        if not is_managed_panel_email(email):
+        if not is_managed_key(key):
             logger.warning(
                 "Daily panel cleanup skipped key %s with unmanaged panel_email=%r",
                 key.get("id"),
@@ -106,7 +106,7 @@ def _normalized_binding(
     server_id: Any,
     panel_email: Any,
 ) -> Optional[tuple[int, str]]:
-    if server_id is None or not is_managed_panel_email(panel_email):
+    if server_id is None or not is_managed_panel_binding(server_id, panel_email):
         return None
     return int(server_id), str(panel_email).strip().lower()
 
@@ -114,8 +114,11 @@ def _normalized_binding(
 def _should_keep_panel_client(
     key: Mapping[str, Any],
     expiry_due_key_ids: set[int],
+    pending_identity_ids: frozenset[int] = frozenset(),
 ) -> bool:
     """Return whether one DB row still protects its logical panel client."""
+    if key.get('id') in pending_identity_ids:
+        return True
     if should_panel_client_exist(key):
         return True
     if bool(key.get("is_banned", 0)):
@@ -185,6 +188,8 @@ async def cleanup_inactive_panel_clients(
             selected_servers,
         )
 
+        from database.requests import get_pending_key_mutation_ids
+        pending_identity_ids = get_pending_key_mutation_ids()
         for server_id, server_keys in grouped.items():
             server = servers_by_id.get(server_id, {})
             report = PanelCleanupServerReport(
@@ -217,7 +222,7 @@ async def cleanup_inactive_panel_clients(
                     for key in email_rows
                 ]
                 desired_states = [
-                    _should_keep_panel_client(key, due_key_ids)
+                    _should_keep_panel_client(key, due_key_ids, pending_identity_ids)
                     for key in email_rows
                 ]
                 if any(desired_states):
@@ -352,8 +357,13 @@ async def cleanup_expired_database_keys(
 
     due_ids_by_binding: Dict[tuple[int, str], set[int]] = defaultdict(set)
     eligible_key_ids: set[int] = set()
+    from database.requests import get_pending_panel_identity_ids
+    pending_identity_ids = get_pending_panel_identity_ids()
     for key in candidates:
         key_id = int(key["id"])
+        if key_id in pending_identity_ids:
+            report.pending_panel += 1
+            continue
         binding = _normalized_binding(
             key.get("server_id"),
             key.get("panel_email"),

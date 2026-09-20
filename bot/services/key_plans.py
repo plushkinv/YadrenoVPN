@@ -33,7 +33,8 @@ async def reissue_key_plan(
     tariff = get_tariff_by_id(int(target_tariff_id))
     if key is None or tariff is None:
         return {'ok': False, 'reason': 'key_or_tariff_not_found'}
-    if int(key.get('tariff_group_id') or 1) != int(tariff.get('group_id') or 1):
+    from database.requests import is_key_tariff_group_allowed
+    if not is_key_tariff_group_allowed(int(key_id), int(tariff.get('group_id') or 1)):
         return {'ok': False, 'reason': 'different_tariff_group'}
 
     is_custom = tariff.get('system_type') == 'admin_custom'

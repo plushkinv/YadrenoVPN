@@ -43,6 +43,8 @@ def _user_list_button_text(user: Dict[str, Any]) -> str:
     username = str(user.get('username') or '').strip()
     telegram_id = user.get('telegram_id')
     identifier = f'@{username}' if username else f'ID: {telegram_id}'
+    if telegram_id is None:
+        identifier = f"🌐 Аккаунт #{user['id']}"
     name_parts = [
         ' '.join(str(user.get(field) or '').split())
         for field in ('first_name', 'last_name')
@@ -74,7 +76,9 @@ def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, curr
     for user in users:
         telegram_id = user.get('telegram_id')
         text = _user_list_button_text(user)
-        builder.row(InlineKeyboardButton(text=text, callback_data=f'admin_user_view:{telegram_id}'))
+        destination = (f'admin_user_view:{telegram_id}' if telegram_id is not None
+                       else f"admin_account_view:{user['id']}")
+        builder.row(InlineKeyboardButton(text=text, callback_data=destination))
     if total_pages > 1:
         nav_buttons = []
         if page > 0:
@@ -85,6 +89,11 @@ def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, curr
         builder.row(*nav_buttons)
     builder.row(back_button('admin_users'), home_button())
     return builder.as_markup()
+
+def account_read_kb(user_id: int, vpn_keys: List[Dict[str, Any]], is_banned=False, balance_cents=0, referral_coefficient=1.0) -> InlineKeyboardMarkup:
+    """Use internal identity for accounts without a Telegram recipient."""
+    return user_view_kb('account_' + str(user_id), vpn_keys, is_banned, balance_cents, referral_coefficient)
+
 
 def user_view_kb(telegram_id: int, vpn_keys: List[Dict[str, Any]], is_banned: bool, balance_cents: int=0, referral_coefficient: float=1.0) -> InlineKeyboardMarkup:
     """
@@ -181,7 +190,7 @@ def key_delivery_admin_kb(key_id: int) -> InlineKeyboardMarkup:
 def key_plan_select_kb(
     key_id: int,
     tariffs: List[Dict[str, Any]],
-    custom_tariff_id: int,
+    custom_tariff_id: int | List[Dict[str, Any]],
 ) -> InlineKeyboardMarkup:
     """Tariff choices for a full administrator key reissue."""
     builder = InlineKeyboardBuilder()
@@ -191,10 +200,12 @@ def key_plan_select_kb(
             text=f"📋 {tariff['name']}{hidden_suffix}",
             callback_data=f"admin_key_plan_select:{key_id}:{tariff['id']}",
         ))
-    builder.row(InlineKeyboardButton(
-        text='🛠 Произвольный тариф',
-        callback_data=f'admin_key_plan_select:{key_id}:{custom_tariff_id}',
-    ))
+    customs = custom_tariff_id if isinstance(custom_tariff_id, list) else [{'id': custom_tariff_id}]
+    for custom in customs:
+        builder.row(InlineKeyboardButton(
+            text='🛠 Произвольный тариф' + (f" · {custom['name']}" if len(customs) > 1 else ''),
+            callback_data=f"admin_key_plan_select:{key_id}:{custom['id']}",
+        ))
     builder.row(back_button(f'admin_key_view:{key_id}'), home_button())
     return builder.as_markup()
 

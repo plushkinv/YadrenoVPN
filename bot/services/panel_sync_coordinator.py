@@ -55,6 +55,9 @@ class PanelSyncCoordinator:
     @asynccontextmanager
     async def regular(self) -> AsyncIterator[None]:
         """Enter a regular key/panel mutation lease."""
+        from runtime.readiness import require_active
+
+        require_active()
         current = self._current_mode()
         if current in {"regular", "manual"}:
             yield
@@ -77,6 +80,9 @@ class PanelSyncCoordinator:
     @asynccontextmanager
     async def try_manual(self) -> AsyncIterator[bool]:
         """Try to enter the single manual writer lease without queueing writers."""
+        from runtime.readiness import require_active
+
+        require_active()
         current = self._current_mode()
         if current == "manual":
             yield True

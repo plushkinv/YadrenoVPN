@@ -1,9 +1,12 @@
-from aiogram.types import Message, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAnimation, LinkPreviewOptions
-from aiogram.exceptions import TelegramBadRequest
-from typing import Literal, Optional, Union
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal, Optional, Union
 from html import escape as escape_attr
 from html.parser import HTMLParser
 import logging
+
+if TYPE_CHECKING:
+    from aiogram.types import Message
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +211,8 @@ def normalize_media_type(media_type: Optional[str], *, media: object = None) -> 
 
 
 def _input_media_for_type(media: object, media_type: str, caption: str):
+    from aiogram.types import InputMediaAnimation, InputMediaPhoto, InputMediaVideo
+
     if media_type == 'video':
         return InputMediaVideo(media=media, caption=caption, parse_mode='HTML')
     if media_type == 'animation':
@@ -317,6 +322,9 @@ async def safe_edit_or_send(
         media: Media (file_id, URL or InputFile)
         media_type: Media type: photo, video or animation
     """
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.types import LinkPreviewOptions
+
     if media is None and photo is not None:
         media = photo
         media_type = media_type or 'photo'

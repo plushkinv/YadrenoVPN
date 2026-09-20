@@ -14,9 +14,16 @@ class ExtensionCoreAPI(ExtensionFinanceAPI):
 
     def get_current_user(self) -> dict[str, Any] | None:
         """Returns the safe user snapshot bound to the current extension call."""
-        from bot.utils.custom_extensions import _get_current_extension_telegram_id
+        from bot.utils.custom_extensions import (
+            _get_current_extension_account_id, _get_current_extension_telegram_id,
+        )
 
         telegram_id = _get_current_extension_telegram_id()
+        account_id = _get_current_extension_account_id()
+        if account_id is not None:
+            from bot.services.extension_user_snapshot import build_extension_account_snapshot
+
+            return build_extension_account_snapshot(account_id)
         if telegram_id is None:
             raise RuntimeError(
                 'get_current_user() requires an extension runtime with a current user'
@@ -59,8 +66,6 @@ class ExtensionCoreAPI(ExtensionFinanceAPI):
             _get_current_extension_bot,
             _get_current_extension_telegram_id,
         )
-        from bot.services.extension_pages import send_extension_user_page
-
         if user_id is not None and telegram_id is not None:
             raise ValueError('pass only user_id or telegram_id')
         if user_id is not None:
@@ -70,10 +75,18 @@ class ExtensionCoreAPI(ExtensionFinanceAPI):
             if user is None:
                 return {'ok': False, 'status': 'not_sent'}
             telegram_id = user['telegram_id']
+            if telegram_id is None:
+                return {'ok': False, 'status': 'not_sent'}
         if telegram_id is None:
             telegram_id = _get_current_extension_telegram_id()
             if telegram_id is None:
+                from bot.utils.custom_extensions import _get_current_extension_account_id
+
+                if _get_current_extension_account_id() is not None:
+                    return {'ok': False, 'status': 'not_sent'}
                 raise RuntimeError('send_user_page requires a recipient or current user')
+        from bot.services.extension_pages import send_extension_user_page
+
         return await send_extension_user_page(
             _get_current_extension_bot(),
             telegram_id=_normalize_positive_int(telegram_id, 'telegram_id'),
@@ -91,13 +104,19 @@ class ExtensionCoreAPI(ExtensionFinanceAPI):
         """Persist one owner-local invocation; success acknowledges scheduling only."""
         _ensure_new_mutation_allowed('schedule_task')
         from bot.utils.action_origin_context import normalize_completion_handler_name
-        from bot.utils.custom_extensions import _get_current_extension_telegram_id
+        from bot.utils.custom_extensions import (
+            _get_current_extension_account_id, _get_current_extension_telegram_id,
+        )
         from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
         from database.requests import schedule_extension_task
 
         name = normalize_completion_handler_name(name)
         if user_id is None and telegram_id is None:
+            # Retain the historical selector/fingerprint for linked users.
+            # Existing implicit scheduling receipts were keyed by Telegram ID.
             telegram_id = _get_current_extension_telegram_id()
+            if telegram_id is None:
+                user_id = _get_current_extension_account_id()
         return schedule_extension_task(
             extension_id=self.extension_id, handler_name=name,
             handler_registered=f'{self.extension_id}.{name}' in EXTENSION_TASK_HANDLERS,
@@ -503,6 +522,9 @@ def _ensure_mutation_allowed(operation: str) -> None:
 
 
 def _ensure_new_mutation_allowed(operation: str) -> None:
+    from runtime.readiness import require_active
+
+    require_active()
     _ensure_mutation_allowed(operation)
     from bot.utils.custom_extensions import _get_current_extension_invocation_kind
 
@@ -514,6 +536,7 @@ def _ensure_new_mutation_allowed(operation: str) -> None:
         'completion_handler',
         'event_handler',
         'task_handler',
+        'module_operation',
     }:
         raise RuntimeError(
             f'{operation} is allowed only in extension callbacks, commands, or '
@@ -571,8 +594,13 @@ def _resolve_new_mutation_target(
     if telegram_id is None:
         if not default_to_current:
             raise ValueError('user_id or telegram_id is required')
-        from bot.utils.custom_extensions import _get_current_extension_telegram_id
+        from bot.utils.custom_extensions import (
+            _get_current_extension_account_id, _get_current_extension_telegram_id,
+        )
 
+        account_id = _get_current_extension_account_id()
+        if account_id is not None:
+            return account_id
         telegram_id = _get_current_extension_telegram_id()
         if telegram_id is None:
             raise RuntimeError('operation requires an extension runtime with a current user')

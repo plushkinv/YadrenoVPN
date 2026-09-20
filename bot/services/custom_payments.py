@@ -54,6 +54,7 @@ async def check_custom_payment_order(provider_id: str, order: Mapping[str, Any])
             'order': dict(order),
             'provider_order': dict(provider_order),
             'order_id': order.get('order_id'),
+            'user_id': order.get('user_id'),
             'provider_payment_id': provider_order.get('provider_payment_id'),
             'payment_url': provider_order.get('payment_url'),
             'amount_cents': provider_amount_minor,
@@ -70,14 +71,34 @@ async def check_custom_payment_order(provider_id: str, order: Mapping[str, Any])
             'rate_snapshot': order.get('rate_snapshot') or {},
         },
     )
+    return _save_custom_payment_status(str(order.get('order_id') or ''), result)
+
+
+def _save_custom_payment_status(order_id: str, result: Mapping[str, Any]) -> dict[str, Any]:
+    """A late pending/canceled check must not erase a committed confirmation."""
+    current = get_payment_provider_order(order_id)
+    if (current or {}).get('status') == 'succeeded' and result['status'] != 'succeeded':
+        return {**result, 'status': 'succeeded'}
     update_payment_provider_order_status(
-        str(order.get('order_id') or ''),
-        result['status'],
+        order_id, result['status'],
         provider_payment_id=result.get('provider_payment_id'),
         payment_url=result.get('payment_url'),
         metadata=result.get('metadata'),
     )
-    return result
+    return dict(result)
+
+
+def _wake_payment_completion(order_id: str) -> None:
+    """Wake an existing polling row; confirmation recovery also works without one."""
+    auto_check = get_payment_auto_check(order_id)
+    auto_check_state = str((auto_check or {}).get('state') or '')
+    if auto_check_state and auto_check_state != 'completed':
+        update_payment_auto_check(
+            order_id,
+            state='provider_succeeded',
+            next_delay_seconds=0,
+            expected_state=auto_check_state,
+        )
 
 
 async def complete_custom_payment_order(
@@ -105,6 +126,9 @@ async def process_custom_payment_webhook(
     bot: Any = None,
 ) -> dict[str, Any]:
     """Processes a custom payment provider's webhook through a declarative contract."""
+    from runtime.readiness import require_active
+
+    require_active()
     try:
         provider = get_payment_provider(provider_id)
     except ValueError:
@@ -136,14 +160,8 @@ async def process_custom_payment_webhook(
     if not order or int(order.get('intent_version') or 0) != 1:
         return {'ok': False, 'reason': 'order_not_found', 'http_status': 404}
 
+    webhook_result = _save_custom_payment_status(order_id, webhook_result)
     status = str(webhook_result['status'])
-    update_payment_provider_order_status(
-        order_id,
-        status,
-        provider_payment_id=webhook_result.get('provider_payment_id'),
-        payment_url=webhook_result.get('payment_url'),
-        metadata=webhook_result.get('metadata'),
-    )
 
     response: dict[str, Any] = {
         'ok': True,
@@ -154,15 +172,7 @@ async def process_custom_payment_webhook(
         'processed_now': False,
     }
     if status == 'succeeded':
-        auto_check = get_payment_auto_check(order_id)
-        auto_check_state = str((auto_check or {}).get('state') or '')
-        if auto_check_state and auto_check_state != 'completed':
-            update_payment_auto_check(
-                order_id,
-                state='provider_succeeded',
-                next_delay_seconds=0,
-                expected_state=auto_check_state,
-            )
+        _wake_payment_completion(order_id)
         completed = await complete_custom_payment_order(order_id, bot=bot, notify_user=True)
         response['completed'] = bool(completed.get('ok'))
         response['processed_now'] = bool(completed.get('processed_now'))

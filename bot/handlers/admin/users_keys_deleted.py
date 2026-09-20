@@ -77,6 +77,14 @@ async def on_key_delete_confirm(callback: CallbackQuery):
     await callback.answer(status, show_alert=True)
 
     # Returning to the user profile
+    if user_telegram_id is None:
+        from database.requests import get_user_by_id
+        from bot.handlers.admin.users_manage import _format_user_card
+        user = get_user_by_id(key['user_id'])
+        if user:
+            text, keyboard = _format_user_card(user)
+            await safe_edit_or_send(callback.message, text, reply_markup=keyboard)
+            return
     if user_telegram_id:
         from database.requests import get_user_by_telegram_id
         user = get_user_by_telegram_id(user_telegram_id)

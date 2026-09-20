@@ -18,8 +18,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
-from aiogram import Bot
-
 from bot.utils.action_registry import register_action_handler as _register_action_handler
 from bot.utils.page_flow import register_page_guard as _register_page_guard
 from bot.utils.page_flow import register_page_hook as _register_page_hook
@@ -31,7 +29,7 @@ CUSTOM_EXTENSIONS_ENABLED_SETTING = 'custom_extensions_enabled'
 
 _TRUE_VALUES = {'1', 'true', 'yes', 'on', 'enabled', 'да', 'вкл'}
 _EXTENSION_FILENAME_RE = re.compile(r'^[a-z][a-z0-9_]*\.py$')
-_BLOCKED_IMPORT_ROOTS = {'sqlite3', 'database', 'sys'}
+_BLOCKED_IMPORT_ROOTS = {'sqlite3', 'database', 'sys', 'core', 'runtime', 'web_api'}
 _BLOCKED_IMPORT_PREFIXES = {
     'bot.handlers',
     'bot.keyboards',
@@ -48,7 +46,7 @@ _BLOCKED_IMPORT_PREFIXES = {
     'bot.utils.extension_event_registry',
 }
 _BLOCKED_IMPORT_MODULES = {'bot', 'bot.utils'}
-_ALLOWED_IMPORT_PREFIXES = {'bot.utils.custom_extensions'}
+_ALLOWED_IMPORT_PREFIXES = {'bot.utils.custom_extensions', 'core.extensions.api'}
 _BLOCKED_DYNAMIC_CODE_CALLS = {'eval', 'exec', 'compile'}
 _BLOCKED_INTROSPECTION_CALLS = {'vars', 'dir'}
 _GETATTR_CALLS = {'getattr'}
@@ -123,6 +121,7 @@ _LAST_LOAD_RESULT = CustomExtensionsLoadResult(skipped=True, reason='not_loaded'
 _CURRENT_EXTENSION: ContextVar[str | None] = ContextVar('custom_extension_id', default=None)
 _CURRENT_EXTENSION_BOT: ContextVar[Any | None] = ContextVar('custom_extension_bot', default=None)
 _CURRENT_EXTENSION_TELEGRAM_ID: ContextVar[int | None] = ContextVar('custom_extension_telegram_id', default=None)
+_CURRENT_EXTENSION_ACCOUNT_ID: ContextVar[int | None] = ContextVar('custom_extension_account_id', default=None)
 _CURRENT_EXTENSION_INVOCATION_KIND: ContextVar[str | None] = ContextVar(
     'custom_extension_invocation_kind',
     default=None,
@@ -448,6 +447,7 @@ def register_payment_provider(
         metadata=metadata,
         replace=replace,
     )
+    provider._extension_id = _require_current_extension()
     _record_registration('payment_providers', provider.provider_id)
 
 
@@ -511,6 +511,8 @@ def load_custom_extensions(
 
     if enabled is None:
         enabled = is_custom_extensions_enabled()
+    from core.extensions.registry import load_manifests, persist_module
+    load_manifests()
     base_dir = Path(extensions_dir) if extensions_dir is not None else CUSTOM_EXTENSIONS_DIR
     result = CustomExtensionsLoadResult(
         loader_enabled=bool(enabled),
@@ -551,6 +553,7 @@ def load_custom_extensions(
             _remove_extension_runtime_registrations(extension_id)
             _EXTENSION_REGISTRATIONS.pop(extension_id, None)
             _load_extension_module(path)
+            persist_module(extension_id)
         except Exception as e:
             _restore_runtime_registries(registry_snapshot)
             if previous_registrations is not None:
@@ -576,6 +579,7 @@ def get_custom_extensions_diagnostics(
 ) -> dict[str, Any]:
     """Returns a read-only snapshot for admin diagnostics of extensions."""
     from database.requests import get_page_classification_diagnostics, get_setting
+    from core.extensions.registry import inspect_modules
 
     configured_value = get_setting(CUSTOM_EXTENSIONS_ENABLED_SETTING, '0')
     if enabled is None:
@@ -665,6 +669,18 @@ def get_custom_extensions_diagnostics(
             'scheduling_modes': ['delay_seconds', 'run_at'],
             'delivery_policy': 'at_least_once',
         },
+        'account_capabilities': {
+            'contract_version': 2,
+            'owner': 'user_id',
+            'telegram_id': 'optional',
+            'sources': ['telegram', 'mini_app', 'site', 'system'],
+            'current_user_versions': [1, 2],
+            'event_versions': [1, 2],
+            'legacy_numeric_selectors': 'telegram_id',
+            'missing_telegram_delivery': 'not_sent',
+            'credentials_access': 'core_only',
+        },
+        'shared_modules': {'contract_version': 1, 'modules': inspect_modules()},
         'messaging_capabilities': {
             'contract_version': 1,
             'methods': ['send_user_page', 'send_current_user_page'],
@@ -679,7 +695,7 @@ def get_custom_extensions_diagnostics(
                 'get_payment', 'list_user_payments', 'get_user_payment_summary',
                 'get_promo_code', 'list_promo_codes', 'check_promo_code', 'create_promo_code',
                 'update_promo_code', 'set_promo_code_active', 'activate_promo_code',
-                'clear_active_promo_code', 'preview_payment_price',
+                'clear_active_promo_code', 'preview_payment_price', 'recheck_payment',
             ],
         },
     }
@@ -758,7 +774,7 @@ def _validate_extension_source(path: Path) -> None:
     getattr_names = set(_GETATTR_CALLS)
     dunder_getattribute_names = set(_DUNDER_GETATTRIBUTE_CALLS)
     constant_string_names: dict[str, str] = {}
-    public_custom_extensions_aliases: set[str] = set()
+    public_custom_extensions_aliases: dict[str, str] = {}
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -768,7 +784,7 @@ def _validate_extension_source(path: Path) -> None:
                         raise ValueError(
                             "import bot.utils.custom_extensions должен использовать alias public API"
                         )
-                    public_custom_extensions_aliases.add(alias.asname)
+                    public_custom_extensions_aliases[alias.asname] = alias.name
                     continue
                 _raise_if_blocked_import(alias.name)
             continue
@@ -780,10 +796,10 @@ def _validate_extension_source(path: Path) -> None:
                 _raise_if_blocked_import(node.module or '')
             for alias in node.names:
                 if public_from_api_module:
-                    _raise_if_private_custom_extensions_api_name(alias.name)
+                    _raise_if_private_custom_extensions_api_name(alias.name, api_module=node.module)
                 _raise_if_blocked_import(f"{node.module or ''}.{alias.name}")
                 if public_from_bot_utils and alias.name == 'custom_extensions':
-                    public_custom_extensions_aliases.add(alias.asname or alias.name)
+                    public_custom_extensions_aliases[alias.asname or alias.name] = 'bot.utils.custom_extensions'
             _collect_dynamic_import_aliases(node, dynamic_import_names)
             _collect_dynamic_code_aliases(node, dynamic_code_names)
             _collect_introspection_aliases(node, introspection_names)
@@ -840,7 +856,7 @@ def _validate_extension_source(path: Path) -> None:
             isinstance(node, ast.Attribute)
             and _is_public_custom_extensions_alias(node.value, public_custom_extensions_aliases)
         ):
-            _raise_if_private_custom_extensions_api_name(node.attr)
+            _raise_if_private_custom_extensions_api_name(node.attr, api_module=public_custom_extensions_aliases[node.value.id])
         if (
             isinstance(node, ast.Call)
             and _is_blocked_custom_extensions_getattr(
@@ -994,15 +1010,18 @@ def _is_allowed_public_custom_extensions_import_from(node: ast.ImportFrom) -> bo
 
 
 def _is_public_custom_extensions_import(module_name: str) -> bool:
-    return str(module_name or '').strip().casefold() == 'bot.utils.custom_extensions'
+    return str(module_name or '').strip().casefold() in {'bot.utils.custom_extensions', 'core.extensions.api'}
 
 
 def _is_public_custom_extensions_import_from(node: ast.ImportFrom) -> bool:
-    return str(node.module or '').casefold() == 'bot.utils.custom_extensions'
+    return str(node.module or '').casefold() in {'bot.utils.custom_extensions', 'core.extensions.api'}
 
 
-def _raise_if_private_custom_extensions_api_name(name: str) -> None:
-    if name == '*' or name not in _PUBLIC_CUSTOM_EXTENSIONS_API:
+def _raise_if_private_custom_extensions_api_name(name: str, *, api_module='bot.utils.custom_extensions') -> None:
+    names = _PUBLIC_CUSTOM_EXTENSIONS_API
+    if api_module == 'core.extensions.api':
+        from core.extensions.api import __all__ as names
+    if name == '*' or name not in names:
         raise ValueError("расширениям доступен только public API bot.utils.custom_extensions")
 
 
@@ -1536,14 +1555,16 @@ def _bind_extension_callable(
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
             bot = _extract_extension_bot(args, kwargs)
-            telegram_id = _extract_extension_telegram_id(args, kwargs, invocation_kind=invocation_kind) if bind_user else None
+            account_id, telegram_id = _extract_extension_identity(args, kwargs, invocation_kind=invocation_kind) if bind_user else (None, None)
             token = _CURRENT_EXTENSION.set(extension_id)
             invocation_token = _CURRENT_EXTENSION_INVOCATION_KIND.set(invocation_kind)
             bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
             telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id)
+            account_token = _CURRENT_EXTENSION_ACCOUNT_ID.set(account_id)
             try:
                 return await func(*args, **kwargs)
             finally:
+                _CURRENT_EXTENSION_ACCOUNT_ID.reset(account_token)
                 if telegram_token is not None:
                     _CURRENT_EXTENSION_TELEGRAM_ID.reset(telegram_token)
                 if bot_token is not None:
@@ -1556,11 +1577,12 @@ def _bind_extension_callable(
     @wraps(func)
     def wrapper(*args, **kwargs):
         bot = _extract_extension_bot(args, kwargs)
-        telegram_id = _extract_extension_telegram_id(args, kwargs, invocation_kind=invocation_kind) if bind_user else None
+        account_id, telegram_id = _extract_extension_identity(args, kwargs, invocation_kind=invocation_kind) if bind_user else (None, None)
         token = _CURRENT_EXTENSION.set(extension_id)
         invocation_token = _CURRENT_EXTENSION_INVOCATION_KIND.set(invocation_kind)
         bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
         telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id)
+        account_token = _CURRENT_EXTENSION_ACCOUNT_ID.set(account_id)
         try:
             result = func(*args, **kwargs)
             if inspect.isawaitable(result):
@@ -1569,10 +1591,12 @@ def _bind_extension_callable(
                     extension_id,
                     bot=bot,
                     telegram_id=telegram_id,
+                    account_id=account_id,
                     invocation_kind=invocation_kind,
                 )
             return result
         finally:
+            _CURRENT_EXTENSION_ACCOUNT_ID.reset(account_token)
             if telegram_token is not None:
                 _CURRENT_EXTENSION_TELEGRAM_ID.reset(telegram_token)
             if bot_token is not None:
@@ -1589,15 +1613,18 @@ async def _await_with_extension_context(
     *,
     bot: Any = None,
     telegram_id: int | None = None,
+    account_id: int | None = None,
     invocation_kind: str | None = None,
 ) -> Any:
     token = _CURRENT_EXTENSION.set(extension_id)
     invocation_token = _CURRENT_EXTENSION_INVOCATION_KIND.set(invocation_kind)
     bot_token = _CURRENT_EXTENSION_BOT.set(bot) if bot is not None else None
     telegram_token = _CURRENT_EXTENSION_TELEGRAM_ID.set(telegram_id)
+    account_token = _CURRENT_EXTENSION_ACCOUNT_ID.set(account_id)
     try:
         return await awaitable
     finally:
+        _CURRENT_EXTENSION_ACCOUNT_ID.reset(account_token)
         if telegram_token is not None:
             _CURRENT_EXTENSION_TELEGRAM_ID.reset(telegram_token)
         if bot_token is not None:
@@ -1634,13 +1661,20 @@ def _get_current_extension_telegram_id() -> int | None:
     return _CURRENT_EXTENSION_TELEGRAM_ID.get()
 
 
+def _get_current_extension_account_id() -> int | None:
+    return _CURRENT_EXTENSION_ACCOUNT_ID.get()
+
+
 def _get_current_extension_invocation_kind() -> str | None:
     return _CURRENT_EXTENSION_INVOCATION_KIND.get()
 
 
 def _extract_extension_bot(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    # A real Bot necessarily has its defining module loaded. Pure business
+    # invocations must not import the Telegram framework just for this check.
+    bot_type = getattr(sys.modules.get('aiogram'), 'Bot', ())
     for item in list(args) + list(kwargs.values()):
-        if isinstance(item, Bot):
+        if isinstance(item, bot_type):
             return item
         bot = getattr(item, 'bot', None)
         if bot is not None:
@@ -1655,6 +1689,12 @@ def _extract_extension_bot(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
 def _extract_extension_telegram_id(
     args: tuple[Any, ...], kwargs: dict[str, Any], *, invocation_kind: str | None = None,
 ) -> int | None:
+    return _extract_extension_identity(args, kwargs, invocation_kind=invocation_kind)[1]
+
+
+def _extract_extension_identity(
+    args: tuple[Any, ...], kwargs: dict[str, Any], *, invocation_kind: str | None = None,
+) -> tuple[int | None, int | None]:
     """Resolve core-provided identity; an internal id always denotes its payer."""
     for item in list(args) + list(kwargs.values()):
         if isinstance(item, Mapping):
@@ -1666,28 +1706,37 @@ def _extract_extension_telegram_id(
                 identity = get_extension_user_identity(user_id=internal_id)
                 if identity is None:
                     if invocation_kind in {'event_handler', 'task_handler'} and type(telegram_id) is int and telegram_id > 0:
-                        return telegram_id
-                    return None
-                resolved = int(identity['telegram_id'])
+                        return None, telegram_id
+                    return None, None
+                resolved = int(identity['telegram_id']) if identity['telegram_id'] is not None else None
                 if invocation_kind not in {'event_handler', 'task_handler'} and type(telegram_id) is int and telegram_id != resolved:
                     raise ValueError('extension user_id and telegram_id do not match')
-                return resolved
+                return int(identity['user_id']), resolved
             if type(telegram_id) is int and telegram_id > 0:
-                return telegram_id
+                return None, telegram_id
             key_id = item.get('key_id')
             if invocation_kind == 'lifecycle_hook' and type(key_id) is int and key_id > 0:
                 from database.requests import get_extension_key_user_identity
 
                 identity = get_extension_key_user_identity(key_id)
-                return int(identity['telegram_id']) if identity else None
+                if identity:
+                    return int(identity['user_id']), (
+                        int(identity['telegram_id']) if identity['telegram_id'] is not None else None
+                    )
+                return None, None
         user = getattr(item, 'from_user', None)
         if user is not None and isinstance(getattr(user, 'id', None), int):
-            return user.id
+            return None, user.id
         message = getattr(item, 'message', None)
         user = getattr(message, 'from_user', None)
         if user is not None and isinstance(getattr(user, 'id', None), int):
-            return user.id
-    return None
+            return None, user.id
+    from core.context import get_account_context
+
+    context = get_account_context()
+    if context is not None:
+        return context.account_id, context.telegram_id
+    return None, None
 
 
 def _extension_directory_status(base_dir: Path) -> str:
@@ -1764,6 +1813,8 @@ def _clone_extension_registrations(
 
 
 def _remove_extension_runtime_registrations(extension_id: str) -> None:
+    from core.extensions.registry import remove_module
+    remove_module(extension_id)
     from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
     from bot.utils.policy_registry import BASE_PRICING_POLICIES
     registrations = _EXTENSION_REGISTRATIONS.get(extension_id)
@@ -1812,7 +1863,9 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
     for name in registrations.get('task_handlers', set()):
         EXTENSION_TASK_HANDLERS.pop(name, None)
     for name in registrations.get('payment_providers', set()):
-        PAYMENT_PROVIDERS.pop(name, None)
+        provider = PAYMENT_PROVIDERS.get(name)
+        if provider is not None and provider._extension_id in {None, extension_id}:
+            PAYMENT_PROVIDERS.pop(name, None)
     remove_extension_callback_handlers(extension_id, registrations.get('callback_handlers', set()))
     remove_extension_command_handlers(extension_id, registrations.get('command_handlers', set()))
     remove_user_access_guards(registrations.get('user_access_guards', set()))
@@ -1821,6 +1874,7 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
 
 
 def _snapshot_runtime_registries() -> dict[str, Any]:
+    from core.extensions.registry import snapshot as snapshot_shared_modules
     from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
     from bot.utils.policy_registry import BASE_PRICING_POLICIES
     from bot.utils.extension_event_registry import EXTENSION_EVENT_HANDLERS
@@ -1841,6 +1895,7 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
     from bot.utils.user_access import USER_ACCESS_GUARDS
 
     return {
+        'shared_modules': snapshot_shared_modules(),
         'actions': dict(ACTION_REGISTRY),
         'action_policies': {
             name: dict(registration)
@@ -1871,6 +1926,8 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
 
 
 def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
+    from core.extensions.registry import restore as restore_shared_modules
+    restore_shared_modules(snapshot.get('shared_modules', {}))
     from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
     from bot.utils.policy_registry import BASE_PRICING_POLICIES
     from bot.utils.extension_event_registry import EXTENSION_EVENT_HANDLERS
@@ -1974,6 +2031,8 @@ def _registry_totals() -> dict[str, int]:
 def reset_custom_extensions_runtime() -> dict[str, dict[str, int]]:
     """Removes all currently registered custom extension runtime objects."""
     global _LAST_LOAD_RESULT
+    from core.extensions.registry import restore as reset_shared_modules
+    reset_shared_modules({})
 
     before = _registry_totals()
     for extension_id in list(_EXTENSION_REGISTRATIONS):

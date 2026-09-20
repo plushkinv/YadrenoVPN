@@ -112,6 +112,26 @@ class ExtensionFinanceAPI:
 
         return get_extension_payment(order_id)
 
+    async def recheck_payment(self, order_id: str) -> dict[str, Any]:
+        """Check an owned provider's existing order and attempt core completion."""
+        from bot.utils.custom_extensions import (
+            _get_current_extension_bot, _require_current_extension,
+        )
+        from bot.utils.extension_core import _ensure_new_mutation_allowed
+        from bot.services.extension_payments import recheck_extension_payment
+
+        _ensure_new_mutation_allowed('recheck_payment')
+        extension_id = _require_current_extension()
+        if extension_id != self.extension_id:
+            raise PermissionError('recheck_payment requires the current extension facade')
+        if not isinstance(order_id, str) or not order_id.strip() or len(order_id) > 256:
+            raise ValueError('order_id must be a non-empty string of at most 256 characters')
+        return await recheck_extension_payment(
+            extension_id=extension_id,
+            order_id=order_id.strip(),
+            bot=_get_current_extension_bot(),
+        )
+
     def list_user_payments(
         self, *, user_id: int | None = None, telegram_id: int | None = None,
         purpose: str | None = None, status: str | None = None,

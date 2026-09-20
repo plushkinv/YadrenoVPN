@@ -61,12 +61,24 @@ def calculate_base_price(
             'base_currency': quote['base_currency'], 'nominal_amount_minor': nominal_minor,
             'payable_amount_minor': payable_minor,
         }, mode='base')
+    if quote.get('ok'):
+        from core.extensions.registry import apply_pricing
+        quote = apply_pricing(quote, {'user_id': user_id, 'tariff': dict(tariff), 'purpose': purpose,
+                                      'order_id': order_id, 'key_id': key_id, 'phase': phase})
     quote['payable_amount_minor'] = int(quote['final_amount'])
     quote['discount_amount_minor'] = max(0, nominal_minor - quote['payable_amount_minor'])
     quote['is_free'] = (
         quote['payable_amount_minor'] == 0
         and (promo is not None or bool(quote['pricing_policies']))
     )
+    from core.extensions.rewards import snapshot_rewards
+    module_rewards = snapshot_rewards(purpose)
+    if module_rewards:
+        quote['module_rewards'] = module_rewards
+    from core.extensions.events import snapshot_payment_events
+    module_events = snapshot_payment_events()
+    if module_events:
+        quote['module_events'] = module_events
     return quote
 
 

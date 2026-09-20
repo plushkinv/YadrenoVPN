@@ -37,7 +37,7 @@ async def grant_days_to_first_active_key(
 
     async with user_locks[user_id]:
         if (
-            reference_type in {'payment_referral', 'payment_promo_reward'}
+            reference_type in {'payment_referral', 'payment_promo_reward', 'shared_module_operation'}
             and reference_id
         ):
             result = apply_key_days_operation_once(

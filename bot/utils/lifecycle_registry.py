@@ -77,6 +77,8 @@ async def emit_key_lifecycle_event(event: str, context: Mapping[str, Any]) -> li
                 entry[key] = result[key]
         results.append(entry)
 
+    from core.extensions.events import emit_lifecycle
+    results.extend(await emit_lifecycle(event_name, base_context))
     return results
 
 

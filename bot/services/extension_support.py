@@ -456,7 +456,8 @@ def _public_thread(row: dict[str, Any]) -> dict[str, Any]:
     elif username:
         display_name = f"@{username}"
     else:
-        display_name = f"ID {int(row['user_telegram_id'])}"
+        display_name = (f"ID {int(row['user_telegram_id'])}" if row.get('user_telegram_id') is not None
+                        else f"Account {int(row['user_id'])}")
     return {
         "thread_id": int(row["id"]),
         "status": status,
@@ -470,7 +471,7 @@ def _public_thread(row: dict[str, Any]) -> dict[str, Any]:
         "last_message_at": _iso_utc(row.get("last_message_at")),
         "user": {
             "user_id": int(row["user_id"]),
-            "telegram_id": int(row["user_telegram_id"]),
+            "telegram_id": _optional_int(row.get("user_telegram_id")),
             "username": username,
             "first_name": first_name,
             "last_name": last_name,

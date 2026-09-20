@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 _fulfillment_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
+def is_payment_fulfillment_running(order_id: str) -> bool:
+    """Let extension rechecks avoid re-entering an in-flight domain operation."""
+    lock = _fulfillment_locks.get(order_id)
+    return bool(lock and lock.locked())
+
+
 async def fulfill_payment_intent(
     order_id: str,
     *,
@@ -43,6 +49,9 @@ async def fulfill_payment_intent(
     process_referrals: bool = True,
 ) -> PaymentResult:
     """Confirms settlement and applies the trusted purpose exactly once."""
+    from runtime.readiness import require_active
+
+    require_active()
     async with _fulfillment_locks[str(order_id)]:
         return await _fulfill_payment_intent_unlocked(
             order_id,
@@ -122,10 +131,13 @@ async def _fulfill_payment_intent_unlocked(
                 await _apply_referrals_once(order, bot=bot)
             await _issue_coupon_once(order)
 
-        from bot.utils.extension_event_registry import event_subscribers
+        from core.extensions.events import subscribers_for_order
+
+        from core.extensions.rewards import apply_order_rewards
+        await apply_order_rewards(order)
 
         if not complete_payment_fulfillment(
-            intent.order_id, event_subscribers=event_subscribers('payment.completed'),
+            intent.order_id, event_subscribers=subscribers_for_order('payment.completed', intent.order_id),
         ):
             current = load_payment_intent(intent.order_id)
             if not current or current.fulfillment_status != 'completed':
@@ -188,7 +200,9 @@ async def _apply_purpose(intent) -> dict[str, Any]:
         )
 
     tariff_id = int(payload.get('tariff_id') or intent.tariff_id or 0)
-    tariff = get_tariff_by_id(tariff_id)
+    from database.requests import get_payment_order_terms
+    terms = get_payment_order_terms(intent.order_id)
+    tariff = dict(terms['tariff']) if terms is not None else get_tariff_by_id(tariff_id)
     if not tariff:
         return {'ok': False, 'reason': 'tariff_not_found'}
     days = int(tariff.get('duration_days') or 0)
@@ -213,6 +227,9 @@ async def _apply_purpose(intent) -> dict[str, Any]:
 
     if intent.purpose == PURPOSE_KEY_RENEWAL:
         key_id = int(payload.get('key_id') or intent.vpn_key_id or 0)
+        from bot.services.imported_access import inspect_imported_renewal
+        imported_state = (await inspect_imported_renewal(key_id)
+                          if not is_payment_effect_completed(intent.order_id, 'purpose') else None)
         result = fulfill_key_renewal_once(
             intent.order_id,
             user_id=intent.user_id,
@@ -220,6 +237,7 @@ async def _apply_purpose(intent) -> dict[str, Any]:
             tariff_id=tariff_id,
             days=days,
             traffic_limit_bytes=traffic_limit,
+            imported_state=imported_state,
         )
         if result.get('ok') and not result.get('already_applied'):
             await _sync_renewed_key(key_id)
@@ -311,8 +329,14 @@ async def _issue_coupon_once(order: dict[str, Any]) -> None:
     await _run_effect(order['order_id'], 'coupon', apply)
 
 
-async def _notify_admins_once(order_id: str, *, bot: Any) -> None:
+async def _notify_admins_once(order_id: str, *, bot: Any, _deferred=False) -> None:
     if bot is None:
+        return
+    from core.context import get_account_context
+    account = get_account_context()
+    if not _deferred and account and account.source in ('site', 'mini_app'):
+        from runtime.delivery import dispatch
+        dispatch(lambda transport: _notify_admins_once(order_id, bot=transport, _deferred=True), bot=bot)
         return
 
     async def apply() -> dict[str, Any]:

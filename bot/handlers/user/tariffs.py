@@ -44,12 +44,14 @@ async def _render_buy_page(target, *, action_context_token: str | None = None):
         get_all_tariffs,
         get_user_internal_id,
     )
+    from bot.services.payment_provider_adapters import has_available_custom_payment_method
     from bot.utils.page_renderer import render_page
 
     if isinstance(target, CallbackQuery):
         telegram_id = target.from_user.id
     else:
         telegram_id = target.from_user.id
+    user_id = get_user_internal_id(telegram_id)
 
     crypto_configured = is_crypto_configured()
     cryptobot_configured = is_cryptobot_configured()
@@ -62,7 +64,12 @@ async def _render_buy_page(target, *, action_context_token: str | None = None):
     demo_enabled = is_demo_payment_enabled()
 
     # Verification: at least one payment method is configured
-    if not crypto_configured and not cryptobot_configured and not stars_enabled and not cards_enabled and not yookassa_qr and not wata_enabled and not platega_enabled and not cardlink_enabled and not demo_enabled:
+    if not any((
+        crypto_configured, cryptobot_configured, stars_enabled, cards_enabled,
+        yookassa_qr, wata_enabled, platega_enabled, cardlink_enabled, demo_enabled,
+    )) and not has_available_custom_payment_method(
+        'key_purchase', telegram_id=telegram_id, user_id=user_id,
+    ):
         await render_page(
             target,
             page_key='prepayment_unavailable',
@@ -85,7 +92,7 @@ async def _render_buy_page(target, *, action_context_token: str | None = None):
         'tariff_button_items': build_tariff_button_items(
             tariffs,
             'key_purchase',
-            user_id=get_user_internal_id(telegram_id),
+            user_id=user_id,
             action_context_token=action_context_token,
         ),
         'tariff_back_callback': 'start',

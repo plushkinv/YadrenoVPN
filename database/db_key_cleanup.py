@@ -66,7 +66,9 @@ def _select_expired_keys(
         """,
         params,
     ).fetchall()
-    return [dict(row) for row in rows]
+    from .db_key_operations import _pending_key_mutation_ids
+    protected = _pending_key_mutation_ids(conn)
+    return [dict(row) for row in rows if row['id'] not in protected]
 
 
 def get_expired_keys_older_than(age_days: int) -> List[Dict[str, Any]]:

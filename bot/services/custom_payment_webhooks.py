@@ -104,6 +104,10 @@ async def _health_handler(request: web.Request) -> web.Response:
 
 
 async def _payment_webhook_handler(request: web.Request) -> web.Response:
+    from runtime.readiness import is_active
+
+    if not is_active():
+        return web.json_response({'ok': False, 'reason': 'temporarily_unavailable'}, status=503)
     provider_id = str(request.match_info.get('provider_id') or '')
 
     from bot.utils.payment_provider_registry import get_payment_provider, validate_payment_webhook_secret

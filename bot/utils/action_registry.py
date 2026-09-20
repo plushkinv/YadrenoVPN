@@ -13,6 +13,7 @@ import logging
 from typing import Optional, Dict, Any, Callable, Mapping
 
 from database.page_button_styles import ITEM_COLOR_COLLECTIONS, is_collection_item_id
+from bot.utils.payment_provider_buttons import get_custom_payment_button_provider_id
 
 logger = logging.getLogger(__name__)
 
@@ -457,6 +458,11 @@ SYSTEM_COLLECTIONS: Dict[str, Callable[[dict], list[dict]]] = {
 }
 
 
+def is_registered_system_button(button_id: str) -> bool:
+    """Include registry-derived provider buttons in the existing system actions."""
+    return button_id in SYSTEM_BUTTONS or get_custom_payment_button_provider_id(button_id) is not None
+
+
 def resolve_system_button(button_id: str, context: Mapping[str, Any]) -> Optional[dict]:
     button_id = _require_text(button_id, 'button_id')
     if not isinstance(context, Mapping):
@@ -466,6 +472,9 @@ def resolve_system_button(button_id: str, context: Mapping[str, Any]) -> Optiona
     handler = SYSTEM_BUTTONS.get(button_id)
     if handler is not None:
         return _normalize_system_button_result(button_id, handler(context))
+    provider_id = get_custom_payment_button_provider_id(button_id)
+    if provider_id is not None:
+        return _normalize_system_button_result(button_id, _resolve_intent_provider(context, provider_id))
     return None
 
 

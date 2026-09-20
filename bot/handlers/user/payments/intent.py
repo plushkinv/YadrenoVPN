@@ -81,14 +81,6 @@ async def show_payment_method_select(
         )
     page_key = _intent_method_page_key(intent)
     key_fields = _intent_key_fields(intent, telegram_id)
-    custom_rows = [
-        [InlineKeyboardButton(
-            text=str(provider.label),
-            callback_data=f"payment_intent_provider:{intent.order_id}:{provider.provider_id}",
-        )]
-        for provider in providers
-        if provider.custom
-    ]
     await render_page(
         target,
         page_key=page_key,
@@ -97,7 +89,7 @@ async def show_payment_method_select(
             order_id=intent.order_id,
             telegram_id=telegram_id,
             payment_purpose=intent.purpose,
-            payment_provider_ids=[provider.provider_id for provider in providers if not provider.custom],
+            payment_provider_ids=[provider.provider_id for provider in providers],
             payment_allow_balance=allow_balance,
             payment_amount_text=format_base_minor(payable, intent.base_currency),
             payment_nominal_text=format_base_minor(intent.nominal_amount_minor, intent.base_currency),
@@ -107,7 +99,6 @@ async def show_payment_method_select(
             payment_discount_line_html=price_line,
             key_fields=key_fields,
         ),
-        append_buttons=custom_rows or None,
     )
 
 
@@ -650,32 +641,9 @@ async def _send_telegram_invoice(callback, intent, quote, adapter, bot_name: str
         text=invoice_change_method_button(),
         callback_data=f'payment_intent_methods:{intent.order_id}',
     ))
-    kwargs = {
-        'title': clamp_invoice_text(bot_name, 32),
-        'description': clamp_invoice_text(intent.description, 255),
-        'payload': intent.order_id,
-        'currency': quote.charge_currency,
-        'prices': [LabeledPrice(label=clamp_invoice_text(intent.description, 80), amount=amount)],
-        'reply_markup': builder.as_markup(),
-    }
-    if adapter.provider_id == 'cards':
-        kwargs['provider_token'] = get_setting('cards_provider_token', '')
-        kwargs['provider_data'] = json.dumps({
-            'receipt': {
-                'customer': {'email': f'user_{intent.order_id}@t.me'},
-                'items': [{
-                    'description': clamp_invoice_text(intent.description, 128),
-                    'quantity': '1.00',
-                    'amount': {
-                        'value': f'{quote.charge_amount:.2f}',
-                        'currency': 'RUB',
-                    },
-                    'vat_code': 1,
-                    'payment_mode': 'full_prepayment',
-                    'payment_subject': 'service',
-                }],
-            },
-        }, ensure_ascii=False)
+    from bot.services.telegram_invoice import invoice_arguments
+    kwargs = invoice_arguments(intent, quote, bot_name=bot_name, provider_id=adapter.provider_id)
+    kwargs['reply_markup'] = builder.as_markup()
     await send_telegram_invoice_or_status(
         callback,
         provider_title=adapter.title,

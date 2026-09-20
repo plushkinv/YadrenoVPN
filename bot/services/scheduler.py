@@ -694,7 +694,8 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
     """
     logger.info("⏳ Запуск проверки истекающих ключей...")
     try:
-        from bot.utils.event_placeholders import render_event_message_text
+        from bot.utils.datetime_format import get_display_tzinfo
+        from bot.utils.event_placeholders import build_key_event_context, render_event_message_text
         from bot.utils.page_renderer import PreparedPageRender, prepare_page_render
         from bot.utils.text import send_media_or_text
         days = int(get_setting('notification_days', '3'))
@@ -708,22 +709,18 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
         notification_media_type = notification_data.get('media_type')
         
         expiring_keys = get_expiring_keys(days)
+        display_tz = get_display_tzinfo()
         sent_count = 0
         
         for key_info in expiring_keys:
             vpn_key_id = key_info['vpn_key_id']
             user_telegram_id = key_info['user_telegram_id']
-            days_left = key_info['days_left']
-            keyname = key_info.get('custom_name') or f"#{vpn_key_id}"
             
             # Checking if we sent today
             if is_notification_sent_today(vpn_key_id):
                 continue
             
-            event_context = {
-                'key_name': keyname,
-                'key_days_left': days_left,
-            }
+            event_context = build_key_event_context(key_info, display_tz=display_tz)
             text = await render_event_message_text(
                 notification_text,
                 'key_expiring',
@@ -736,10 +733,9 @@ async def check_and_send_expiry_notifications(bot: Bot) -> None:
                 bot,
                 'expiry_notification_actions',
                 context={
+                    **event_context,
                     'telegram_id': user_telegram_id,
                     'key_id': vpn_key_id,
-                    'key_name': keyname,
-                    'key_days_left': days_left,
                 },
             )
             kb = (
@@ -1188,6 +1184,8 @@ async def sync_traffic_stats(
             error,
         )
 
+    from bot.services.imported_access import observe_imported_snapshots
+    observe_imported_snapshots(keys, collection.snapshots)
     # Only changed cumulative counters are written to SQLite.
     traffic_updates = collect_changed_traffic_updates(keys, collection.snapshots)
     
@@ -1200,6 +1198,9 @@ async def sync_traffic_stats(
     if not notification_text_template:
         raise RuntimeError("Required setting 'traffic_notification_text' is empty")
 
+    from bot.utils.datetime_format import get_display_tzinfo
+
+    display_tz = get_display_tzinfo()
     for key in keys:
         try:
             server_id = int(key['server_id'])
@@ -1226,13 +1227,10 @@ async def sync_traffic_stats(
                 # Sending a notification
                 telegram_id = key.get('telegram_id')
                 if telegram_id:
-                    # Forming the key name
-                    keyname = key.get('custom_name') or f"#{key['id']}"
-                    
-                    from bot.utils.event_placeholders import render_event_message_text
+                    from bot.utils.event_placeholders import build_key_event_context, render_event_message_text
 
                     event_context = {
-                        'key_name': keyname,
+                        **build_key_event_context({**key, 'traffic_used': traffic_used}, display_tz=display_tz),
                         'key_traffic_remaining_percent': threshold,
                         'key_traffic_used_text': format_traffic(traffic_used),
                         'key_traffic_limit_text': format_traffic(traffic_limit),
@@ -1354,6 +1352,12 @@ async def run_traffic_sync_scheduler(bot: Bot) -> None:
     cycle = 0
     while True:
         try:
+            from core.panel_identity import process_panel_identity_renames
+            await process_panel_identity_renames()
+            from core.key_operations import recover_key_operations
+            await recover_key_operations()
+            from core.trials import recover_trial_access
+            await recover_trial_access()
             async with panel_sync_coordinator.regular():
                 from database.requests import (
                     get_all_active_keys_with_server,

@@ -64,6 +64,8 @@ async def retry_confirmed_payment_intents(
     concurrency: int = AUTO_CHECK_CONCURRENCY,
 ) -> dict[str, int]:
     """Retries settled v1 intents that are not owned by an active polling row."""
+    from database.requests import expire_unprepared_payment_offers
+    expire_unprepared_payment_offers()
     rows = get_retryable_confirmed_payment_intents(
         limit=min(max(1, int(limit)), AUTO_CHECK_BATCH_LIMIT)
     )

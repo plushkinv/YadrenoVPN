@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from bot.services.panel_key_state import should_panel_client_exist
 from bot.services.panel_sync_coordinator import panel_sync_coordinator, regular_panel_operation
-from bot.utils.panel_email import is_managed_panel_email
+from bot.utils.panel_email import is_managed_panel_email, is_managed_panel_binding, is_managed_key
 
 from .panels.base import (
     BaseVPNClient,
@@ -65,11 +65,16 @@ async def provision_client_on_server(
     sub_id: Optional[str] = None,
     inbound_ids: Optional[Iterable[int]] = None,
     client: Optional[BaseVPNClient] = None,
+    expected_sub_id: Optional[str] = None,
 ) -> PanelProvisionResult:
     """Create or repair one logical client through unified Clients API."""
-    if not is_managed_panel_email(email):
+    if not is_managed_panel_binding(server_id, email):
         raise VPNAPIError(f"Refusing to provision unmanaged panel client: {email!r}")
     panel_client = client or await get_client(server_id)
+    if expected_sub_id is not None:
+        record = await panel_client._get_client_record(email)
+        if record and panel_client._split_record(record)[0].get('subId') != expected_sub_id:
+            raise VPNAPIError('Panel client has a different subscription identity')
     if int(limit_hwid) > 0:
         await refresh_client_capabilities(panel_client)
         if not supports_client_hwids(panel_client):
@@ -94,6 +99,8 @@ async def provision_client_on_server(
     result = await result if inspect.isawaitable(result) else result
     if not isinstance(result, PanelProvisionResult):
         raise VPNAPIError("Panel adapter returned an invalid provisioning result")
+    if expected_sub_id is not None and result.attached_inbound_ids and result.sub_id != expected_sub_id:
+        raise VPNAPIError('Panel returned a different subscription identity')
     return result
 
 
@@ -173,7 +180,7 @@ async def get_client_external_links(
     client: Optional[BaseVPNClient] = None,
 ) -> List[Dict[str, Any]]:
     """Read all external links for one bot-owned logical client."""
-    if not is_managed_panel_email(panel_email):
+    if not is_managed_panel_binding(server_id, panel_email):
         raise VPNAPIError(
             f"Refusing to read external links for unmanaged panel client: {panel_email!r}"
         )
@@ -202,9 +209,17 @@ async def get_key_devices_for_user(
     key = get_key_details_for_user(int(key_id), int(telegram_id))
     if not key:
         raise VPNAPIError("VPN key is missing or belongs to another user")
+    return await read_key_devices(key)
+
+
+async def read_key_devices(key: dict) -> List[PanelClientDevice]:
+    """Read devices for a key already selected by a trusted ownership adapter."""
+    from database.requests import DEVICE_LIMIT_MODE_HWID, get_device_limit_mode
+    if get_device_limit_mode() != DEVICE_LIMIT_MODE_HWID:
+        raise VPNAPIError("Client devices are unavailable in IP limit mode")
     server_id = key.get("server_id")
     panel_email = str(key.get("panel_email") or "").strip()
-    if not server_id or not key.get("sub_id") or not is_managed_panel_email(panel_email):
+    if not server_id or not key.get("sub_id") or not is_managed_key(key):
         raise VPNAPIError("VPN key is not configured on a panel")
     panel_client = await get_client(int(server_id))
     if not supports_client_hwids(panel_client):
@@ -241,6 +256,13 @@ async def delete_key_device_for_user(
     key = get_key_details_for_user(int(key_id), int(telegram_id))
     if not key:
         return False
+    from database.requests import assert_key_mutation_ready
+    assert_key_mutation_ready(int(key_id))
+    return await _delete_key_device(key, device_id)
+
+
+async def _delete_key_device(key, device_id):
+    """Execute native device deletion after the caller has checked ownership."""
     server_id = key.get("server_id")
     panel_email = str(key.get("panel_email") or "").strip()
     normalized_device_id = str(device_id or "").strip()
@@ -250,7 +272,7 @@ async def delete_key_device_for_user(
         or not normalized_device_id.isascii()
         or not normalized_device_id.isdecimal()
         or int(normalized_device_id) <= 0
-        or not is_managed_panel_email(panel_email)
+        or not is_managed_key(key)
     ):
         return False
     panel_client = await get_client(int(server_id))
@@ -274,7 +296,7 @@ async def replace_client_external_links(
     client: Optional[BaseVPNClient] = None,
 ) -> bool:
     """Replace all external links for one bot-owned logical client."""
-    if not is_managed_panel_email(panel_email):
+    if not is_managed_panel_binding(server_id, panel_email):
         raise VPNAPIError(
             f"Refusing to write external links for unmanaged panel client: {panel_email!r}"
         )
@@ -535,7 +557,7 @@ async def reset_key_traffic_if_active(key_id: int) -> bool:
     if not key or not key.get("server_active"):
         return False
     email = key.get("panel_email")
-    if not is_managed_panel_email(email):
+    if not is_managed_key(key):
         return False
     try:
         client = get_client_from_server_data(_build_server_data_from_key(key))
@@ -553,7 +575,7 @@ async def extend_key_on_server(key_id: int, days: int) -> bool:
     if not key or not key.get("server_active"):
         return False
     email = key.get("panel_email")
-    if not is_managed_panel_email(email):
+    if not is_managed_key(key):
         return False
     try:
         client = get_client_from_server_data(_build_server_data_from_key(key))
@@ -589,7 +611,7 @@ async def restore_key_traffic_limit(key_id: int) -> bool:
     if not key or not key.get("server_active"):
         return True
     email = key.get("panel_email")
-    if not is_managed_panel_email(email):
+    if not is_managed_key(key):
         return False
     try:
         client = get_client_from_server_data(_build_server_data_from_key(key))
@@ -665,12 +687,33 @@ async def _ensure_subscription_keys_on_server_impl(
         if not key:
             stats["errors"] = 1
             return stats
+        from database.requests import get_pending_panel_identity
+        if get_pending_panel_identity(int(key_id)):
+            stats['errors'] = 1
+            return stats
+        from database.requests import assert_key_mutation_ready
+        from core.results import CoreError
+        try:
+            assert_key_mutation_ready(int(key_id))
+        except CoreError:
+            stats['errors'] = 1
+            return stats
         if not all((key.get("server_id"), key.get("panel_email"), key.get("sub_id"))):
             stats["skipped"] = 1
             stats["ok"] = 1
             return stats
+        from database.requests import get_imported_key_binding
+        imported = get_imported_key_binding(int(key_id))
+        if imported and imported['preserve_terms']:
+            # Unknown historical terms belong to the panel until an explicit
+            # tariff purchase. A background pass must not reissue this access.
+            from bot.services.imported_access import sync_preserved_controls
+            return await sync_preserved_controls(key, imported, dry_run=dry_run)
+        if imported:
+            from bot.services.imported_access import sync_imported_entitlement
+            return await sync_imported_entitlement(key, imported, dry_run=dry_run, device_limit_mode=device_limit_mode)
         email = str(key["panel_email"])
-        if not is_managed_panel_email(email):
+        if not is_managed_key(key):
             stats["errors"] = 1
             return stats
 
@@ -897,6 +940,8 @@ async def ensure_subscription_keys_on_server(
     device_limit_mode: Optional[str] = None,
 ) -> Dict[str, int]:
     """Reconcile one key and make every non-preview failure observable."""
+    from database.requests import get_key_entitlement, complete_key_entitlement_sync
+    entitlement = get_key_entitlement(key_id) if not dry_run else None
     context = _unlocked_preview() if dry_run else panel_sync_coordinator.regular()
     async with context:
         try:
@@ -941,6 +986,8 @@ async def ensure_subscription_keys_on_server(
             stats.get("errors", 0),
             stats.get("ok", 0),
         )
+    if entitlement and not dry_run and stats.get('ok') and not stats.get('errors'):
+        complete_key_entitlement_sync(key_id, entitlement['order_id'])
     return stats
 
 
@@ -978,6 +1025,11 @@ async def get_subscription_url_for_key(
     if not sub_id or not server_id:
         return None
     try:
+        if key.get('id') is not None:
+            from database.requests import get_imported_key_binding
+            imported = get_imported_key_binding(int(key['id']))
+            if imported and imported['source_url']:
+                return imported['source_url']
         client = await get_client(int(server_id))
         return await client.get_subscription_link(str(sub_id))
     except Exception:

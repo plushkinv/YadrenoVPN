@@ -5,7 +5,9 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from bot.utils.action_registry import ACTION_REGISTRY, SYSTEM_BUTTONS, SYSTEM_COLLECTIONS, normalize_callback_data
+from bot.utils.action_registry import (
+    ACTION_REGISTRY, SYSTEM_COLLECTIONS, is_registered_system_button, normalize_callback_data,
+)
 from bot.utils.custom_pages import build_page_callback
 from bot.utils.page_flow import PAGE_GUARDS, PAGE_HOOKS
 from bot.utils.page_routes import build_page_route_callback, page_route_exists
@@ -84,8 +86,11 @@ def _validate_page_button_action(
     action_type = str(button['action_type'])
     action_value = button.get('action_value')
     if action_type in {'system', 'system_collection'}:
-        registry = SYSTEM_BUTTONS if action_type == 'system' else SYSTEM_COLLECTIONS
-        if button_id not in registry:
+        registered = (
+            is_registered_system_button(button_id)
+            if action_type == 'system' else button_id in SYSTEM_COLLECTIONS
+        )
+        if not registered:
             raise ValueError(
                 f'page.buttons[{index}] references unregistered {action_type} id: {button_id}'
             )

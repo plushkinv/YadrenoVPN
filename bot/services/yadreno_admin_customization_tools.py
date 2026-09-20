@@ -494,6 +494,8 @@ def _inspect_extensions(cursor: int, limit: int) -> dict[str, Any]:
             'core_events': core_events,
             'scheduled_tasks': scheduled_tasks,
             'task_capabilities': diagnostics.get('task_capabilities') or {},
+            'account_capabilities': diagnostics.get('account_capabilities') or {},
+            'shared_modules': diagnostics.get('shared_modules') or {},
             'messaging_capabilities': diagnostics.get('messaging_capabilities') or {},
             'finance_capabilities': diagnostics.get('finance_capabilities') or {},
         },

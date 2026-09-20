@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from config import ADMIN_IDS
 from database.requests import get_users_stats, get_all_users_paginated, get_user_by_telegram_id, toggle_user_ban, get_user_vpn_keys, get_user_payments_stats, get_vpn_key_by_id, extend_vpn_key, create_vpn_key_admin, get_active_servers, get_all_tariffs, get_user_balance, get_user_referral_coefficient, set_user_referral_coefficient
 from bot.utils.admin import is_admin
+from bot.utils.admin_accounts import selected_user, account_selector, identity_line
 from bot.utils.datetime_format import format_datetime_for_display
 from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.panel_email import get_panel_email_prefix
@@ -29,7 +30,27 @@ def format_user_display(user: dict) -> str:
     """Formats the username for display."""
     if user.get('username'):
         return f"@{user['username']}"
+    if user.get('telegram_id') is None:
+        return f"Аккаунт #{user['id']}"
     return f"ID: {user['telegram_id']}"
+
+
+@router.callback_query(F.data.startswith('admin_account_view:'))
+async def show_account_view_callback(callback: CallbackQuery, state: FSMContext):
+    """Read an account by internal ID without reinterpreting legacy callbacks."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        return
+    from database.requests import get_user_by_id
+    user = get_user_by_id(int(callback.data.split(':')[1]))
+    if not user:
+        await callback.answer('Пользователь не найден', show_alert=True)
+        return
+    await state.set_state(AdminStates.user_view)
+    await state.update_data(current_user_id=user['id'], current_user_telegram_id=user['telegram_id'], current_user_selector=account_selector(user))
+    text, keyboard = _format_user_card(user)
+    await safe_edit_or_send(callback.message, text, reply_markup=keyboard)
+    await callback.answer()
 
 @router.callback_query(F.data.startswith('admin_user_view:'))
 async def show_user_view_callback(callback: CallbackQuery, state: FSMContext):
@@ -37,28 +58,28 @@ async def show_user_view_callback(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    telegram_id = int(callback.data.split(':')[1])
+    telegram_id = callback.data.split(':', 1)[1]
     await _show_user_view_edit(callback, state, telegram_id)
 
 async def _show_user_view(message: Message, state: FSMContext, telegram_id: int):
     """Shows the user card (new message)."""
-    user = get_user_by_telegram_id(telegram_id)
+    user = selected_user(telegram_id)
     if not user:
         await safe_edit_or_send(message, f'❌ Пользователь с ID {telegram_id} не найден', reply_markup=home_only_kb(), force_new=True)
         return
     await state.set_state(AdminStates.user_view)
-    await state.update_data(current_user_telegram_id=telegram_id)
+    await state.update_data(current_user_telegram_id=user['telegram_id'], current_user_id=user['id'], current_user_selector=account_selector(user))
     (text, keyboard) = _format_user_card(user)
     await safe_edit_or_send(message, text, reply_markup=keyboard, force_new=True)
 
 async def _show_user_view_edit(callback: CallbackQuery, state: FSMContext, telegram_id: int):
     """Shows the user card (editing a message)."""
-    user = get_user_by_telegram_id(telegram_id)
+    user = selected_user(telegram_id)
     if not user:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
     await state.set_state(AdminStates.user_view)
-    await state.update_data(current_user_telegram_id=telegram_id)
+    await state.update_data(current_user_telegram_id=user['telegram_id'], current_user_id=user['id'], current_user_selector=account_selector(user))
     (text, keyboard) = _format_user_card(user)
     await safe_edit_or_send(callback.message, text, reply_markup=keyboard)
     await callback.answer()
@@ -84,13 +105,19 @@ def _format_user_card(user: dict) -> tuple[str, any]:
     else:
         lines.append('👤 Username: _не указан_')
         
-    lines.append(f'📱 Telegram ID: <code>{telegram_id}</code>')
-    if is_bot_blocked:
+    if telegram_id is None:
+        lines.append(f"🌐 Аккаунт: <code>{user['id']}</code>")
+        lines.append('📱 Telegram не привязан')
+    else:
+        lines.append(f'📱 Telegram ID: <code>{telegram_id}</code>')
+    if telegram_id is None:
+        lines.append('📵 Доставка в Telegram недоступна')
+    elif is_bot_blocked:
         lines.append('📵 Статус доставки: <b>бот заблокирован пользователем</b>')
     else:
         lines.append('📨 Статус доставки: <b>доступен для сообщений</b>')
     
-    panel_email_prefix = get_panel_email_prefix(user)
+    panel_email_prefix = get_panel_email_prefix(user) if telegram_id is not None else f"site_{user['id']}_"
     lines.append(f'📧 E-mail в панели: <code>{escape_html(panel_email_prefix)}</code>')
     lines.append(f'📅 Зарегистрирован: {created_at}')
     
@@ -132,7 +159,11 @@ def _format_user_card(user: dict) -> tuple[str, any]:
     else:
         lines.append('  _Оплат не было_')
     text = '\n'.join(lines)
-    keyboard = user_view_kb(telegram_id, vpn_keys, is_banned, balance_cents, referral_coefficient)
+    if telegram_id is None:
+        from bot.keyboards.admin_users import account_read_kb
+        keyboard = account_read_kb(user['id'], vpn_keys, is_banned, balance_cents, referral_coefficient)
+    else:
+        keyboard = user_view_kb(telegram_id, vpn_keys, is_banned, balance_cents, referral_coefficient)
     return (text, keyboard)
 
 @router.callback_query(F.data.startswith('admin_user_toggle_ban:'))
@@ -141,8 +172,8 @@ async def request_ban_confirmation(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    telegram_id = int(callback.data.split(':')[1])
-    user = get_user_by_telegram_id(telegram_id)
+    telegram_id = callback.data.split(':', 1)[1]
+    user = selected_user(telegram_id)
     if not user:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
@@ -162,15 +193,18 @@ async def confirm_ban_toggle(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    telegram_id = int(callback.data.split(':')[1])
-    new_status = toggle_user_ban(telegram_id)
+    telegram_id = callback.data.split(':', 1)[1]
+    user = selected_user(telegram_id)
+    from database.requests import toggle_account_ban
+    new_status = toggle_account_ban(user['id']) if user else None
     if new_status is None:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
     action_text = 'заблокирован' if new_status else 'разблокирован'
     icon = '🚫' if new_status else '✅'
     try:
-        sync_result = await sync_user_keys_panel_access(telegram_id)
+        from bot.services.key_lifecycle import sync_account_keys_panel_access
+        sync_result = await sync_account_keys_panel_access(user['id'])
         keys_total = int(sync_result.get('keys_total', 0) or 0)
         synced = int(sync_result.get('synced', 0) or 0)
         errors = int(sync_result.get('errors', 0) or 0)
@@ -193,15 +227,15 @@ async def start_coefficient_edit(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    telegram_id = int(callback.data.split(':')[1])
-    user = get_user_by_telegram_id(telegram_id)
+    telegram_id = callback.data.split(':', 1)[1]
+    user = selected_user(telegram_id)
     if not user:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
     current_coefficient = get_user_referral_coefficient(user['id'])
     await state.set_state(AdminStates.waiting_coefficient)
-    await state.update_data(coefficient_user_telegram_id=telegram_id, coefficient_edit_message_id=callback.message.message_id)
-    await safe_edit_or_send(callback.message, f'📊 <b>Редактирование реферального коэффициента</b>\n\n👤 {format_user_display(user)}\n📱 ID: <code>{telegram_id}</code>\n\nТекущий реферальный коэффициент: <b>{current_coefficient}x</b>\n\nВведите новый реферальный коэффициент (0.0 - 10.0):', reply_markup=back_and_home_kb(f'admin_user_view:{telegram_id}'))
+    await state.update_data(coefficient_user_telegram_id=user['telegram_id'], coefficient_user_selector=account_selector(user), coefficient_edit_message_id=callback.message.message_id)
+    await safe_edit_or_send(callback.message, f'📊 <b>Редактирование реферального коэффициента</b>\n\n👤 {format_user_display(user)}\n{identity_line(user)}\n\nТекущий реферальный коэффициент: <b>{current_coefficient}x</b>\n\nВведите новый реферальный коэффициент (0.0 - 10.0):', reply_markup=back_and_home_kb(f'admin_user_view:{telegram_id}'))
     await callback.answer()
 
 @router.message(AdminStates.waiting_coefficient, F.text, ~F.text.startswith('/'))
@@ -219,9 +253,9 @@ async def process_coefficient_input(message: Message, state: FSMContext):
         await message.delete()
         return
     data = await state.get_data()
-    telegram_id = data.get('coefficient_user_telegram_id')
+    telegram_id = data.get('coefficient_user_selector') or data.get('coefficient_user_telegram_id')
     edit_message_id = data.get('coefficient_edit_message_id')
-    user = get_user_by_telegram_id(telegram_id)
+    user = selected_user(telegram_id)
     if not user:
         await message.delete()
         return
@@ -229,45 +263,45 @@ async def process_coefficient_input(message: Message, state: FSMContext):
     await message.delete()
     if edit_message_id:
         try:
-            await message.bot.edit_message_text(chat_id=message.chat.id, message_id=edit_message_id, text=f'📊 <b>Реферальный коэффициент обновлён</b>\n\n👤 {format_user_display(user)}\n📱 ID: <code>{telegram_id}</code>\n\nНовый реферальный коэффициент: <b>{coefficient}x</b>', reply_markup=back_and_home_kb(f'admin_user_view:{telegram_id}'), parse_mode='HTML')
+            await message.bot.edit_message_text(chat_id=message.chat.id, message_id=edit_message_id, text=f'📊 <b>Реферальный коэффициент обновлён</b>\n\n👤 {format_user_display(user)}\n{identity_line(user)}\n\nНовый реферальный коэффициент: <b>{coefficient}x</b>', reply_markup=back_and_home_kb(f'admin_user_view:{telegram_id}'), parse_mode='HTML')
         except Exception:
             pass
     await state.clear()
 
-@router.callback_query(F.data.regexp('^admin_user_balance_add:(\\d+)$'))
+@router.callback_query(F.data.regexp('^admin_user_balance_add:((?:account_)?\\d+)$'))
 async def start_balance_add(callback: CallbackQuery, state: FSMContext):
     """Start of replenishing the user's balance."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    telegram_id = int(callback.data.split(':')[1])
-    user = get_user_by_telegram_id(telegram_id)
+    telegram_id = callback.data.split(':', 1)[1]
+    user = selected_user(telegram_id)
     if not user:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
     current_balance = get_user_balance(user['id'])
     base_currency = get_base_currency()
     await state.set_state(AdminStates.waiting_balance_amount)
-    await state.update_data(balance_user_telegram_id=telegram_id, balance_operation='add')
-    await safe_edit_or_send(callback.message, f'💰 <b>Пополнение баланса</b>\n\n👤 {format_user_display(user)}\n📱 ID: <code>{telegram_id}</code>\n💼 Текущий баланс: <b>{format_money_minor(current_balance, base_currency)}</b>\n\nВведите сумму пополнения в {base_currency} (например: 100 или 50.5):', reply_markup=back_and_home_kb(f'admin_user_view:{telegram_id}'))
+    await state.update_data(balance_user_telegram_id=user['telegram_id'], balance_user_selector=account_selector(user), balance_operation='add')
+    await safe_edit_or_send(callback.message, f'💰 <b>Пополнение баланса</b>\n\n👤 {format_user_display(user)}\n{identity_line(user)}\n💼 Текущий баланс: <b>{format_money_minor(current_balance, base_currency)}</b>\n\nВведите сумму пополнения в {base_currency} (например: 100 или 50.5):', reply_markup=back_and_home_kb(f'admin_user_view:{telegram_id}'))
     await callback.answer()
 
-@router.callback_query(F.data.regexp('^admin_user_balance_deduct:(\\d+)$'))
+@router.callback_query(F.data.regexp('^admin_user_balance_deduct:((?:account_)?\\d+)$'))
 async def start_balance_deduct(callback: CallbackQuery, state: FSMContext):
     """Start of debiting the user's balance."""
     if not is_admin(callback.from_user.id):
         await callback.answer('⛔ Доступ запрещён', show_alert=True)
         return
-    telegram_id = int(callback.data.split(':')[1])
-    user = get_user_by_telegram_id(telegram_id)
+    telegram_id = callback.data.split(':', 1)[1]
+    user = selected_user(telegram_id)
     if not user:
         await callback.answer('Пользователь не найден', show_alert=True)
         return
     current_balance = get_user_balance(user['id'])
     base_currency = get_base_currency()
     await state.set_state(AdminStates.waiting_balance_amount)
-    await state.update_data(balance_user_telegram_id=telegram_id, balance_operation='deduct')
-    await safe_edit_or_send(callback.message, f'💸 <b>Списание баланса</b>\n\n👤 {format_user_display(user)}\n📱 ID: <code>{telegram_id}</code>\n💼 Текущий баланс: <b>{format_money_minor(current_balance, base_currency)}</b>\n\nВведите сумму списания в {base_currency} (например: 100 или 50.5):', reply_markup=back_and_home_kb(f'admin_user_view:{telegram_id}'))
+    await state.update_data(balance_user_telegram_id=user['telegram_id'], balance_user_selector=account_selector(user), balance_operation='deduct')
+    await safe_edit_or_send(callback.message, f'💸 <b>Списание баланса</b>\n\n👤 {format_user_display(user)}\n{identity_line(user)}\n💼 Текущий баланс: <b>{format_money_minor(current_balance, base_currency)}</b>\n\nВведите сумму списания в {base_currency} (например: 100 или 50.5):', reply_markup=back_and_home_kb(f'admin_user_view:{telegram_id}'))
     await callback.answer()
 
 @router.message(AdminStates.waiting_balance_amount, F.text, ~F.text.startswith('/'))
@@ -286,12 +320,12 @@ async def process_balance_amount(message: Message, state: FSMContext):
         await safe_edit_or_send(message, '❌ Введите положительное число (например: 100 или 50.5)')
         return
     data = await state.get_data()
-    telegram_id = data.get('balance_user_telegram_id')
+    telegram_id = data.get('balance_user_selector') or data.get('balance_user_telegram_id')
     operation = data.get('balance_operation')
     if not telegram_id:
         await safe_edit_or_send(message, '❌ Ошибка: потерян контекст операции')
         return
-    user = get_user_by_telegram_id(telegram_id)
+    user = selected_user(telegram_id)
     if not user:
         await safe_edit_or_send(message, '❌ Пользователь не найден')
         return
@@ -338,4 +372,4 @@ async def process_balance_amount(message: Message, state: FSMContext):
         await message.delete()
     except:
         pass
-    await state.update_data(balance_user_telegram_id=None, balance_operation=None)
+    await state.update_data(balance_user_telegram_id=None, balance_user_selector=None, balance_operation=None)

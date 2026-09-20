@@ -98,6 +98,7 @@ def _broadcast_recipient_query_parts(
     conditions = [
         'u.is_banned = 0',
         'u.is_bot_blocked = 0',
+        'u.telegram_id IS NOT NULL',
     ]
 
     if 'active' in selected:
@@ -221,20 +222,28 @@ def get_expiring_keys(days: int) -> List[Dict[str, Any]]:
         days: Number of days until expiration
     
     Returns:
-        List of dictionaries: vpn_key_id, user_telegram_id, expires_at, custom_name, days_left
+        Key display data plus the released vpn_key_id, user_telegram_id and days_left fields.
     """
     with get_db() as conn:
         cursor = conn.execute("""
             SELECT 
-                vk.id as vpn_key_id,
+                vk.id, vk.id as vpn_key_id,
                 u.telegram_id as user_telegram_id,
                 vk.expires_at,
                 vk.custom_name,
+                vk.server_id, s.name as server_name,
+                vk.traffic_used, vk.traffic_limit, vk.max_ips_override,
+                t.name as tariff_name, t.system_type as tariff_system_type,
+                COALESCE(json_extract(ke.tariff_json, '$.max_ips'), t.max_ips) as tariff_max_ips,
                 CAST((julianday(vk.expires_at) - julianday('now')) AS INTEGER) as days_left
             FROM vpn_keys vk
             JOIN users u ON vk.user_id = u.id
+            LEFT JOIN servers s ON vk.server_id = s.id
+            LEFT JOIN tariffs t ON vk.tariff_id = t.id
+            LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
             WHERE u.is_banned = 0
             AND u.is_bot_blocked = 0
+            AND u.telegram_id IS NOT NULL
             AND vk.expires_at IS NOT NULL
             AND vk.expires_at > datetime('now')
             AND vk.expires_at <= datetime('now', '+' || ? || ' days')

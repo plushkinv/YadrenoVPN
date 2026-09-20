@@ -10,6 +10,7 @@ from database.requests import (
     create_support_thread,
     get_support_thread,
     get_user_by_telegram_id,
+    get_user_by_id,
     mark_user_bot_blocked,
     record_support_message,
     release_support_thread_assignment,
@@ -19,12 +20,14 @@ from bot.services.support import (
     cleanup_claimed_admin_notifications,
     extract_support_payload,
     format_support_user_line,
+    support_identity_line,
     send_admin_message_to_user,
     support_thread_operation,
     support_unsupported_text,
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
+from bot.utils.admin_accounts import account_selector, selected_user, identity_line
 from bot.utils.delivery import is_bot_blocked_error
 from bot.utils.text import safe_edit_or_send
 
@@ -73,7 +76,7 @@ async def _send_admin_support_message_locked(
                 thread_id,
                 sender_type="admin",
                 sender_telegram_id=admin_id,
-                recipient_telegram_id=int(thread["user_telegram_id"]),
+                recipient_telegram_id=thread.get("user_telegram_id") if thread.get('channel') != 'web' else None,
                 text_html=payload["text_html"],
                 media_type=payload["media_type"],
                 media_file_id=payload["media_file_id"],
@@ -123,12 +126,12 @@ async def admin_support_start(callback: CallbackQuery, state: FSMContext):
         return
 
     try:
-        user_telegram_id = int(callback.data.split(":", 1)[1])
+        selector = callback.data.split(":", 1)[1]
     except (TypeError, ValueError, IndexError):
         await callback.answer("❌ Некорректный пользователь", show_alert=True)
         return
 
-    user = get_user_by_telegram_id(user_telegram_id)
+    user = selected_user(selector)
     if not user:
         await callback.answer("❌ Пользователь не найден", show_alert=True)
         return
@@ -136,21 +139,24 @@ async def admin_support_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.support_waiting_message)
     await state.update_data(
         support_mode="new",
-        support_user_telegram_id=user_telegram_id,
-        support_back_callback=f"admin_user_view:{user_telegram_id}",
+        support_user_telegram_id=user['telegram_id'],
+        support_user_id=user['id'],
+        support_back_callback=f"admin_user_view:{account_selector(user)}",
     )
 
     text = (
         "💬 <b>Сообщение пользователю</b>\n\n"
         f"👤 Пользователь: {format_support_user_line(user)}\n"
-        f"📱 Telegram ID: <code>{user_telegram_id}</code>\n\n"
+        f"{identity_line(user)}\n\n"
         "Отправьте сообщение, которое нужно передать пользователю.\n\n"
         "Можно отправить текст, фото, видео или GIF."
     )
+    if user['telegram_id'] is None:
+        text += '\n\nСообщение будет доступно в веб-переписке через установленный модуль поддержки.'
     await safe_edit_or_send(
         callback.message,
         text,
-        reply_markup=support_admin_cancel_kb(f"admin_user_view:{user_telegram_id}"),
+        reply_markup=support_admin_cancel_kb(f"admin_user_view:{account_selector(user)}"),
     )
     await callback.answer()
 
@@ -185,7 +191,8 @@ async def admin_support_reply(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Диалог уже взял другой администратор", show_alert=True)
         return
 
-    user = get_user_by_telegram_id(int(thread["user_telegram_id"]))
+    user = (get_user_by_telegram_id(int(thread["user_telegram_id"])) if thread.get('user_telegram_id') is not None
+            else get_user_by_id(thread['user_id']))
     if not user:
         await callback.answer("❌ Пользователь не найден", show_alert=True)
         return
@@ -194,7 +201,7 @@ async def admin_support_reply(callback: CallbackQuery, state: FSMContext):
     await state.update_data(
         support_mode="reply",
         support_thread_id=thread_id,
-        support_user_telegram_id=int(thread["user_telegram_id"]),
+        support_user_telegram_id=thread.get("user_telegram_id"),
         support_back_callback="admin_panel",
     )
 
@@ -206,7 +213,7 @@ async def admin_support_reply(callback: CallbackQuery, state: FSMContext):
     text = (
         "💬 <b>Ответ пользователю</b>\n\n"
         f"👤 Пользователь: {format_support_user_line(user)}\n"
-        f"📱 Telegram ID: <code>{thread['user_telegram_id']}</code>\n"
+        f"{support_identity_line(thread)}\n"
         f"🧵 Диалог: <code>{thread_id}</code>\n\n"
         f"{note}\n\n"
         "Отправьте текст, фото, видео или GIF."
@@ -244,7 +251,8 @@ async def process_admin_support_message(message: Message, state: FSMContext):
 
     if mode == "new":
         user_telegram_id = data.get("support_user_telegram_id")
-        user = get_user_by_telegram_id(int(user_telegram_id or 0))
+        user = (get_user_by_id(data['support_user_id']) if data.get('support_user_id')
+                else get_user_by_telegram_id(int(user_telegram_id or 0)))
         if not user:
             await safe_edit_or_send(
                 message,
@@ -255,12 +263,14 @@ async def process_admin_support_message(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        thread = create_support_thread(
-            int(user_telegram_id),
-            initiator_type="admin",
-            initiator_admin_id=admin_id,
-            assigned_admin_id=admin_id,
-        )
+        if user.get('telegram_id') is None:
+            from database.requests import create_account_support_thread
+            thread = create_account_support_thread(user['id'], admin_id=admin_id)
+        else:
+            thread = create_support_thread(
+                int(user['telegram_id']), initiator_type="admin",
+                initiator_admin_id=admin_id, assigned_admin_id=admin_id,
+            )
         if not thread:
             await safe_edit_or_send(
                 message,
@@ -307,7 +317,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
         await _show_admin_thread_state_error(message, state, error.status)
         return
     except Exception as e:
-        if is_bot_blocked_error(e):
+        if thread.get('user_telegram_id') is not None and is_bot_blocked_error(e):
             mark_user_bot_blocked(int(thread["user_telegram_id"]))
             text = (
                 "📵 <b>Сообщение не отправлено</b>\n\n"

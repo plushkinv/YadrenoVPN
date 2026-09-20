@@ -142,6 +142,15 @@ def build_payment_return_url(bot_name: str, provider: str, order_id: str) -> str
     The start parameter format is the same for QR providers:
     pay_{provider}_{order_id}
     """
+    from database.requests import get_payment_order_terms
+    terms = get_payment_order_terms(order_id)
+    if terms and terms['source'] in {'site', 'mini_app'}:
+        from urllib.parse import quote
+        from web_api.settings import get_web_settings
+        origin = get_web_settings().public_origin
+        if not origin:
+            raise ValueError('Web payment return origin is not configured')
+        return f'{origin}/orders/{quote(str(order_id), safe="")}'
     if not bot_name:
         return build_telegram_link()
 
@@ -487,7 +496,7 @@ async def create_yookassa_qr_payment(
     credentials = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
 
     # Idempotency key - unique for this order
-    idempotence_key = f"qr-{order_id}-{uuid.uuid4().hex[:8]}"
+    idempotence_key = str(uuid.uuid5(uuid.NAMESPACE_URL, 'yadrenovpn-yookassa:' + order_id))
     return_url = build_payment_return_url(bot_name, 'yookassa', order_id)
 
     payload = {
@@ -1355,7 +1364,13 @@ async def process_referral_reward(
     if bot is not None and events:
         try:
             from bot.services.notifications import notify_referrers_purchase
-            await notify_referrers_purchase(bot, order, events)
+            from core.context import get_account_context
+            account = get_account_context()
+            if account and account.source in ('site', 'mini_app'):
+                from runtime.delivery import dispatch
+                dispatch(lambda transport: notify_referrers_purchase(transport, order, events), bot=bot)
+            else:
+                await notify_referrers_purchase(bot, order, events)
         except Exception as notify_err:
             logger.warning(f'Ошибка уведомления рефоводов о покупке: {notify_err}')
 

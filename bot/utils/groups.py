@@ -25,9 +25,24 @@ def is_tariff_available_for_payment(
         return False
     if key is None:
         return True
+    if key.get('tariff_id') is None and key.get('id') and key.get('user_id'):
+        from database.requests import is_tariff_payment_target_allowed
+        return is_tariff_payment_target_allowed(user_id=key['user_id'], tariff_id=tariff['id'], vpn_key_id=key['id'])
     return int(tariff.get('group_id') or 1) == int(
         key.get('tariff_group_id') or 1
     )
+
+
+def get_tariffs_for_key_renewal(key: dict):
+    """Unknown imported plans are selected from their configured panel groups."""
+    if key.get('tariff_id') is not None:
+        if key.get('id'):
+            from database.requests import get_key_entitlement
+            terms = get_key_entitlement(key['id'])
+            if terms and get_groups_count() > 1:
+                return get_tariffs_by_group(int(terms['tariff'].get('group_id') or 1))
+        return get_tariffs_for_renewal(key['tariff_id'])
+    return [tariff for tariff in get_all_tariffs(include_hidden=False) if is_tariff_available_for_payment(tariff, key)]
 
 
 def build_groups_data_for_tariffs():

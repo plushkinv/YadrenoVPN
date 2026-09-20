@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
 
 from .connection import get_db
@@ -150,12 +151,14 @@ def create_extension_support_ticket(
                 VALUES (?, ?, ?, NULL, NULL, 'open',
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
-                (target_user_id, int(user["telegram_id"]), initiator_type),
+                (target_user_id, user["telegram_id"], initiator_type),
             )
             thread_id = int(thread_cursor.lastrowid)
+            if user['telegram_id'] is None:
+                conn.execute("UPDATE support_threads SET channel='web' WHERE id=?", (thread_id,))
             sender_type = "user" if direction == "inbound" else "admin"
-            sender_telegram_id = int(user["telegram_id"]) if direction == "inbound" else None
-            recipient_telegram_id = int(user["telegram_id"]) if direction == "outbound" else None
+            sender_telegram_id = user["telegram_id"] if direction == "inbound" else None
+            recipient_telegram_id = user["telegram_id"] if direction == "outbound" else None
             conn.execute(
                 """
                 INSERT INTO support_messages (
@@ -462,6 +465,7 @@ def record_support_message(
     origin_extension_id: Optional[str] = None,
     origin_operation_key: Optional[str] = None,
     delivered_message_id: Optional[int] = None,
+    _conn=None,
 ) -> int:
     """Writes a message to the support log."""
     if sender_type not in {"user", "admin"}:
@@ -469,7 +473,7 @@ def record_support_message(
     if origin_type not in {"telegram", "extension"}:
         raise ValueError("origin_type must be telegram or extension")
 
-    with get_db() as conn:
+    with nullcontext(_conn) if _conn is not None else get_db() as conn:
         cursor = conn.execute(
             """
             INSERT INTO support_messages (

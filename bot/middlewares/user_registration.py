@@ -8,6 +8,7 @@ from aiogram.types import Message, TelegramObject
 
 from bot.services.referral_attribution import attribute_start_referral
 from database.requests import get_or_create_user
+from core.context import AccountContext, bind_account_context
 
 logger = logging.getLogger(__name__)
 
@@ -46,4 +47,5 @@ class UserRegistrationMiddleware(BaseMiddleware):
                 except Exception:
                     logger.warning('Failed to notify referrers for user %s', user['id'], exc_info=True)
 
-        return await handler(event, data)
+        with bind_account_context(AccountContext(account_id=user['id'], telegram_id=sender.id, source='telegram')):
+            return await handler(event, data)

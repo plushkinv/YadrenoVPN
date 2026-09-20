@@ -97,7 +97,8 @@ def record_core_event_with_conn(
     )
     event_id = f'evt_{uuid4().hex}'
     payload = {
-        'contract_version': 1, 'event_id': event_id, 'event': event_name,
+        'contract_version': 1 if user['telegram_id'] is not None else 2,
+        'event_id': event_id, 'event': event_name,
         'occurred_at': iso_utc(occurred_at), 'user_id': user['user_id'],
         'telegram_id': user['telegram_id'], 'user': user_snapshot,
         'payment': payment,

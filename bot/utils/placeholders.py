@@ -143,6 +143,8 @@ KEY_PAGE_FIELDS = frozenset({
     'server',
     'tariff',
     'device_limit',
+    'days_left',
+    'time_left',
 })
 PAYMENT_COUPON_FIELDS_CONTEXT_KEY = 'payment_coupon_fields'
 PAYMENT_COUPON_PAGE_FIELDS = frozenset({

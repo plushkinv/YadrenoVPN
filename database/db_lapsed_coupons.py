@@ -53,6 +53,7 @@ __all__ = [
     "mark_lapsed_coupon_delivery_sent",
     "mark_lapsed_coupon_delivery_retry",
     "mark_lapsed_coupon_delivery_failed",
+    "mark_lapsed_coupon_delivery_unavailable",
     "get_lapsed_coupon_delivery",
 ]
 
@@ -682,6 +683,16 @@ def mark_lapsed_coupon_delivery_retry(
             ),
         )
         return cursor.rowcount > 0
+
+
+def mark_lapsed_coupon_delivery_unavailable(delivery_id: int) -> bool:
+    """End an impossible Telegram delivery without revoking the earned coupon."""
+    with get_db() as conn:
+        return conn.execute(
+            "UPDATE lapsed_coupon_deliveries SET status = 'failed', last_error = 'not_sent:no_telegram', "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'",
+            (int(delivery_id),),
+        ).rowcount > 0
 
 
 def mark_lapsed_coupon_delivery_failed(

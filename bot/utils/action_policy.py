@@ -186,6 +186,27 @@ async def run_action_policies(
         'phase': phase,
     }
 
+    return await _run_registered_action_policies(action_name, base_context, phase=phase, bot=bot)
+
+
+async def run_account_action_policies(action, params, *, account, phase, bot=None):
+    """Adapt a trusted internal actor to existing business policies exactly once."""
+    from core.context import AccountContext, bind_account_context
+    if not isinstance(account, AccountContext) or phase not in ACTION_POLICY_PHASES:
+        raise ValueError('trusted account and action phase are required')
+    action_name = normalize_core_action(action)
+    context = {
+        'action': action_name, 'params': normalize_core_action_params(action_name, params),
+        'telegram_id': account.telegram_id, 'source': account.source, 'phase': phase,
+        'account_id': account.account_id, 'user_id': account.account_id,
+        'operation_id': account.operation_id,
+    }
+    with bind_account_context(account):
+        return await _run_registered_action_policies(action_name, context, phase=phase, bot=bot)
+
+
+async def _run_registered_action_policies(action_name, base_context, *, phase, bot):
+    """Keep legacy insertion order, decisions and exception behavior."""
     effective_label: str | None = None
     for policy_name, registration in list(ACTION_POLICIES.items()):
         if action_name not in registration['actions']:
@@ -221,6 +242,16 @@ async def run_action_policies(
         result['_extension_id'] = registration['extension_id']
         return result
 
+    from core.extensions.registry import apply_action
+    from core.context import get_account_context
+    from core.results import CoreError
+    try:
+        await apply_action(action_name, base_context)
+    except CoreError:
+        account = get_account_context()
+        if account is not None and account.source in {'site', 'mini_app'}:
+            raise
+        return {'decision': 'deny', 'show_alert': True}
     result: dict[str, Any] = {'decision': 'continue'}
     if effective_label:
         result['label'] = effective_label

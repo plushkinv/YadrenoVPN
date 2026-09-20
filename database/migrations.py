@@ -2,7 +2,7 @@
 
 Fresh installations are created directly at the committed v97 compatibility
 boundary. Older databases must pass through the ordered blocking releases that
-materialize v97 before this code can run. Migrations v98-v110 remain incremental
+materialize v97 before this code can run. Post-v97 migrations remain incremental
 so already installed v97 databases and fresh databases use the same transitions.
 """
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import re
+from uuid import uuid4
 
 from .connection import get_db
 from .db_user_ui_texts import update_user_ui_text_defaults
@@ -34,6 +36,12 @@ _POST_V97_USER_UI_TEXT_KEYS = frozenset({
     'key.devices.deleted',
     'key.devices.delete_error',
 })
+_POST_V113_USER_UI_TEXT_KEYS = frozenset({
+    'account.link.prompt', 'account.link.button.confirm', 'account.link.button.cancel',
+    'account.link.confirmed', 'account.link.cancelled', 'account.link.invalid',
+    'account.link.conflict', 'account.link.unavailable',
+})
+_POST_V120_USER_UI_TEXT_KEYS = frozenset({'format.time_left'})
 _POST_V105_CORE_PAGE_KEYS = frozenset({
     'key_devices',
     'key_replace_server_unavailable',
@@ -42,7 +50,9 @@ _CORE_PAGE_KEYS_V105 = CORE_PAGE_KEYS.difference(_POST_V105_CORE_PAGE_KEYS)
 _BASELINE_USER_UI_TEXT_DEFINITIONS_V97 = tuple(
     definition
     for definition in USER_UI_TEXT_DEFINITIONS
-    if definition.text_key not in _POST_V97_USER_UI_TEXT_KEYS
+    if definition.text_key not in (
+        _POST_V97_USER_UI_TEXT_KEYS | _POST_V113_USER_UI_TEXT_KEYS | _POST_V120_USER_UI_TEXT_KEYS
+    )
 )
 _USER_UI_TEXT_DEFINITIONS_V108 = tuple(
     definition
@@ -61,7 +71,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 113
+LATEST_VERSION = 121
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -3753,6 +3763,272 @@ def migration_113(conn: sqlite3.Connection) -> None:
     ))
 
 
+def _nullable_column_ddl(sql: str, column: str, new_table: str) -> str:
+    """Remove one column's NOT NULL constraint without rewriting other SQL."""
+    token_re = re.compile(
+        r"--[^\n]*(?:\n|$)|/\*.*?\*/|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|"
+        r"`(?:``|[^`])*`|\[[^]]*\]|[A-Za-z_][A-Za-z_0-9$]*|[^\s]", re.S,
+    )
+    tokens = [match for match in token_re.finditer(sql)
+              if not match.group().startswith(('--', '/*'))]
+
+    def name(token):
+        value = token.group()
+        if value.startswith(('"', '`', '[')):
+            return value[1:-1].replace(value[0] * 2, value[0])
+        return value
+
+    opening = next(i for i, token in enumerate(tokens) if token.group() == '(')
+    table_token = tokens[opening - 1]
+    replacements = [(table_token.start(), table_token.end(), '"' + new_table + '"')]
+    depth = 1
+    at_column = True
+    target = False
+    for i in range(opening + 1, len(tokens)):
+        value = tokens[i].group()
+        if at_column:
+            target = name(tokens[i]).casefold() == column.casefold()
+            at_column = False
+        if value == '(':
+            depth += 1
+        elif value == ')':
+            depth -= 1
+        elif value == ',' and depth == 1:
+            at_column = True
+        elif (target and depth == 1 and value.upper() == 'NOT'
+              and i + 1 < len(tokens) and tokens[i + 1].group().upper() == 'NULL'):
+            start, end = i, i + 1
+            if i >= 2 and tokens[i - 2].group().upper() == 'CONSTRAINT':
+                start -= 2
+            if (i + 4 < len(tokens)
+                    and tokens[i + 2].group().upper() == 'ON'
+                    and tokens[i + 3].group().upper() == 'CONFLICT'):
+                end = i + 4
+            replacements.append((tokens[start].start(), tokens[end].end(), ''))
+    if len(replacements) != 2:
+        raise RuntimeError(f'Expected one {column} NOT NULL constraint')
+    for start, end, value in sorted(replacements, reverse=True):
+        sql = sql[:start] + value + sql[end:]
+    return sql
+
+
+def migration_114(conn: sqlite3.Connection) -> None:
+    """Allow accounts without Telegram while preserving installed schema objects."""
+    _make_column_nullable(conn, 'users', 'telegram_id')
+
+
+def _make_column_nullable(conn: sqlite3.Connection, table: str, column: str) -> None:
+    """Preserve installed DDL, custom objects and identities during a SQLite rebuild."""
+    if (table, column) not in {('users', 'telegram_id'), ('vpn_keys', 'tariff_id'),
+                             ('support_threads', 'user_telegram_id')}:
+        raise ValueError('Unexpected nullable-column migration')
+    columns = conn.execute(f'PRAGMA table_xinfo({table})').fetchall()
+    if not next(row['notnull'] for row in columns if row['name'] == column):
+        return
+    original = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,),
+    ).fetchone()[0]
+    temporary = '__web_core_' + table + '_' + uuid4().hex
+    ddl = _nullable_column_ddl(original, column, temporary)
+    objects = conn.execute(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master "
+        "WHERE sql IS NOT NULL AND (type IN ('view', 'trigger') OR "
+        "(type = 'index' AND tbl_name = ?))", (table,),
+    ).fetchall()
+    sequence = conn.execute('SELECT seq FROM sqlite_sequence WHERE name = ?', (table,)).fetchone()
+    fields = ', '.join('"' + row['name'].replace('"', '""') + '"'
+                       for row in columns if row['hidden'] == 0)
+    conn.commit()
+    conn.execute('PRAGMA foreign_keys = OFF')
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        # SQLite validates surviving views during RENAME. Recreate their exact
+        # definitions, including INSTEAD OF triggers, in this same transaction.
+        for object_type in ('trigger', 'view'):
+            for item in objects:
+                if item['type'] == object_type:
+                    conn.execute('DROP ' + object_type.upper() + ' "' + item['name'].replace('"', '""') + '"')
+        conn.execute(ddl)
+        conn.execute(f'INSERT INTO "{temporary}" ({fields}) SELECT {fields} FROM "{table}"')
+        conn.execute(f'DROP TABLE "{table}"')
+        conn.execute(f'ALTER TABLE "{temporary}" RENAME TO "{table}"')
+        for object_type in ('view', 'index', 'trigger'):
+            for item in objects:
+                if item['type'] == object_type:
+                    conn.execute(item['sql'])
+        if sequence:
+            conn.execute('UPDATE sqlite_sequence SET seq = ? WHERE name = ?', (sequence[0], table))
+        _assert_migration_database_integrity(conn, stage=f'after nullable {table}.{column}')
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys = ON')
+
+
+def migration_115(conn: sqlite3.Connection) -> None:
+    """Add opt-in web authentication without assigning credentials to old users."""
+    statements = (
+        '''CREATE TABLE IF NOT EXISTS account_credentials (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id),
+            phone TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+            phone_verified INTEGER NOT NULL DEFAULT 0 CHECK(phone_verified IN (0, 1)),
+            version INTEGER NOT NULL DEFAULT 1,
+            updated_at INTEGER NOT NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS account_sessions (
+            token_hash TEXT PRIMARY KEY, csrf_hash TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            source TEXT NOT NULL CHECK(source IN ('site', 'mini_app')),
+            credential_version INTEGER NOT NULL,
+            created_at INTEGER NOT NULL, authenticated_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL, revoked_at INTEGER
+        )''',
+        '''CREATE INDEX IF NOT EXISTS idx_account_sessions_owner
+            ON account_sessions(user_id, expires_at)''',
+        '''CREATE TABLE IF NOT EXISTS auth_challenges (
+            id TEXT PRIMARY KEY, phone TEXT NOT NULL, purpose TEXT NOT NULL
+                CHECK(purpose IN ('register', 'reset', 'credentials')),
+            session_hash TEXT, user_id INTEGER REFERENCES users(id),
+            code_hash TEXT NOT NULL, proof_hash TEXT,
+            state TEXT NOT NULL CHECK(state IN ('sending', 'sent', 'failed', 'unknown', 'verified', 'used')),
+            attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL, verified_at INTEGER, used_at INTEGER
+        )''',
+        '''CREATE INDEX IF NOT EXISTS idx_auth_challenges_expiry ON auth_challenges(expires_at)''',
+        '''CREATE TABLE IF NOT EXISTS auth_rate_limits (
+            bucket TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS account_link_requests (
+            token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+            session_hash TEXT NOT NULL REFERENCES account_sessions(token_hash),
+            telegram_id INTEGER, telegram_username TEXT, telegram_first_name TEXT, telegram_last_name TEXT,
+            created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+            telegram_confirmed_at INTEGER, completed_at INTEGER,
+            state TEXT NOT NULL DEFAULT 'pending'
+                CHECK(state IN ('pending', 'confirmed', 'completed', 'conflict'))
+        )''',
+    )
+    for sql in statements:
+        conn.execute(sql)
+    defaults = {
+        'web_enabled': '0', 'web_listen_port': '18764', 'web_public_origin': '',
+        'web_sms_enabled': '0', 'web_sms_registration_required': '0',
+        'web_sms_api_key': '',
+    }
+    conn.executemany('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', defaults.items())
+
+
+def migration_116(conn: sqlite3.Connection) -> None:
+    """Bind link requests to this bot and retain resumable panel name changes."""
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(account_link_requests)')}
+    if 'bot_id' not in columns:
+        conn.execute('ALTER TABLE account_link_requests ADD COLUMN bot_id INTEGER')
+    conn.execute('''CREATE TABLE IF NOT EXISTS panel_identity_renames (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key_id INTEGER NOT NULL REFERENCES vpn_keys(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        server_id INTEGER NOT NULL REFERENCES servers(id),
+        old_email TEXT NOT NULL, new_email TEXT NOT NULL, sub_id TEXT NOT NULL,
+        snapshot_json TEXT, state TEXT NOT NULL DEFAULT 'pending'
+            CHECK(state IN ('pending', 'running', 'done')),
+        attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT, created_at INTEGER NOT NULL, completed_at INTEGER
+    )''')
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_panel_identity_rename_open "
+                 "ON panel_identity_renames(key_id) WHERE state != 'done'")
+    update_user_ui_text_defaults(
+        (item for item in USER_UI_TEXT_DEFINITIONS if item.text_key in _POST_V113_USER_UI_TEXT_KEYS),
+        conn=conn,
+    )
+    conn.executemany('INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)',
+                     [('web_bot_id', ''), ('web_bot_username', '')])
+
+
+def migration_117(conn: sqlite3.Connection) -> None:
+    """Adopt complete panel groups without guessing their original tariff."""
+    _make_column_nullable(conn, 'vpn_keys', 'tariff_id')
+    statements = (
+        '''CREATE TABLE IF NOT EXISTS subscription_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            endpoint TEXT NOT NULL, source_url TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )''',
+        '''CREATE INDEX IF NOT EXISTS idx_subscription_import_owner
+            ON subscription_imports(user_id)''',
+        '''CREATE TABLE IF NOT EXISTS subscription_import_resources (
+            endpoint TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('email', 'sub_id')),
+            identity TEXT NOT NULL,
+            import_id INTEGER NOT NULL REFERENCES subscription_imports(id),
+            PRIMARY KEY(endpoint, kind, identity)
+        )''',
+        '''CREATE INDEX IF NOT EXISTS idx_subscription_import_resources_group
+            ON subscription_import_resources(import_id)''',
+        '''CREATE TABLE IF NOT EXISTS subscription_import_members (
+            import_id INTEGER NOT NULL REFERENCES subscription_imports(id),
+            email TEXT NOT NULL COLLATE NOCASE,
+            key_id INTEGER UNIQUE REFERENCES vpn_keys(id) ON DELETE SET NULL,
+            snapshot_json TEXT NOT NULL,
+            PRIMARY KEY(import_id, email)
+        )''',
+    )
+    for sql in statements:
+        conn.execute(sql)
+
+
+def migration_118(conn: sqlite3.Connection) -> None:
+    """Retain terms for new orders; historical orders keep their old contract."""
+    for sql in (
+        '''CREATE TABLE IF NOT EXISTS payment_order_terms (
+            order_id TEXT PRIMARY KEY REFERENCES payments(order_id),
+            version INTEGER NOT NULL CHECK(version = 1),
+            source TEXT NOT NULL CHECK(source IN ('telegram','site','mini_app','system')),
+            tariff_json TEXT NOT NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS key_entitlements (
+            key_id INTEGER PRIMARY KEY REFERENCES vpn_keys(id) ON DELETE CASCADE,
+            order_id TEXT NOT NULL REFERENCES payments(order_id),
+            tariff_json TEXT NOT NULL
+        )''',
+        '''CREATE TABLE IF NOT EXISTS account_operations (
+            id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+            kind TEXT NOT NULL, idempotency_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            request_json TEXT NOT NULL, result_json TEXT,
+            order_id TEXT REFERENCES payments(order_id),
+            created_at INTEGER NOT NULL,
+            UNIQUE(user_id, kind, idempotency_key)
+        )''',
+        '''CREATE TABLE IF NOT EXISTS payment_offers (
+            id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
+            payload_json TEXT NOT NULL, quote_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+            order_id TEXT REFERENCES payments(order_id)
+        )''',
+    ):
+        conn.execute(sql)
+
+
+def migration_119(conn: sqlite3.Connection) -> None:
+    """Keep future price decisions beside their immutable purchased terms."""
+    conn.execute('ALTER TABLE payment_order_terms ADD COLUMN pricing_json TEXT')
+
+
+def migration_120(conn: sqlite3.Connection) -> None:
+    """Keep existing support history while admitting accounts without Telegram."""
+    _make_column_nullable(conn, 'support_threads', 'user_telegram_id')
+    conn.execute("ALTER TABLE support_threads ADD COLUMN channel TEXT NOT NULL DEFAULT 'telegram'")
+
+
+def migration_121(conn: sqlite3.Connection) -> None:
+    """Add the editable remaining-time format without rewriting saved templates."""
+    update_user_ui_text_defaults(
+        (item for item in USER_UI_TEXT_DEFINITIONS if item.text_key in _POST_V120_USER_UI_TEXT_KEYS),
+        conn=conn,
+    )
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -3770,6 +4046,14 @@ MIGRATIONS = {
     111: migration_111,
     112: migration_112,
     113: migration_113,
+    114: migration_114,
+    115: migration_115,
+    116: migration_116,
+    117: migration_117,
+    118: migration_118,
+    119: migration_119,
+    120: migration_120,
+    121: migration_121,
 }
 
 

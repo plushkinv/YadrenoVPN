@@ -23,6 +23,36 @@ class UserUITextDefinition:
 
 USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
     UserUITextDefinition(
+        'account.link.prompt',
+        '🔗 <b>Привязка Telegram</b>\n\nПодтвердите привязку к аккаунту №%account_id%. '
+        'Затем вернитесь на сайт и завершите привязку там.',
+        'html', 'Explicit Telegram confirmation for an existing site account.',
+        frozenset({'account_id'}),
+    ),
+    UserUITextDefinition('account.link.button.confirm', '✅ Привязать Telegram', 'button',
+                         'Confirm the Telegram side of an account link.'),
+    UserUITextDefinition('account.link.button.cancel', '❌ Отмена', 'button',
+                         'Cancel this account link request.'),
+    UserUITextDefinition(
+        'account.link.confirmed',
+        '🔗 <b>Telegram подтверждён</b>\n\nВернитесь в исходную вкладку сайта и завершите привязку.',
+        'html', 'Telegram confirmation succeeded; the originating web session must finish.'),
+    UserUITextDefinition('account.link.cancelled', '🔗 <b>Привязка отменена</b>\n\nАккаунты не изменены.',
+                         'html', 'The unused account link was cancelled.'),
+    UserUITextDefinition(
+        'account.link.invalid',
+        '🔗 <b>Ссылка недействительна</b>\n\nНачните привязку заново на сайте.',
+        'html', 'An expired, consumed or invalid account link.'),
+    UserUITextDefinition(
+        'account.link.conflict',
+        '🔗 <b>Не удалось привязать Telegram</b>\n\nTelegram уже связан с другим аккаунтом. '
+        'Аккаунты и подписки не объединены.',
+        'html', 'Linking cannot transfer an existing Telegram account or its property.'),
+    UserUITextDefinition(
+        'account.link.unavailable',
+        '🔗 <b>Привязка временно недоступна</b>\n\nПопробуйте ещё раз позднее.',
+        'html', 'The account link service is temporarily unavailable.'),
+    UserUITextDefinition(
         "payment.invoice.purchase_description",
         "Оплата тарифа «%tariff_name%» (%days%).",
         "plain",
@@ -68,6 +98,13 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
         "plain",
         "Compact day-count format shared by user-facing runtime data.",
         frozenset({"days"}),
+    ),
+    UserUITextDefinition(
+        "format.time_left",
+        "%days% дн., %hours% ч., %minutes% мин.",
+        "plain",
+        "Remaining key duration in complete days, hours and minutes.",
+        frozenset({"days", "hours", "minutes"}),
     ),
     UserUITextDefinition(
         "format.duration_unlimited",
@@ -303,8 +340,8 @@ USER_UI_TEXT_CATALOG = {
 if len(USER_UI_TEXT_CATALOG) != len(USER_UI_TEXT_DEFINITIONS):
     raise RuntimeError("Duplicate text_key in USER_UI_TEXT_DEFINITIONS")
 
-if len(USER_UI_TEXT_CATALOG) != 39:
-    raise RuntimeError("The core user UI text catalog must contain exactly 39 entries")
+if len(USER_UI_TEXT_CATALOG) != 48:
+    raise RuntimeError("The core user UI text catalog must contain exactly 48 entries")
 
 
 __all__ = [

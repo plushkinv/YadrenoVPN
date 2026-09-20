@@ -2,12 +2,44 @@
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any, Mapping
 
 from bot.services.new_key_setup import NewKeySetupResult, NewKeySetupStatus
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _CompletionScope:
+    order_id: str
+    active: bool = True
+
+
+_COMPLETING_ORDERS: ContextVar[tuple[_CompletionScope, ...]] = ContextVar(
+    'completing_payment_orders', default=(),
+)
+
+
+def is_payment_completion_active(order_id: str) -> bool:
+    """Detect a nested extension wake inside any payment continuation."""
+    return any(scope.active and scope.order_id == order_id for scope in _COMPLETING_ORDERS.get())
+
+
+def _completion_context(function):
+    @wraps(function)
+    async def wrapped(order_id, **kwargs):
+        scope = _CompletionScope(str(order_id).strip())
+        token = _COMPLETING_ORDERS.set((*_COMPLETING_ORDERS.get(), scope))
+        try:
+            return await function(order_id, **kwargs)
+        finally:
+            # Child tasks inherit context, but must not retain a finished scope.
+            scope.active = False
+            _COMPLETING_ORDERS.reset(token)
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -224,7 +256,7 @@ async def _deliver_optional_coupon(
 async def _run_key_setup_without_delivery(
     order_id: str,
     *,
-    telegram_id: int,
+    telegram_id: int | None,
 ) -> NewKeySetupResult:
     from bot.services.new_key_setup import provision_new_key, resolve_new_key_setup
 
@@ -241,20 +273,14 @@ async def _run_key_setup_without_delivery(
         from bot.services.extension_completion import (
             run_extension_completion_after_key_configured,
         )
-        from bot.handlers.user.subscription_hosts import (
-            offer_default_subscription_host,
-        )
 
         await run_extension_completion_after_key_configured(
             result.order_id,
             key_id=result.key_id,
         )
         try:
-            await offer_default_subscription_host(
-                None,
-                component_key_id=result.key_id,
-                telegram_id=telegram_id,
-            )
+            from bot.services.subscription_host_flow import resolve_default_host
+            await resolve_default_host(result.key_id)
         except Exception as error:
             logger.warning(
                 "Post-configuration subscription host flow failed "
@@ -285,6 +311,7 @@ def _finish_payment_auto_check(order_id: str) -> None:
         )
 
 
+@_completion_context
 async def complete_confirmed_payment(
     order_id: str,
     *,
@@ -323,8 +350,8 @@ async def complete_confirmed_payment(
     initial_purpose = _normalized_purpose(initial_order)
 
     owner = get_user_by_id(int(initial_order.get("user_id") or 0))
-    owner_telegram_id = int((owner or {}).get("telegram_id") or 0)
-    if not owner_telegram_id:
+    owner_telegram_id = int(owner['telegram_id']) if owner and owner.get('telegram_id') is not None else None
+    if not owner:
         return PaymentCompletionResult(
             ok=False,
             order_id=normalized_order_id,
@@ -354,6 +381,8 @@ async def complete_confirmed_payment(
             purpose=initial_purpose,
             payment_completed=initial_payment_completed,
         )
+
+    notify_user = bool(notify_user and owner_telegram_id is not None)
 
     completion_order: Mapping[str, Any] = initial_order
     purpose = initial_purpose
@@ -417,59 +446,73 @@ async def complete_confirmed_payment(
             and (not background or processed_now)
         )
         if should_show_primary:
-            primary_message = await _render_primary_result(
-                order=fresh_order,
-                purpose=purpose,
-                bot=bot,
-                telegram_id=owner_telegram_id,
-                target=target,
-                background=background,
-            )
-            user_notified = primary_message is not None
-            coupon_delivered = await _deliver_optional_coupon(
-                bot=bot,
-                target=target,
-                telegram_id=owner_telegram_id,
-                order_id=normalized_order_id,
-                background=background,
-            )
+            try:
+                primary_message = await _render_primary_result(
+                    order=fresh_order, purpose=purpose, bot=bot,
+                    telegram_id=owner_telegram_id, target=target, background=background,
+                )
+                user_notified = primary_message is not None
+                coupon_delivered = await _deliver_optional_coupon(
+                    bot=bot, target=target, telegram_id=owner_telegram_id,
+                    order_id=normalized_order_id, background=background,
+                )
+            except Exception as error:
+                logger.warning('Payment presentation unavailable order=%s type=%s',
+                               normalized_order_id, type(error).__name__)
 
         key_setup: NewKeySetupResult | None = None
         if purpose == "key_purchase":
-            if notify_user and background:
-                from bot.handlers.user.payments.keys_config import (
-                    start_new_key_config_background,
-                )
+            try:
+                if notify_user and background:
+                    from bot.handlers.user.payments.keys_config import (
+                        start_new_key_config_background,
+                    )
 
-                key_setup = await start_new_key_config_background(
-                    bot,
-                    telegram_id=owner_telegram_id,
-                    username=(owner or {}).get("username"),
-                    order_id=normalized_order_id,
-                    anchor_message=primary_message,
-                )
-            elif notify_user and target is not None:
-                from bot.handlers.user.payments.keys_config import run_new_key_setup_flow
+                    key_setup = await start_new_key_config_background(
+                        bot,
+                        telegram_id=owner_telegram_id,
+                        username=(owner or {}).get("username"),
+                        order_id=normalized_order_id,
+                        anchor_message=primary_message,
+                    )
+                elif notify_user and target is not None:
+                    from bot.handlers.user.payments.keys_config import run_new_key_setup_flow
 
-                key_setup = await run_new_key_setup_flow(
-                    primary_message or target,
-                    normalized_order_id,
-                    state=state,
-                    owner_telegram_id=owner_telegram_id,
-                    owner_username=(owner or {}).get("username"),
-                    force_new=True,
-                )
-            else:
-                key_setup = await _run_key_setup_without_delivery(
-                    normalized_order_id,
-                    telegram_id=owner_telegram_id,
-                )
+                    key_setup = await run_new_key_setup_flow(
+                        primary_message or target,
+                        normalized_order_id,
+                        state=state,
+                        owner_telegram_id=owner_telegram_id,
+                        owner_username=(owner or {}).get("username"),
+                        force_new=True,
+                    )
+                else:
+                    key_setup = await _run_key_setup_without_delivery(
+                        normalized_order_id,
+                        telegram_id=owner_telegram_id,
+                    )
+            except Exception as error:
+                logger.warning('Key presentation unavailable order=%s type=%s', normalized_order_id, type(error).__name__)
+                key_setup = await _run_key_setup_without_delivery(normalized_order_id, telegram_id=owner_telegram_id)
             key_setup_status = key_setup.status
+
+        from database.requests import get_key_entitlement, complete_key_entitlement_sync
+        access_pending = False
+        key_id = int(fresh_order.get('vpn_key_id') or 0)
+        entitlement = get_key_entitlement(key_id) if key_id else None
+        if entitlement:
+            if not entitlement['panel_applied'] and (purpose == 'key_renewal' or (key_setup and key_setup.already_configured)):
+                from bot.services.vpn_api import sync_key_to_panel_state
+                try:
+                    await sync_key_to_panel_state(key_id, reset_traffic=False)
+                except Exception as error:
+                    logger.warning('Paid access remains pending order=%s type=%s', normalized_order_id, type(error).__name__)
+            access_pending = not bool((get_key_entitlement(key_id) or {}).get('panel_applied'))
 
         if purpose != "key_purchase" and state is not None:
             await state.clear()
 
-        retryable = bool(key_setup and key_setup.retryable)
+        retryable = bool(key_setup and key_setup.retryable) or access_pending
         completion_text = (
             key_setup.error_code
             if retryable and key_setup and key_setup.error_code

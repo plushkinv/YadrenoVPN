@@ -16,6 +16,7 @@ async def apply_extension_core_operation(
     amount: int,
     reason: str,
     performed_by: int | None = None,
+    _atomic_days: bool = False,
 ) -> dict[str, Any]:
     """Applies the allowed core extension command through domain services."""
     from database.requests import (
@@ -50,6 +51,7 @@ async def apply_extension_core_operation(
                 extension_id=extension_id,
                 idempotency_key=idempotency_key,
                 reason=reason,
+                atomic=_atomic_days,
             )
         elif operation == 'add_balance_bonus':
             domain_result = await _add_balance_bonus(
@@ -112,6 +114,7 @@ async def _grant_days(
     extension_id: str,
     idempotency_key: str,
     reason: str,
+    atomic: bool = False,
 ) -> dict[str, Any]:
     from bot.services.rewards import grant_days_to_first_active_key
 
@@ -120,7 +123,7 @@ async def _grant_days(
         days,
         source='extension_core',
         reason=reason,
-        reference_type='extension_core_operation',
+        reference_type='shared_module_operation' if atomic else 'extension_core_operation',
         reference_id=f'{extension_id}:{idempotency_key}',
         metadata={
             'extension_id': extension_id,

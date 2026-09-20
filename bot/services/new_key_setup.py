@@ -64,6 +64,14 @@ class _SetupContext:
     servers: tuple[Mapping[str, Any], ...]
 
 
+def _owned_key(key_id: int, user: Mapping[str, Any]):
+    from database.requests import get_key_details_for_user, get_vpn_key_by_id
+    if user.get('telegram_id') is not None:
+        return get_key_details_for_user(key_id, int(user['telegram_id']))
+    key = get_vpn_key_by_id(key_id)
+    return key if key and int(key['user_id']) == int(user['id']) else None
+
+
 def _failure(
     order_id: str,
     *,
@@ -78,7 +86,8 @@ def _failure(
         order_id=str(order_id),
         key_id=int(context.key["id"]) if context else None,
         internal_user_id=int(context.order["user_id"]) if context else None,
-        telegram_id=int(context.user["telegram_id"]) if context else None,
+        telegram_id=(int(context.user['telegram_id'])
+                     if context and context.user.get('telegram_id') is not None else None),
         username=(
             str(context.user.get("username") or "") or None
             if context
@@ -99,6 +108,7 @@ def _load_setup_context(
     from bot.utils.groups import get_servers_for_key
     from database.requests import (
         find_order_by_order_id,
+        get_payment_order_terms,
         get_active_servers,
         get_key_details_for_user,
         get_user_by_id,
@@ -116,7 +126,7 @@ def _load_setup_context(
 
     user = get_user_by_id(int(order.get("user_id") or 0))
     telegram_id = int((user or {}).get("telegram_id") or 0)
-    if not user or not telegram_id:
+    if not user:
         return _failure(
             normalized_order_id,
             status=NewKeySetupStatus.UNAVAILABLE,
@@ -132,7 +142,7 @@ def _load_setup_context(
         )
 
     key_id = int(order.get("vpn_key_id") or 0)
-    key = get_key_details_for_user(key_id, telegram_id) if key_id else None
+    key = _owned_key(key_id, user) if key_id else None
     if not key:
         return _failure(
             normalized_order_id,
@@ -143,6 +153,10 @@ def _load_setup_context(
 
     tariff_id = int(order.get("tariff_id") or key.get("tariff_id") or 0)
     raw_servers = get_servers_for_key(tariff_id) if tariff_id else get_active_servers()
+    from database.requests import get_key_entitlement
+    if get_key_entitlement(key_id):
+        from bot.services.order_terms import key_servers
+        raw_servers = key_servers(key)
     servers = tuple(dict(server) for server in raw_servers)
     return _SetupContext(
         order=dict(order),
@@ -162,7 +176,7 @@ def _result_from_context(
         order_id=str(context.order["order_id"]),
         key_id=int(context.key["id"]),
         internal_user_id=int(context.order["user_id"]),
-        telegram_id=int(context.user["telegram_id"]),
+        telegram_id=(int(context.user['telegram_id']) if context.user.get('telegram_id') is not None else None),
         username=str(context.user.get("username") or "") or None,
         servers=context.servers,
         **kwargs,
@@ -262,6 +276,16 @@ async def provision_new_key(
         if current.status is not NewKeySetupStatus.PROVISIONING:
             return current
         try:
+            from database.requests import get_payment_order_terms, get_vpn_key_by_id
+            if get_payment_order_terms(current.order_id):
+                from core.context import AccountContext, get_account_context
+                from core.key_operations import mutate_key
+                account = get_account_context()
+                if account is None or account.account_id != current.internal_user_id:
+                    account = AccountContext(current.internal_user_id, current.telegram_id, 'system')
+                await mutate_key(account, 'configure', {'key_id': current.key_id, 'server_id': current.server_id},
+                                 'setup:' + current.order_id, _policy_checked=True, _locked=True)
+                return replace(current, status=NewKeySetupStatus.READY, key_data=get_vpn_key_by_id(current.key_id))
             return await _provision_resolved_new_key(current)
         except Exception as error:
             logger.exception(
@@ -293,6 +317,7 @@ async def _provision_resolved_new_key(
     from bot.utils.panel_email import generate_unique_panel_email
     from database.requests import (
         find_order_by_order_id,
+        get_payment_order_terms,
         get_key_details_for_user,
         get_tariff_by_id,
         get_user_by_id,
@@ -301,9 +326,10 @@ async def _provision_resolved_new_key(
     )
 
     order = find_order_by_order_id(setup.order_id)
-    if not order or not setup.key_id or not setup.telegram_id or not setup.server_id:
+    if not order or not setup.key_id or not setup.internal_user_id or not setup.server_id:
         raise RuntimeError("New-key setup context disappeared")
-    key = get_key_details_for_user(setup.key_id, setup.telegram_id)
+    user = get_user_by_id(int(order['user_id']))
+    key = _owned_key(setup.key_id, user) if user else None
     if not key:
         raise RuntimeError("New-key draft disappeared")
     if _has_complete_binding(key):
@@ -315,7 +341,8 @@ async def _provision_resolved_new_key(
         )
 
     user = get_user_by_id(int(order["user_id"]))
-    tariff = get_tariff_by_id(int(order.get("tariff_id") or key.get("tariff_id") or 0))
+    from bot.services.order_terms import order_tariff
+    tariff = order_tariff(setup.order_id, int(order.get('tariff_id') or key.get('tariff_id') or 0))
     if not user or not tariff:
         raise RuntimeError("New-key owner or tariff is unavailable")
 
@@ -350,9 +377,10 @@ async def _provision_resolved_new_key(
         expiry_time_ms=exact_expiry_time_ms,
         limit_ip=panel_limits.limit_ip,
         limit_hwid=panel_limits.limit_hwid,
-        enable=True,
-        tg_id=str(setup.telegram_id),
+        enable=not bool(user.get('is_banned')),
+        tg_id=str(setup.telegram_id) if setup.telegram_id is not None else '',
         sub_id=requested_sub_id,
+        **({'expected_sub_id': requested_sub_id} if get_payment_order_terms(setup.order_id) else {}),
     )
     ready_count = len(provisioned.attached_inbound_ids)
     effective_sub_id = str(provisioned.sub_id or "").strip()
@@ -443,6 +471,10 @@ async def _provision_resolved_new_key(
         "sync_stats": sync_stats,
     }
 
+    if sync_stats.get('ok') and not sync_stats.get('errors'):
+        from database.requests import complete_key_entitlement_sync
+        complete_key_entitlement_sync(setup.key_id, setup.order_id)
+
     update_payment_key_id(setup.order_id, setup.key_id)
     from bot.services.key_lifecycle import emit_key_lifecycle_event_safe
 
@@ -467,7 +499,7 @@ async def _provision_resolved_new_key(
         key_id=setup.key_id,
     )
 
-    ready_key = get_key_details_for_user(setup.key_id, setup.telegram_id)
+    ready_key = _owned_key(setup.key_id, user)
     if not ready_key:
         raise RuntimeError("Configured key cannot be loaded")
     return replace(

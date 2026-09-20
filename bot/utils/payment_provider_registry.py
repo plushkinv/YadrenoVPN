@@ -76,6 +76,7 @@ class PaymentProvider:
     auto_check_interval_seconds: int | None = 300
     supported_purposes: frozenset[str] = _DEFAULT_SUPPORTED_PURPOSES
     metadata: dict[str, Any] = field(default_factory=dict)
+    _extension_id: str | None = field(default=None, init=False, repr=False)
 
 
 PAYMENT_PROVIDERS: dict[str, PaymentProvider] = {}
@@ -284,6 +285,9 @@ async def check_payment(provider_id: str, context: Mapping[str, Any]) -> dict[st
 
 async def handle_payment_webhook(provider_id: str, context: Mapping[str, Any]) -> dict[str, Any]:
     """Calls the provider's webhook_handler and normalizes the declarative result."""
+    from runtime.readiness import require_active
+
+    require_active()
     provider = get_payment_provider(provider_id)
     if provider is None:
         raise ValueError('payment provider не зарегистрирован')

@@ -20,6 +20,8 @@ from database.requests import (
     get_tariff_by_id,
     get_tariffs_by_group,
     get_vpn_key_by_id,
+    get_all_groups,
+    is_key_tariff_group_allowed,
 )
 
 router = Router()
@@ -62,16 +64,13 @@ async def start_key_plan_change(callback: CallbackQuery, state: FSMContext) -> N
     if key is None:
         await callback.answer('❌ Ключ не найден', show_alert=True)
         return
-    group_id = int(key.get('tariff_group_id') or 1)
-    custom_tariff = get_admin_custom_tariff(group_id)
-    if custom_tariff is None:
+    groups = [group for group in get_all_groups() if is_key_tariff_group_allowed(key_id, group['id'])]
+    custom_tariffs = [tariff for group in groups if (tariff := get_admin_custom_tariff(group['id']))]
+    if not custom_tariffs:
         await callback.answer('❌ Системный тариф группы не найден', show_alert=True)
         return
-    tariffs = get_tariffs_by_group(
-        group_id,
-        include_hidden=True,
-        include_system=False,
-    )
+    tariffs = [tariff for group in groups for tariff in get_tariffs_by_group(
+        group['id'], include_hidden=True, include_system=False)]
     await state.set_state(AdminStates.key_view)
     await state.update_data(current_key_id=key_id)
     rendered = await safe_edit_or_send(
@@ -84,7 +83,7 @@ async def start_key_plan_change(callback: CallbackQuery, state: FSMContext) -> N
         reply_markup=key_plan_select_kb(
             key_id,
             tariffs,
-            int(custom_tariff['id']),
+            int(custom_tariffs[0]['id']) if len(custom_tariffs) == 1 else custom_tariffs,
         ),
     )
     await state.update_data(
@@ -111,7 +110,7 @@ async def select_key_plan(callback: CallbackQuery, state: FSMContext) -> None:
     if key is None or tariff is None:
         await callback.answer('❌ Ключ или тариф не найден', show_alert=True)
         return
-    if int(key.get('tariff_group_id') or 1) != int(tariff.get('group_id') or 1):
+    if not is_key_tariff_group_allowed(key_id, int(tariff.get('group_id') or 1)):
         await callback.answer('❌ Тариф относится к другой группе', show_alert=True)
         return
 

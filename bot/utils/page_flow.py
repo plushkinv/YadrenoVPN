@@ -10,10 +10,10 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Mapping
 
-from aiogram import Bot
-from aiogram.types import InlineKeyboardButton
+if TYPE_CHECKING:
+    from aiogram.types import InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +230,8 @@ def build_page_flow_context(target: Any, **values: Any) -> dict[str, Any]:
     Hooks are executed before render_page(), so they need the same minimum
     common values, which the renderer will later add for placeholders.
     """
+    from aiogram import Bot
+
     context = dict(values)
     if 'telegram_id' not in context:
         user = getattr(target, 'from_user', None)
@@ -660,6 +662,8 @@ def _copy_hook_result(result: PageHookResult) -> PageHookResult:
 
 
 def _estimate_hook_payload(value: Any) -> tuple[int, int, int]:
+    from aiogram.types import InlineKeyboardButton
+
     size = 0
     nodes = 0
     maximum_depth = 0
@@ -898,6 +902,8 @@ def _require_visibility_dict(value: Any) -> dict[str, bool]:
 
 
 def _normalize_button_rows(value: Any, field_name: str) -> list[list[InlineKeyboardButton]] | None:
+    from aiogram.types import InlineKeyboardButton
+
     if value is None:
         return None
     if not isinstance(value, (list, tuple)):

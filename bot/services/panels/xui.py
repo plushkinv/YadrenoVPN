@@ -568,10 +568,13 @@ class XUIClient(BaseVPNClient):
                     endpoint="/panel/api/setting/apiTokens",
                     detail="named token has no valid id",
                 )
+            delete_options = {"csrf_token": csrf_token}
+            if isinstance(row.get("scope"), str) and row["scope"]:
+                delete_options["data"] = {"expectedScope": row["scope"]}
             await self._cookie_json(
                 "POST",
                 f"/panel/api/setting/apiTokens/delete/{row_id}",
-                csrf_token=csrf_token,
+                **delete_options,
             )
 
         created = await self._cookie_json(
@@ -1296,6 +1299,8 @@ class XUIClient(BaseVPNClient):
         return None
 
     async def _attach_one(self, email: str, inbound_id: int) -> Dict[str, Any]:
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         encoded = urllib.parse.quote(email, safe="")
 
         def attached(record: Optional[Dict[str, Any]]) -> bool:
@@ -1317,6 +1322,8 @@ class XUIClient(BaseVPNClient):
         return record
 
     async def _detach_one(self, email: str, inbound_id: int) -> Dict[str, Any]:
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         encoded = urllib.parse.quote(email, safe="")
 
         def detached(record: Optional[Dict[str, Any]]) -> bool:
@@ -1351,6 +1358,8 @@ class XUIClient(BaseVPNClient):
         reset: Optional[int] = None,
         known_state: Optional[PanelClientState] = None,
     ) -> bool:
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         if known_state is not None:
             await self.hydrate_client_state(known_state)
             if not known_state.update_inbound_ids:
@@ -1470,6 +1479,8 @@ class XUIClient(BaseVPNClient):
         sub_id: Optional[str] = None,
         inbound_ids: Optional[Iterable[int]] = None,
     ) -> PanelProvisionResult:
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         if int(limit_hwid) > 0 and not self.supports_client_hwids():
             raise PanelRequestError(
                 PanelErrorKind.UNSUPPORTED_VERSION,
@@ -1686,6 +1697,8 @@ class XUIClient(BaseVPNClient):
         known_state: Optional[PanelClientState] = None,
         verify: bool = True,
     ) -> Optional[Dict[str, Any]]:
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         record = await self._get_client_record(email)
         if not record:
             return None
@@ -1730,6 +1743,8 @@ class XUIClient(BaseVPNClient):
         return confirmed
 
     async def delete_client(self, email: str) -> bool:
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         encoded = urllib.parse.quote(email, safe="")
         try:
             await self._request("POST", f"/panel/api/clients/del/{encoded}")
@@ -1771,6 +1786,11 @@ class XUIClient(BaseVPNClient):
                 logger.exception("bulk enable failed server_id=%s email=%s", self.server_id, email)
         return changed
 
+    async def rename_client_identity(self, old_email: str, new_email: str, expected_identity: dict) -> dict:
+        """Recover an identity-only rename using a persisted complete snapshot."""
+        from .identity import rename_client_identity
+        return await rename_client_identity(self, old_email, new_email, expected_identity)
+
     async def get_client_stats(self, email: str) -> Optional[Dict[str, Any]]:
         encoded = urllib.parse.quote(email, safe="")
         try:
@@ -1798,6 +1818,8 @@ class XUIClient(BaseVPNClient):
         }
 
     async def reset_client_traffic(self, email: str) -> bool:
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         encoded = urllib.parse.quote(email, safe="")
         await self._request("POST", f"/panel/api/clients/resetTraffic/{encoded}")
         return True
@@ -1992,6 +2014,8 @@ class XUIClient(BaseVPNClient):
 
     async def delete_client_device(self, email: str, device_id: str) -> bool:
         """Delete exactly one registered client device."""
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         if not self.supports_client_hwids():
             raise PanelRequestError(
                 PanelErrorKind.UNSUPPORTED_API,
@@ -2061,6 +2085,8 @@ class XUIClient(BaseVPNClient):
         links: Iterable[Dict[str, Any]],
     ) -> bool:
         """Replace all external links after callers have merged foreign rows."""
+        from database.requests import assert_panel_identity_ready
+        assert_panel_identity_ready(self.server, email)
         if not self.supports_client_external_links():
             raise PanelRequestError(
                 PanelErrorKind.UNSUPPORTED_API,

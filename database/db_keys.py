@@ -36,6 +36,7 @@ __all__ = [
     'get_user_keys_for_display',
     'get_user_key_snapshot_stats',
     'get_key_details_for_user',
+    'get_key_details_for_account',
     'update_key_custom_name',
     'add_days_to_first_active_key',
     'get_user_by_panel_email',
@@ -81,8 +82,8 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
             SELECT 
                 vk.*,
                 t.name as tariff_name, t.duration_days, t.price_minor,
-                t.traffic_limit_gb as tariff_traffic_limit_gb,
-                t.max_ips as tariff_max_ips, t.group_id as tariff_group_id,
+                COALESCE(json_extract(ke.tariff_json, '$.traffic_limit_gb'), t.traffic_limit_gb) as tariff_traffic_limit_gb,
+                COALESCE(json_extract(ke.tariff_json, '$.max_ips'), t.max_ips) as tariff_max_ips, COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) as tariff_group_id,
                 t.system_type as tariff_system_type,
                 COALESCE((SELECT value FROM settings WHERE key = 'base_currency'), 'RUB') AS base_currency,
                 s.name as server_name, s.host, s.port, s.web_base_path,
@@ -91,6 +92,7 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
                 s.is_active as server_active,
                 u.telegram_id, u.username, u.is_banned
             FROM vpn_keys vk
+            LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
             LEFT JOIN tariffs t ON vk.tariff_id = t.id
             LEFT JOIN servers s ON vk.server_id = s.id
             LEFT JOIN users u ON vk.user_id = u.id
@@ -98,6 +100,7 @@ def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
         """, (key_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
 
 def extend_vpn_key(
     key_id: int,
@@ -116,7 +119,13 @@ def extend_vpn_key(
         True if successful
     """
     with get_db() as conn:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         normalized_days = int(days)
+        from .db_subscription_imports import _extend_imported_terms
+        if _extend_imported_terms(conn, key_id, normalized_days,
+                                  finite_from_now_if_unlimited=finite_from_now_if_unlimited) is not None:
+            return True
         modifier = f"{normalized_days:+} days"
         cursor = conn.execute("""
             UPDATE vpn_keys 
@@ -212,6 +221,8 @@ def update_vpn_key_binding(
     if not normalized_email or not normalized_sub_id:
         raise ValueError('Configured subscription requires panel_email and sub_id')
     with get_db() as conn:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         cursor = conn.execute(
             """
             UPDATE vpn_keys
@@ -391,15 +402,16 @@ def get_all_active_keys_with_server() -> List[Dict[str, Any]]:
                 vk.traffic_notified_pct, vk.custom_name,
                 vk.tariff_id, vk.expires_at, vk.sub_id,
                 vk.traffic_limit_override, vk.max_ips_override,
-                t.traffic_limit_gb AS tariff_traffic_limit_gb,
-                t.max_ips AS tariff_max_ips, t.group_id AS tariff_group_id,
-                t.system_type AS tariff_system_type,
+                COALESCE(json_extract(ke.tariff_json, '$.traffic_limit_gb'), t.traffic_limit_gb) AS tariff_traffic_limit_gb,
+                COALESCE(json_extract(ke.tariff_json, '$.max_ips'), t.max_ips) AS tariff_max_ips, COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) AS tariff_group_id,
+                t.name AS tariff_name, t.system_type AS tariff_system_type,
                 tg.monthly_traffic_reset_enabled,
                 s.id as server_id, s.name as server_name,
                 u.telegram_id, u.is_banned
             FROM vpn_keys vk
-            JOIN tariffs t ON vk.tariff_id = t.id
-            JOIN tariff_groups tg ON t.group_id = tg.id
+            LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
+            LEFT JOIN tariffs t ON vk.tariff_id = t.id
+            LEFT JOIN tariff_groups tg ON COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) = tg.id
             JOIN servers s ON vk.server_id = s.id
             JOIN users u ON vk.user_id = u.id
             WHERE (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
@@ -407,6 +419,7 @@ def get_all_active_keys_with_server() -> List[Dict[str, Any]]:
             AND s.is_active = 1
         """)
         return [dict(row) for row in cursor.fetchall()]
+
 
 
 def get_active_keys_for_monthly_traffic_reset() -> List[Dict[str, Any]]:
@@ -418,20 +431,22 @@ def get_active_keys_for_monthly_traffic_reset() -> List[Dict[str, Any]]:
                 vk.id, vk.server_id, vk.panel_email, vk.tariff_id,
                 vk.expires_at, vk.traffic_limit, vk.traffic_used,
                 vk.traffic_limit_override, vk.max_ips_override,
-                t.traffic_limit_gb AS tariff_traffic_limit_gb,
-                t.max_ips AS tariff_max_ips,
-                t.group_id AS tariff_group_id,
+                COALESCE(json_extract(ke.tariff_json, '$.traffic_limit_gb'), t.traffic_limit_gb) AS tariff_traffic_limit_gb,
+                COALESCE(json_extract(ke.tariff_json, '$.max_ips'), t.max_ips) AS tariff_max_ips,
+                COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) AS tariff_group_id,
                 t.system_type AS tariff_system_type,
                 tg.monthly_traffic_reset_enabled
             FROM vpn_keys vk
+            LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
             JOIN tariffs t ON t.id = vk.tariff_id
-            JOIN tariff_groups tg ON tg.id = t.group_id
+            JOIN tariff_groups tg ON tg.id = COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id)
             WHERE (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
               AND tg.monthly_traffic_reset_enabled = 1
             ORDER BY vk.id
             """
         )
         return [dict(row) for row in cursor.fetchall()]
+
 
 
 def get_all_panel_sync_keys() -> List[Dict[str, Any]]:
@@ -443,19 +458,21 @@ def get_all_panel_sync_keys() -> List[Dict[str, Any]]:
                 vk.traffic_notified_pct, vk.custom_name,
                 vk.tariff_id, vk.expires_at, vk.sub_id,
                 vk.traffic_limit_override, vk.max_ips_override,
-                t.traffic_limit_gb AS tariff_traffic_limit_gb,
-                t.max_ips AS tariff_max_ips, t.group_id AS tariff_group_id,
+                COALESCE(json_extract(ke.tariff_json, '$.traffic_limit_gb'), t.traffic_limit_gb) AS tariff_traffic_limit_gb,
+                COALESCE(json_extract(ke.tariff_json, '$.max_ips'), t.max_ips) AS tariff_max_ips, COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) AS tariff_group_id,
                 t.system_type AS tariff_system_type,
                 s.id AS server_id, s.name AS server_name,
                 u.telegram_id, u.is_banned
             FROM vpn_keys vk
-            JOIN tariffs t ON vk.tariff_id = t.id
+            LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
+            LEFT JOIN tariffs t ON vk.tariff_id = t.id
             JOIN servers s ON vk.server_id = s.id
             JOIN users u ON vk.user_id = u.id
             WHERE vk.panel_email IS NOT NULL
               AND s.is_active = 1
         """)
         return [dict(row) for row in cursor.fetchall()]
+
 
 def get_all_keys_with_server() -> List[Dict[str, Any]]:
     """
@@ -489,6 +506,9 @@ def bulk_update_traffic(updates: List[tuple]) -> None:
     if not updates:
         return
     
+    from .db_key_operations import get_pending_key_mutation_ids
+    pending = get_pending_key_mutation_ids()
+    updates = [item for item in updates if int(item[1]) not in pending]
     with get_db() as conn:
         conn.executemany("""
             UPDATE vpn_keys 
@@ -564,6 +584,8 @@ def reset_key_traffic_notification(key_id: int) -> None:
         key_id: Key ID
     """
     with get_db() as conn:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         conn.execute("""
             UPDATE vpn_keys 
             SET traffic_notified_pct = 100, traffic_used = 0, traffic_updated_at = NULL
@@ -580,6 +602,8 @@ def update_key_traffic_limit(key_id: int, traffic_limit_bytes: int) -> None:
         traffic_limit_bytes: New traffic limit in bytes
     """
     with get_db() as conn:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         conn.execute("""
             UPDATE vpn_keys SET traffic_limit = ? WHERE id = ?
         """, (traffic_limit_bytes, key_id))
@@ -597,6 +621,8 @@ def update_vpn_key_tariff_and_traffic_limit(
     so that the user receives a full new balance from the current moment.
     """
     with get_db() as conn:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         row = conn.execute("""
             SELECT traffic_limit, traffic_used
             FROM vpn_keys
@@ -625,6 +651,8 @@ def update_vpn_key_tariff_and_traffic_limit(
         """, (tariff_id, new_limit, key_id))
         success = cursor.rowcount > 0
         if success:
+            # This explicit legacy plan change supersedes a previous snapshot.
+            conn.execute('DELETE FROM key_entitlements WHERE key_id=?', (key_id,))
             limit_gb = new_limit / (1024 ** 3) if new_limit > 0 else 0
             limit_text = f"{limit_gb:.1f} ГБ" if new_limit > 0 else "безлимит"
             added_gb = traffic_limit_bytes / (1024 ** 3) if traffic_limit_bytes > 0 else 0
@@ -657,12 +685,14 @@ def reissue_vpn_key_plan(
         raise ValueError("max_ips_override must be between 1 and 999")
 
     with get_db() as conn:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         before = conn.execute(
             """
             SELECT vk.user_id, vk.tariff_id, vk.expires_at,
                    t.group_id AS tariff_group_id
             FROM vpn_keys vk
-            JOIN tariffs t ON t.id = vk.tariff_id
+            LEFT JOIN tariffs t ON t.id = vk.tariff_id
             WHERE vk.id = ?
             """,
             (int(key_id),),
@@ -673,7 +703,8 @@ def reissue_vpn_key_plan(
         ).fetchone()
         if before is None or target is None:
             return None
-        if int(before['tariff_group_id']) != int(target['group_id']):
+        from .db_payments import _key_tariff_group_allowed_with_conn
+        if not _key_tariff_group_allowed_with_conn(conn, key_id, target['group_id']):
             raise ValueError("Target tariff must belong to the key tariff group")
 
         cursor = conn.execute(
@@ -704,6 +735,7 @@ def reissue_vpn_key_plan(
         )
         if cursor.rowcount <= 0:
             return None
+        conn.execute('DELETE FROM key_entitlements WHERE key_id=?', (key_id,))
         after = conn.execute(
             "SELECT expires_at FROM vpn_keys WHERE id = ?",
             (int(key_id),),
@@ -711,7 +743,7 @@ def reissue_vpn_key_plan(
         return {
             'key_id': int(key_id),
             'user_id': int(before['user_id']),
-            'tariff_id_before': int(before['tariff_id']),
+            'tariff_id_before': int(before['tariff_id']) if before['tariff_id'] is not None else None,
             'tariff_id_after': int(tariff_id),
             'expires_before': before['expires_at'],
             'expires_after': after['expires_at'] if after else None,
@@ -733,6 +765,8 @@ def delete_vpn_key(key_id: int) -> bool:
         True if successful
     """
     with get_db() as conn:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         # Remove the link in the payment history (to save the history itself)
         conn.execute("UPDATE payments SET vpn_key_id = NULL WHERE vpn_key_id = ?", (key_id,))
         # Deleting notification logs
@@ -763,15 +797,16 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
                 vk.sub_id,
                 vk.traffic_used, vk.traffic_limit,
                 t.name as tariff_name,
-                COALESCE(vk.max_ips_override, t.max_ips) as tariff_max_ips,
+                COALESCE(vk.max_ips_override, COALESCE(json_extract(ke.tariff_json, '$.max_ips'), t.max_ips)) as tariff_max_ips,
                 t.system_type as tariff_system_type,
-                t.group_id as tariff_group_id,
+                COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) as tariff_group_id,
                 CASE
                     WHEN vk.expires_at IS NULL
                       OR vk.expires_at > datetime('now') THEN 1
                     ELSE 0
                 END as is_active
             FROM vpn_keys vk
+            LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
             LEFT JOIN servers s ON vk.server_id = s.id
             LEFT JOIN tariffs t ON vk.tariff_id = t.id
             JOIN users u ON vk.user_id = u.id
@@ -793,6 +828,7 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
             keys.append(key)
         
         return keys
+
 
 
 def get_user_key_snapshot_stats(user_id: int) -> Dict[str, int]:
@@ -849,15 +885,25 @@ def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str
     Returns:
         Dictionary with key data or None if not found or not owned
     """
+    return _get_key_details(key_id, telegram_id, by_account=False)
+
+
+def get_key_details_for_account(key_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    """Read the same key details using explicit internal ownership."""
+    return _get_key_details(key_id, user_id, by_account=True)
+
+
+def _get_key_details(key_id, owner_id, *, by_account):
+    owner_column = 'u.id' if by_account else 'u.telegram_id'
     with get_db() as conn:
-        cursor = conn.execute("""
+        cursor = conn.execute(f"""
             SELECT 
                 vk.*, 
                 s.name as server_name, s.id as server_id,
                 t.name as tariff_name, t.duration_days, t.price_minor,
                 COALESCE((SELECT value FROM settings WHERE key = 'base_currency'), 'RUB') AS base_currency,
-                COALESCE(vk.max_ips_override, t.max_ips) as tariff_max_ips,
-                t.group_id as tariff_group_id,
+                COALESCE(vk.max_ips_override, COALESCE(json_extract(ke.tariff_json, '$.max_ips'), t.max_ips)) as tariff_max_ips,
+                COALESCE(json_extract(ke.tariff_json, '$.group_id'), t.group_id) as tariff_group_id,
                 t.system_type as tariff_system_type,
                 u.telegram_id, u.username,
                 s.is_active as server_active,
@@ -867,11 +913,12 @@ def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str
                     ELSE 0 
                 END as is_active
             FROM vpn_keys vk
+            LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
             LEFT JOIN servers s ON vk.server_id = s.id
             LEFT JOIN tariffs t ON vk.tariff_id = t.id
             JOIN users u ON vk.user_id = u.id
-            WHERE vk.id = ? AND u.telegram_id = ?
-        """, (key_id, telegram_id))
+            WHERE vk.id = ? AND {owner_column} = ?
+        """, (key_id, owner_id))
         row = cursor.fetchone()
         if not row:
             return None
@@ -887,6 +934,7 @@ def get_key_details_for_user(key_id: int, telegram_id: int) -> Optional[Dict[str
                  key['display_name'] = f"Ключ #{key['id']}"
         
         return key
+
 
 def update_key_custom_name(key_id: int, telegram_id: int, new_name: str) -> bool:
     """
@@ -909,6 +957,8 @@ def update_key_custom_name(key_id: int, telegram_id: int, new_name: str) -> bool
         return False
     
     with get_db() as conn:
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         conn.execute("""
             UPDATE vpn_keys SET custom_name = ? WHERE id = ?
         """, (new_name or None, key_id))
@@ -941,6 +991,8 @@ def add_days_to_first_active_key(user_id: int, days: int) -> bool:
             return False
         
         key_id = row['id']
+        from .db_key_operations import _assert_key_mutation_ready
+        _assert_key_mutation_ready(conn, key_id)
         conn.execute("""
             UPDATE vpn_keys 
             SET expires_at = datetime(expires_at, '+' || ? || ' days')

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import asyncio
+from weakref import WeakValueDictionary
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -54,6 +56,7 @@ class ProviderInvoice:
 
 
 _ALL_PURPOSES = frozenset({'key_purchase', 'key_renewal', 'balance_topup'})
+_invoice_locks = WeakValueDictionary()
 _BUILTIN_ADAPTERS: Mapping[str, PaymentProviderAdapter] = MappingProxyType({
     'crypto': PaymentProviderAdapter('crypto', 'crypto', 'USDT', '🪙 USDT', 'link', _ALL_PURPOSES),
     'cryptobot': PaymentProviderAdapter(
@@ -127,6 +130,23 @@ def has_available_payment_method(
         ):
             return True
 
+    return has_available_custom_payment_method(
+        normalized_purpose,
+        telegram_id=telegram_id,
+        user_id=user_id,
+        key_id=key_id,
+    )
+
+
+def has_available_custom_payment_method(
+    purpose: str,
+    *,
+    telegram_id: int | None,
+    user_id: int | None = None,
+    key_id: int | None = None,
+) -> bool:
+    """Check registered extension providers for a purpose before an intent exists."""
+    normalized_purpose = str(purpose or '').strip()
     from bot.utils.payment_provider_registry import (
         is_payment_provider_enabled,
         list_payment_providers,
@@ -134,7 +154,7 @@ def has_available_payment_method(
 
     context = {
         'user_id': user_id,
-        'telegram_id': int(telegram_id),
+        'telegram_id': int(telegram_id) if telegram_id is not None else None,
         'purpose': normalized_purpose,
         'key_id': key_id,
     }
@@ -235,6 +255,15 @@ async def create_provider_invoice(
     bot_username: str,
 ) -> ProviderInvoice:
     """Creates one provider order after purpose and quote validation."""
+    lock = _invoice_locks.setdefault(intent.order_id, asyncio.Lock())
+    async with lock:
+        return await _create_provider_invoice_locked(intent, quote, telegram_id=telegram_id, bot_username=bot_username)
+
+
+async def _create_provider_invoice_locked(intent, quote, *, telegram_id, bot_username):
+    from runtime.readiness import require_active
+
+    require_active()
     adapter = get_payment_provider_adapter(quote.payment_type.removeprefix('ext_'))
     if adapter is None or adapter.payment_type != quote.payment_type:
         adapter = get_payment_provider_adapter(quote.payment_type)
@@ -266,6 +295,9 @@ async def create_provider_invoice(
                 telegram_id=telegram_id,
                 bot_username=bot_username,
             )
+    existing = get_payment_provider_order(intent.order_id)
+    if existing is not None:
+        return _existing_provider_invoice(adapter, intent, quote, existing)
     return await _create_provider_invoice_bound(
         adapter,
         intent,
@@ -273,6 +305,21 @@ async def create_provider_invoice(
         telegram_id=telegram_id,
         bot_username=bot_username,
     )
+
+
+def _existing_provider_invoice(adapter, intent, quote, provider_order):
+    if str(provider_order.get('provider_id') or '') != adapter.provider_id:
+        raise ValueError('Payment intent is already bound to another provider')
+    status = _normalize_status(provider_order.get('status'))
+    if (status == 'canceled' or provider_order.get('charge_amount') != _decimal_text(quote.charge_amount)
+            or provider_order.get('charge_currency') != quote.charge_currency
+            or provider_order.get('payment_type') != quote.payment_type
+            or provider_order.get('purpose') != intent.purpose):
+        raise ValueError('Persisted invoice snapshot is inconsistent')
+    return ProviderInvoice(order_id=intent.order_id, provider_id=adapter.provider_id, payment_type=adapter.payment_type,
+        presentation=adapter.presentation, status=status, payment_url=provider_order.get('payment_url'),
+        provider_payment_id=provider_order.get('provider_payment_id'),
+        metadata=MappingProxyType(dict(provider_order.get('metadata') or {})))
 
 
 def _existing_cryptobot_invoice(
@@ -558,7 +605,7 @@ async def _create_custom_invoice(
 ) -> dict[str, Any]:
     from bot.utils.payment_provider_registry import create_payment
 
-    return await create_payment(adapter.provider_id, {
+    context = {
         'provider_id': adapter.provider_id,
         'payment_type': adapter.payment_type,
         'order_id': intent.order_id,
@@ -579,7 +626,13 @@ async def _create_custom_invoice(
         'description': intent.description,
         'quote': dict(quote.raw),
         'bot_username': bot_username,
-    })
+    }
+    from database.requests import get_payment_order_terms
+    terms = get_payment_order_terms(intent.order_id)
+    if terms and terms['source'] in {'site', 'mini_app'}:
+        from bot.services.billing import build_payment_return_url
+        context['return_url'] = build_payment_return_url(bot_username, adapter.provider_id, intent.order_id)
+    return await create_payment(adapter.provider_id, context)
 
 
 async def _check_builtin_status(
@@ -644,6 +697,7 @@ __all__ = [
     'check_provider_invoice',
     'create_provider_invoice',
     'get_payment_provider_adapter',
+    'has_available_custom_payment_method',
     'has_available_payment_method',
     'list_payment_provider_adapters',
 ]

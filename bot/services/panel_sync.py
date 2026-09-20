@@ -13,7 +13,7 @@ from bot.services.panels.base import (
     PanelServerSnapshot,
 )
 from bot.services.panel_key_state import should_panel_client_exist
-from bot.utils.panel_email import is_managed_panel_email
+from bot.utils.panel_email import is_managed_key
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +126,13 @@ def _managed_keys(
     operation: str,
 ) -> List[Dict[str, Any]]:
     """Return only bot-owned key rows and report invalid ownership boundaries."""
+    from database.requests import get_pending_panel_identity_ids
+    pending_ids = get_pending_panel_identity_ids()
     managed: List[Dict[str, Any]] = []
     for key in keys:
-        if is_managed_panel_email(key.get("panel_email")):
+        if key.get('id') in pending_ids:
+            continue
+        if is_managed_key(key):
             managed.append(key)
             continue
         logger.warning(
@@ -225,9 +229,13 @@ async def _apply_clients_api_bulk_prelude(
     states_by_email: Dict[str, PanelClientState] = {}
     seen_emails: set[str] = set()
 
+    from database.requests import get_imported_panel_key_ids, get_pending_key_mutation_ids
+    imported_ids = get_imported_panel_key_ids() | get_pending_key_mutation_ids()
     for key in server_keys:
+        if key.get('id') in imported_ids:
+            continue
         email = str(key.get("panel_email") or "").strip()
-        if not is_managed_panel_email(email):
+        if not is_managed_key(key):
             logger.warning(
                 "Clients API bulk prelude skipped key %s with unmanaged "
                 "panel_email=%r",
@@ -458,7 +466,8 @@ def build_panel_import_change(
 
     panel_expiry = (
         None
-        if int(state.expiry_time or 0) == 0
+        if int(state.expiry_time or 0) == 0 or
+        (key.get('tariff_id') is None and int(state.expiry_time or 0) < 0)
         else datetime.fromtimestamp(int(state.expiry_time) / 1000, tz=timezone.utc)
     )
     panel_revives = panel_expiry is None or panel_expiry > now_utc

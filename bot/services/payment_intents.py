@@ -35,6 +35,22 @@ PURPOSE_KEY_RENEWAL = 'key_renewal'
 PURPOSE_BALANCE_TOPUP = 'balance_topup'
 
 
+def payment_invoice_description(purpose, *, tariff, key_id, nominal, base_currency):
+    """Use the same saved invoice text for every authenticated channel."""
+    if purpose == PURPOSE_BALANCE_TOPUP:
+        nominal_value = format(minor_to_decimal(nominal, base_currency), 'f')
+        if '.' in nominal_value:
+            nominal_value = nominal_value.rstrip('0').rstrip('.')
+        return render_ui_text('payment.invoice.topup_description', amount=nominal_value, currency=base_currency)
+    tariff_name = str(tariff.get('name') or f"#{tariff.get('id')}")
+    if purpose == PURPOSE_KEY_PURCHASE:
+        return render_ui_text('payment.invoice.purchase_description', tariff_name=tariff_name,
+                              days=render_duration_days(tariff.get('duration_days')))
+    key = get_vpn_key_by_id(key_id) if key_id else None
+    return render_ui_text('payment.invoice.renewal_description',
+                          key_name=str((key or {}).get('display_name') or f'#{key_id or 0}'), tariff_name=tariff_name)
+
+
 @dataclass(frozen=True)
 class PaymentTarget:
     """Declarative post-payment target owned by the page/route registry."""
@@ -208,9 +224,8 @@ def create_payment_intent(
             key = get_vpn_key_by_id(key_id) if key_id else None
             if key is None:
                 raise ValueError('Renewal key does not exist')
-            if int(key.get('tariff_group_id') or 1) != int(
-                tariff.get('group_id') or 1
-            ):
+            from database.requests import is_tariff_payment_target_allowed
+            if not is_tariff_payment_target_allowed(user_id=user_id, tariff_id=tariff_id, vpn_key_id=key_id):
                 raise ValueError('Tariff belongs to another key group')
 
     base_currency = get_base_currency()
@@ -221,14 +236,7 @@ def create_payment_intent(
             else nominal_amount_cents
         )
         nominal = _positive_int(raw_nominal, 'nominal_amount_minor')
-        nominal_value = format(minor_to_decimal(nominal, base_currency), "f")
-        if "." in nominal_value:
-            nominal_value = nominal_value.rstrip("0").rstrip(".")
-        default_description = render_ui_text(
-            "payment.invoice.topup_description",
-            amount=nominal_value,
-            currency=base_currency,
-        )
+
     else:
         if not tariff:
             raise ValueError('Tariff is required for this payment purpose')
@@ -236,23 +244,10 @@ def create_payment_intent(
             int(tariff.get('price_minor') or 0),
             'tariff.price_minor',
         )
-        tariff_name = str(tariff.get('name') or f'#{tariff_id}')
-        if purpose == PURPOSE_KEY_PURCHASE:
-            days = render_duration_days(tariff.get('duration_days'))
-            default_description = render_ui_text(
-                "payment.invoice.purchase_description",
-                tariff_name=tariff_name,
-                days=days,
-            )
-        else:
-            key_id = _optional_positive_int(payload.get('key_id'))
-            key = get_vpn_key_by_id(key_id) if key_id else None
-            key_name = str((key or {}).get('display_name') or f'#{key_id or 0}')
-            default_description = render_ui_text(
-                "payment.invoice.renewal_description",
-                key_name=key_name,
-                tariff_name=tariff_name,
-            )
+    default_description = payment_invoice_description(
+        purpose, tariff=tariff, key_id=_optional_positive_int(payload.get('key_id')),
+        nominal=nominal, base_currency=base_currency,
+    )
 
     resolved_navigation = navigation or default_payment_navigation(purpose)
     validate_payment_target(resolved_navigation.success_target)
@@ -292,7 +287,15 @@ def quote_payment_intent(order_id: str, payment_type: str) -> PaymentQuote:
     if intent.status != 'pending' or intent.fulfillment_status not in {'pending', 'failed'}:
         raise ValueError('Payment intent can no longer be quoted')
 
-    tariff = get_tariff_by_id(intent.tariff_id) if intent.tariff_id else {
+    from database.requests import get_payment_order_terms, get_payment_provider_order, save_payment_order_pricing
+    terms = get_payment_order_terms(order_id)
+    if terms and terms['pricing'] and get_payment_provider_order(order_id):
+        if terms['pricing']['payment_type'] != payment_type:
+            raise ValueError('Payment intent is already bound to another provider')
+        return _payment_quote(intent, terms['pricing'])
+
+    from bot.services.order_terms import order_tariff
+    tariff = order_tariff(intent.order_id, intent.tariff_id) if intent.tariff_id else {
         'id': None,
         'name': intent.description,
         'duration_days': 0,
@@ -350,6 +353,8 @@ def quote_payment_intent(order_id: str, payment_type: str) -> PaymentQuote:
     if not quote_persisted:
         cancel_promo_reservation_for_order(intent.order_id)
         raise RuntimeError('Payment intent quote was not persisted')
+    if not save_payment_order_pricing(intent.order_id, pricing):
+        raise RuntimeError('Payment intent immutable pricing was not persisted')
     return _payment_quote(intent, pricing, charge_amount=charge_amount)
 
 

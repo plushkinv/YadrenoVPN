@@ -5,6 +5,7 @@ Provides a context manager for secure work with the database.
 """
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,21 @@ DEFAULT_SQLITE_MMAP_SIZE_BYTES = 134217728
 _ALLOWED_JOURNAL_MODES = {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}
 _ALLOWED_SYNCHRONOUS = {"OFF", "NORMAL", "FULL", "EXTRA"}
 _ALLOWED_TEMP_STORE = {"DEFAULT", "FILE", "MEMORY"}
+_request_connection = ContextVar('http_database_connection', default=None)
+
+
+@contextmanager
+def request_connection_scope():
+    """Reuse setup within one HTTP task, preserving each get_db transaction boundary."""
+    from runtime.readiness import _owner
+    scope = {'owner': _owner(), 'path': str(DB_PATH), 'connection': None, 'borrowed': False}
+    token = _request_connection.set(scope)
+    try:
+        yield
+    finally:
+        _request_connection.reset(token)
+        if scope['connection'] is not None:
+            scope['connection'].close()
 
 
 def _config_value(name: str, default: Any) -> Any:
@@ -107,7 +123,10 @@ def get_connection() -> sqlite3.Connection:
         sqlite3.Connection: Connection to the database
     """
     timeout_seconds = get_sqlite_busy_timeout_ms() / 1000
-    conn = sqlite3.connect(DB_PATH, timeout=timeout_seconds)
+    from runtime.readiness import RuntimeConnection, sqlite_authorizer
+
+    conn = sqlite3.connect(DB_PATH, timeout=timeout_seconds, factory=RuntimeConnection)
+    conn.set_authorizer(sqlite_authorizer)
     conn.row_factory = sqlite3.Row  # Access fields by name
     _apply_connection_pragmas(conn)
     return conn
@@ -128,7 +147,16 @@ def get_db():
     Yields:
         sqlite3.Connection: Connection to the database
     """
-    conn = get_connection()
+    from runtime.readiness import _owner
+    scope = _request_connection.get()
+    shared = bool(scope and scope['owner'] == _owner() and scope['path'] == str(DB_PATH) and not scope['borrowed'])
+    if shared:
+        if scope['connection'] is None:
+            scope['connection'] = get_connection()
+        conn = scope['connection']
+        scope['borrowed'] = True
+    else:
+        conn = get_connection()
     try:
         yield conn
         conn.commit()
@@ -136,4 +164,7 @@ def get_db():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        if shared:
+            scope['borrowed'] = False
+        else:
+            conn.close()
