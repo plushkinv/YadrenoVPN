@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from web_api.setup_options import SetupError
+from web_api.setup_detection import prepared_local_nginx
 from web_api.setup_certificates import certificate_paths, inspect_renewals
 from web_api.setup_system import owned_paths, system_path, verify_owned_file
 from web_tools.package import MAX_BYTES, digest, verify_package
@@ -192,15 +193,15 @@ def preflight(root, options, system, store):
         raise SetupError('dns_unavailable', 'DNS не возвращает A или AAAA домена.')
     if options.listen_address and not ipaddress.ip_address(options.listen_address).is_unspecified and options.listen_address not in addresses:
         raise SetupError('listen_address_missing', 'Выбранный публичный listen address отсутствует на сервере.')
-    if options.proxy == 'managed-nginx':
-        for command in ('systemd-analyze',) + (('apt-get',) if not system.which('nginx') or not system.which('certbot') else ()):
-            if not system.which(command):
-                raise SetupError('command_missing', 'Не найдена необходимая команда: ' + command)
+    if options.proxy in {'auto', 'managed-nginx'}:
         public_local = {value for value in addresses if ipaddress.ip_address(value).is_global}
         if public_local and any(value not in public_local for value in resolved):
             raise SetupError('dns_address_mismatch', 'A/AAAA указывают не на публичные адреса этого сервера.', details={'dns': resolved, 'server': sorted(public_local)})
         if any(':' in value for value in resolved) and not any(':' in value for value in addresses):
             raise SetupError('ipv6_unavailable', 'DNS содержит AAAA, но на сервере нет IPv6.')
+        if options.proxy == 'auto' and any(value not in addresses for value in resolved):
+            raise SetupError('dns_address_mismatch', 'Автоматическое подключение требует, чтобы домен указывал на этот сервер.',
+                             details={'dns': resolved, 'server': addresses})
     occupied = listeners(system)
     try:
         saved_port = int(saved['web_listen_port']) if saved.get('web_public_origin') and saved.get('web_listen_port') else None
@@ -208,6 +209,11 @@ def preflight(root, options, system, store):
             raise ValueError('port out of range')
     except (TypeError, ValueError):
         raise SetupError('invalid_saved_web_settings', 'Сохранённый внутренний порт некорректен; он не изменён автоматически.') from None
+    prepared = None
+    if options.proxy == 'auto':
+        prepared = prepared_local_nginx(system, options, paths, resolved, occupied, options.backend_port or saved_port)
+        options = replace(options, proxy='external' if prepared else 'managed-nginx',
+                          backend_port=prepared['port'] if prepared else options.backend_port)
     candidates = [options.backend_port or saved_port] if options.backend_port or saved_port else range(18764, 18785)
     for port in candidates:
         busy = [item for item in occupied if item['port'] == port and overlaps(item['host'], options.backend_bind)]
@@ -225,6 +231,9 @@ def preflight(root, options, system, store):
     else:
         raise SetupError('backend_port_conflict', 'Выбранный внутренний порт занят; сохранённый или явный порт автоматически не меняется.')
     if options.proxy == 'managed-nginx':
+        for command in ('systemd-analyze',) + (('apt-get',) if not system.which('nginx') or not system.which('certbot') else ()):
+            if not system.which(command):
+                raise SetupError('command_missing', 'Не найдена необходимая команда: ' + command)
         issues = []
         public_hosts = [options.listen_address] if options.listen_address else ['0.0.0.0', '::']
         if options.backend_port in {80, options.https_port} and any(overlaps(options.backend_bind, host) for host in public_hosts):
@@ -250,6 +259,7 @@ def preflight(root, options, system, store):
                 'Для новой выдачи нужен --agree-tos; email по умолчанию admin@<домен>, другой можно задать через --email.',
                 stage='arguments', exit_code=2)
     return options, signed, trust, saved, paths, {'dns': resolved, 'server_addresses': addresses,
+        'existing_local_proxy': prepared['file'] if prepared else None,
         'acme_http01': plans if options.proxy == 'managed-nginx' else [],
         'tls_renewal': 'managed' if options.proxy == 'managed-nginx' else 'external_owner',
         'certificate_name': certificate_name(system, paths, options.domain) if options.proxy == 'managed-nginx' else None,

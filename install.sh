@@ -15,7 +15,7 @@
 # bash install.sh update [COMMIT_OR_BRANCH]
 # bash install.sh reset [COMMIT_OR_BRANCH]
 # bash install.sh rollback
-# bash install.sh web-setup --proxy managed-nginx --domain vpn.example.com --email admin@example.com --agree-tos --output json
+# bash install.sh web-setup --domain vpn.example.com --agree-tos --output json
 # Without an explicit update/reset target, install/reinstall/update/reset select
 # the latest first-parent origin/main commit whose subject does not start with '?'.
 
@@ -747,27 +747,14 @@ do_web_setup() {
         (cd "$INSTALL_DIR" && "$python_bin" -m web_api.management --project-root "$INSTALL_DIR" setup "$@" < /dev/null)
         return $?
     fi
-    local web_proxy web_domain web_origin
-    local web_args=()
+    local web_domain
+    print_header 'Подключение сайта и Mini App'
     echo 'Сайт и Mini App используют отдельный домен в корне /.'
-    echo '1) Настроить HTTPS на этом сервере — установить или использовать Nginx.'
-    echo '   Для обычной установки: домен указывает сюда, порты 80/443 свободны или заняты Nginx.'
-    echo '2) Использовать HTTPS-прокси, уже настроенный администратором (например, Nginx или Caddy).'
-    echo '   Для готовой схемы: домен, сертификат и маршрут запросов к боту подготовлены заранее.'
-    echo '   Второй режим не устанавливает прокси и не устраняет занятость портов.'
-    read -r -p 'Режим [1/2]: ' web_proxy
-    case "$web_proxy" in
-        1)
-            read -r -p 'Домен или поддомен: ' web_domain
-            web_args=(--proxy managed-nginx --domain "$web_domain" --agree-tos)
-            ;;
-        2)
-            read -r -p 'Готовый публичный HTTPS URL: ' web_origin
-            web_args=(--proxy external --public-url "$web_origin")
-            ;;
-        *) echo 'Неверный режим.' >&2; return 2 ;;
-    esac
-    (cd "$INSTALL_DIR" && "$python_bin" -m web_api.management --project-root "$INSTALL_DIR" setup "${web_args[@]}" < /dev/null)
+    echo 'Установщик проверит сервер и подключит домен автоматически.'
+    echo 'Если потребуется ручная настройка, появится инструкция для администратора.'
+    echo
+    read -r -p 'Домен или поддомен: ' web_domain
+    (cd "$INSTALL_DIR" && "$python_bin" -m web_api.management --project-root "$INSTALL_DIR" setup --domain "$web_domain" --agree-tos < /dev/null)
 }
 
 # ============================================================

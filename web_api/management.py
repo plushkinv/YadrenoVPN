@@ -22,7 +22,8 @@ def parser():
     value.add_argument('--project-root', type=Path, default=PROJECT_ROOT)
     commands = value.add_subparsers(dest='command', required=True, parser_class=Parser)
     setup = commands.add_parser('setup')
-    setup.add_argument('--proxy', required=True, choices=('managed-nginx', 'external'))
+    setup.add_argument('--proxy', default='auto', choices=('auto', 'managed-nginx', 'external'),
+                       help='По умолчанию подключение определяется автоматически; явный режим — для администратора.')
     setup.add_argument('--domain')
     setup.add_argument('--public-url')
     setup.add_argument('--email', help='Контакт для сертификата; по умолчанию admin@<домен>.')
@@ -87,18 +88,25 @@ def main(argv=None):
                          message='Настройка не завершена; повтор восстановит сохранённую конфигурацию.',
                          details={'error_type': type(exc).__name__})
         status = 4
-    if not payload['ok'] and payload['stage'] not in {'arguments', 'complete'}:
+    manual = not payload['ok'] and payload['stage'] not in {'arguments', 'complete'}
+    if manual:
         from web_api.setup_diagnostics import manual_setup_report
         payload['message'] = manual_setup_report(payload, options, root)
     if output_json:
         print(json.dumps(payload, ensure_ascii=False))
     else:
-        print(payload.get('message') or ('Сайт и Mini App готовы: ' + str(payload['public_url']) if payload['code'] == 'ready'
-              else 'Результат: ' + payload['code']))
+        if manual:
+            from web_api.setup_diagnostics import terminal_report
+            print(terminal_report(payload['message']))
+        else:
+            print(payload.get('message') or ('Сайт и Mini App готовы: ' + str(payload['public_url']) if payload['code'] == 'ready'
+                  else 'Результат: ' + payload['code']))
         if payload.get('upstream'):
             print('Закрытый upstream: ' + payload['upstream'])
+        if payload.get('existing_local_proxy'):
+            print('Найдено готовое локальное подключение домена. Конфигурация Nginx и сертификат сохраняются.')
         if payload.get('tls_renewal') == 'external_owner':
-            print('TLS и продление обслуживает владелец внешнего прокси; будущая выдача здесь не проверяется.')
+            print('Продление сертификата остаётся в существующей конфигурации HTTPS; будущая выдача здесь не проверяется.')
         if payload['ok'] and payload.get('acme_http01'):
             print('Продление существующего IP-сертификата: HTTP-проверка через Nginx' +
                   (' будет настроена при установке.' if options.check_only else ' настроена.'))

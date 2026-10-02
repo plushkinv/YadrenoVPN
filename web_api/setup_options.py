@@ -47,8 +47,8 @@ class SetupOptions:
     def parse(cls, values):
         try:
             proxy = values.proxy
-            if proxy not in {'managed-nginx', 'external'}:
-                raise ValueError('Выберите --proxy managed-nginx или external.')
+            if proxy not in {'auto', 'managed-nginx', 'external'}:
+                raise ValueError('Допустимые значения --proxy: auto, managed-nginx, external.')
             public_url = normalize_public_origin(values.public_url) if values.public_url else None
             domain = hostname(values.domain or (urlsplit(public_url).hostname if public_url else None))
             port = values.https_port
@@ -65,14 +65,14 @@ class SetupOptions:
             if values.backend_port is not None and not 1 <= values.backend_port <= 65535:
                 raise ValueError('Внутренний порт должен быть 1–65535.')
             email = values.email
-            if email is None and proxy == 'managed-nginx':
+            if email is None and proxy in {'auto', 'managed-nginx'}:
                 email = 'admin@' + domain
             if email and not re.fullmatch(r'[^\s@\x00-\x1f]+@[^\s@\x00-\x1f]+\.[^\s@\x00-\x1f]+', email):
                 raise ValueError('Некорректный контакт для сертификата.')
             listen = str(ipaddress.ip_address(values.listen_address)) if values.listen_address else None
             bind = private_bind(values.backend_bind)
             proxies = trusted_proxies(values.trusted_proxy or DEFAULT_TRUSTED_PROXIES)
-            if proxy == 'managed-nginx' and not ipaddress.ip_address(bind).is_loopback:
+            if proxy in {'auto', 'managed-nginx'} and not ipaddress.ip_address(bind).is_loopback:
                 raise ValueError('Управляемый Nginx использует loopback; закрытый адрес нужен режиму external.')
             if not ipaddress.ip_address(bind).is_loopback and not values.trusted_proxy:
                 raise ValueError('Для закрытого внешнего прокси явно задайте --trusted-proxy.')

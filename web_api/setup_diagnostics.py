@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from pathlib import Path
 import shlex
+import shutil
+import sys
+import textwrap
+
+from web_api.settings import DEFAULT_TRUSTED_PROXIES
 
 HEADING = 'Автоматическая установка невозможна. Требуется дополнительная ручная настройка сервера'
 ADMIN_URL = 'https://t.me/YadrenoAdmin_Bot'
+COPY_START = '----- НАЧАЛО ИНСТРУКЦИИ ДЛЯ КОПИРОВАНИЯ -----'
+COPY_END = '----- КОНЕЦ ИНСТРУКЦИИ -----'
 
 
 def _steps(code, details, options):
@@ -23,7 +31,8 @@ def _steps(code, details, options):
         else:
             steps.append('Измените порт или привязку обнаруженной службы через её штатные настройки, сохранив её работу.')
         steps.append('Если служба должна сохранить этот порт, подготовьте совместную маршрутизацию вручную '
-                     'и используйте готовый HTTPS-прокси. Повторный запуск мастера сам порт не освободит.')
+                     'и завершите подключение служебной командой для готового HTTPS-прокси ниже. '
+                     'Повторный запуск мастера сам порт не освободит.')
         return steps
     if code in {'renewal_conflict', 'renewal_changed', 'renewal_http_unavailable'}:
         return ['Определите, какой клиент и какое задание продлевают указанный сертификат: acme.sh, Certbot, cron или systemd.',
@@ -39,7 +48,7 @@ def _steps(code, details, options):
                 'Для автоматического режима нужен include /etc/nginx/conf.d/*.conf внутри http и отсутствие '
                 'чужого сайта с тем же именем; существующие сайты, VPN и подписки должны продолжить работу.',
                 'Если требуется перестройка stream, контейнерного или другого прокси, настройте HTTPS-маршрут '
-                'к закрытому HTTP listener бота вручную и выберите режим готового прокси.']
+                'к закрытому HTTP listener бота вручную и используйте служебную команду для готового прокси ниже.']
     if code in {'dns_unavailable', 'dns_address_mismatch', 'ipv6_unavailable'}:
         return ['Проверьте A и AAAA указанного домена. В автоматическом режиме они должны вести на этот сервер.',
                 'Исправьте неверные записи. Если IPv6 не настроен, удалите лишнюю AAAA; затем дождитесь обновления DNS.',
@@ -80,11 +89,14 @@ def _steps(code, details, options):
             'Устраните конкретную причину, сохранив данные бота, панель, VPN, подписки и существующее продление сертификатов.']
 
 
-def _retry(root, options):
-    args = ['bash', str(Path(root) / 'install.sh'), 'web-setup', '--proxy', options.proxy]
-    if options.proxy == 'managed-nginx':
+def _retry(root, options, *, prepared=False):
+    proxy = 'external' if prepared else options.proxy
+    args = ['bash', str(Path(root) / 'install.sh'), 'web-setup']
+    if proxy != 'auto':
+        args += ['--proxy', proxy]
+    if proxy in {'auto', 'managed-nginx'}:
         args += ['--domain', options.domain, '--agree-tos']
-        if options.email:
+        if options.email and options.email != 'admin@' + options.domain:
             args += ['--email', options.email]
     else:
         args += ['--public-url', options.public_url]
@@ -94,10 +106,25 @@ def _retry(root, options):
         args += ['--listen-address', options.listen_address]
     if options.backend_port:
         args += ['--backend-port', str(options.backend_port)]
-    args += ['--backend-bind', options.backend_bind]
-    for proxy in options.trusted_proxies:
-        args += ['--trusted-proxy', proxy]
+    if options.backend_bind != '127.0.0.1':
+        args += ['--backend-bind', options.backend_bind]
+    if options.trusted_proxies != DEFAULT_TRUSTED_PROXIES:
+        for address in options.trusted_proxies:
+            args += ['--trusted-proxy', address]
     return args
+
+
+def _command(args):
+    """Wrap only between whole shell-quoted arguments, preserving paste-and-run."""
+    lines, current = [], ''
+    for arg in args:
+        word = shlex.quote(arg)
+        if current and len(current) + len(word) + 1 > 90:
+            lines.append(current + ' \\')
+            current = '  ' + word
+        else:
+            current += (' ' if current else '') + word
+    return '\n'.join([*lines, current])
 
 
 def manual_setup_report(payload, options, root):
@@ -105,8 +132,9 @@ def manual_setup_report(payload, options, root):
     details = payload.get('details', {})
     issues = details.get('issues') or [{'code': payload['code'], 'message': payload.get('message', ''), 'details': details}]
     lines = [HEADING, '', 'Вы можете выполнить настройку самостоятельно или полностью делегировать её Yadreno Admin:',
-             ADMIN_URL, '', 'Инструкция ниже предназначена для администратора или для передачи агенту целиком.',
-             'SSH-доступ к нужному серверу передайте агенту отдельно.', '', 'Задача: подключить сайт и Mini App, сохранив работу панели, VPN и подписок.',
+             ADMIN_URL, '', 'Скопируйте весь блок между отметками НАЧАЛО и КОНЕЦ и передайте администратору.',
+             'SSH-доступ к нужному серверу передайте отдельно.', '', COPY_START, '',
+             'Задача: подключить сайт и Mini App, сохранив работу панели, VPN и подписок.',
              'Каталог установленного бота: ' + str(root)]
     addresses = details.get('server_addresses') or details.get('server') or []
     visible = []
@@ -120,10 +148,12 @@ def manual_setup_report(payload, options, root):
         lines.append('Адреса сервера по результатам проверки: ' + ', '.join(visible))
     if options:
         lines.extend(['Домен: ' + options.domain, 'Публичный адрес: ' + options.public_url,
-                      'Режим: ' + ('Nginx на сервере бота' if options.proxy == 'managed-nginx' else 'готовый HTTPS-прокси')])
+                      'Подключение: ' + {'auto': 'автоматическое на этом сервере',
+                          'managed-nginx': 'Nginx на сервере бота', 'external': 'готовый HTTPS-прокси'}[options.proxy]])
     lines += ['', 'Обнаруженные причины и необходимые действия:']
     actions = []
     for index, issue in enumerate(issues, 1):
+        lines.append('')
         lines.append(f'{index}. {issue["message"]} [код: {issue["code"]}]')
         for field in ('path', 'file', 'address'):
             if issue.get('details', {}).get(field):
@@ -134,12 +164,41 @@ def manual_setup_report(payload, options, root):
                 actions.append(step)
     if options:
         retry = _retry(root, options)
-        lines += ['', 'После исправления повторите проверку без изменений:', shlex.join([*retry, '--check-only']),
-                  'Если проверка успешна, выполните установку:', shlex.join(retry),
-                  'Если подготовлен другой HTTPS-прокси, выберите второй режим мастера и укажите его готовый публичный URL.',
-                  'Проверьте открытие сайта и Mini App, работу панели/VPN/подписок и продление их сертификатов.']
+        lines += ['', 'После исправления повторите проверку без изменений:', '', _command([*retry, '--check-only']),
+                  '', 'Если проверка успешна, выполните установку:', '', _command(retry)]
+        if options.proxy != 'external':
+            lines += ['', 'Для администратора: если HTTPS-прокси настроен вручную, завершите подключение командой ниже.',
+                      'До её запуска подготовьте маршрут к закрытому адресу бота ' + options.backend_bind + ':' +
+                      str(options.backend_port or 18764) + '. Для удалённого прокси явно задайте --backend-bind, '
+                      '--backend-port и --trusted-proxy под подготовленную закрытую сеть.', '',
+                      _command(_retry(root, options, prepared=True) + ([] if options.backend_port else ['--backend-port', '18764']))]
+        lines += ['', 'Проверьте открытие сайта и Mini App, работу панели/VPN/подписок и продление их сертификатов.']
     if payload.get('stage') == 'recovery' or payload['code'] in {'setup_incomplete', 'setup_recovery_invalid', 'setup_failed'}:
         command = [str(Path(root) / 'venv/bin/python'), '-m', 'web_api.management', '--project-root', str(root), 'recover']
         lines += ['', 'Команда восстановления незавершённой настройки:',
                   'cd ' + shlex.quote(str(root)) + ' && ' + shlex.join(command)]
+    lines += ['', COPY_END]
     return '\n'.join(lines)
+
+
+def terminal_report(message, *, stream=None):
+    """Keep machine output plain; decorate the interactive terminal only."""
+    stream = sys.stdout if stream is None else stream
+    color = stream.isatty() and os.environ.get('TERM') != 'dumb' and 'NO_COLOR' not in os.environ
+    warning, accent, reset = ('\033[1;33m', '\033[1;36m', '\033[0m') if color else ('', '', '')
+    width = max(40, min(100, shutil.get_terminal_size((96, 24)).columns))
+    rule = '=' * width
+    first, second = HEADING.split('. ', 1)
+    lines = ['', '', warning + rule, first + '.', second, rule + reset, '']
+    for line in message.splitlines()[1:]:
+        if line in {COPY_START, COPY_END}:
+            lines.extend([accent + line + reset, ''])
+        elif line == ADMIN_URL:
+            lines.append(accent + line + reset)
+        elif line.startswith(('bash ', 'cd ', '  --', "  '", '  ')) and not line.startswith('   '):
+            lines.append(line)  # Shell continuations must retain their exact bytes.
+        elif line.startswith('   — '):
+            lines.append(textwrap.fill(line, width=width, subsequent_indent='     ', break_long_words=False, break_on_hyphens=False))
+        else:
+            lines.append(textwrap.fill(line, width=width, break_long_words=False, break_on_hyphens=False) if line else '')
+    return '\n'.join([*lines, ''])
