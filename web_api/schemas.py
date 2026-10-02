@@ -167,6 +167,7 @@ route('GET', 'ui/manifest', obj({'manifest': {'anyOf': [
 ]}, 'signature': S}), anonymous=True)
 route('GET', 'ui/packages/{content_hash}', {'type': 'string', 'format': 'binary'}, anonymous=True)
 route('GET', 'admin/ui/preview', ref('UiPreview'))
+route('POST', 'admin/ui/preset', ref('UiSettings'), obj({'preset': text_bound(32)}))
 route('GET', 'admin/ui/editor', ref('EditorState'))
 route('POST', 'admin/ui/editor/preview', obj({'task_id': S, 'candidate': ref('EditorCandidate'),
     'viewed': ref('EditorViewed'), 'preview_url': S, 'published': B,

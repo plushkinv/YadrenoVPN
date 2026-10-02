@@ -85,8 +85,8 @@ function AppRuntime({ environment, transport, preview = false }: ApplicationProp
       if (!active) return;
       bindSession(identity); setBootstrap(initial); setSettings(presentation);
       if (launch) remember('miniapp-launch', launch);
-      const appearance = stored<{ preset: Preset; theme: Theme } | null>(`${identity?.account_id}.appearance`, null);
-      setPreset(appearance?.preset ?? presentation.preset); setTheme(appearance?.theme ?? environment.initialTheme ?? presentation.theme);
+      const appearance = stored<{ theme: Theme } | null>(`${identity?.account_id}.appearance`, null);
+      setPreset(presentation.preset); setTheme(appearance?.theme ?? environment.initialTheme ?? presentation.theme);
       remember('bootstrap', initial); remember('ui-settings', presentation);
       if (identity) {
         const personal = await api.request<Bootstrap>('/bootstrap');
@@ -129,10 +129,21 @@ function AppRuntime({ environment, transport, preview = false }: ApplicationProp
   }, [preview]);
   useEffect(() => {
     if (!session || !settings || preview) return;
-    const update = () => { if (navigator.onLine && document.visibilityState === 'visible') refresh(); };
+    let active = true, pending = false;
+    const update = async () => {
+      if (!navigator.onLine || document.visibilityState !== 'visible' || pending) return;
+      pending = true;
+      refresh();
+      try {
+        const value = await api.request<UiSettings>('/ui/settings');
+        if (active) { setSettings(value); setPreset(value.preset); remember('ui-settings', value); }
+      } catch { /* Keep the last confirmed presentation during a network failure. */ }
+      finally { pending = false; }
+    };
     const timer = setInterval(update, settings.sync_interval_seconds * 1000);
-    return () => clearInterval(timer);
-  }, [session?.account_id, settings, preview, refresh]);
+    document.addEventListener('visibilitychange', update);
+    return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', update); };
+  }, [api, session?.account_id, settings?.sync_interval_seconds, preview, refresh]);
   if (loading || loggingOut) return <div className="app" data-preset={preset} data-theme={theme}><NativeConnection bridge={environment.native} /><Loading /></div>;
   if (error || !bootstrap || !settings) return <div className="app" data-preset={preset} data-theme={theme}><NativeConnection bridge={environment.native} /><Failure error={error} retry={() => setAttempt(value => value + 1)} /></div>;
   const definition = registeredPages.find(page => page.id === path);
@@ -140,9 +151,9 @@ function AppRuntime({ environment, transport, preview = false }: ApplicationProp
   const Component = selected.component;
   const value: AppContextValue = { api, environment, session, bootstrap, settings, route: selected.id, param, revision, refresh,
     navigate, preset, theme, preview,
-    appearance: (nextPreset, nextTheme) => {
-      setPreset(nextPreset); setTheme(nextTheme); remember(`${session?.account_id}.appearance`, { preset: nextPreset, theme: nextTheme });
-      if (preview) window.parent.postMessage({ type: 'yadreno.preview.appearance', preset: nextPreset, theme: nextTheme }, '*');
+    setTheme: nextTheme => {
+      setTheme(nextTheme); remember(`${session?.account_id}.appearance`, { theme: nextTheme });
+      if (preview) window.parent.postMessage({ type: 'yadreno.preview.appearance', preset, theme: nextTheme }, '*');
     },
     authenticated: identity => {
       logoutPending(false); bindSession(identity); remember('ui-settings', settings);
@@ -159,7 +170,8 @@ function AppRuntime({ environment, transport, preview = false }: ApplicationProp
   return <AppContext.Provider value={value}><Shell route={selected.id} navigate={navigate} preset={preset} theme={theme}
     navigation={customization.navigation}
     title={settings.title} logo={settings.logo?.startsWith('/ui/assets/') ? customization.asset_base + settings.logo.slice(4) : settings.logo} accountLabel={session ? `${t.account} ${session.account_id}` : t.login} account={() => navigate('account')}
-    help={() => navigate('help')} toggleTheme={() => value.appearance(preset, theme === 'light' ? 'dark' : 'light')} review={preview ? null : <AdminPreview />}>
+    help={() => navigate('help')} toggleTheme={() => value.setTheme(theme === 'light' ? 'dark' : 'light')}
+    review={preview ? null : <AdminPreview onSettingsSaved={value => { setSettings(value); setPreset(value.preset); remember('ui-settings', value); }} />}>
     {(offline || cachedAt) && <p className="notice" role="status">{t.offline}{cachedAt && ` ${t.updated}: ${new Date(cachedAt).toLocaleString('ru')}`}</p>}
     {newUi && <p className="notice" role="status">Доступна новая версия интерфейса. <Button tone="quiet" disabled={updating} onClick={() => { setUpdating(true); setUpdateError(undefined); void updateShell().catch(setUpdateError).finally(() => setUpdating(false)); }}>Обновить интерфейс</Button></p>}
     <Failure error={updateError} />

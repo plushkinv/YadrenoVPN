@@ -1,14 +1,13 @@
 import { ArrowRight, CalendarDays, ChartNoAxesColumnIncreasing, CircleHelp, Clock3, Layers2, MonitorSmartphone, ShieldCheck, Smartphone, WifiOff } from 'lucide-react';
 import { Badge, Button, ExternalArrow, PageHeading, RowButton } from '../components/Ui';
 import { ru } from '../i18n/ru';
-import { appText } from '../i18n/app';
 import type { ClientView, HomeState, SubscriptionView } from '../model';
 
-export function Home({ state, subscription, hasMultiple, client, onSubscriptions, onConnect, onGuide, onClient, onRenew, onBuy, onTrial, onRetry, trialAvailable = true, renewAvailable = true, onImport }: {
+export function Home({ state, subscription, hasMultiple, client, onSubscriptions, onConnect, onGuide, onClient, onRenew, onBuy, onTrial, onRetry, trialAvailable = true, renewAvailable = true }: {
   state: HomeState; subscription: SubscriptionView; hasMultiple: boolean; client: ClientView;
   onSubscriptions: () => void; onConnect: () => void; onGuide: () => void; onClient: () => void; onRenew: () => void;
   onBuy: () => void; onTrial: () => void; onRetry: () => void;
-  trialAvailable?: boolean; renewAvailable?: boolean; onImport?: () => void;
+  trialAvailable?: boolean; renewAvailable?: boolean;
 }) {
   const unavailable = state === 'offline' || state === 'unavailable';
   if (unavailable || state === 'loading') return <>
@@ -30,7 +29,6 @@ export function Home({ state, subscription, hasMultiple, client, onSubscriptions
       <div className="button-row">{trialAvailable && <Button onClick={onTrial}>{ru.try}<ArrowRight size={18} /></Button>}<Button tone={trialAvailable ? 'secondary' : 'primary'} onClick={onBuy}>{ru.buy}</Button></div>
       <div className="welcome-points"><span><MonitorSmartphone size={18} />{ru.multipleDevices}</span><span><CircleHelp size={18} />{ru.setupHelp}</span></div>
     </section>
-    <section className="import-hint"><Layers2 size={24} /><div><strong>{ru.alreadyHave}</strong><p>{ru.importCaption}</p>{onImport && <Button tone="quiet" onClick={onImport}>{appText.import}<ArrowRight size={16} /></Button>}</div></section>
   </>;
   const blocked = state === 'expired' || state === 'traffic' || state === 'devices';
   const title = state === 'expired' ? ru.expiredTitle : state === 'traffic' ? ru.trafficTitle : state === 'devices' ? ru.devicesTitle : state === 'unknown' ? ru.status.unknown : ru.readyTitle;

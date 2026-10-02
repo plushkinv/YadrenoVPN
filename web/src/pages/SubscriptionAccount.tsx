@@ -44,7 +44,7 @@ function HomeAccountContent() {
     hasMultiple={(state.data?.items.length ?? 0) > 1} client={client} onSubscriptions={() => navigate('subscriptions')}
     onConnect={() => navigate('connect/' + selected?.id)} onGuide={() => navigate('connect/' + selected?.id)} onClient={() => setChoose(true)}
     onRenew={() => navigate('renewal/' + selected?.id)} onBuy={() => navigate('purchase')} onTrial={() => navigate('trials')} onRetry={state.retry}
-    trialAvailable={bootstrap.features.trial} renewAvailable={selected?.actions['key.renew.start']?.allowed ?? false} onImport={() => navigate('import')} />
+    trialAvailable={bootstrap.features.trial} renewAvailable={selected?.actions['key.renew.start']?.allowed ?? false} />
     {selected?.state === 'first_use' && <p className="notice">{t.firstUse}</p>}
     {selected && <Button tone="quiet" onClick={() => navigate('subscription/' + selected.id)}>{t.details}</Button>}
     {choose && <Dialog title={t.chooseClient} onClose={() => setChoose(false)}>{clients.map(item => <Button key={item.id} tone="secondary" onClick={() => { select(item.id); setChoose(false); }}>{item.name} · {item.platforms}</Button>)}</Dialog>}

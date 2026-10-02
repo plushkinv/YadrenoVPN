@@ -451,6 +451,10 @@ async def check_provider_invoice(intent: PaymentIntent) -> str:
     external_id = str(provider_order.get('provider_payment_id') or '')
     metadata_update: dict[str, Any] | None = None
 
+    if adapter.provider_id == 'wata':
+        from bot.services.wata import check_wata_invoice
+
+        return await check_wata_invoice(intent.order_id)
     if adapter.custom:
         from bot.services.custom_payments import check_custom_payment_order
 

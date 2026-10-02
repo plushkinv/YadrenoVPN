@@ -8,7 +8,7 @@ export interface AppContextValue {
   api: Api; environment: Environment; session: Session | null; bootstrap: Bootstrap; settings: UiSettings;
   navigate: (route: string) => void; route: string; param: string; revision: number;
   refresh: () => void; authenticated: (session: Session) => void; logout: () => Promise<void>;
-  preset: Preset; theme: Theme; appearance: (preset: Preset, theme: Theme) => void;
+  preset: Preset; theme: Theme; setTheme: (theme: Theme) => void;
   preview: boolean;
 }
 export const AppContext = createContext<AppContextValue | null>(null);

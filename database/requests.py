@@ -28,6 +28,7 @@ from database.db_business_operations import *
 from database.db_key_lifecycle import *
 from database.db_key_cleanup import *
 from database.db_payment_providers import *
+from database.db_wata_checks import *
 from database.db_payment_auto_checks import *
 from database.db_payment_intents import *
 from database.db_action_contexts import *

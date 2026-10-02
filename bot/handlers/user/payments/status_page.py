@@ -13,6 +13,14 @@ CALLBACK_NOTIFICATION_TEXT_LIMIT = 200
 
 logger = logging.getLogger(__name__)
 
+
+async def send_payment_status_notification(message, page_key: str, **context_values: Any) -> None:
+    """Send a buttonless return-link notice before restoring the saved invoice."""
+    text = render_page_text(page_key, context=build_page_flow_context(message, **context_values))
+    if text:
+        await safe_edit_or_send(message, text, force_new=True)
+
+
 async def answer_payment_status_notification(
     callback,
     page_key: str,

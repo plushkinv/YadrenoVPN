@@ -81,6 +81,10 @@ async def _prepare_external_cancellation(intent: PaymentIntent) -> str:
     status = str(provider_order.get("status") or "pending").casefold()
     if status == "succeeded" or intent.provider_confirmed_at is not None:
         return "succeeded"
+    if (provider_order.get('provider_id') == 'wata' and status == 'pending'
+            and intent.status == 'pending'
+            and (provider_order.get('provider_payment_id') or provider_order.get('payment_url'))):
+        return "retained"
     if str(provider_order.get("provider_id") or "") != "cryptobot":
         return "local"
     if status == "canceled":
@@ -143,7 +147,7 @@ async def cancel_payment_intent_safely(
 
 async def _cancel_locked(intent: PaymentIntent) -> SafePaymentCancellation:
     outcome = await _prepare_external_cancellation(intent)
-    if outcome in {"succeeded", "uncertain"}:
+    if outcome in {"succeeded", "uncertain", "retained"}:
         return SafePaymentCancellation(outcome, intent)
     canceled = cancel_payment_intent(intent.order_id, user_id=intent.user_id)
     return SafePaymentCancellation(

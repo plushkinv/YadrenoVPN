@@ -23,7 +23,6 @@
     {"id":"login","file":"src/pages/Account.tsx","export":"Authentication","title_key":"login","public":true},
     {"id":"register","file":"src/pages/Account.tsx","export":"Authentication","title_key":"register","public":true},
     {"id":"reset","file":"src/pages/Account.tsx","export":"Authentication","title_key":"reset","public":true},
-    {"id":"appearance","file":"src/pages/Information.tsx","export":"Appearance","title_key":"appearance","public":true},
     {"id":"help","file":"src/pages/Information.tsx","export":"Help","title_key":"help"},
     {"id":"more","file":"src/pages/Information.tsx","export":"MoreAccount","title":"Ещё"}
   ],

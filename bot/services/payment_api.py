@@ -4,6 +4,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import math
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
@@ -22,6 +25,10 @@ T = TypeVar('T')
 class PaymentApiError(RuntimeError):
     """Base error for classified payment provider failures."""
 
+    def __init__(self, message: str, *, retry_after_seconds: int | None = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
 
 class PaymentApiTransientError(PaymentApiError):
     """Retryable provider failure, normally an HTTP 5xx response."""
@@ -33,6 +40,22 @@ class PaymentApiResponseError(PaymentApiError):
 
 class PaymentApiRateLimitError(PaymentApiResponseError):
     """Non-retryable immediate rate-limit response."""
+
+
+def payment_retry_after(value: str | None) -> int | None:
+    """Read either HTTP Retry-After format without trusting malformed values."""
+    if not value:
+        return None
+    try:
+        return max(0, math.ceil(float(value)))
+    except (ValueError, OverflowError):
+        try:
+            deadline = parsedate_to_datetime(value)
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            return max(0, math.ceil((deadline - datetime.now(timezone.utc)).total_seconds()))
+        except (ValueError, TypeError, OverflowError):
+            return None
 
 
 class PaymentApiRetryExhausted(PaymentApiTransientError):

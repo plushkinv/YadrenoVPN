@@ -11,7 +11,7 @@ function BaseShell({ children, route, navigate, preset, theme, toggleTheme, help
   title?: string; logo?: string | null; account?: () => void;
   navigation?: { route: Route; label: string }[];
 }) {
-  const active = route === 'connect' ? 'home' : ['purchase', 'payment', 'renewal', 'subscription', 'devices', 'hosts', 'history', 'operation'].includes(route) ? 'subscriptions' : ['account', 'appearance', 'help', 'payments', 'balance', 'promotion', 'referrals', 'import', 'credentials', 'telegram-link'].includes(route) ? 'more' : route;
+  const active = route === 'connect' ? 'home' : ['purchase', 'payment', 'renewal', 'subscription', 'devices', 'hosts', 'history', 'operation'].includes(route) ? 'subscriptions' : ['account', 'help', 'payments', 'balance', 'promotion', 'referrals', 'import', 'credentials', 'telegram-link'].includes(route) ? 'more' : route;
   const navigation = (customNavigation ?? [{ route: 'home', label: ru.home }, { route: 'subscriptions', label: ru.subscriptions }, { route: 'more', label: ru.more }]).map(item => ({ ...item, icon: item.route === 'home' ? Home : item.route === 'more' ? Ellipsis : Layers2 }));
   const brand = <>{logo ? <img className="brand-logo" src={logo} alt="" /> : <span className="brand-symbol"><Zap size={23} strokeWidth={2.6} /></span>}<span>{title}{title === ru.brand && <small>{ru.brandCaption}</small>}</span></>;
   const links = navigation.map(item => <a key={item.route} href={`#${item.route}`} onClick={event => { event.preventDefault(); navigate(item.route); }}

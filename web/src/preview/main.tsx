@@ -20,3 +20,4 @@ window.addEventListener('message', event => {
 });
 window.parent.postMessage({ type: 'yadreno.preview.ready' }, '*');
 window.addEventListener('hashchange', () => window.parent.postMessage({ type: 'yadreno.preview.route', route: location.hash.slice(1) }, '*'));
+window.addEventListener('pointerdown', () => window.parent.postMessage({ type: 'yadreno.preview.interaction' }, '*'));

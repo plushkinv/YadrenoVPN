@@ -8,6 +8,7 @@ import shlex
 import shutil
 import sys
 import textwrap
+import uuid
 
 from web_api.settings import DEFAULT_TRUSTED_PROXIES
 
@@ -129,6 +130,18 @@ def _command(args):
     return '\n'.join([*lines, current])
 
 
+def _agent_commands(args, root):
+    """Print a detached invocation and its journal; never start it here."""
+    unit = 'yadreno-web-setup-' + uuid.uuid4().hex + '.service'
+    # systemd expands dollars in arguments, but resolves the executable literally.
+    command = ['systemd-run', '--unit=' + unit, '--collect', '--service-type=exec',
+               '--working-directory=' + str(root), '--property=StandardOutput=journal',
+               '--property=StandardError=journal', '--',
+               args[0], *(arg.replace('$', '$$') for arg in args[1:]), '--output', 'json']
+    return [_command(command), '', 'Журнал этой попытки (читать отдельной командой после перезапуска бота):',
+            _command(['journalctl', '--unit=' + unit, '--no-pager', '--output=cat', '--lines=80'])]
+
+
 def manual_setup_report(payload, options, root):
     """The same complete report is delivered as text and in the JSON message."""
     details = payload.get('details', {})
@@ -152,7 +165,13 @@ def manual_setup_report(payload, options, root):
         lines.extend(['Домен: ' + options.domain, 'Публичный адрес: ' + options.public_url,
                       'Подключение: ' + {'auto': 'автоматическое на этом сервере',
                           'managed-nginx': 'Nginx на сервере бота', 'external': 'готовый HTTPS-прокси'}[options.proxy]])
-    lines += ['', 'Обнаруженные причины и необходимые действия:']
+        retry = _retry(root, options)
+        lines += ['', 'Сначала повторите штатную проверку без изменений: отчёт отражает состояние на момент его создания.',
+                  '', _command([*retry, '--check-only']),
+                  '', 'Работайте только по актуальным причинам из новой проверки. Уже устранённые причины не расследуйте повторно.',
+                  'Проверяйте указанный порт, профиль сертификата или конфигурацию; расширяйте диагностику только '
+                  'при новой ошибке или обнаруженной зависимости. Если требуется recover, используйте команду ниже.']
+    lines += ['', 'Причины на момент составления отчёта и необходимые действия:']
     actions = []
     for index, issue in enumerate(issues, 1):
         lines.append('')
@@ -166,20 +185,36 @@ def manual_setup_report(payload, options, root):
                 lines.append('   — ' + step)
                 actions.append(step)
     if options:
-        retry = _retry(root, options)
-        lines += ['', 'После исправления повторите проверку без изменений:', '', _command([*retry, '--check-only']),
-                  '', 'Если проверка успешна, выполните установку:', '', _command(retry)]
+        lines += ['', 'После исправления повторите --check-only выше. При preflight_ready выполните установку одним из способов.',
+                  '', 'Из SSH:', '', _command(retry),
+                  '', 'Из ЯдреноАдмина: установка перезапускает бота, поэтому запускайте её вне его службы через systemd-run.',
+                  'Прямой запуск и nohup внутри службы бота прерываются вместе с ней. '
+                  'Команда ниже создаёт только временную службу, без таймера.', '', *_agent_commands(retry, root)]
         if options.proxy != 'external':
             lines += ['', 'Для администратора: если HTTPS-прокси настроен вручную, завершите подключение командой ниже.',
                       'До её запуска подготовьте маршрут к закрытому адресу бота ' + options.backend_bind + ':' +
                       str(options.backend_port or 18764) + '. Для удалённого прокси явно задайте --backend-bind, '
                       '--backend-port и --trusted-proxy под подготовленную закрытую сеть.', '',
-                      _command(_retry(root, options, prepared=True) + ([] if options.backend_port else ['--backend-port', '18764']))]
-        lines += ['', 'Проверьте открытие сайта и Mini App, работу панели/VPN/подписок и продление их сертификатов.']
+                      'Из SSH:', '',
+                      _command(_retry(root, options, prepared=True) + ([] if options.backend_port else ['--backend-port', '18764'])),
+                      '', 'Из ЯдреноАдмина:', '',
+                      *_agent_commands(_retry(root, options, prepared=True) + ([] if options.backend_port else ['--backend-port', '18764']), root)]
+        lines += ['', 'Критерий успеха: конечный результат мастера ready (в JSON: ok=true, code=ready) '
+                  'и доступный HTTPS-сайт именно этой установки. Сам запуск службы не означает завершение установки.',
+                  'Если конечного результата ещё нет, проверьте журнал этой попытки; вторую установку одновременно не запускайте.',
+                  'После ошибки сначала установите причину и исправьте её. Для новой попытки используйте новое имя временной службы.',
+                  'Для затронутых соседних служб проверьте доступные серверные признаки: состояние, listener, '
+                  'сертификат и изменённое продление. Успешную проверку продления мастером повторяйте только '
+                  'после изменений, затрагивающих продление.',
+                  'Администратор при желании отдельно проверяет вход через Telegram и использование VPN/панели/подписок. '
+                  'Агент не выполняет эти пользовательские проверки и не ждёт их подтверждения для завершения серверной работы.']
     if payload.get('stage') == 'recovery' or payload['code'] in {'setup_incomplete', 'setup_recovery_invalid', 'setup_failed'}:
         command = [str(Path(root) / 'venv/bin/python'), '-m', 'web_tools.setup_cli', '--project-root', str(root), 'recover']
         lines += ['', 'Команда восстановления незавершённой настройки:',
-                  'cd ' + shlex.quote(str(root)) + ' && ' + shlex.join(command)]
+                  'Из SSH:', 'cd ' + shlex.quote(str(root)) + ' && ' + shlex.join(command),
+                  '', 'Из ЯдреноАдмина (восстановление также может перезапустить бота):', '',
+                  *_agent_commands(command, root),
+                  '', 'Дождитесь конечного recovered или nothing_to_recover с ok=true, затем повторите --check-only.']
     lines += ['', COPY_END]
     return '\n'.join(lines)
 
@@ -198,7 +233,7 @@ def terminal_report(message, *, stream=None):
             lines.extend([accent + line + reset, ''])
         elif line == ADMIN_URL:
             lines.append(accent + line + reset)
-        elif line.startswith(('bash ', 'cd ', '  --', "  '", '  ')) and not line.startswith('   '):
+        elif line.startswith(('bash ', 'cd ', 'systemd-run ', 'journalctl ', '  --', "  '", '  ')) and not line.startswith('   '):
             lines.append(line)  # Shell continuations must retain their exact bytes.
         elif line.startswith('   — '):
             lines.append(textwrap.fill(line, width=width, subsequent_indent='     ', break_long_words=False, break_on_hyphens=False))

@@ -75,15 +75,10 @@ export function Help() {
   </section>}</Resource></>;
 }
 
-export function Appearance() {
-  const { preset, theme, appearance } = useApp();
-  return <><PageHeading title={t.appearance} /><section className="panel form-panel"><Field label={t.appearance}><select value={preset} onChange={e => appearance(e.target.value as typeof preset, theme)}><option value="clear">Universal / Clear</option><option value="signal">Signal / Dark</option><option value="friendly">Friendly / Brand</option></select></Field><div className="button-row"><Button tone={theme === 'light' ? 'primary' : 'secondary'} onClick={() => appearance(preset, 'light')}>{t.light}</Button><Button tone={theme === 'dark' ? 'primary' : 'secondary'} onClick={() => appearance(preset, 'dark')}>{t.dark}</Button></div></section></>;
-}
-
 export function MoreAccount() {
   const { navigate, bootstrap } = useApp();
   const items = [
-    ['account', t.account, true], ['appearance', t.appearance, true], ['payments', t.paymentHistory, true],
+    ['account', t.account, true], ['payments', t.paymentHistory, true],
     ['balance', t.balance, bootstrap.features.balance], ['promotion', t.promo, bootstrap.features.promotions],
     ['referrals', t.referrals, bootstrap.features.referrals], ['import', t.import, bootstrap.features.subscription_import], ['help', t.help, true],
   ] as const;

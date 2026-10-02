@@ -13,12 +13,14 @@ from bot.utils.action_origin_context import (
 from database.requests import (
     cancel_promo_reservation_for_order,
     cancel_unconfirmed_payment_for_method_change,
+    claim_wata_payment_replacement,
     confirm_internal_payment_intent_settlement,
     create_payment_intent_record,
     get_base_currency,
     get_page,
     get_page_route,
     get_payment_intent,
+    get_payment_provider_order,
     get_tariff_by_id,
     get_vpn_key_by_id,
     save_payment_balance_deduction,
@@ -444,6 +446,15 @@ def restart_payment_intent_for_method_change(
     navigation = current.navigation
     balance_deduct_minor = current.balance_deduct_minor
 
+    provider = get_payment_provider_order(current.order_id)
+    retained = bool(provider and provider['provider_id'] == 'wata' and provider['status'] == 'pending'
+                    and (provider.get('provider_payment_id') or provider.get('payment_url')))
+    if retained:
+        previous = claim_wata_payment_replacement(current.order_id, user_id=int(user_id))
+        if previous:
+            return load_payment_intent(previous)
+        balance_deduct_minor = 0
+
     try:
         replacement = create_payment_intent(
             user_id=int(user_id),
@@ -456,6 +467,14 @@ def restart_payment_intent_for_method_change(
         )
     except ValueError:
         return None
+
+    if retained:
+        selected = claim_wata_payment_replacement(
+            current.order_id, user_id=int(user_id), replacement_id=replacement.order_id,
+        )
+        if selected != replacement.order_id:
+            cancel_payment_intent(replacement.order_id, user_id=int(user_id))
+        return load_payment_intent(selected) if selected else None
 
     if balance_deduct_minor > 0:
         if not save_payment_balance_deduction(

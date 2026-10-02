@@ -131,6 +131,7 @@ async def _telegram_invoice(account, intent, price):
 async def check_order(account, order_id):
     from runtime.readiness import require_active
     from bot.services.payment_provider_adapters import check_provider_invoice
+    from bot.services.payment_api import PaymentApiRateLimitError
     require_active()
     async with _order_lock(order_id):
         intent = owned_order(account, order_id)
@@ -141,6 +142,10 @@ async def check_order(account, order_id):
             try:
                 with bind_account_context(account):
                     confirmed = await check_provider_invoice(intent) == 'succeeded'
+            except PaymentApiRateLimitError:
+                if intent.payment_type == 'wata':
+                    return order_status(account, order_id)
+                raise CoreError('payment_provider_unavailable', retryable=True) from None
             except Exception:
                 raise CoreError('payment_provider_unavailable', retryable=True) from None
         if confirmed:
@@ -163,6 +168,6 @@ async def cancel_order(account, order_id):
             if result.outcome == 'succeeded':
                 await _complete(account, order_id)
                 raise CoreError('order_already_paid')
-            if result.outcome != 'canceled':
+            if result.outcome not in {'canceled', 'retained'}:
                 raise CoreError('order_unavailable')
         return order_status(account, order_id)

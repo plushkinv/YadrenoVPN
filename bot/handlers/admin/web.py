@@ -44,7 +44,7 @@ async def presentation(callback, state):
             f"Тема: {'светлая' if settings['theme'] == 'light' else 'тёмная'}\n"
             f"Цвет: {escape_html(settings['accent'] or 'из пресета')}\n"
             f"Обновление: каждые {settings['sync_interval_seconds']} с\n\n"
-            'Настройка просмотра в Mini App не меняет эти значения.\n'
+            'Выбранный в Mini App готовый дизайн сохраняется зелёной галочкой.\n'
             'Контакты и ссылки помощи используются из существующих страниц бота.')
     await state.clear()
     await safe_edit_or_send(callback.message, text, reply_markup=web_presentation_kb())

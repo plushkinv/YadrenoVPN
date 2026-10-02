@@ -333,7 +333,7 @@ async def payment_intent_cancel_handler(callback: CallbackQuery, state: FSMConte
             order_id=intent.order_id,
         )
         return
-    if result.outcome != 'canceled':
+    if result.outcome not in {'canceled', 'retained'}:
         await _render_callback_page(callback, "payment_order_unavailable")
         return
 
@@ -527,6 +527,16 @@ async def payment_intent_check_handler(callback: CallbackQuery, state: FSMContex
         status = await check_provider_invoice(intent)
     except Exception as error:
         logger.warning('Manual intent check failed order=%s: %s', intent.order_id, error)
+        if intent.payment_type == 'wata':
+            from bot.services.payment_api import PaymentApiRateLimitError
+
+            await answer_payment_status_notification(
+                callback,
+                'payment_check_wait' if isinstance(error, PaymentApiRateLimitError) else 'payment_failed',
+                order_id=intent.order_id,
+                payment_wait_seconds=getattr(error, 'retry_after_seconds', None) or 45,
+            )
+            return
         await _render_callback_page(callback, "payment_failed", order_id=intent.order_id)
         return
     if status == 'succeeded':
@@ -652,7 +662,7 @@ async def _send_telegram_invoice(callback, intent, quote, adapter, bot_name: str
     )
 
 
-async def _render_link_invoice(callback, intent, quote, adapter, invoice) -> None:
+async def _render_link_invoice(callback, intent, quote, adapter, invoice, *, force_new=False, tariff_name=None) -> None:
     if not invoice.payment_url:
         raise RuntimeError('Link provider did not return a payment URL')
     page_key = _intent_link_page_key(intent)
@@ -660,7 +670,7 @@ async def _render_link_invoice(callback, intent, quote, adapter, invoice) -> Non
         callback,
         order_id=intent.order_id,
         payment_provider_title=adapter.title,
-        payment_tariff_name=_intent_tariff_name(intent),
+        payment_tariff_name=tariff_name if tariff_name is not None else _intent_tariff_name(intent),
         payment_amount_text=_format_charge(quote),
         payment_nominal_text=format_base_minor(intent.nominal_amount_minor, intent.base_currency),
         payment_url=invoice.payment_url,
@@ -681,7 +691,36 @@ async def _render_link_invoice(callback, intent, quote, adapter, invoice) -> Non
         media_policy='runtime',
         runtime_media=runtime_media,
         runtime_media_type='photo' if runtime_media else None,
+        force_new=force_new,
     )
+
+
+async def render_saved_link_invoice(message, intent, provider_order) -> None:
+    """Restore the saved invoice without quoting, reserving benefits or creating a payment."""
+    from bot.services.payment_intents import PaymentQuote
+    from bot.services.payment_provider_adapters import ProviderInvoice
+    from bot.services.billing import payment_link_qr
+    from database.requests import get_payment_order_terms
+
+    terms = get_payment_order_terms(intent.order_id) or {}
+    pricing = terms.get('pricing') or {}
+    promo = pricing.get('promo') or {}
+    quote = PaymentQuote(
+        order_id=intent.order_id, payment_type=intent.payment_type,
+        base_currency=intent.base_currency, nominal_amount_minor=intent.nominal_amount_minor,
+        payable_amount_minor=intent.payable_amount_minor, charge_amount=intent.charge_amount,
+        charge_currency=intent.charge_currency, rate_snapshot=intent.rate_snapshot,
+        discount_percent=int(pricing.get('discount_percent') or 0), promo_code=promo.get('code'),
+    )
+    adapter = get_payment_provider_adapter(provider_order['provider_id'])
+    invoice = ProviderInvoice(
+        order_id=intent.order_id, provider_id=adapter.provider_id, payment_type=adapter.payment_type,
+        presentation=adapter.presentation, status=provider_order['status'],
+        payment_url=provider_order['payment_url'], provider_payment_id=provider_order['provider_payment_id'],
+        qr_image_data=payment_link_qr(provider_order['payment_url']),
+    )
+    await _render_link_invoice(message, intent, quote, adapter, invoice, force_new=True,
+                               tariff_name=(terms.get('tariff') or {}).get('name'))
 
 
 async def _complete_intent(

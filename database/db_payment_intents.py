@@ -236,6 +236,12 @@ def cancel_unconfirmed_payment_for_method_change(
               AND status = 'pending'
               AND intent_version = 1
               AND provider_confirmed_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM payment_provider_orders po
+                  WHERE po.order_id = payments.order_id AND po.provider_id = 'wata'
+                    AND po.status = 'pending'
+                    AND (COALESCE(po.provider_payment_id, '') <> '' OR COALESCE(po.payment_url, '') <> '')
+              )
             """,
             (normalized_order_id, int(user_id)),
         )

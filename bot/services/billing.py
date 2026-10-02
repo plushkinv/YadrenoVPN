@@ -15,6 +15,7 @@ import qrcode
 import io
 import math
 import asyncio
+import json
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Dict, Any, Tuple
@@ -32,6 +33,7 @@ from bot.services.payment_api import (
     PaymentApiResponseError,
     PaymentApiTransientError,
     payment_client_timeout,
+    payment_retry_after,
     run_payment_api_operation,
 )
 from bot.utils.telegram_links import build_telegram_link
@@ -99,12 +101,21 @@ async def _payment_api_json_request(
                 data=data,
                 params=params,
             ) as response:
+                retry_after = payment_retry_after(getattr(response, 'headers', {}).get('Retry-After'))
                 if response.status >= 500:
-                    raise PaymentApiTransientError(f'HTTP {response.status}')
+                    raise PaymentApiTransientError(f'HTTP {response.status}', retry_after_seconds=retry_after)
                 if response.status == 429:
-                    raise PaymentApiRateLimitError('HTTP 429')
+                    raise PaymentApiRateLimitError(
+                        'HTTP 429',
+                        retry_after_seconds=retry_after,
+                    )
                 try:
-                    response_data = await response.json(content_type=None)
+                    if provider == 'wata' and operation == 'check':
+                        response_data = await response.json(
+                            content_type=None, loads=lambda value: json.loads(value, parse_float=Decimal),
+                        )
+                    else:
+                        response_data = await response.json(content_type=None)
                 except Exception as error:
                     raise PaymentApiResponseError(
                         f'Некорректный JSON-ответ HTTP {response.status}'
@@ -122,7 +133,7 @@ async def _payment_api_json_request(
                             or error_text
                         )
                     raise PaymentApiResponseError(
-                        f'HTTP {response.status}: {error_text}'
+                        f'HTTP {response.status}: {error_text}', retry_after_seconds=retry_after,
                     )
                 return response_data
 
@@ -724,18 +735,6 @@ async def create_wata_payment(
             'WATA API не вернул id или URL платёжной ссылки',
         )
 
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(qr_url)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    bio = io.BytesIO()
-    img.save(bio, format="PNG")
-    qr_image_data = bio.getvalue()
     logger.info(
         "WATA ссылка создана: link_id=%s, order_id=%s, amount=%s RUB",
         wata_link_id,
@@ -744,10 +743,20 @@ async def create_wata_payment(
     )
     return {
         'wata_link_id': str(wata_link_id),
-        'qr_image_data': qr_image_data,
+        'qr_image_data': payment_link_qr(qr_url),
         'qr_url': qr_url,
-        'status': str(data.get('status', 'Created')).lower(),
+        'status': 'pending',
     }
+
+
+def payment_link_qr(payment_url: str) -> bytes:
+    """Render the same QR for a newly created or restored payment link."""
+    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
+    qr.add_data(payment_url)
+    qr.make(fit=True)
+    bio = io.BytesIO()
+    qr.make_image(fill_color='black', back_color='white').save(bio, format='PNG')
+    return bio.getvalue()
 
 
 async def check_wata_payment_status(
@@ -755,27 +764,19 @@ async def check_wata_payment_status(
     *,
     order_id: Optional[str] = None,
 ) -> str:
-    """
-    Checks the status of the WATA payment link by its ID.
+    """Compatibility entry point using the saved invoice and shared check gate."""
+    from database.requests import find_payment_provider_order_by_external_id, get_payment_provider_order
+    from bot.services.wata import check_wata_invoice
 
-    GET https://api.wata.pro/api/h2h/links/{wata_link_id}
+    saved = (get_payment_provider_order(order_id) if order_id
+             else find_payment_provider_order_by_external_id('wata', wata_link_id))
+    if not saved or saved['provider_id'] != 'wata' or saved['provider_payment_id'] != wata_link_id:
+        raise PaymentApiResponseError('WATA invoice does not match the order')
+    return await check_wata_invoice(saved['order_id'])
 
-    Endpoint /transactions/?orderId= does not work (404).
-    Instead, we check the status of the link itself via /links/{id}.
 
-    WATA has a limit - no more than one request per 30 seconds.
-    Request rate control is performed on the handler side.
-
-    Args:
-        wata_link_id: WATA link ID (UUID)
-
-    Returns:
-        Normalized status: 'pending' | 'succeeded' | 'cancelled'
-
-    Raises:
-        ValueError: If the JWT token is not configured
-        RuntimeError: If the API returned an error
-    """
+async def fetch_wata_transactions(order_id: str, *, cursor: dict | None = None) -> Any:
+    """Fetch one page; the WATA service owns pacing, continuation and settlement."""
     token = get_wata_token()
     if not token:
         raise _payment_configuration_error('wata', 'WATA: JWT-токен не настроен')
@@ -785,30 +786,20 @@ async def check_wata_payment_status(
         "Accept": "application/json",
     }
 
-    url = f"{WATA_API_URL}/links/{wata_link_id}"
-
-    data = await _payment_api_json_request(
+    params = {'OrderId': order_id, 'Statuses': 'Paid', 'Sorting': 'creationtime', 'MaxResultCount': 100}
+    if cursor:
+        params.update(cursor)
+    return await _payment_api_json_request(
         provider='wata',
         operation='check',
-        order_id=order_id or wata_link_id,
+        order_id=order_id,
         method='GET',
-        url=url,
+        url=f'{WATA_API_URL}/v2/transactions',
         expected_statuses=(200,),
-        retry=True,
+        retry=False,
         headers=headers,
+        params=params,
     )
-    if not isinstance(data, dict) or not data.get('status'):
-        raise _payment_contract_error(
-            'wata', 'check', order_id or wata_link_id,
-            'WATA API не вернул статус платежа',
-        )
-    status = str(data['status']).lower()
-    logger.debug("WATA link %s: status=%s", wata_link_id, status)
-    if status in ('closed', 'paid'):
-        return 'succeeded'
-    if status in ('declined', 'expired', 'canceled', 'cancelled'):
-        return 'canceled'
-    return 'pending'
 
 
 # ============================================================================

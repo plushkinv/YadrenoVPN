@@ -92,6 +92,18 @@ async def handle_payment_deeplink(
             status = await check_provider_invoice(intent)
         except Exception as error:
             logger.warning('Intent deep-link check failed order=%s: %s', order_id, error)
+            if provider == 'wata':
+                from .intent import render_saved_link_invoice
+                from .status_page import send_payment_status_notification
+                from bot.services.payment_api import PaymentApiRateLimitError
+
+                await send_payment_status_notification(
+                    message,
+                    'payment_check_wait' if isinstance(error, PaymentApiRateLimitError) else 'payment_failed',
+                    order_id=order_id, payment_wait_seconds=getattr(error, 'retry_after_seconds', None) or 45,
+                )
+                await render_saved_link_invoice(message, intent, provider_order)
+                return True
             await _show_deeplink_status('payment_failed', order_id=order_id)
             return True
         if status == 'succeeded':
@@ -105,7 +117,14 @@ async def handle_payment_deeplink(
         elif status == 'canceled':
             await _show_deeplink_status('payment_canceled', order_id=order_id)
         else:
-            await _show_deeplink_status('payment_pending', order_id=order_id)
+            if provider == 'wata':
+                from .intent import render_saved_link_invoice
+                from .status_page import send_payment_status_notification
+
+                await send_payment_status_notification(message, 'payment_pending', order_id=order_id)
+                await render_saved_link_invoice(message, intent, provider_order)
+            else:
+                await _show_deeplink_status('payment_pending', order_id=order_id)
         return True
 
     return False

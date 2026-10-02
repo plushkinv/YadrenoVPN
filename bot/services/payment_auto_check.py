@@ -11,6 +11,7 @@ from database.requests import (
     cancel_pending_order,
     get_due_payment_auto_checks,
     get_payment_auto_check,
+    get_payment_provider_order,
     get_retryable_confirmed_payment_intents,
     record_payment_auto_check_attempt,
     record_payment_completion_attempt,
@@ -114,6 +115,16 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
     if row.get('state') == 'provider_succeeded':
         return await _complete_confirmed_queue_row(bot, row)
 
+    is_wata = row.get('provider_id') == 'wata'
+    if is_wata:
+        provider = get_payment_provider_order(order_id) or {}
+        if provider.get('status') == 'succeeded':
+            update_payment_auto_check(order_id, state='provider_succeeded', next_delay_seconds=0, expected_state='active')
+            return await _complete_confirmed_queue_row(bot, get_payment_auto_check(order_id) or row)
+        if not _wata_within_window(row):
+            update_payment_auto_check(order_id, state='exhausted', expected_state='active')
+            return 'exhausted'
+
     minimum_interval = _custom_minimum_interval(row)
     if (
         int(row.get('check_attempts') or 0) == 0
@@ -136,10 +147,22 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
         return 'exhausted'
 
     attempt_no = int(row.get('check_attempts') or 0) + 1
-    record_payment_auto_check_attempt(order_id)
+    if not is_wata:
+        record_payment_auto_check_attempt(order_id)
     try:
         status = await _check_provider_status(row)
     except Exception as error:
+        if is_wata:
+            from bot.services.wata import WataCheckDeferred
+
+            if isinstance(error, WataCheckDeferred):
+                delay = error.retry_after_seconds
+                if _wata_within_window(row, delay):
+                    update_payment_auto_check(order_id, state='active', next_delay_seconds=delay, expected_state='active')
+                    return 'pending'
+                update_payment_auto_check(order_id, state='exhausted', expected_state='active')
+                return 'exhausted'
+            record_payment_auto_check_attempt(order_id)
         logger.warning(
             "Автопроверка платежа не выполнена: provider=%s order=%s check=%s/%s error=%s",
             row.get('provider_id'),
@@ -157,6 +180,10 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
             )
             return 'exhausted'
         delay = _next_check_delay(row, attempt_no)
+        if is_wata and delay is not None:
+            delay = max(delay, getattr(error, 'retry_after_seconds', None) or 0)
+            if not _wata_within_window(row, delay):
+                delay = None
         if delay is None:
             update_payment_auto_check(
                 order_id,
@@ -174,6 +201,8 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
         )
         return 'errors'
 
+    if is_wata:
+        record_payment_auto_check_attempt(order_id)
     if status == 'succeeded':
         transitioned = update_payment_auto_check(
             order_id,
@@ -242,6 +271,16 @@ async def _check_provider_status(row: Mapping[str, Any]) -> str:
     return await check_provider_invoice(intent)
 
 
+def _wata_within_window(row: Mapping[str, Any], delay: int = 0) -> bool:
+    provider = get_payment_provider_order(str(row.get('order_id') or '')) or {}
+    created = _parse_timestamp(provider.get('created_at') or row.get('started_at'))
+    now = datetime.now(timezone.utc)
+    # SQLite schedules delays from CURRENT_TIMESTAMP at whole-second precision.
+    scheduled = now.replace(microsecond=0) if delay else now
+    return bool(created and scheduled + timedelta(seconds=delay)
+                <= created + timedelta(seconds=AUTO_CHECK_MAX_AGE_SECONDS))
+
+
 def _next_check_delay(row: Mapping[str, Any], completed_attempts: int) -> int | None:
     if completed_attempts >= AUTO_CHECK_MAX_ATTEMPTS:
         return None
@@ -261,7 +300,8 @@ def _next_check_delay(row: Mapping[str, Any], completed_attempts: int) -> int | 
     delay = max(base_delay, interval or 0)
     if started_at is not None:
         deadline = started_at + timedelta(seconds=AUTO_CHECK_MAX_AGE_SECONDS)
-        if now + timedelta(seconds=delay) > deadline:
+        scheduled = now.replace(microsecond=0) if row.get('provider_id') == 'wata' and delay else now
+        if scheduled + timedelta(seconds=delay) > deadline:
             return None
     return delay
 

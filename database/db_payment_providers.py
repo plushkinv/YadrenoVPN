@@ -251,31 +251,37 @@ def update_payment_provider_order_status(
                 metadata_json = COALESCE(?, metadata_json),
                 updated_at = CURRENT_TIMESTAMP
             WHERE order_id = ?
+              AND (provider_id <> 'wata' OR status <> 'succeeded' OR ? = 'succeeded')
             """,
-            (normalized_status, provider_payment_id, payment_url, metadata_json, order_id),
+            (normalized_status, provider_payment_id, payment_url, metadata_json, order_id, normalized_status),
         )
         if normalized_status == 'succeeded':
-            conn.execute(
-                """
-                UPDATE payments
-                SET provider_confirmed_at = COALESCE(provider_confirmed_at, CURRENT_TIMESTAMP),
-                    fulfillment_status = CASE
-                        WHEN status = 'pending'
-                         AND fulfillment_status IN ('pending', 'failed', 'provider_succeeded')
-                            THEN 'provider_succeeded'
-                        ELSE fulfillment_status
-                    END,
-                    fulfillment_last_error = CASE
-                        WHEN status = 'pending'
-                         AND fulfillment_status IN ('pending', 'failed', 'provider_succeeded')
-                            THEN NULL
-                        ELSE fulfillment_last_error
-                    END
-                WHERE order_id = ? AND intent_version = 1
-                """,
-                (order_id,),
-            )
+            _mark_provider_confirmed(conn, order_id)
         return cursor.rowcount > 0
+
+
+def _mark_provider_confirmed(conn: sqlite3.Connection, order_id: str) -> None:
+    """Record settlement in the same transaction as the provider evidence."""
+    conn.execute(
+        """
+        UPDATE payments
+        SET provider_confirmed_at = COALESCE(provider_confirmed_at, CURRENT_TIMESTAMP),
+            fulfillment_status = CASE
+                WHEN status = 'pending'
+                 AND fulfillment_status IN ('pending', 'failed', 'provider_succeeded')
+                    THEN 'provider_succeeded'
+                ELSE fulfillment_status
+            END,
+            fulfillment_last_error = CASE
+                WHEN status = 'pending'
+                 AND fulfillment_status IN ('pending', 'failed', 'provider_succeeded')
+                    THEN NULL
+                ELSE fulfillment_last_error
+            END
+        WHERE order_id = ? AND intent_version = 1
+        """,
+        (order_id,),
+    )
 
 
 def _normalize_status(status: str) -> str:
