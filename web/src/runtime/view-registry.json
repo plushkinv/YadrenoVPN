@@ -1,0 +1,49 @@
+{
+  "pages": [
+    {"id":"home","file":"src/pages/SubscriptionAccount.tsx","export":"HomeAccount","title":"Главная"},
+    {"id":"subscriptions","file":"src/pages/SubscriptionAccount.tsx","export":"SubscriptionList","title_key":"subscriptions"},
+    {"id":"subscription","file":"src/pages/SubscriptionAccount.tsx","export":"SubscriptionDetails","title_key":"subscription","preview_parameter":"1"},
+    {"id":"connect","file":"src/pages/SubscriptionAccount.tsx","export":"Connection","title_key":"connect","preview_parameter":"1"},
+    {"id":"purchase","file":"src/pages/Checkout.tsx","export":"Checkout","title_key":"buy"},
+    {"id":"renewal","file":"src/pages/Checkout.tsx","export":"Checkout","title_key":"renew","preview_parameter":"1"},
+    {"id":"payment","file":"src/pages/Checkout.tsx","export":"OrderStatus","title_key":"paymentHistory","preview_parameter":"preview-order"},
+    {"id":"payments","file":"src/pages/Information.tsx","export":"History","title_key":"history"},
+    {"id":"history","file":"src/pages/Information.tsx","export":"History","title_key":"history","preview_parameter":"1"},
+    {"id":"operation","file":"src/pages/SubscriptionAccount.tsx","export":"KeyOperation","title_key":"checkOperation","preview_parameter":"preview-operation"},
+    {"id":"devices","file":"src/pages/SubscriptionAccount.tsx","export":"Devices","title_key":"devices","preview_parameter":"1"},
+    {"id":"hosts","file":"src/pages/SubscriptionAccount.tsx","export":"Hosts","title_key":"hosts","preview_parameter":"1"},
+    {"id":"trials","file":"src/pages/SubscriptionAccount.tsx","export":"Trials","title_key":"trialTitle","feature":"trial"},
+    {"id":"balance","file":"src/pages/Information.tsx","export":"History","title_key":"balance","feature":"balance"},
+    {"id":"promotion","file":"src/pages/Information.tsx","export":"Promotion","title_key":"promo","feature":"promotions"},
+    {"id":"referrals","file":"src/pages/Information.tsx","export":"Referrals","title_key":"referrals","feature":"referrals"},
+    {"id":"import","file":"src/pages/Account.tsx","export":"SubscriptionImport","title_key":"import","feature":"subscription_import"},
+    {"id":"account","file":"src/pages/Account.tsx","export":"Account","title_key":"account"},
+    {"id":"telegram-link","file":"src/pages/Account.tsx","export":"TelegramLink","title_key":"telegramLink"},
+    {"id":"credentials","file":"src/pages/Account.tsx","export":"Authentication","title_key":"credentials"},
+    {"id":"login","file":"src/pages/Account.tsx","export":"Authentication","title_key":"login","public":true},
+    {"id":"register","file":"src/pages/Account.tsx","export":"Authentication","title_key":"register","public":true},
+    {"id":"reset","file":"src/pages/Account.tsx","export":"Authentication","title_key":"reset","public":true},
+    {"id":"appearance","file":"src/pages/Information.tsx","export":"Appearance","title_key":"appearance","public":true},
+    {"id":"help","file":"src/pages/Information.tsx","export":"Help","title_key":"help"},
+    {"id":"more","file":"src/pages/Information.tsx","export":"MoreAccount","title":"Ещё"}
+  ],
+  "components": [
+    {"id":"button","file":"src/components/Ui.tsx","export":"Button"},
+    {"id":"page.heading","file":"src/components/Ui.tsx","export":"PageHeading"},
+    {"id":"badge","file":"src/components/Ui.tsx","export":"Badge"},
+    {"id":"row.button","file":"src/components/Ui.tsx","export":"RowButton"},
+    {"id":"dialog","file":"src/components/Ui.tsx","export":"Dialog"},
+    {"id":"check.list","file":"src/components/Ui.tsx","export":"CheckList"},
+    {"id":"app.shell","file":"src/components/Shell.tsx","export":"Shell"},
+    {"id":"home.connect.primary","file":"src/components/Ui.tsx","export":"Button","fallback":"button"},
+    {"id":"home.client.change","file":"src/components/Ui.tsx","export":"Button","fallback":"button"},
+    {"id":"purchase.continue","file":"src/components/Ui.tsx","export":"Button","fallback":"button"}
+  ],
+  "styles": ["src/styles.css", "src/app.css", "src/themes/tokens.css"],
+  "scenarios": {
+    "active":"Активная подписка", "empty":"Пустые данные", "loading":"Загрузка", "error":"Ошибка",
+    "pending":"Ожидание оплаты", "confirmed":"Провайдер подтвердил оплату", "issuing":"Оплачено, доступ готовится",
+    "ready":"Доступ готов", "expired":"Срок истёк", "traffic":"Трафик исчерпан", "unknown":"Неизвестные счётчики",
+    "unconfigured":"Нужна настройка", "disabled":"Доступ отключён"
+  }
+}

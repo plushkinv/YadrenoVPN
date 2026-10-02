@@ -45,6 +45,7 @@ _POST_V120_USER_UI_TEXT_KEYS = frozenset({'format.time_left'})
 _POST_V105_CORE_PAGE_KEYS = frozenset({
     'key_devices',
     'key_replace_server_unavailable',
+    'support_admin_notification',
 })
 _CORE_PAGE_KEYS_V105 = CORE_PAGE_KEYS.difference(_POST_V105_CORE_PAGE_KEYS)
 _BASELINE_USER_UI_TEXT_DEFINITIONS_V97 = tuple(
@@ -71,7 +72,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 121
+LATEST_VERSION = 125
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -3887,16 +3888,6 @@ def migration_115(conn: sqlite3.Connection) -> None:
         )''',
         '''CREATE INDEX IF NOT EXISTS idx_account_sessions_owner
             ON account_sessions(user_id, expires_at)''',
-        '''CREATE TABLE IF NOT EXISTS auth_challenges (
-            id TEXT PRIMARY KEY, phone TEXT NOT NULL, purpose TEXT NOT NULL
-                CHECK(purpose IN ('register', 'reset', 'credentials')),
-            session_hash TEXT, user_id INTEGER REFERENCES users(id),
-            code_hash TEXT NOT NULL, proof_hash TEXT,
-            state TEXT NOT NULL CHECK(state IN ('sending', 'sent', 'failed', 'unknown', 'verified', 'used')),
-            attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
-            expires_at INTEGER NOT NULL, verified_at INTEGER, used_at INTEGER
-        )''',
-        '''CREATE INDEX IF NOT EXISTS idx_auth_challenges_expiry ON auth_challenges(expires_at)''',
         '''CREATE TABLE IF NOT EXISTS auth_rate_limits (
             bucket TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT NULL
         )''',
@@ -3914,10 +3905,10 @@ def migration_115(conn: sqlite3.Connection) -> None:
         conn.execute(sql)
     defaults = {
         'web_enabled': '0', 'web_listen_port': '18764', 'web_public_origin': '',
-        'web_sms_enabled': '0', 'web_sms_registration_required': '0',
-        'web_sms_api_key': '',
     }
     conn.executemany('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', defaults.items())
+    from database.phone_verification_schema import create_phone_verification_schema
+    create_phone_verification_schema(conn)
 
 
 def migration_116(conn: sqlite3.Connection) -> None:
@@ -4029,6 +4020,108 @@ def migration_121(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_122(conn: sqlite3.Connection) -> None:
+    """Describe unrestricted file types in stock prompts, preserving customization."""
+    conn.executemany(
+        "UPDATE pages SET text_default = ? WHERE page_key = ? AND page_kind = 'core'",
+        (
+            (
+                "💬 <b>Поддержка</b>\n\n"
+                "Отправьте текст или файл любого формата.",
+                "support_format_unsupported",
+            ),
+            (
+                "💬 <b>Ответ в поддержку</b>\n\n"
+                "Отправьте текст или файл любого формата одним сообщением.",
+                "support_reply_start",
+            ),
+            (
+                "💬 <b>Поддержка</b>\n\n"
+                "Отправьте текст или файл любого формата одним сообщением.",
+                "support_start",
+            ),
+        ),
+    )
+
+
+def migration_123(conn: sqlite3.Connection) -> None:
+    """Add hidden Mini App defaults without assigning existing custom button IDs."""
+    from database.web_ui_defaults import WEB_UI_DEFAULTS, WEB_CABINET_BUTTON_ID, web_cabinet_button
+    conn.executemany('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',
+                     [('web_ui_' + key, value) for key, value in WEB_UI_DEFAULTS.items()])
+    row = conn.execute("SELECT buttons_default, buttons_custom FROM pages WHERE page_key='main'").fetchone()
+    if not row:
+        return
+    try:
+        defaults, customs = json.loads(row[0] or '[]'), json.loads(row[1] or '[]')
+        if not isinstance(defaults, list) or not isinstance(customs, list):
+            raise ValueError()
+        if any(not isinstance(button, dict) for button in defaults + customs):
+            raise ValueError()
+    except (ValueError, TypeError):
+        logger.warning('Mini App default skipped: existing main button data needs inspection')
+        return
+    if any(button.get('id') == WEB_CABINET_BUTTON_ID for button in defaults + customs):
+        logger.warning('Mini App default skipped: button identity already exists; saved data preserved')
+        return
+    last = max((button.get('row', 0) for button in defaults if type(button.get('row', 0)) is int), default=-1)
+    defaults.append(web_cabinet_button(last + 1))
+    conn.execute("UPDATE pages SET buttons_default=? WHERE page_key='main'", (json.dumps(defaults, ensure_ascii=False),))
+
+
+def migration_124(conn: sqlite3.Connection) -> None:
+    """Expose administrator support cards without replacing installed customs."""
+    page_key = 'support_admin_notification'
+    _archive_conflicting_core_page(
+        conn,
+        page_key=page_key,
+        archive_key_base='legacy_support_admin_notification_v124',
+        migration_version=124,
+    )
+    conn.execute(
+        """
+        INSERT INTO pages (page_key, text_default, buttons_default, page_kind)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(page_key) DO UPDATE SET
+            text_default = excluded.text_default,
+            buttons_default = excluded.buttons_default
+        """,
+        (
+            page_key,
+            '💬 <b>%support_ticket(field=title)%</b>\n\n'
+            '👤 Пользователь: %support_ticket(field=user_name)%\n'
+            '%support_ticket(field=identity_label)%: '
+            '<code>%support_ticket(field=identity_id)%</code>\n'
+            '🧵 Диалог: <code>%support_ticket(field=id)%</code>\n'
+            '%support_ticket(field=assignment)%\n\n'
+            'Выше сообщение пользователя.',
+            json.dumps([{
+                'id': 'btn_admin_support_reply',
+                'label': '💬 Ответить',
+                'color': 'secondary',
+                'row': 0,
+                'col': 0,
+                'is_hidden': False,
+                'action_type': 'system',
+                'action_value': None,
+            }], ensure_ascii=False),
+            PAGE_KIND_CORE,
+        ),
+    )
+
+
+def migration_125(conn: sqlite3.Connection) -> None:
+    """Replace development-only challenges/settings while retaining account data."""
+    from database.phone_verification_schema import create_phone_verification_schema
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(auth_challenges)')}
+    if columns and 'method' not in columns:
+        conn.execute('DROP TABLE auth_challenges')
+    create_phone_verification_schema(conn)
+    conn.execute("DELETE FROM settings WHERE key IN "
+                 "('web_sms_enabled', 'web_sms_registration_required', 'web_sms_api_key')")
+    conn.execute("DELETE FROM auth_rate_limits WHERE bucket LIKE 'sms:%' OR bucket LIKE 'sms_verify:%'")
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -4054,6 +4147,10 @@ MIGRATIONS = {
     119: migration_119,
     120: migration_120,
     121: migration_121,
+    122: migration_122,
+    123: migration_123,
+    124: migration_124,
+    125: migration_125,
 }
 
 

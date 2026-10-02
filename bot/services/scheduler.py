@@ -48,6 +48,7 @@ from bot.utils.git_utils import check_for_updates
 from bot.utils.update_block import is_update_blocked, get_blocked_message, try_unblock
 from bot.utils.delivery import is_bot_blocked_error
 from bot.utils.text import escape_html
+from bot.keyboards.admin_backups import backup_document_kb
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -64,6 +65,7 @@ CUSTOM_EXTENSIONS_BACKUP_DIRNAME = 'custom_extensions'
 
 # How many days to store local backups
 BACKUP_RETENTION_DAYS = 7
+_backup_lock = asyncio.Lock()
 
 _CUSTOM_EXTENSION_CACHE_DIRS = {'__pycache__'}
 _CUSTOM_EXTENSION_CACHE_SUFFIXES = ('.pyc', '.pyo')
@@ -159,7 +161,7 @@ def _collect_custom_extension_files() -> Optional[list[tuple[str, str]]]:
 def _add_custom_extensions_to_archive(zf: zipfile.ZipFile) -> Optional[int]:
     """Adds the custom extension tree to an open daily ZIP archive."""
     files = _collect_custom_extension_files()
-    if files is None:
+    if files is None and os.path.lexists(CUSTOM_EXTENSIONS_DIR):
         return None
     if not files:
         zf.writestr(f"{CUSTOM_EXTENSIONS_BACKUP_DIRNAME}/", b"")
@@ -269,12 +271,12 @@ async def collect_panel_database_backups() -> PanelBackupCollection:
     return PanelBackupCollection(backups=tuple(backups), warnings=tuple(warnings))
 
 
-def build_backup_caption(today: str, panel_warnings: Sequence[PanelBackupWarning]) -> str:
+def build_backup_caption(today: str, panel_warnings: Sequence[PanelBackupWarning], *, manual: bool = False) -> str:
     """Collects an HTML-safe caption for a Telegram document with a backup archive."""
     lines = [
-        f"📦 <b>Ежедневный бэкап за {escape_html(today)}</b>",
+        f"📦 <b>{'Ручной' if manual else 'Ежедневный'} бэкап за {escape_html(today)}</b>",
         "",
-        "Содержит базу данных бота, файлы расширений и доступные бэкапы VPN-панелей.",
+        "Содержит базу бота, расширения, Mini App с ключом подписи и доступные бэкапы VPN-панелей.",
     ]
     if panel_warnings:
         lines.extend(["", "⚠️ <b>Предупреждения:</b>"])
@@ -469,6 +471,9 @@ async def create_backup_archive(
                     )
             except Exception as e:
                 logger.warning(f"Не удалось добавить custom_extensions в архив: {e}")
+
+            from web_tools.paths import backup_to_zip
+            backup_to_zip(zf, PROJECT_ROOT)
         
         archive_buffer.seek(0)
         return archive_buffer.read()
@@ -503,6 +508,9 @@ async def save_local_backup(
             panel_backups = await collect_panel_database_backups()
 
         os.makedirs(day_dir, exist_ok=True)
+
+        from web_tools.paths import backup_local
+        backup_local(day_dir, PROJECT_ROOT)
         
         # Saving the bot database
         bot_db_path = os.path.abspath(BOT_DB_PATH)
@@ -636,14 +644,16 @@ def cleanup_old_backups() -> None:
         logger.error(f"Ошибка при очистке локальных бэкапов: {e}")
 
 
-async def send_backup_archive(bot: Bot) -> None:
-    """
-    Creates and sends a backup archive to all administrators.
-    It also saves local copies and cleans up old backups.
-    
-    Args:
-        bot: Bot instance
-    """
+async def send_backup_archive(bot: Bot, *, recipient_id: int | None = None) -> bool:
+    """Use the same capture for daily delivery and an administrator's request."""
+    if recipient_id is not None and recipient_id not in ADMIN_IDS:
+        raise PermissionError('Administrator access required')
+    async with _backup_lock:
+        return await _send_backup_archive(bot, recipient_id=recipient_id)
+
+
+async def _send_backup_archive(bot: Bot, *, recipient_id: int | None) -> bool:
+    """Capture local copies, retain recent backups and deliver the selected ZIP."""
     try:
         panel_backups = await collect_panel_database_backups()
 
@@ -658,31 +668,35 @@ async def send_backup_archive(bot: Bot) -> None:
         
         if not archive_data:
             logger.error("Не удалось создать архив бэкапов")
-            return
+            return False
         
         # File name with date
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d_%H-%M-%S" if recipient_id is not None else "%Y-%m-%d")
         filename = f"backup_{today}.zip"
-        caption = build_backup_caption(today, panel_backups.warnings)
+        caption = build_backup_caption(today, panel_backups.warnings, manual=recipient_id is not None)
         
         # Sent to admins
-        for admin_id in ADMIN_IDS:
+        delivered = False
+        for admin_id in ([recipient_id] if recipient_id is not None else ADMIN_IDS):
             try:
                 await bot.send_document(
                     chat_id=admin_id,
                     document=BufferedInputFile(archive_data, filename=filename),
                     caption=caption,
                     parse_mode="HTML",
-                    reply_markup=ReplyKeyboardRemove()
+                    reply_markup=backup_document_kb()
                 )
+                delivered = True
                 logger.info(f"Бэкап отправлен админу {admin_id}")
             except Exception as e:
                 logger.warning(f"Не удалось отправить бэкап админу {admin_id}: {e}")
         
         logger.info(f"✅ Бэкап отправлен ({len(archive_data)} байт)")
+        return delivered
         
     except Exception as e:
         logger.error(f"Ошибка при отправке бэкапа: {e}")
+        return False
 
 
 async def check_and_send_expiry_notifications(bot: Bot) -> None:
@@ -849,6 +863,15 @@ async def run_daily_tasks(bot: Bot) -> None:
             logger.info(f"Следующий запуск задач ({time_str}) через {seconds_to_wait // 3600}ч {(seconds_to_wait % 3600) // 60}м")
             
             await asyncio.sleep(seconds_to_wait)
+
+            # File retention must not depend on Telegram/network availability.
+            try:
+                from pathlib import Path
+                from bot.services.temporary_files import cleanup_temporary_files
+                removed = await asyncio.to_thread(cleanup_temporary_files, Path(__file__).resolve().parents[2])
+                logger.info('Daily temporary-file cleanup removed %s files', removed)
+            except Exception as error:
+                logger.warning('Daily temporary-file cleanup failed: %s', type(error).__name__)
             
             # Sending statistics
             logger.info("📊 Запуск отправки суточной статистики...")

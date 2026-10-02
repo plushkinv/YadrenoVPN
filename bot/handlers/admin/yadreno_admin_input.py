@@ -25,6 +25,7 @@ class PendingYaaInput:
     return_state: str | None
     prompt_message: Message | None = None
     submissions: int = 0
+    new_chat_started: bool = False
 
 
 async def get_pending_yaa_input(state: FSMContext) -> PendingYaaInput | None:

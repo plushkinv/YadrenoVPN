@@ -30,6 +30,7 @@ _PAGE_PLACEHOLDER_ALIASES_BY_NAME = {
     'bot_username': (),
     'telegram_link_domain': (),
     'page_key': (),
+    'web_app_url': (),
     'tariffs': ('%тарифы%',),
     'no_tariffs': ('%без_тарифов%',),
     'referral_link': ('%реферальная_ссылка%',),
@@ -127,6 +128,7 @@ for _name, _aliases in {
 _PARAMETERIZED_PAGE_PLACEHOLDERS = frozenset({
     'key',
     'payment_coupon',
+    'support_ticket',
     'tariffs',
     'trial_offer',
 })
@@ -160,10 +162,16 @@ TRIAL_OFFER_PAGE_FIELDS = frozenset({
     'traffic',
     'device_limit',
 })
+SUPPORT_TICKET_FIELDS_CONTEXT_KEY = 'support_ticket_fields'
+SUPPORT_TICKET_PAGE_FIELDS = frozenset({
+    'id', 'status', 'user_id', 'telegram_id', 'user_name', 'assigned_admin_id',
+    'title', 'identity_label', 'identity_id', 'assignment',
+})
 _PARAMETER_FIELDS = {
     'key': KEY_PAGE_FIELDS,
     'payment_coupon': PAYMENT_COUPON_PAGE_FIELDS,
     'trial_offer': TRIAL_OFFER_PAGE_FIELDS,
+    'support_ticket': SUPPORT_TICKET_PAGE_FIELDS,
 }
 _EVENT_VALUE_KEYS = {
     'key_name': ('key_name', 'key_display_name', 'custom_name'),
@@ -373,7 +381,7 @@ def _parse_positive_int(value: Any) -> int | None:
 def valid_placeholder_parameters(name: str, params: Mapping[str, str]) -> bool:
     """Apply the same bounded parameter contract in rendering and validation."""
     if not params:
-        return name != 'key'
+        return name not in {'key', 'support_ticket'}
     if name == 'tariffs':
         return set(params) == {'group_id'} and _parse_positive_int(params['group_id']) is not None
     fields = _PARAMETER_FIELDS.get(name)
@@ -531,10 +539,18 @@ def _resolve_registered_placeholder(
         return _format_value(get_telegram_link_domain(), mode)
     if name == 'page_key':
         return _format_value(_context_value(context, 'page_key'), mode)
+    if name == 'web_app_url':
+        return _format_value(_context_value(context, 'web_app_url'), mode)
     if name == 'tariffs':
         return _resolve_tariffs_placeholder(context, mode, params)
     if name == 'key':
         return _resolve_key_placeholder(context, mode, params)
+    if name == 'support_ticket':
+        values = context.get(SUPPORT_TICKET_FIELDS_CONTEXT_KEY)
+        if not isinstance(values, Mapping):
+            return ''
+        field = params['field'].casefold()
+        return _format_value(values.get(field), mode, html_ready=field == 'assignment')
     if name == 'payment_coupon':
         return _resolve_payment_coupon_placeholder(context, mode, params)
     if name == 'trial_offer':

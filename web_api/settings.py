@@ -2,10 +2,37 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
+import json
 from urllib.parse import urlsplit
 
 DEFAULT_PORT = 18764
 LOOPBACK_HOST = '127.0.0.1'
+DEFAULT_TRUSTED_PROXIES = ('127.0.0.0/8', '::1/128')
+
+
+def private_bind(value: str) -> str:
+    address = ipaddress.ip_address(value)
+    private_ranges = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7')
+    if not (address.is_loopback or any(address in ipaddress.ip_network(net) for net in private_ranges)):
+        raise ValueError('backend bind must be an explicit loopback or private address')
+    return str(address)
+
+
+def trusted_proxies(values) -> tuple[str, ...]:
+    if not isinstance(values, (list, tuple)) or not 1 <= len(values) <= 32:
+        raise ValueError('trusted proxies must be an explicit nonempty address/network list')
+    result = []
+    for value in values:
+        network = ipaddress.ip_network(value, strict=False)
+        # An explicit closed connection must not trust arbitrary Internet peers.
+        if network.prefixlen == 0 or not (network.network_address.is_loopback or
+                any(network.subnet_of(ipaddress.ip_network(net)) for net in
+                    ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7')
+                    if ipaddress.ip_network(net).version == network.version)):
+            raise ValueError('trusted proxy must be a loopback or private network')
+        result.append(str(network))
+    return tuple(dict.fromkeys(result))
 
 
 def normalize_public_origin(value: str) -> str:
@@ -26,6 +53,8 @@ class WebSettings:
     enabled: bool
     port: int
     public_origin: str
+    host: str = LOOPBACK_HOST
+    trusted_proxies: tuple[str, ...] = DEFAULT_TRUSTED_PROXIES
 
 
 def get_web_settings() -> WebSettings:
@@ -51,4 +80,11 @@ def get_web_settings() -> WebSettings:
             origin = ''
     if enabled and not origin:
         raise ValueError('enabled web requires a configured HTTPS public origin')
-    return WebSettings(enabled, port, origin)
+    try:
+        host = private_bind(get_setting('web_listen_host', LOOPBACK_HOST))
+        proxies = trusted_proxies(json.loads(get_setting('web_trusted_proxies', json.dumps(DEFAULT_TRUSTED_PROXIES))))
+    except (TypeError, ValueError):
+        if enabled:
+            raise
+        host, proxies = LOOPBACK_HOST, DEFAULT_TRUSTED_PROXIES
+    return WebSettings(enabled, port, origin, host, proxies)

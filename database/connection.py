@@ -34,7 +34,7 @@ _request_connection = ContextVar('http_database_connection', default=None)
 
 @contextmanager
 def request_connection_scope():
-    """Reuse setup within one HTTP task, preserving each get_db transaction boundary."""
+    """Reuse setup within one task, preserving each get_db transaction boundary."""
     from runtime.readiness import _owner
     scope = {'owner': _owner(), 'path': str(DB_PATH), 'connection': None, 'borrowed': False}
     token = _request_connection.set(scope)

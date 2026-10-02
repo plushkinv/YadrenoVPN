@@ -22,3 +22,6 @@ class PromoInput(StatesGroup):
 
 class PaymentTopup(StatesGroup):
     waiting_for_amount = State()
+
+class ExtensionInput(StatesGroup):
+    waiting = State()

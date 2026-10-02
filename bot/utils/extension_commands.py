@@ -195,7 +195,7 @@ def normalize_extension_command_result(raw_result: Mapping[str, Any] | None) -> 
         return {}
     if not isinstance(raw_result, Mapping):
         raise ValueError('extension command must return dict or None')
-    allowed = {'answer_text', 'page_key', 'route_key', 'context'}
+    allowed = {'answer_text', 'page_key', 'route_key', 'context', 'input'}
     result = dict(raw_result)
     unknown = set(result.keys()) - allowed
     if unknown:
@@ -213,6 +213,9 @@ def normalize_extension_command_result(raw_result: Mapping[str, Any] | None) -> 
         if not isinstance(result['context'], Mapping):
             raise ValueError('context must be a mapping')
         result['context'] = dict(result['context'])
+    from bot.utils.extension_inputs import normalize_input_request
+
+    normalize_input_request(result)
     return result
 
 

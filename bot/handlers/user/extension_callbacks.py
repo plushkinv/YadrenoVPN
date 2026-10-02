@@ -43,7 +43,7 @@ async def extension_callback_handler(callback: CallbackQuery, state: FSMContext)
     }
     result = await dispatch_extension_callback(context, bot=callback.bot)
 
-    if result.get('target') == 'core_action':
+    if result.get('target') == 'core_action' or 'input' in result:
         await apply_extension_callback_result(
             callback,
             result,

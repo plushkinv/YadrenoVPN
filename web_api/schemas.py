@@ -43,11 +43,18 @@ PAYMENT_FIELDS = {'order_id': S, 'purpose': S, 'status': S, 'payment_type': NS, 
 SCHEMAS = {
     'Error': obj({'code': S, 'details': {'type': 'object', 'additionalProperties': True},
                   'retryable': B, 'operation_id': S}, ['code', 'details', 'retryable']),
-    'AuthSettings': obj({'phone_format': S, 'sms_available': B, 'sms_registration_required': B,
+    'AuthSettings': obj({'phone_format': S, 'verification_available': B, 'verification_required': B,
+                         'verification_method': nullable({'type': 'string', 'enum': ['ucaller', 'smsaero_mobile', 'smsaero_sms']}),
                          'password_recovery_available': B, 'unverified_phone_warning_required': B}),
+    'PhoneVerification': obj({'challenge_id': S,
+        'method': {'type': 'string', 'enum': ['ucaller', 'smsaero_mobile', 'smsaero_sms']},
+        'state': {'type': 'string', 'enum': ['code_required', 'waiting', 'confirmed', 'failed', 'unknown', 'verified', 'expired']},
+        'send_state': {'type': 'string', 'enum': ['sent', 'failed', 'unknown']},
+        'expires_at': I, 'resend_at': I, 'code_length': NI, 'proof': NS}),
     'Session': obj({'account_id': I, 'telegram_id': NI, 'source': S, 'expires_at': I, 'csrf': S},
                    ['account_id', 'telegram_id', 'source', 'expires_at']),
-    'Bootstrap': obj({'api_version': I, 'auth': ref('AuthSettings'), 'features': obj({name: B for name in
+    'ModuleAvailability': obj({'module_id': S, 'version': S, 'api_version': I, 'state': S}),
+    'Bootstrap': obj({'api_version': I, 'auth': ref('AuthSettings'), 'modules': array(ref('ModuleAvailability')), 'features': obj({name: B for name in
         ('subscriptions', 'trial', 'promotions', 'referrals', 'balance', 'subscription_import', 'support_chat')})}),
     'Profile': obj({'account_id': I, 'telegram_id': NI, 'username': NS, 'first_name': NS, 'last_name': NS,
         'created_at': NS, 'credentials': obj({'present': B, 'phone': NS, 'phone_verified': B})}),
@@ -105,18 +112,81 @@ def page(item):
     return obj({'items': array(item), **PAGING})
 
 
+SCHEMAS['UiSettings'] = obj({'title': S, 'logo': NS, 'preset': S, 'theme': S, 'accent': NS,
+                           'sync_interval_seconds': I})
+SCHEMAS['UiPreview'] = obj({'settings': ref('UiSettings'), 'captured_at': I, 'currency': S,
+    'modules': array(ref('ModuleAvailability')),
+    'features': SCHEMAS['Bootstrap']['properties']['features'],
+    'tariffs': array(obj({'id': I, 'name': S, 'group_id': I, 'duration_days': I,
+                          'price_minor': I, 'traffic_limit_gb': N, 'max_ips': I})),
+    'trial_offers': array(obj({'offer_id': I, 'tariff_name': NS, 'duration_days': NI,
+                              'traffic_limit_gb': nullable(N)}))})
+
+
 # method, path, input, output, anonymous, durable-idempotency-header
 ROUTES = []
 
+SCHEMAS['EditorViewed'] = obj({'contract_version': {'type': 'integer', 'enum': [1]},
+    'route': text_bound(210), 'scenario': text_bound(80), 'preset': text_bound(32),
+    'theme': text_bound(32), 'ui_version': text_bound(32), 'customization_version': text_bound(128)})
+EDITOR_REQUEST_ID = {'anyOf': [ID, {'type': 'string', 'minLength': 1, 'maxLength': 19,
+    'description': 'Exact decimal Hub ID when outside the legacy numeric range; treat as opaque.'}]}
+SCHEMAS['EditorFinal'] = obj({'content': S, 'content_html': S, 'viewer_url': nullable(S),
+    'request_id': nullable(EDITOR_REQUEST_ID), 'rich_markdown': nullable(S)},
+    ['content', 'viewer_url', 'request_id', 'rich_markdown'])
+SCHEMAS['EditorProgress'] = obj({'event': S, 'content': S, 'slot': S, 'cancel_button_text': nullable(S)})
+SCHEMAS['EditorLatest'] = obj({'request_id': EDITOR_REQUEST_ID, 'event': S, 'final': nullable(ref('EditorFinal')),
+    'progress': nullable(ref('EditorProgress')), 'resume_allowed': B, 'cancel_button_text': nullable(S)})
+SCHEMAS['EditorState'] = obj({'task': nullable(obj({'task_id': S, 'viewed': ref('EditorViewed')})),
+    'latest': nullable(ref('EditorLatest')), 'local_polling': B})
+SCHEMAS['EditorCandidate'] = obj({'build_id': S, 'base_build_id': S, 'content_hash': S,
+    'customization_version': S, 'revision': S, 'package_sha256': S,
+    'package_valid': {'type': 'boolean', 'enum': [True]}, 'activated': {'type': 'boolean', 'enum': [False]}})
 
-def route(method, path, output, inputs=None, *, anonymous=False, idempotent=False, paging=False, query=None):
+
+def route(method, path, output, inputs=None, *, anonymous=False, idempotent=False, paging=False, query=None,
+          media_type='application/json'):
     ROUTES.append({'method': method, 'path': '/api/v1/' + path, 'input': inputs, 'output': output,
-        'anonymous': anonymous, 'idempotent': idempotent, 'query': query or ({
+        'anonymous': anonymous, 'idempotent': idempotent, 'media_type': media_type, 'query': query or ({
             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
             'offset': {'type': 'integer', 'minimum': 0, 'maximum': 1000000}} if paging else {})})
 
 
 route('GET', 'bootstrap', ref('Bootstrap'), anonymous=True)
+route('GET', 'ui/settings', ref('UiSettings'), anonymous=True)
+UI_API_RANGE = obj({'min': I, 'max': I})
+UI_MANIFEST_FIELDS = {'product': S, 'product_version': S, 'base_build_id': S, 'build_id': S,
+    'instance_id': S, 'core_api': UI_API_RANGE, 'environment_contract': I,
+    'customization_version': S, 'key_id': S, 'content_hash': S,
+    'files': {'type': 'object', 'additionalProperties': obj({'sha256': S, 'size': I})}}
+UI_REQUIREMENTS = obj({'frontend_api': UI_API_RANGE, 'modules': array(obj({'id': S, 'version': S,
+    'api_version': I, 'core_api': UI_API_RANGE, 'frontend_api': UI_API_RANGE, 'environment_contract': I}))})
+route('GET', 'ui/manifest', obj({'manifest': {'anyOf': [
+    obj({**UI_MANIFEST_FIELDS, 'format_version': {'type': 'integer', 'enum': [1]}}),
+    obj({**UI_MANIFEST_FIELDS, 'format_version': {'type': 'integer', 'enum': [2]}, 'requirements': UI_REQUIREMENTS}),
+]}, 'signature': S}), anonymous=True)
+route('GET', 'ui/packages/{content_hash}', {'type': 'string', 'format': 'binary'}, anonymous=True)
+route('GET', 'admin/ui/preview', ref('UiPreview'))
+route('GET', 'admin/ui/editor', ref('EditorState'))
+route('POST', 'admin/ui/editor/preview', obj({'task_id': S, 'candidate': ref('EditorCandidate'),
+    'viewed': ref('EditorViewed'), 'preview_url': S, 'published': B,
+    'pages': array(obj({'id': S, 'title': nullable(S)}))}), obj())
+route('POST', 'admin/ui/editor/turns', obj({'status': {'type': 'string', 'enum': ['accepted']},
+    'task_id': S, 'request_id': EDITOR_REQUEST_ID}), obj({'message': text_bound(8192), 'viewed': ref('EditorViewed')}))
+route('POST', 'admin/ui/editor/uploads', obj({'status': {'type': 'string', 'enum': ['accepted']},
+    'task_id': S, 'request_id': EDITOR_REQUEST_ID}), obj({'message': text_bound(8192),
+    'viewed': {**S, 'description': 'JSON-encoded EditorViewed; validated with the same closed schema.'},
+    'files': {'type': 'array', 'maxItems': 5, 'items': {'type': 'string', 'format': 'binary'},
+              'description': 'At least one attachment required. Up to five files including voice, 10 MiB each; body up to 50 MiB + 64 KiB.'},
+    'voice': {'type': 'string', 'format': 'binary', 'description': 'One OGG/WAV spoken request; counts as one file.'},
+    'file': {'type': 'string', 'format': 'binary', 'description': 'Legacy alias of voice; cannot be combined with voice.'}},
+    required=['message', 'viewed']),
+    media_type='multipart/form-data')
+route('POST', 'admin/ui/editor/resume', obj({'resuming': B}), obj())
+route('POST', 'admin/ui/editor/cancel', obj({'status': S, 'response_text': S, 'cancel_button_text': nullable(S),
+    'request_id': nullable(EDITOR_REQUEST_ID), 'retry_after_sec': nullable(N)}), obj())
+route('POST', 'admin/ui/editor/new-chat', obj({'status': S, 'response_text': S, 'cancel_button_text': nullable(S),
+    'closed_session_id': {'anyOf': [S, I, {'type': 'null'}]}}), obj())
 route('GET', 'auth/settings', ref('AuthSettings'), anonymous=True)
 route('POST', 'auth/register', ref('Session'), obj({'phone': text_bound(64), 'password': text_bound(128),
     'proof': nullable(text_bound(128)), 'referral_code': nullable(text_bound(128))}, ['phone', 'password']), anonymous=True)
@@ -126,9 +196,11 @@ route('POST', 'auth/logout', obj({'logged_out': B}), obj())
 route('GET', 'auth/session', ref('Session'))
 route('POST', 'account/credentials', ref('Session'), obj({'phone': text_bound(64), 'password': text_bound(128),
     'current_password': nullable(text_bound(128)), 'proof': nullable(text_bound(128))}, ['phone', 'password']))
-route('POST', 'auth/sms/request', obj({'challenge_id': S, 'expires_at': I, 'send_state': S}),
+route('POST', 'auth/verification/request', ref('PhoneVerification'),
     obj({'phone': text_bound(64), 'purpose': {'type': 'string', 'enum': ['register', 'credentials', 'reset']}}), anonymous=True)
-route('POST', 'auth/sms/verify', obj({'proof': S}), obj({'challenge_id': text_bound(64), 'code': text_bound(6)}), anonymous=True)
+route('POST', 'auth/verification/status', ref('PhoneVerification'), obj({'challenge_id': text_bound(64)}), anonymous=True)
+route('POST', 'auth/verification/verify', ref('PhoneVerification'),
+    obj({'challenge_id': text_bound(64), 'code': nullable(text_bound(32))}, ['challenge_id']), anonymous=True)
 route('POST', 'auth/password/reset', obj({'password_reset': B}),
     obj({'phone': text_bound(64), 'password': text_bound(128), 'proof': text_bound(128)}), anonymous=True)
 route('POST', 'account/telegram/link', obj({'token': S, 'telegram_url': S, 'expires_at': I}), obj())
@@ -235,7 +307,7 @@ async def validate_request(request):
             validate(int(value), entry['query'][key], key)
         if entry['idempotent'] and not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request.headers.get('Idempotency-Key', '')):
             raise ValueError('Idempotency-Key')
-        if entry['input'] is not None:
+        if entry['input'] is not None and entry['media_type'] == 'application/json':
             validate(await request.json(), entry['input'])
     except (ValueError, TypeError, OverflowError) as error:
         raise CoreError('invalid_request', details={'field': str(error)[:128]}) from None
@@ -273,7 +345,7 @@ def openapi_document():
                        (409, 'Conflict or unavailable action'), (413, 'Request body too large'), (422, 'Invalid input'),
                        (429, 'Rate limited'), (500, 'Internal failure'), (503, 'Retryable operation or unavailable service'))}}}
         if entry['input'] is not None:
-            operation['requestBody'] = {'required': True, 'content': {'application/json': {'schema': entry['input']}}}
+            operation['requestBody'] = {'required': True, 'content': {entry['media_type']: {'schema': entry['input']}}}
         paths.setdefault(entry['path'], {})[entry['method'].lower()] = operation
     from core.extensions.registry import POLICIES
     for (kind, module_id, name), policy in POLICIES.items():

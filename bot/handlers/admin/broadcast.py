@@ -20,6 +20,7 @@ from database.requests import (
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
+from bot.utils.placeholder_help import BROADCAST_PLACEHOLDER_HINT, EDITOR_PLACEHOLDER_HELP
 from bot.keyboards.admin import (
     broadcast_main_kb, broadcast_confirm_kb,
     broadcast_stop_kb, broadcast_notifications_kb, broadcast_back_kb,
@@ -307,9 +308,7 @@ async def broadcast_edit_message(callback: CallbackQuery, state: FSMContext):
         "• Текст (с форматированием)\n"
         "• Фото с подписью\n"
         "• Нативный опрос Telegram\n\n"
-        "В тексте и подписи доступны подстановки страниц: например, "
-        "%referral_link% — личная реферальная ссылка получателя. "
-        "В превью подставляются ваши данные.\n\n"
+        f"{BROADCAST_PLACEHOLDER_HINT}\n\n"
         "💡 Опрос можно создать прямо здесь или переслать из «Избранного», группы или канала."
     )
     
@@ -1120,12 +1119,7 @@ async def broadcast_notify_text(callback: CallbackQuery, state: FSMContext):
         callback.message, state,
         key='notification_text',
         back_callback='broadcast_notifications',
-        help_text=(
-            "📝 <b>Справка: Текст уведомления об истечении</b>\n\n"
-            "Переменные:\n"
-            "• <code>%ключ_дней_до_окончания%</code> — количество дней до истечения\n"
-            "• <code>%ключ_имя%</code> — имя ключа"
-        ),
+        help_text=EDITOR_PLACEHOLDER_HELP['notification_text'],
         allowed_types=['text', 'photo', 'video', 'animation'],
     )
     await callback.answer()

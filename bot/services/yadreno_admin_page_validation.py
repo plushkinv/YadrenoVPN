@@ -42,6 +42,7 @@ _PAGE_BUTTON_ACTION_TYPES = frozenset({
     'system',
     'system_collection',
     'url',
+    'web_app',
     'page',
     'route',
 })
@@ -116,6 +117,10 @@ def _validate_page_button_action(
         raise ValueError(
             f'page.buttons[{index}] references unregistered internal action: {value}'
         )
+    if action_type == 'web_app':
+        from bot.utils.web_app_buttons import validate_web_app_url
+        validate_web_app_url(value, template=True)
+        return
     if action_type == 'url':
         parsed = urlparse(value)
         if parsed.scheme.lower() not in {'http', 'https', 'tg'}:

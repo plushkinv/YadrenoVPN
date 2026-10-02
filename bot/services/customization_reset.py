@@ -131,6 +131,8 @@ def reset_customization_files(
     _assert_tree_inside(custom_extensions_dir, root)
 
     if create_backup and not dry_run:
+        from web_tools.paths import backup_local
+        backup_local(backups_root / (_timestamp() + '__web'), root)
         backup = _create_custom_extensions_backup(custom_extensions_dir, backups_root)
         if backup is not None:
             backups.append(backup)

@@ -75,7 +75,7 @@ async def _render_main_page(target, force_new: bool = False) -> bool:
     rendered = await render_page(
         target,
         page_key='main',
-        context={'telegram_id': user_id},
+        context={'telegram_id': user_id, '_stock_main_admin_before_web': True},
         visibility=visibility,
         append_buttons=admin_append_buttons,
         force_new=force_new,

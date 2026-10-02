@@ -31,7 +31,7 @@ def get_phone_credentials(phone: str) -> dict | None:
 
 def _consume_proof(conn, *, proof_hash, phone, purpose, session_hash, now):
     if not proof_hash:
-        raise CoreError('sms_proof_required')
+        raise CoreError('verification_proof_required')
     changed = conn.execute(
         "UPDATE auth_challenges SET state = 'used', used_at = ? WHERE proof_hash = ? "
         "AND phone = ? AND purpose = ? AND session_hash IS ? "
@@ -39,7 +39,7 @@ def _consume_proof(conn, *, proof_hash, phone, purpose, session_hash, now):
         (now, proof_hash, phone, purpose, session_hash, now),
     ).rowcount
     if changed != 1:
-        raise CoreError('sms_proof_invalid')
+        raise CoreError('verification_proof_invalid')
 
 
 def create_account_credentials(
@@ -120,7 +120,7 @@ def reset_account_password(*, phone: str, password_hash: str, proof_hash: str, n
         _consume_proof(conn, proof_hash=proof_hash, phone=phone, purpose='reset', session_hash=None, now=now)
         row = conn.execute('SELECT user_id FROM account_credentials WHERE phone = ?', (phone,)).fetchone()
         if row is None:
-            raise CoreError('sms_proof_invalid')
+            raise CoreError('verification_proof_invalid')
         conn.execute(
             'UPDATE account_credentials SET password_hash = ?, phone_verified = 1, '
             'version = version + 1, updated_at = ? WHERE user_id = ?',

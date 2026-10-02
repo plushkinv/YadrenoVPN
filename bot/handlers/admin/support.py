@@ -23,7 +23,6 @@ from bot.services.support import (
     support_identity_line,
     send_admin_message_to_user,
     support_thread_operation,
-    support_unsupported_text,
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
@@ -149,7 +148,7 @@ async def admin_support_start(callback: CallbackQuery, state: FSMContext):
         f"👤 Пользователь: {format_support_user_line(user)}\n"
         f"{identity_line(user)}\n\n"
         "Отправьте сообщение, которое нужно передать пользователю.\n\n"
-        "Можно отправить текст, фото, видео или GIF."
+        "Можно отправить текст или файл любого формата."
     )
     if user['telegram_id'] is None:
         text += '\n\nСообщение будет доступно в веб-переписке через установленный модуль поддержки.'
@@ -216,7 +215,7 @@ async def admin_support_reply(callback: CallbackQuery, state: FSMContext):
         f"{support_identity_line(thread)}\n"
         f"🧵 Диалог: <code>{thread_id}</code>\n\n"
         f"{note}\n\n"
-        "Отправьте текст, фото, видео или GIF."
+        "Отправьте текст или файл любого формата."
     )
     await safe_edit_or_send(
         callback.message,
@@ -238,7 +237,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
         data = await state.get_data()
         await safe_edit_or_send(
             message,
-            support_unsupported_text(),
+            "💬 <b>Сообщение пользователю</b>\n\nОтправьте текст или файл любого формата.",
             reply_markup=support_admin_cancel_kb(data.get("support_back_callback", "admin_panel")),
             force_new=True,
         )

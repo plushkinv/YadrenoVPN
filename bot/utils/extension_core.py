@@ -532,6 +532,7 @@ def _ensure_new_mutation_allowed(operation: str) -> None:
     if invocation_kind not in {
         'callback',
         'command',
+        'input_handler',
         'lifecycle_hook',
         'completion_handler',
         'event_handler',
@@ -539,7 +540,7 @@ def _ensure_new_mutation_allowed(operation: str) -> None:
         'module_operation',
     }:
         raise RuntimeError(
-            f'{operation} is allowed only in extension callbacks, commands, or '
+            f'{operation} is allowed only in extension callbacks, commands, input handlers, or '
             'lifecycle hooks; durable completion handlers are also supported'
         )
 
@@ -558,6 +559,7 @@ def _ensure_support_ticket_read_allowed(operation: str) -> int:
         'page_hook',
         'callback',
         'command',
+        'input_handler',
         'action_policy',
     }:
         raise PermissionError(
@@ -574,9 +576,9 @@ def _ensure_support_ticket_status_mutation_allowed(operation: str) -> int:
     _ensure_mutation_allowed(operation)
     from bot.utils.custom_extensions import _get_current_extension_invocation_kind
 
-    if _get_current_extension_invocation_kind() not in {'callback', 'command'}:
+    if _get_current_extension_invocation_kind() not in {'callback', 'command', 'input_handler'}:
         raise PermissionError(
-            f'{operation} is allowed only in administrator extension callbacks or commands'
+            f'{operation} is allowed only in administrator extension callbacks, commands or input handlers'
         )
     return _ensure_support_ticket_read_allowed(operation)
 

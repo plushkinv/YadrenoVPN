@@ -10,6 +10,9 @@ from typing import Any, Callable
 
 from bot.services.yadreno_admin_page_validation import _normalize_page_create_payload
 from bot.services.yadreno_admin_page_patch import PAGE_CHANGE_FIELDS, PagePatch
+from bot.services.yadreno_admin_customization_settings import (
+    CUSTOM_SETTING_KEYS, setting_contract, validate_setting_value as _validate_setting_value,
+)
 from bot.services.yadreno_admin_replacement import (
     MESSAGE_TEMPLATE_KEYS, REPLACE_SCOPES, REPLACE_TYPES,
     prepare_replacement, validate_replace_args,
@@ -33,8 +36,6 @@ from bot.utils.user_ui_texts import (
 from database.requests import (
     CustomizationChanges,
     mutate_customization_data,
-    EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
-    REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX,
     create_custom_page,
     create_bot_database_backup,
     create_trial_offer,
@@ -95,16 +96,6 @@ APPLY_OPERATIONS = frozenset({
     'trial.offer.delete',
     'extensions.loader.set',
 })
-CUSTOM_SETTING_KEYS = (
-    'key_name_prefix',
-    'my_keys_item_template',
-    'notification_text',
-    'traffic_notification_text',
-    'referral_new_ref_notification_text',
-    'referral_purchase_notification_text',
-    'referral_attribution_window_hours',
-    'expired_key_panel_cleanup_delay_days',
-)
 _CUSTOM_SETTING_KEY_SET = frozenset(CUSTOM_SETTING_KEYS)
 _NOTIFICATION_EVENT_TYPES = {
     'notification_text': 'key_expiring',
@@ -218,11 +209,15 @@ def _page_state(page_key: str) -> dict[str, Any] | None:
     if row is None:
         return None
     classification = get_page_classification(page_key)
+    from bot.services.yadreno_admin_page_validation import _PAGE_BUTTON_ACTION_TYPES
     return {
         'page_key': str(row['page_key']),
         'page_kind': classification.page_kind,
         'render_allowed': classification.render_allowed,
         'classification_reason': classification.reason,
+        'button_action_types': sorted(_PAGE_BUTTON_ACTION_TYPES),
+        'web_app_contract': {'url_scheme': 'https', 'chat_type': 'private', 'business_supported': False,
+                             'origin_placeholder': '%web_app_url%'},
         'custom': {
             'text_custom': row.get('text_custom'),
             'image_custom': row.get('image_custom'),
@@ -328,11 +323,19 @@ def _inspect_settings(key: str | None, cursor: int, limit: int) -> dict[str, Any
     if key and key not in _CUSTOM_SETTING_KEY_SET:
         raise KeyError(f'setting is not customizable through this tool: {key}')
     keys = [key] if key else list(CUSTOM_SETTING_KEYS)
-    rows = [{'setting_key': item, 'value': get_setting(item)} for item in keys]
+    rows = [{'setting_key': item, 'value': get_setting(item), **setting_contract(item)} for item in keys]
     for row in rows:
         if row['setting_key'] in _NOTIFICATION_EVENT_TYPES:
             row['event_type'] = _NOTIFICATION_EVENT_TYPES[row['setting_key']]
     result = _paginated('settings', rows, cursor, limit)
+    result['settings_contract_version'] = 1
+    if any(row['setting_key'].startswith('web_ui_') for row in result['items']):
+        from web_tools.toolchain import describe
+        result['web_ui_contract'] = {'format_version': 1, 'core_api_version': 1, 'environment_contract': 1,
+            'source_root': 'custom_web', 'runtime_root': 'web_runtime', 'manifest': 'custom_web/manifest.json',
+            'local_cli': 'python -m web_tools', 'admin_preview_context_version': 1,
+            'preview_authority': 'verified_mini_app_administrator'}
+        result['web_ui_contract']['compiler'] = describe()
     if any('event_type' in row for row in result['items']):
         result['placeholder_contract'] = get_placeholder_contract(include_events=True)
     return result
@@ -497,6 +500,7 @@ def _inspect_extensions(cursor: int, limit: int) -> dict[str, Any]:
             'account_capabilities': diagnostics.get('account_capabilities') or {},
             'shared_modules': diagnostics.get('shared_modules') or {},
             'messaging_capabilities': diagnostics.get('messaging_capabilities') or {},
+            'input_capabilities': diagnostics.get('input_capabilities') or {},
             'finance_capabilities': diagnostics.get('finance_capabilities') or {},
         },
     )
@@ -531,6 +535,7 @@ def inspect_customization(args: dict[str, Any]) -> str:
                 'status': 'ok',
                 'scope': 'overview',
                 'customization_contract': 'customization_tools_v2',
+                'customization_contracts': ['customization_tools_v2', 'customization_tools_v3'],
                 'apply_operations': sorted(APPLY_OPERATIONS),
                 'page_change_types': sorted(PAGE_CHANGE_FIELDS),
                 'replace_scopes': list(REPLACE_SCOPES),
@@ -718,52 +723,6 @@ def _apply_ui_text(args: dict[str, Any]) -> str:
     return _json_result(result)
 
 
-def _validate_setting_value(key: str, value: Any) -> str:
-    if key not in _CUSTOM_SETTING_KEY_SET:
-        raise ValueError(f'setting is not allowlisted: {key}')
-    if not isinstance(value, str):
-        raise TypeError('setting value must be a string')
-    if not value.strip():
-        raise ValueError('setting value must not be empty')
-    if len(value) > 50_000:
-        raise ValueError('setting value is too large')
-    if key == 'key_name_prefix':
-        if '\n' in value or '\r' in value:
-            raise ValueError('key_name_prefix must be a single line')
-        if len(value.strip()) > 30:
-            raise ValueError('key_name_prefix exceeds the key-name limit')
-        return value.strip()
-    if key == 'referral_attribution_window_hours':
-        normalized = value.strip()
-        if not normalized.isascii() or not normalized.isdecimal():
-            raise ValueError(
-                'referral_attribution_window_hours must be a whole number '
-                'from 0 to 8760'
-            )
-        hours = int(normalized)
-        if hours > REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX:
-            raise ValueError(
-                'referral_attribution_window_hours must be a whole number '
-                'from 0 to 8760'
-            )
-        return str(hours)
-    if key == 'expired_key_panel_cleanup_delay_days':
-        normalized = value.strip()
-        if not normalized.isascii() or not normalized.isdecimal():
-            raise ValueError(
-                'expired_key_panel_cleanup_delay_days must be a whole number '
-                'from 0 to 36500'
-            )
-        days = int(normalized)
-        if days > EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX:
-            raise ValueError(
-                'expired_key_panel_cleanup_delay_days must be a whole number '
-                'from 0 to 36500'
-            )
-        return str(days)
-    return value
-
-
 def _apply_setting(args: dict[str, Any]) -> str:
     key = str(args.get('setting_key') or '').strip()
     if 'value' not in args:
@@ -773,7 +732,11 @@ def _apply_setting(args: dict[str, Any]) -> str:
     if before == value:
         return _unchanged('setting.set', {'setting_key': key, 'value': before})
     backup_path = create_bot_database_backup()
-    set_setting(key, value)
+    if key.startswith('web_ui_'):
+        from core.web_ui import set_presentation_setting
+        set_presentation_setting(key.removeprefix('web_ui_'), value)
+    else:
+        set_setting(key, value)
     read_back = get_setting(key)
     if read_back != value:
         raise RuntimeError('setting read-back mismatch')

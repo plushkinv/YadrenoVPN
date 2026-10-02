@@ -1,0 +1,110 @@
+@layer base, preset, admin, custom;
+
+/* Shared semantic tokens. Later customization can override the narrow UI layer. */
+@layer base {
+  .app {
+    --font: 'Manrope Variable', system-ui, sans-serif;
+    --radius: 22px;
+    --radius-small: 13px;
+    --button-radius: 12px;
+    --canvas: #f5f7f6;
+    --surface: #ffffff;
+    --surface-soft: #f7f9f8;
+    --text: #162a23;
+    --muted: #607068;
+    --line: #e2e9e5;
+    --accent: #126449;
+    --accent-hover: #0c503a;
+    --on-accent: #ffffff;
+    --tint: #e8f3ed;
+    --hero: #edf7f0;
+    --warning: #8c5208;
+    --warning-tint: #fff1da;
+    --shadow: 0 6px 28px rgb(23 49 35 / 3%);
+    --focus: #246dbd;
+    color-scheme: light;
+  }
+  .app[data-theme='dark'] {
+    --canvas: #101a17;
+    --surface: #192620;
+    --surface-soft: #1f2e27;
+    --text: #eaf2ed;
+    --muted: #a9b9af;
+    --line: #32453b;
+    --accent: #94dfb7;
+    --accent-hover: #b2edcc;
+    --on-accent: #103b28;
+    --tint: #243e30;
+    --hero: #20382b;
+    --warning: #f2c684;
+    --warning-tint: #403322;
+    --shadow: none;
+    --focus: #9bc8ff;
+    color-scheme: dark;
+  }
+}
+
+@layer preset {
+  .app[data-preset='signal'] {
+    --radius: 14px;
+    --radius-small: 8px;
+    --button-radius: 8px;
+    --canvas: #f0f3fa;
+    --surface: #ffffff;
+    --surface-soft: #f4f6fc;
+    --text: #172746;
+    --muted: #586b89;
+    --line: #dce3ef;
+    --accent: #264fc1;
+    --accent-hover: #1d3c97;
+    --on-accent: #ffffff;
+    --tint: #e8edff;
+    --hero: #eef2ff;
+    --shadow: 0 4px 20px rgb(24 44 99 / 3%);
+  }
+  .app[data-preset='signal'][data-theme='dark'] {
+    --canvas: #0d1320;
+    --surface: #141e30;
+    --surface-soft: #1a273d;
+    --text: #eef3ff;
+    --muted: #a4b3cf;
+    --line: #2b3b57;
+    --accent: #a7c0ff;
+    --accent-hover: #c4d4ff;
+    --on-accent: #102a67;
+    --tint: #263657;
+    --hero: #1a2c4b;
+    --shadow: none;
+  }
+  .app[data-preset='friendly'] {
+    --radius: 29px;
+    --radius-small: 18px;
+    --button-radius: 24px;
+    --canvas: #faf5f0;
+    --surface: #fffdfa;
+    --surface-soft: #faf4ed;
+    --text: #3c2b26;
+    --muted: #7b635b;
+    --line: #eaded4;
+    --accent: #a43e29;
+    --accent-hover: #843321;
+    --on-accent: #fffaf6;
+    --tint: #f9e6dc;
+    --hero: #fbeddf;
+    --shadow: 0 6px 28px rgb(76 42 20 / 3%);
+  }
+  .app[data-preset='friendly'][data-theme='dark'] {
+    --canvas: #211917;
+    --surface: #302321;
+    --surface-soft: #392a25;
+    --text: #fff0e7;
+    --muted: #ceb1a7;
+    --line: #51403a;
+    --accent: #ffbba3;
+    --accent-hover: #ffd5c5;
+    --on-accent: #632718;
+    --tint: #52382e;
+    --hero: #443026;
+    --shadow: none;
+  }
+}

@@ -14,7 +14,7 @@ def pagination(limit=50, offset=0):
 
 async def summary(account, key_id):
     from bot.utils.action_policy import run_account_action_policies
-    from bot.utils.panel_version import panel_version_at_least
+    from bot.utils.panel_version import CLIENT_HWID_LIMITS_MIN_VERSION, panel_version_at_least
     from bot.services.order_terms import key_servers
     key = owned_key(account, positive_id(key_id, 'key_id'))
     configured = bool(key.get('server_id') and key.get('sub_id') and key.get('panel_email'))
@@ -56,7 +56,7 @@ async def summary(account, key_id):
                         'known': key.get('traffic_updated_at') is not None, 'updated_at': key.get('traffic_updated_at'),
                         'source': 'panel' if key.get('traffic_updated_at') is not None else 'unknown'},
             'devices_available': configured and db.get_device_limit_mode() == db.DEVICE_LIMIT_MODE_HWID
-                                 and panel_version_at_least(key.get('panel_version'), '3.7.0'),
+                                 and panel_version_at_least(key.get('panel_version'), CLIENT_HWID_LIMITS_MIN_VERSION),
             'actions': actions, 'pending_operations': pending,
             'servers': [{'id': server['id'], 'name': server['name']} for server in key_servers(key)]}
 

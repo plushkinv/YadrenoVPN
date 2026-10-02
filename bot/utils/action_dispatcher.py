@@ -308,6 +308,11 @@ async def apply_extension_callback_result(
     visited: tuple[str, ...] = (),
 ) -> bool:
     """Apply one normalized extension callback result through trusted adapters."""
+    if 'input' in result:
+        from bot.utils.extension_input_runtime import apply_input_result
+
+        return await apply_input_result(target, dict(result), extension_id, state)
+
     if result.get('target') == 'core_action':
         next_origin = origin_context
         raw_origin = result.get('origin_context')

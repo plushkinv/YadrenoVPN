@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from aiohttp import web
 
 from runtime.readiness import is_active
-from web_api.settings import LOOPBACK_HOST, WebSettings, get_web_settings
+from web_api.settings import WebSettings, get_web_settings
 
 SETTINGS_KEY = web.AppKey('web_settings', WebSettings)
 
@@ -22,7 +22,7 @@ async def health(request: web.Request) -> web.Response:
     return web.json_response({'ready': ready}, status=200 if ready else 503)
 
 
-def create_app(settings: WebSettings | None = None) -> web.Application:
+def create_app(settings: WebSettings | None = None, *, ui_runtime=None) -> web.Application:
     from web_api.auth import add_routes, security_middleware
     app = web.Application(middlewares=[activation_middleware, security_middleware], client_max_size=64 * 1024)
     app[SETTINGS_KEY] = settings or get_web_settings()
@@ -30,6 +30,8 @@ def create_app(settings: WebSettings | None = None) -> web.Application:
     from web_api.schemas import openapi
     app.router.add_get('/api/v1/openapi.json', openapi)
     add_routes(app)
+    from web_api.phone_verification import add_routes as add_verification_routes
+    add_verification_routes(app)
     from web_api.account_links import add_routes as add_account_link_routes
     add_account_link_routes(app)
     from web_api.subscription_import import add_routes as add_import_routes
@@ -40,6 +42,12 @@ def create_app(settings: WebSettings | None = None) -> web.Application:
     add_module_routes(app)
     from web_api.user import add_routes as add_user_routes
     add_user_routes(app)
+    from web_api.ui import add_routes as add_ui_routes
+    add_ui_routes(app)
+    from web_api.editor import add_routes as add_editor_routes
+    add_editor_routes(app)
+    from web_api.ui_publications import add_routes as add_ui_publication_routes
+    add_ui_publication_routes(app, ui_runtime)
     return app
 
 
@@ -53,13 +61,16 @@ class WebServer:
 
 
 async def start_web_server() -> WebServer | None:
+    from runtime.application import get_web_setup_error
+    if get_web_setup_error():
+        return None
     settings = get_web_settings()
     if not settings.enabled:
         return None
     runner = web.AppRunner(create_app(settings))
     await runner.setup()
     try:
-        await web.TCPSite(runner, LOOPBACK_HOST, settings.port).start()
+        await web.TCPSite(runner, settings.host, settings.port).start()
     except BaseException:
         await runner.cleanup()
         raise

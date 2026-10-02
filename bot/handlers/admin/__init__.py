@@ -17,6 +17,7 @@ from bot.handlers.admin.users_keys import router as users_keys_router
 from bot.handlers.admin.key_plans import router as key_plans_router
 from bot.handlers.admin.users_keys_deleted import router as users_keys_deleted_router
 from bot.handlers.admin.system import router as system_router
+from bot.handlers.admin.backups import router as backups_router
 from bot.handlers.admin.trial import router as trial_router
 from bot.handlers.admin.referral import router as referral_router
 from bot.handlers.admin.promotions import router as promotions_router
@@ -47,6 +48,7 @@ admin_router.include_router(key_plans_router)
 admin_router.include_router(users_keys_router)
 admin_router.include_router(users_keys_deleted_router)
 admin_router.include_router(system_router)
+admin_router.include_router(backups_router)
 admin_router.include_router(trial_router)
 admin_router.include_router(referral_router)
 admin_router.include_router(promotions_router)

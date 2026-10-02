@@ -126,21 +126,25 @@ def _managed_keys(
     operation: str,
 ) -> List[Dict[str, Any]]:
     """Return only bot-owned key rows and report invalid ownership boundaries."""
+    from database.connection import request_connection_scope
     from database.requests import get_pending_panel_identity_ids
-    pending_ids = get_pending_panel_identity_ids()
-    managed: List[Dict[str, Any]] = []
-    for key in keys:
-        if key.get('id') in pending_ids:
-            continue
-        if is_managed_key(key):
-            managed.append(key)
-            continue
-        logger.warning(
-            "%s skipped key %s with unmanaged panel_email=%r",
-            operation,
-            key.get("id"),
-            key.get("panel_email"),
-        )
+
+    # Reuse connection setup, not ownership results or a transaction across the batch.
+    with request_connection_scope():
+        pending_ids = get_pending_panel_identity_ids()
+        managed: List[Dict[str, Any]] = []
+        for key in keys:
+            if key.get('id') in pending_ids:
+                continue
+            if is_managed_key(key):
+                managed.append(key)
+                continue
+            logger.warning(
+                "%s skipped key %s with unmanaged panel_email=%r",
+                operation,
+                key.get("id"),
+                key.get("panel_email"),
+            )
     return managed
 
 

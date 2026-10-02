@@ -8,6 +8,7 @@ from .custom_pages import router as custom_pages_router
 from .page_routes import router as page_routes_router
 from .extension_callbacks import router as extension_callbacks_router
 from .extension_commands import router as extension_commands_router
+from .extension_inputs import router as extension_inputs_router
 from .support import router as support_router
 from .promo import router as promo_router
 from .subscription_hosts import router as subscription_hosts_router
@@ -33,6 +34,7 @@ router.include_router(extension_callbacks_router)
 router.include_router(page_routes_router)
 router.include_router(start_router)
 router.include_router(extension_commands_router)
+router.include_router(extension_inputs_router)
 router.include_router(custom_pages_router)
 router.include_router(subscription_hosts_router)
 router.include_router(keys_router)

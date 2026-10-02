@@ -77,7 +77,7 @@ def _collect_page_placeholder_names(page_data: Mapping[str, Any]) -> set[str]:
         label = button.get('label')
         if isinstance(label, str):
             sources.append(label)
-        if button.get('action_type') == 'url':
+        if button.get('action_type') in ('url', 'web_app'):
             action_value = button.get('action_value')
             if isinstance(action_value, str):
                 sources.append(action_value)
@@ -242,6 +242,10 @@ def enrich_page_placeholder_context_sync(
     enriched: dict[str, Any] = _normalize_context(context)
     placeholders = _collect_page_placeholder_names(page_data)
     explicit = _normalize_placeholders(text_replacements)
+
+    if '%web_app_url%' in placeholders - explicit:
+        from bot.utils.web_app_buttons import public_web_app_url
+        enriched.setdefault('web_app_url', public_web_app_url())
 
     if (TARIFF_PLACEHOLDERS & placeholders) - explicit and 'tariffs_html' not in enriched:
         enriched['tariffs_html'] = build_tariff_text()

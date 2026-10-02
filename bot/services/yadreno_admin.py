@@ -21,6 +21,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
+from bot.services.yadreno_admin_broadcast_context import (
+    BroadcastRuntimeContextError,
+    build_broadcast_runtime_context,
+    load_broadcast_bot_identity,
+)
 from bot.services.yadreno_admin_core_guard import (
     finalize_core_guard,
     finalize_core_guards_for_request,
@@ -43,6 +48,9 @@ from bot.services.satellite_lane import (
     SatelliteLaneCycle,
     satellite_lane_controller,
 )
+from bot.services.yadreno_admin_web_binding import WebEditorBinding, WEB_TOPIC_ID, WEB_LANE_ACTOR
+from bot.services.temporary_files import attachment_sources
+from core.results import CoreError
 from bot.version import BOT_COMMIT, BOT_RELEASE
 from config import RETRY_CONFIG
 from database.requests import (
@@ -80,6 +88,7 @@ YADRENO_ADMIN_CHAT_TOPIC_ID = 0
 YADRENO_ADMIN_YAA_TOPIC_ID = 1001
 YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID = 1002
 YADRENO_ADMIN_BROADCAST_TOPIC_ID = 1003
+YADRENO_ADMIN_WEB_TOPIC_ID = WEB_TOPIC_ID
 YADRENO_ADMIN_DEFAULT_SKILL_ID = "yadreno_vpn"
 YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID = "yadreno_vpn_customization"
 YADRENO_ADMIN_BROADCAST_SKILL_ID = "yadreno_vpn_broadcast"
@@ -89,6 +98,7 @@ BROADCAST_EDITOR_CAPABILITY = "broadcast_editor_v1"
 RICH_MESSAGES_CAPABILITY = "rich_messages_v1"
 RUNTIME_CONTEXT_CAPABILITY = "runtime_context_v1"
 CUSTOMIZATION_TOOLS_CAPABILITY = "customization_tools_v2"
+CUSTOMIZATION_TOOLS_V3_CAPABILITY = "customization_tools_v3"
 YADRENO_ADMIN_TELEGRAM_HTML_TASK_FORMAT = "telegram_html"
 SATELLITE_PROTOCOL_VERSION = "v1"
 SATELLITE_CAPABILITIES: tuple[str, ...] = (
@@ -209,6 +219,7 @@ def is_yadreno_admin_customization_topic(topic_id: int) -> bool:
     return int(topic_id) in {
         YADRENO_ADMIN_YAA_TOPIC_ID,
         YADRENO_ADMIN_CUSTOMIZATION_TOPIC_ID,
+        YADRENO_ADMIN_WEB_TOPIC_ID,
     }
 
 
@@ -216,7 +227,10 @@ def yadreno_admin_message_storage_format(
     topic_id: int,
 ) -> Literal["html", "plain"]:
     """Return the Telegram message representation sent to the Hub."""
-    return "html" if is_yadreno_admin_customization_topic(topic_id) else "plain"
+    return "html" if (
+        (is_yadreno_admin_customization_topic(topic_id) and topic_id != YADRENO_ADMIN_WEB_TOPIC_ID)
+        or is_yadreno_admin_broadcast_topic(topic_id)
+    ) else "plain"
 
 
 def yadreno_admin_task_format_for_topic(topic_id: int) -> str | None:
@@ -236,16 +250,17 @@ def _capabilities_for_skill(
     *,
     runtime_context_supported: bool = False,
     customization_tools_supported: bool = False,
+    customization_tools_v3_supported: bool = False,
 ) -> list[str]:
     """Advertise optional capabilities only inside their isolated skills."""
     capabilities = list(SATELLITE_CAPABILITIES)
     if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
         capabilities.append(BROADCAST_EDITOR_CAPABILITY)
-    elif runtime_context_supported:
+    if runtime_context_supported:
         capabilities.append(RUNTIME_CONTEXT_CAPABILITY)
         if (
             skill_id == YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID
-            and customization_tools_supported
+            and (customization_tools_supported or customization_tools_v3_supported)
             and CUSTOMIZATION_TOOL_NAMES
             == {
                 'satellite_customization_inspect',
@@ -253,7 +268,10 @@ def _capabilities_for_skill(
                 'satellite_customization_replace',
             }
         ):
-            capabilities.append(CUSTOMIZATION_TOOLS_CAPABILITY)
+            capabilities.append(
+                CUSTOMIZATION_TOOLS_V3_CAPABILITY if customization_tools_v3_supported
+                else CUSTOMIZATION_TOOLS_CAPABILITY
+            )
     return capabilities
 
 
@@ -263,6 +281,8 @@ def yadreno_admin_skill_id_for_topic(
 ) -> str:
     """Resolve the skill id sent to the hub for a local Yadreno Admin lane."""
     requested = (requested_skill_id or "").strip()
+    if topic_id == YADRENO_ADMIN_WEB_TOPIC_ID:
+        return YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID
     if is_yadreno_admin_broadcast_topic(topic_id):
         return YADRENO_ADMIN_BROADCAST_SKILL_ID
     if requested in {
@@ -338,8 +358,36 @@ def _runtime_context_factory_for_turn(
     topic_id: int,
     extra_context: Optional[dict[str, Any]],
     page_binding: YaaPageBinding | None = None,
+    *,
+    bot_identity: dict[str, str | None] | None = None,
+    web_binding: WebEditorBinding | None = None,
+    api_key: str | None = None,
 ) -> Callable[[], dict[str, Any]]:
-    """Return a builder that prefers the active pinned /yaa page snapshot."""
+    """Bind the current lane's canonical snapshot builder to this request."""
+    if topic_id == YADRENO_ADMIN_WEB_TOPIC_ID:
+        if (telegram_id != WEB_LANE_ACTOR or not isinstance(web_binding, WebEditorBinding)
+                or web_binding.project_root != PROJECT_ROOT.resolve() or not api_key):
+            raise YadrenoAdminError('Web editor requires an authenticated local task binding', kind='configuration')
+
+        def build_web() -> dict[str, Any]:
+            return build_agent_runtime_context(web_binding.runtime_context(api_key))
+
+        return build_web
+    if web_binding is not None and not is_yadreno_admin_customization_topic(topic_id):
+        raise YadrenoAdminError('Web task binding requires the customization skill', kind='configuration')
+
+    def with_web(factory):
+        def build():
+            context = factory()
+            if web_binding is not None:
+                context.update(web_binding.runtime_context(api_key))
+            return context
+        return build
+    if is_yadreno_admin_broadcast_topic(topic_id):
+        def build_broadcast() -> dict[str, Any]:
+            return build_broadcast_runtime_context(telegram_id, bot_identity)
+
+        return build_broadcast
     task_format = yadreno_admin_task_format_for_topic(topic_id)
     binding = page_binding or get_yaa_page_binding(telegram_id, topic_id)
     if topic_id == YADRENO_ADMIN_YAA_TOPIC_ID and binding is not None:
@@ -350,7 +398,7 @@ def _runtime_context_factory_for_turn(
                 task_format=task_format,
             )
 
-        return build_bound
+        return with_web(build_bound)
 
     def build_unbound() -> dict[str, Any]:
         if is_yadreno_admin_customization_topic(topic_id):
@@ -360,7 +408,7 @@ def _runtime_context_factory_for_turn(
             task_format=task_format,
         )
 
-    return build_unbound
+    return with_web(build_unbound)
 
 
 def _build_runtime_context_or_error(
@@ -374,6 +422,14 @@ def _build_runtime_context_or_error(
             f"Failed to build active /yaa page context: {exc}",
             user_message=(
                 "Не удалось заново собрать контекст закреплённой страницы. "
+                "Запрос агенту не отправлен; попробуйте ещё раз."
+            ),
+        ) from exc
+    except BroadcastRuntimeContextError as exc:
+        raise YadrenoAdminError(
+            "Failed to build broadcast editor context",
+            user_message=(
+                "Не удалось прочитать состояние редактора рассылки. "
                 "Запрос агенту не отправлен; попробуйте ещё раз."
             ),
         ) from exc
@@ -651,6 +707,15 @@ def _clear_last_request(
         topic_id,
         expected_request_id=expected_request_id,
     )
+
+
+def _bind_web_request(telegram_id, topic_id, request_id, binding, api_key):
+    """Keep per-admin recovery controls and one draft continuation per Hub topic."""
+    # Retain the accepted ID even if saving its local binding fails.
+    _remember_request(telegram_id, topic_id, request_id, active=True)
+    binding.bind_request(request_id, api_key)
+    if topic_id != YADRENO_ADMIN_WEB_TOPIC_ID:
+        set_yadreno_admin_last_request_id(WEB_LANE_ACTOR, topic_id, request_id)
 
 
 def _signal_poll_stop(
@@ -1165,10 +1230,10 @@ async def _ensure_broadcast_hub_support(
     session: aiohttp.ClientSession,
     api_key: str,
     skill_id: str,
-) -> None:
+) -> set[str]:
     """Negotiate the broadcast capability before any agent request starts."""
     if skill_id != YADRENO_ADMIN_BROADCAST_SKILL_ID:
-        return
+        return set()
     try:
         _, data = await _request_json(
             session,
@@ -1196,8 +1261,13 @@ async def _ensure_broadcast_hub_support(
         raise _incompatible_broadcast_hub("wrong satellite_type")
     if not isinstance(capabilities, list) or BROADCAST_EDITOR_CAPABILITY not in capabilities:
         raise _incompatible_broadcast_hub("broadcast_editor_v1 is absent")
+    if RUNTIME_CONTEXT_CAPABILITY not in capabilities:
+        raise _incompatible_broadcast_hub("runtime_context_v1 is absent")
+    if data.get("protocol_version") != SATELLITE_PROTOCOL_VERSION:
+        raise _incompatible_broadcast_hub("protocol version mismatch")
     if not isinstance(allowed_skills, list) or skill_id not in allowed_skills:
         raise _incompatible_broadcast_hub("broadcast skill is not allowed")
+    return {item for item in capabilities if isinstance(item, str)}
 
 
 async def _negotiate_runtime_context_support(
@@ -1212,8 +1282,10 @@ async def _negotiate_runtime_context_support(
     Only the ordinary lane may degrade to the legacy text prefix.
     """
     if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
-        await _ensure_broadcast_hub_support(session, api_key, skill_id)
-        return False
+        capabilities = await _ensure_broadcast_hub_support(session, api_key, skill_id)
+        if negotiated_capabilities is not None:
+            negotiated_capabilities.update(capabilities)
+        return True
     try:
         _, data = await _request_json(
             session,
@@ -1326,6 +1398,7 @@ async def _request_multipart(
     fields: dict[str, Any],
     uploads: list[YadrenoAdminUpload],
     file_field: str,
+    voice_upload: YadrenoAdminUpload | None = None,
 ) -> tuple[int, Optional[dict]]:
     """Makes a multipart request to the upload API of the hub with retry."""
     headers = _hub_headers(api_key)
@@ -1341,11 +1414,11 @@ async def _request_multipart(
             for key, value in fields.items():
                 if value is not None:
                     form.add_field(key, str(value))
-            for upload in uploads:
+            for upload in [*uploads, *([voice_upload] if voice_upload is not None else [])]:
                 handle = upload.path.open("rb")
                 handles.append(handle)
                 form.add_field(
-                    file_field,
+                    'voice' if upload is voice_upload else file_field,
                     handle,
                     filename=upload.filename,
                     content_type=upload.content_type or "application/octet-stream",
@@ -1792,6 +1865,8 @@ async def _run_tool_call(
     *,
     topic_id: int = YADRENO_ADMIN_CHAT_TOPIC_ID,
     telegram_id: int = 0,
+    web_binding: WebEditorBinding | None = None,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """Executes one tool_call of the hub."""
     tool = str(event.get("tool") or "")
@@ -1831,13 +1906,27 @@ async def _run_tool_call(
         result = {
             "result": "",
             "error": (
-                f"{tool} is allowed only in customization topics 1001 and 1002"
+                f"{tool} is allowed only in customization topics 1001, 1002 and 1004"
             ),
         }
         _log_tool_audit(event, result)
         return result
 
     runtime = _runtime_context_from_event(event, topic_id=topic_id)
+    if topic_id == YADRENO_ADMIN_WEB_TOPIC_ID or web_binding is not None:
+        try:
+            if runtime is None or not isinstance(web_binding, WebEditorBinding) or not api_key:
+                raise ValueError('missing Web binding')
+            restored = WebEditorBinding.for_request(PROJECT_ROOT, runtime.request_id, api_key)
+            if (restored.task_id != web_binding.task_id
+                    or (topic_id == YADRENO_ADMIN_WEB_TOPIC_ID and telegram_id != WEB_LANE_ACTOR)
+                    or (topic_id != YADRENO_ADMIN_WEB_TOPIC_ID
+                        and restored.authority(api_key)['telegram_id'] != telegram_id)):
+                raise ValueError('Web request binding mismatch')
+        except (ValueError, OSError, CoreError):
+            result = {'result': '', 'error': 'Web editor task authorization is unavailable'}
+            _log_tool_audit(event, result)
+            return result
 
     async def execute_tool() -> dict[str, Any]:
         if _is_deferred_self_restart(tool, args):
@@ -1860,6 +1949,13 @@ async def _run_tool_call(
         if tool in CUSTOMIZATION_TOOL_NAMES:
             if not isinstance(args, dict):
                 return {"result": "", "error": "invalid customization tool arguments"}
+            from bot.services.yadreno_admin_web_tools import is_web_operation, run_web_customization_tool
+            if is_web_operation(tool, args):
+                if web_binding is None or not api_key:
+                    return {'result': '', 'error': 'Web operations require an admitted Web editor task'}
+                return {'result': await run_web_customization_tool(
+                    tool, args, web_binding, api_key,
+                ), 'error': None}
             return {
                 "result": await asyncio.to_thread(
                     execute_customization_tool,
@@ -1998,6 +2094,7 @@ async def _poll_until_final(
     runtime_context_supported: bool = False,
     runtime_context_factory: Callable[[], dict[str, Any]] | None = None,
     accepted_callback: Callable[[], Awaitable[None]] | None = None,
+    web_binding: WebEditorBinding | None = None,
 ) -> YadrenoAdminFinal:
     """Single poll/tool/final loop for text and upload requests."""
     _remember_request(telegram_id, topic_id, request_id, active=True)
@@ -2072,7 +2169,12 @@ async def _poll_until_final(
                     _remember_tool_runtime(runtime)
                 try:
                     if tool_started_here:
-                        if is_yadreno_admin_broadcast_topic(topic_id):
+                        if is_yadreno_admin_customization_topic(topic_id) and web_binding is not None:
+                            tool_result = await _run_tool_call(
+                                event, topic_id=topic_id, telegram_id=telegram_id,
+                                web_binding=web_binding, api_key=api_key,
+                            )
+                        elif is_yadreno_admin_broadcast_topic(topic_id):
                             tool_result = await _run_tool_call(
                                 event,
                                 topic_id=topic_id,
@@ -2094,7 +2196,7 @@ async def _poll_until_final(
                             tool_result_payload["runtime_context"] = (
                                 runtime_context_factory()
                             )
-                        except YaaPageBindingContextError as exc:
+                        except (YaaPageBindingContextError, BroadcastRuntimeContextError) as exc:
                             logger.warning(
                                 "Omitting post-tool runtime_context for request %s "
                                 "tool_call %s: %s",
@@ -2155,6 +2257,7 @@ async def run_dialog(
     progress_callback: Optional[ProgressCallback] = None,
     page_binding: YaaPageBinding | None = None,
     accepted_callback: Callable[[], Awaitable[None]] | None = None,
+    web_binding: WebEditorBinding | None = None,
 ) -> YadrenoAdminFinal:
     """
     Performs a full cycle of dialogue with the Yadreno Admin agent.
@@ -2163,8 +2266,12 @@ async def run_dialog(
     Local polling ownership is acquired only after acceptance.
     """
     key = _lane_key(telegram_id, topic_id)
-    runtime_context_factory = _runtime_context_factory_for_turn(
-        telegram_id, topic_id, runtime_context, page_binding,
+    runtime_context_factory = (
+        None if is_yadreno_admin_broadcast_topic(topic_id)
+        else _runtime_context_factory_for_turn(
+            telegram_id, topic_id, runtime_context, page_binding,
+            web_binding=web_binding, api_key=api_key,
+        )
     )
     timeout = aiohttp.ClientTimeout(total=70)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -2176,19 +2283,32 @@ async def run_dialog(
             effective_skill_id,
             negotiated_capabilities,
         )
+        if topic_id == YADRENO_ADMIN_WEB_TOPIC_ID and (
+            not runtime_context_supported or CUSTOMIZATION_TOOLS_V3_CAPABILITY not in negotiated_capabilities
+        ):
+            raise _incompatible_customization_hub('Web editor requires customization_tools_v3')
+        if (web_binding is None and is_yadreno_admin_customization_topic(topic_id)
+                and topic_id != YADRENO_ADMIN_WEB_TOPIC_ID
+                and CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities):
+            web_binding = WebEditorBinding.defer(
+                PROJECT_ROOT, telegram_id, api_key,
+                previous_request_id=get_yadreno_admin_last_request_id(WEB_LANE_ACTOR, topic_id),
+            )
+            runtime_context_factory = _runtime_context_factory_for_turn(
+                telegram_id, topic_id, runtime_context, page_binding,
+                web_binding=web_binding, api_key=api_key,
+            )
+        if runtime_context_factory is None:
+            runtime_context_factory = _runtime_context_factory_for_turn(
+                telegram_id, topic_id, runtime_context, page_binding,
+                bot_identity=await load_broadcast_bot_identity(),
+            )
         server_ip = await _get_server_ip(session)
         core_changes_allowed = _core_policy_for_skill(effective_skill_id)
-        agent_runtime_context = (
-            None
-            if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-            else _build_runtime_context_or_error(runtime_context_factory)
-        )
+        agent_runtime_context = _build_runtime_context_or_error(runtime_context_factory)
         agent_message = (
             message
-            if (
-                effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-                or runtime_context_supported
-            )
+            if runtime_context_supported
             else _with_agent_runtime_context(
                 message,
                 agent_runtime_context or {},
@@ -2204,6 +2324,9 @@ async def run_dialog(
                 runtime_context_supported=runtime_context_supported,
                 customization_tools_supported=(
                     CUSTOMIZATION_TOOLS_CAPABILITY in negotiated_capabilities
+                ),
+                customization_tools_v3_supported=(
+                    CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities
                 ),
             ),
         }
@@ -2229,6 +2352,8 @@ async def run_dialog(
         _raise_for_hub_rejection(process_data, "process request")
 
         request_id = _accepted_request_id(process_data, "process request")
+        if web_binding is not None:
+            _bind_web_request(telegram_id, topic_id, request_id, web_binding, api_key)
         async with satellite_lane_controller.cycle(key, request_id) as cycle:
             if cycle is None:
                 raise YadrenoAdminError("Hub returned an already polled request", kind="protocol")
@@ -2245,13 +2370,10 @@ async def run_dialog(
                 server_ip=server_ip,
                 progress_callback=progress_callback,
                 runtime_context_supported=runtime_context_supported,
-                runtime_context_factory=(
-                    runtime_context_factory
-                    if effective_skill_id != YADRENO_ADMIN_BROADCAST_SKILL_ID
-                    else None
-                ),
+                runtime_context_factory=runtime_context_factory,
                 cycle=cycle,
                 **({"accepted_callback": accepted_callback} if accepted_callback else {}),
+                **({"web_binding": web_binding} if web_binding is not None else {}),
             )
 
 
@@ -2268,6 +2390,7 @@ async def run_dialog_with_uploads(
     page_binding: YaaPageBinding | None = None,
     overflow_count: int = 0,
     accepted_callback: Callable[[], Awaitable[None]] | None = None,
+    web_binding: WebEditorBinding | None = None,
 ) -> YadrenoAdminFinal:
     """Sends files to Yadreno Admin and waits for the final response from the agent."""
     if not uploads:
@@ -2280,12 +2403,17 @@ async def run_dialog_with_uploads(
             runtime_context=runtime_context,
             progress_callback=progress_callback,
             page_binding=page_binding,
+            **({"web_binding": web_binding} if web_binding is not None else {}),
             **({"accepted_callback": accepted_callback} if accepted_callback else {}),
         )
 
     key = _lane_key(telegram_id, topic_id)
-    runtime_context_factory = _runtime_context_factory_for_turn(
-        telegram_id, topic_id, runtime_context, page_binding,
+    runtime_context_factory = (
+        None if is_yadreno_admin_broadcast_topic(topic_id)
+        else _runtime_context_factory_for_turn(
+            telegram_id, topic_id, runtime_context, page_binding,
+            web_binding=web_binding, api_key=api_key,
+        )
     )
     timeout = aiohttp.ClientTimeout(total=70)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -2297,25 +2425,45 @@ async def run_dialog_with_uploads(
             effective_skill_id,
             negotiated_capabilities,
         )
+        if topic_id == YADRENO_ADMIN_WEB_TOPIC_ID and (
+            not runtime_context_supported or CUSTOMIZATION_TOOLS_V3_CAPABILITY not in negotiated_capabilities
+        ):
+            raise _incompatible_customization_hub('Web editor requires customization_tools_v3')
+        if (web_binding is None and is_yadreno_admin_customization_topic(topic_id)
+                and topic_id != YADRENO_ADMIN_WEB_TOPIC_ID
+                and CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities):
+            web_binding = WebEditorBinding.defer(
+                PROJECT_ROOT, telegram_id, api_key,
+                previous_request_id=get_yadreno_admin_last_request_id(WEB_LANE_ACTOR, topic_id),
+            )
+            runtime_context_factory = _runtime_context_factory_for_turn(
+                telegram_id, topic_id, runtime_context, page_binding,
+                web_binding=web_binding, api_key=api_key,
+            )
+        if runtime_context_factory is None:
+            runtime_context_factory = _runtime_context_factory_for_turn(
+                telegram_id, topic_id, runtime_context, page_binding,
+                bot_identity=await load_broadcast_bot_identity(),
+            )
         server_ip = await _get_server_ip(session)
         core_changes_allowed = _core_policy_for_skill(effective_skill_id)
-        agent_runtime_context = (
-            None
-            if effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-            else _build_runtime_context_or_error(runtime_context_factory)
-        )
+        agent_runtime_context = _build_runtime_context_or_error(runtime_context_factory)
         agent_message = (
             message
-            if (
-                effective_skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID
-                or runtime_context_supported
-            )
+            if runtime_context_supported
             else _with_agent_runtime_context(
                 message,
                 agent_runtime_context or {},
             )
         )
         is_batch = len(uploads) > 1
+        voice_upload = None
+        if is_batch and topic_id == YADRENO_ADMIN_WEB_TOPIC_ID:
+            voices = [upload for upload in uploads if upload.audio_kind == 'voice']
+            if len(voices) > 1:
+                raise YadrenoAdminError('Only one voice request is supported', kind='protocol')
+            if voices:
+                voice_upload = voices[0]
         path = (
             "/api/v1/satellite/upload_batch"
             if is_batch
@@ -2332,6 +2480,9 @@ async def run_dialog_with_uploads(
                 customization_tools_supported=(
                     CUSTOMIZATION_TOOLS_CAPABILITY in negotiated_capabilities
                 ),
+                customization_tools_v3_supported=(
+                    CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities
+                ),
             )),
         }
         if runtime_context_supported:
@@ -2344,6 +2495,10 @@ async def run_dialog_with_uploads(
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
+        ordered_uploads = [upload for upload in uploads if upload is not voice_upload]
+        if voice_upload is not None:
+            ordered_uploads.append(voice_upload)
+        fields['attachment_sources'] = json.dumps(attachment_sources(ordered_uploads), ensure_ascii=False)
         if core_changes_allowed is not None:
             fields["core_changes_allowed"] = "true" if core_changes_allowed else "false"
         if is_batch:
@@ -2357,8 +2512,9 @@ async def run_dialog_with_uploads(
             api_key,
             path,
             fields=fields,
-            uploads=uploads,
+            uploads=[upload for upload in uploads if upload is not voice_upload],
             file_field="files" if is_batch else "file",
+            **({'voice_upload': voice_upload} if voice_upload is not None else {}),
         )
         if not upload_data:
             raise YadrenoAdminError("Хаб вернул пустой ответ на upload")
@@ -2367,6 +2523,8 @@ async def run_dialog_with_uploads(
         _raise_for_hub_rejection(upload_data, "upload request")
 
         request_id = _accepted_request_id(upload_data, "upload request")
+        if web_binding is not None:
+            _bind_web_request(telegram_id, topic_id, request_id, web_binding, api_key)
         async with satellite_lane_controller.cycle(key, request_id) as cycle:
             if cycle is None:
                 raise YadrenoAdminError("Hub returned an already polled request", kind="protocol")
@@ -2383,13 +2541,10 @@ async def run_dialog_with_uploads(
                 server_ip=server_ip,
                 progress_callback=progress_callback,
                 runtime_context_supported=runtime_context_supported,
-                runtime_context_factory=(
-                    runtime_context_factory
-                    if effective_skill_id != YADRENO_ADMIN_BROADCAST_SKILL_ID
-                    else None
-                ),
+                runtime_context_factory=runtime_context_factory,
                 cycle=cycle,
                 **({"accepted_callback": accepted_callback} if accepted_callback else {}),
+                **({"web_binding": web_binding} if web_binding is not None else {}),
             )
 
 
@@ -2425,6 +2580,22 @@ async def resume_active_dialog(
                     hub_status.response_text
                     or "Hub не подтвердил живую задачу для восстановления polling."
                 )
+            runtime_context_factory = None
+            web_binding = None
+            if is_yadreno_admin_customization_topic(topic_id):
+                try:
+                    web_binding = WebEditorBinding.for_request(PROJECT_ROOT, request_id, api_key)
+                except FileNotFoundError:
+                    if topic_id == YADRENO_ADMIN_WEB_TOPIC_ID:
+                        raise
+                runtime_context_factory = _runtime_context_factory_for_turn(
+                    telegram_id, topic_id, None, web_binding=web_binding, api_key=api_key,
+                )
+            if is_yadreno_admin_broadcast_topic(topic_id):
+                runtime_context_factory = _runtime_context_factory_for_turn(
+                    telegram_id, topic_id, None,
+                    bot_identity=await load_broadcast_bot_identity(),
+                )
             return await _poll_until_final(
                 session,
                 api_key,
@@ -2437,7 +2608,10 @@ async def resume_active_dialog(
                     "cancel_button_text": hub_status.cancel_button_text,
                 },
                 progress_callback=progress_callback,
+                runtime_context_supported=runtime_context_factory is not None,
+                runtime_context_factory=runtime_context_factory,
                 cycle=cycle,
+                **({'web_binding': web_binding} if web_binding is not None else {}),
             )
 
 
@@ -2663,6 +2837,9 @@ async def start_new_chat(
         )
         previous_active = get_active_request_id(telegram_id, topic_id)
         previous_last = get_last_request_id(telegram_id, topic_id)
+        shared_draft = (get_yadreno_admin_last_request_id(WEB_LANE_ACTOR, topic_id)
+                        if is_yadreno_admin_customization_topic(topic_id)
+                        and topic_id != YADRENO_ADMIN_WEB_TOPIC_ID else None)
         payload: dict[str, Any] = {
             "topic_id": topic_id,
             "skill_id": effective_skill_id,
@@ -2693,6 +2870,8 @@ async def start_new_chat(
             _clear_active_request(telegram_id, topic_id, expected_request_id=previous_active)
         if previous_last is not None:
             _clear_last_request(telegram_id, topic_id, expected_request_id=previous_last)
+        if shared_draft is not None:
+            clear_yadreno_admin_last_request_id(WEB_LANE_ACTOR, topic_id, expected_request_id=shared_draft)
     return result
 
 
@@ -2824,7 +3003,8 @@ async def _recover_one_active_dialog_on_startup(
             request_id=request_id,
         )
         if hub_status is None or not hub_status.resume_allowed:
-            if hub_status is not None and hub_status.status == "idle":
+            if (topic_id != YADRENO_ADMIN_WEB_TOPIC_ID
+                    and hub_status is not None and hub_status.status == "idle"):
                 latest = await fetch_latest_dialog_event(
                     telegram_id,
                     api_key,
@@ -2856,7 +3036,7 @@ async def _recover_one_active_dialog_on_startup(
             topic_id=topic_id,
             progress_callback=None,
         )
-        if final is None:
+        if final is None or topic_id == YADRENO_ADMIN_WEB_TOPIC_ID:
             return
         await send_yadreno_admin_final(
             bot,
@@ -2897,6 +3077,7 @@ async def recover_active_dialogs_on_startup(bot: Any) -> None:
         for telegram_id in sorted({
             int(item["telegram_id"])
             for item in active_requests
+            if int(item['topic_id']) != YADRENO_ADMIN_WEB_TOPIC_ID
         }):
             try:
                 await bot.send_message(

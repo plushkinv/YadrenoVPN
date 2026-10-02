@@ -13,8 +13,17 @@ AGENTS.md
 .agents/
 tmp/
 custom_extensions/
+/custom_web/
+/web_runtime/
 **/__pycache__/
 .vscode
+
+# Frontend sources and the reviewed base bundle are product files; local builds are not.
+node_modules/
+/web/dist/
+*.tsbuildinfo
+/web/prebuilt/*
+!/web/prebuilt/base-ui.zip
 
 # База данных (создаётся автоматически при запуске)
 database/vpn_bot.db

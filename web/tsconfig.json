@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "paths": { "@ui/*": ["./src/*"], "react": ["./node_modules/@types/react"], "react/*": ["./node_modules/@types/react/*"], "react-dom/*": ["./node_modules/@types/react-dom/*"], "lucide-react": ["./node_modules/lucide-react"], "qrcode.react": ["./node_modules/qrcode.react"] }
+  },
+  "include": ["src", "../tests/web_core_ui/*.tsx", "../tests/web_core_ui/fixtures.ts"]
+}

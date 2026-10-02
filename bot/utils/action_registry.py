@@ -264,6 +264,16 @@ def _resolve_key_devices_back(ctx: dict) -> Optional[dict]:
 
 def _resolve_support_reply(ctx: dict) -> Optional[dict]:
     """Builds the user reply action for an existing support thread."""
+    return _resolve_support_thread_reply(ctx, 'support_reply')
+
+
+def _resolve_admin_support_reply(ctx: dict) -> Optional[dict]:
+    """Keep the administrator reply action bound to the displayed thread."""
+    return _resolve_support_thread_reply(ctx, 'admin_support_reply')
+
+
+def _resolve_support_thread_reply(ctx: dict, prefix: str) -> Optional[dict]:
+    """Resolve either existing reply route from the same validated thread id."""
     thread_id = ctx.get('support_thread_id')
     if isinstance(thread_id, bool) or not isinstance(thread_id, (int, str)):
         logger.warning("Invalid support_thread_id for system button: %r", thread_id)
@@ -274,7 +284,7 @@ def _resolve_support_reply(ctx: dict) -> Optional[dict]:
         logger.warning("Invalid support_thread_id for system button: %r", thread_id)
         return None
 
-    return {"callback_data": f"support_reply:{normalized}"}
+    return {"callback_data": f"{prefix}:{normalized}"}
 
 
 def _intent_order_id(ctx: dict) -> str | None:
@@ -411,6 +421,7 @@ SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_key_devices": _resolve_key_devices,
     "btn_key_devices_back": _resolve_key_devices_back,
     "btn_support_reply": _resolve_support_reply,
+    "btn_admin_support_reply": _resolve_admin_support_reply,
     "btn_intent_provider_crypto": lambda ctx: _resolve_intent_provider(ctx, "crypto"),
     "btn_intent_provider_cryptobot": lambda ctx: _resolve_intent_provider(ctx, "cryptobot"),
     "btn_intent_provider_stars": lambda ctx: _resolve_intent_provider(ctx, "stars"),

@@ -73,6 +73,12 @@ async def extension_command_handler(
     }
     result = await dispatch_extension_command(context, bot=message.bot)
 
+    if 'input' in result:
+        from bot.utils.extension_input_runtime import apply_input_result
+
+        await apply_input_result(message, result, extension_command['extension_id'], state)
+        return
+
     render_context = {
         'telegram_id': telegram_id,
         'extension_id': extension_command['extension_id'],

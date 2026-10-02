@@ -4,40 +4,45 @@ from database import requests as db
 
 
 def web_diagnostics(application=None):
-    from core.auth import public_auth_settings
+    from core.phone_verification_settings import admin_verification_settings
     from core.extensions.registry import inspect_modules
     from runtime.readiness import is_active
+    from runtime.application import get_web_setup_error
     from web_api.settings import get_web_settings
+    from web_tools.release_build import release_status
     try:
         settings = get_web_settings()
         configured, enabled, origin = bool(settings.public_origin), settings.enabled, settings.public_origin
-        error = None
+        error = get_web_setup_error()
     except ValueError:
         configured, enabled, origin, error = False, False, '', 'invalid_web_settings'
     return {'api_version': 1, 'core_active': is_active(), 'configured': configured,
             'enabled': enabled, 'public_origin': origin, 'error': error,
             'listener_running': application.web_server is not None if application else None,
-            'sms': {**public_auth_settings(), 'key_configured': bool(db.get_setting('web_sms_api_key', ''))},
-            'modules': inspect_modules()}
+            'verification': admin_verification_settings(),
+            'modules': inspect_modules(), 'ui': ui_publication_status(), 'ui_release': release_status()}
 
 
-def set_sms_option(name, value):
-    from runtime.readiness import require_active
-    require_active()
-    if name == 'api_key':
-        if not isinstance(value, str) or len(value) > 512 or any(char.isspace() for char in value):
-            raise CoreError('invalid_request')
-        if not value and db.get_setting('web_sms_enabled', '0') == '1':
-            raise CoreError('sms_enabled')
-    elif name in ('enabled', 'registration_required') and type(value) is bool:
-        if value and not db.get_setting('web_sms_api_key', ''):
-            raise CoreError('sms_not_configured')
-        if name == 'registration_required' and value and db.get_setting('web_sms_enabled', '0') != '1':
-            raise CoreError('sms_not_configured')
-        value = '1' if value else '0'
-    else:
-        raise CoreError('invalid_request')
-    db.set_setting('web_sms_' + name, value)
+def ui_publication_status():
+    """Read-only presentation status; no signing material or build operations."""
+    from web_tools.compatibility import current_capabilities
+    from web_tools.paths import PROJECT_ROOT
+    from web_tools.publication import read_pointer
+    from web_tools.release import publication
+    runtime = PROJECT_ROOT / 'web_runtime'
+    try:
+        build_id = read_pointer(runtime)['current']
+        if not build_id:
+            return {'state': 'not_published'}
+        signed, _, _ = publication(runtime, build_id, current_capabilities())
+        manifest = signed['manifest']
+        result = {'state': 'ready', 'build_id': manifest['build_id'], 'customization_version': manifest['customization_version']}
+        from runtime.application import get_ui_bootstrap_error
+        if get_ui_bootstrap_error():
+            result['warning'] = 'ui_bootstrap_failed'
+        return result
+    except (OSError, ValueError, KeyError, TypeError):
+        return {'state': 'unavailable'}
 
 
 def set_module_enabled(module_id, enabled):

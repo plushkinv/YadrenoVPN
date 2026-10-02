@@ -1,0 +1,33 @@
+{
+  "name": "yadreno-web-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "simulator": "vite --config vite.simulator.config.ts --open /simulator.html",
+    "build:simulator": "tsc --noEmit && vite build --config vite.simulator.config.ts",
+    "dev": "vite --config vite.app.config.ts",
+    "build": "tsc --noEmit && vite build --config vite.app.config.ts",
+    "prototype": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "build:prototype": "tsc --noEmit && vite build",
+    "preview:prototype": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
+    "test:prototype": "node ../tests/web_core_ui/qa.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/manrope": "5.3.0",
+    "lucide-react": "1.47.0",
+    "qrcode.react": "4.2.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}

@@ -1,0 +1,10 @@
+server {
+@HTTP_LISTEN@
+    server_name @DOMAIN@;
+    location ^~ /.well-known/acme-challenge/ {
+        root @ACME_ROOT@;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+    location / { return 404; }
+}

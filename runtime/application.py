@@ -11,6 +11,56 @@ from runtime import readiness
 from runtime.ownership import RuntimeOwner
 
 logger = logging.getLogger(__name__)
+_ui_bootstrap_error = None
+_web_setup_error = None
+
+
+def get_ui_bootstrap_error():
+    """A bounded private diagnostic, without local paths or exception contents."""
+    return _ui_bootstrap_error
+
+
+def get_web_setup_error():
+    return _web_setup_error
+
+
+def prepare_web_setup(*, root=None, finish_verified=False):
+    """An invalid optional setup journal closes only the new web ingress."""
+    global _web_setup_error
+    from core.results import CoreError
+    from web_api.setup_apply import finish_verified_setup, recover_interrupted_setup
+    from web_api.setup_options import SetupError
+    operation = finish_verified_setup if finish_verified else recover_interrupted_setup
+    arguments = {'root': root} if root is not None else {}
+    try:
+        completed = operation(startup=True, **arguments)
+    except (SetupError, CoreError, ValueError, OSError, KeyError, TypeError) as exc:
+        _web_setup_error = 'web_setup_recovery_failed'
+        logger.warning('Optional web setup recovery failed type=%s', type(exc).__name__)
+    else:
+        _web_setup_error = None
+        if not finish_verified or completed:
+            from web_api.setup_apply import refresh_upload_limit
+            try:
+                refresh_upload_limit(**arguments)
+            except (SetupError, ValueError, OSError, KeyError, TypeError) as exc:
+                logger.warning('Managed proxy upload-limit refresh failed type=%s', type(exc).__name__)
+
+
+def prepare_optional_ui():
+    """Older installers can prepare the shipped UI without Node or another runtime."""
+    global _ui_bootstrap_error
+    from web_tools.release import ensure_base
+    try:
+        from web_tools.editor_publication import recover
+        from web_tools.paths import PROJECT_ROOT
+        recover(PROJECT_ROOT)
+        ensure_base()
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        _ui_bootstrap_error = 'ui_bootstrap_failed'
+        logger.warning('Optional UI preparation failed type=%s', type(exc).__name__)
+    else:
+        _ui_bootstrap_error = None
 
 
 async def initialize_core() -> None:
@@ -23,6 +73,8 @@ async def initialize_core() -> None:
     from bot.utils.custom_extensions import load_custom_extensions
 
     run_migrations()
+    prepare_web_setup()
+    prepare_optional_ui()
     load_user_ui_text_cache()
     validate_required_user_pages()
     load_telegram_link_domain()
@@ -65,10 +117,12 @@ def start_background_tasks(bot: Any) -> list[asyncio.Task]:
 async def deliver_startup_notifications(bot: Any) -> None:
     """Telegram delivery/recovery cannot hold the core activation acknowledgement."""
     from bot.services.update_rollback import notify_pending_rollback_result, notify_pending_update_result
+    from bot.services.backup_restore_worker import notify_pending_backup_restore_result
     from bot.services.yadreno_admin import recover_active_dialogs_on_startup
     from bot.utils.update_block import is_update_blocked, get_blocked_message
 
-    for operation in (notify_pending_rollback_result, notify_pending_update_result, recover_active_dialogs_on_startup):
+    for operation in (notify_pending_rollback_result, notify_pending_update_result,
+                      notify_pending_backup_restore_result, recover_active_dialogs_on_startup):
         try:
             await operation(bot)
         except Exception:
@@ -108,6 +162,8 @@ class Application:
         if type(enabled) is not bool or not self._owns_gate:
             raise ValueError('an active owning application is required')
         readiness.require_active()
+        if enabled and get_web_setup_error():
+            raise ValueError('web setup requires recovery through the installer')
         async with self._web_settings_lock:
             old = get_setting('web_enabled', '0')
             if enabled and not get_web_settings().public_origin:
@@ -149,12 +205,18 @@ class Application:
             self.web_server = await start_web_server()
             await accept_managed_update()
             readiness.activate()
+            if not get_web_setup_error():
+                prepare_web_setup(finish_verified=True)
             from runtime.delivery import set_bot
             set_bot(self.bot)
             self.bot.background_tasks = start_background_tasks(self.bot)
             self.tasks.extend(self.bot.background_tasks)
             self.bot.pending_update_result_task = asyncio.create_task(deliver_startup_notifications(self.bot))
             self.tasks.append(self.bot.pending_update_result_task)
+            # Older installed updaters cannot call a newly introduced hook.
+            # Provision only after accepting the runtime; serving never waits.
+            from web_tools.toolchain import prepare_after_start
+            self.tasks.append(asyncio.create_task(prepare_after_start(), name='web_compiler_preparation'))
         except BaseException:
             await self.stop()
             raise

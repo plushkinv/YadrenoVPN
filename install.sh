@@ -6,7 +6,7 @@
 # === АВТОМАТИЧЕСКИЙ ЗАПУСК (БЕЗ ДИАЛОГОВ) ===
 #
 # 1. Запуск прямо с GitHub (для чистой установки или если папки ещё нет):
-# bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) install <BOT_TOKEN> <ADMIN_ID>
+# bash <(curl -fsSL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) install <BOT_TOKEN> <ADMIN_ID> < /dev/null
 # bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) update [COMMIT_OR_BRANCH]
 # bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) reset [COMMIT_OR_BRANCH]
 # bash <(curl -sL https://raw.githubusercontent.com/plushkinv/YadrenoVPN/main/install.sh) rollback
@@ -15,6 +15,9 @@
 # bash install.sh update [COMMIT_OR_BRANCH]
 # bash install.sh reset [COMMIT_OR_BRANCH]
 # bash install.sh rollback
+# bash install.sh web-setup --proxy managed-nginx --domain vpn.example.com --email admin@example.com --agree-tos --output json
+# Without an explicit update/reset target, install/reinstall/update/reset select
+# the latest first-parent origin/main commit whose subject does not start with '?'.
 
 set -e
 
@@ -48,6 +51,35 @@ print_warn() {
 
 print_err() {
     echo -e "${RED}[✗]${NC} $1"
+}
+
+# Resolve an already fetched target and emit only its immutable commit hash.
+resolve_install_target() {
+    local requested_target="${1:-}"
+    local target=""
+    if [ -n "$requested_target" ]; then
+        if ! target=$(git rev-parse --verify "${requested_target}^{commit}" 2>/dev/null); then
+            print_err "Целевая версия недоступна: $requested_target" >&2
+            return 1
+        fi
+    else
+        local history commit_hash commit_subject
+        if ! history=$(git log origin/main --first-parent --format='%H|%s'); then
+            print_err "Не удалось прочитать историю стабильных версий origin/main" >&2
+            return 1
+        fi
+        while IFS='|' read -r commit_hash commit_subject; do
+            if [ -n "$commit_hash" ] && [[ "$commit_subject" != \?* ]]; then
+                target="$commit_hash"
+                break
+            fi
+        done <<< "$history"
+        if [ -z "$target" ]; then
+            print_err "В истории origin/main не найдена стабильная версия без ? в начале заголовка" >&2
+            return 1
+        fi
+    fi
+    printf '%s\n' "$target"
 }
 
 # Create and verify the mandatory database snapshot before a direct reset.
@@ -172,7 +204,7 @@ write_config() {
     cp "$INSTALL_DIR/config.py.example" "$INSTALL_DIR/config.py"
 
     sed -i "s|\"ВАШ_ТОКЕН_БОТА\"|\"$BOT_TOKEN\"|g" "$INSTALL_DIR/config.py"
-    sed -i "s|12345678|$ADMIN_ID|g" "$INSTALL_DIR/config.py"
+    sed -i "/^ADMIN_IDS = \[/,/^\]/s|12345678|$ADMIN_ID|g" "$INSTALL_DIR/config.py"
 
     print_ok "config.py создан с вашими настройками"
 }
@@ -210,6 +242,88 @@ setup_venv() {
     print_ok "Зависимости Python установлены в venv"
 }
 
+setup_ready_web_ui() {
+    if [ -f "$INSTALL_DIR/web_tools/release.py" ]; then
+        print_header "Подготовка готового интерфейса сайта и Mini App"
+        if ! (cd "$INSTALL_DIR" && "$VENV_DIR/bin/python" -m web_tools.release ensure-base); then
+            print_err "Готовый интерфейс не прошёл проверку. Веб не активирован."
+            return 1
+        fi
+        print_ok "Интерфейс подготовлен без Node. Домен и HTTPS подключаются отдельно."
+    fi
+}
+
+setup_web_toolchain() {
+    if [ -f "$INSTALL_DIR/web_tools/toolchain.py" ]; then
+        print_header "Подготовка инструментов веб-редактора"
+        if (cd "$INSTALL_DIR" && "$VENV_DIR/bin/python" -m web_tools.toolchain prepare); then
+            print_ok "Инструменты веб-редактора подготовлены"
+        else
+            print_warn "Инструменты веб-редактора пока недоступны. Бот и сайт продолжают работать; подготовка повторится при обновлении."
+        fi
+    fi
+}
+
+# Remove only untracked artifacts left by older installers. Some supported
+# source versions ship the root service template as an ordinary tracked file.
+cleanup_legacy_unit_files() {
+    local old_unit tracked_unit
+    for old_unit in "$SERVICE_FILE" "$UPDATER_SERVICE_FILE"; do
+        if ! tracked_unit=$(git -C "$INSTALL_DIR" ls-files -- "$old_unit"); then
+            print_err "Не удалось проверить старые unit-файлы в Git"
+            return 1
+        fi
+        if [ -z "$tracked_unit" ] && ! rm -f "$INSTALL_DIR/$old_unit"; then
+            print_err "Не удалось удалить старые unit-файлы из рабочего каталога"
+            return 1
+        fi
+    done
+}
+
+# Repair the exact unstaged deletion caused by earlier setup_systemd versions
+# before invoking an installed updater that correctly rejects a dirty tree.
+recover_legacy_tracked_service_file() {
+    local legacy_unit="yadreno-vpn.service"
+    if [ -e "$INSTALL_DIR/$legacy_unit" ] || [ -L "$INSTALL_DIR/$legacy_unit" ]; then
+        return 0
+    fi
+    local index_status=0
+    git -C "$INSTALL_DIR" diff --cached --quiet --exit-code || index_status=$?
+    if [ "$index_status" -eq 1 ]; then
+        return 0
+    fi
+    if [ "$index_status" -ne 0 ]; then
+        print_err "Не удалось проверить индекс Git перед обновлением"
+        return 1
+    fi
+    local unit_status
+    if ! unit_status=$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=no); then
+        print_err "Не удалось проверить шаблон службы в Git"
+        return 1
+    fi
+    if [ "$unit_status" != " D $legacy_unit" ]; then
+        return 0
+    fi
+    local legacy_installer legacy_line legacy_cleanup=0
+    if ! legacy_installer=$(git -C "$INSTALL_DIR" show HEAD:install.sh 2>/dev/null); then
+        return 0
+    fi
+    while IFS= read -r legacy_line; do
+        if [ "$legacy_line" = '    if ! rm -f "$INSTALL_DIR/$SERVICE_FILE" "$INSTALL_DIR/$UPDATER_SERVICE_FILE"; then' ]; then
+            legacy_cleanup=1
+            break
+        fi
+    done <<< "$legacy_installer"
+    if [ "$legacy_cleanup" -ne 1 ]; then
+        return 0
+    fi
+    if ! git -C "$INSTALL_DIR" checkout -- "$legacy_unit"; then
+        print_err "Не удалось восстановить удалённый старым установщиком шаблон службы"
+        return 1
+    fi
+    print_ok "Отсутствующий шаблон yadreno-vpn.service восстановлен из текущей версии Git"
+}
+
 # Настройка systemd сервиса
 setup_systemd() {
     print_header "Настройка автозапуска (systemd)"
@@ -235,11 +349,7 @@ EOF
         return 1
     fi
 
-    # Remove files generated by older installers inside the Git worktree.
-    if ! rm -f "$INSTALL_DIR/$SERVICE_FILE" "$INSTALL_DIR/$UPDATER_SERVICE_FILE"; then
-        print_err "Не удалось удалить старые unit-файлы из рабочего каталога"
-        return 1
-    fi
+    cleanup_legacy_unit_files || return 1
     if ! "$VENV_DIR/bin/python" -m bot.services.update_rollback install-service \
         --project-root "$INSTALL_DIR" \
         --service-name yadreno-vpn > /dev/null 2>&1; then
@@ -353,9 +463,19 @@ do_install() {
 
     # Клонирование репозитория
     print_header "Загрузка Yadreno VPN"
-    git clone "$REPO_URL" "$INSTALL_DIR" -q
+    git clone --branch main "$REPO_URL" "$INSTALL_DIR" -q
     cd "$INSTALL_DIR"
     print_ok "Репозиторий клонирован"
+
+    local target
+    if ! target=$(resolve_install_target); then
+        return 1
+    fi
+    if ! git reset --hard "$target" -q; then
+        print_err "Не удалось выбрать стабильную версию для установки"
+        return 1
+    fi
+    print_ok "Выбрана стабильная версия: ${target:0:8}"
 
     # Запись config.py
     write_config
@@ -363,12 +483,16 @@ do_install() {
     # Виртуальное окружение и зависимости
     setup_venv
 
+    setup_ready_web_ui || return 1
+
     # Настройка автозапуска
     setup_systemd
 
     # Запуск
     print_header "Запуск бота"
     start_service
+
+    setup_web_toolchain
 
     print_header "✅ Установка завершена!"
     echo -e "  Директория: ${GREEN}$INSTALL_DIR${NC}"
@@ -392,11 +516,6 @@ do_soft_update() {
     fi
 
     cd "$INSTALL_DIR"
-    local requested_target="origin/main"
-    if [ -n "$TARGET_COMMIT" ]; then
-        requested_target="$TARGET_COMMIT"
-    fi
-
     # The downloaded installer may run against an older installed updater.
     # Resolve the marked stage here as well so that version cannot skip the
     # first blocking commit before the target code takes over this policy.
@@ -405,10 +524,12 @@ do_soft_update() {
         return 1
     fi
     local resolved_target
-    if ! resolved_target=$(git rev-parse --verify "${requested_target}^{commit}" 2>/dev/null); then
-        print_err "Целевая версия обновления недоступна: $requested_target"
+    if ! resolved_target=$(resolve_install_target "${TARGET_COMMIT:-}"); then
         return 1
     fi
+    local requested_target="$resolved_target"
+    print_ok "Выбрана версия обновления: ${resolved_target:0:8}"
+    recover_legacy_tracked_service_file || return 1
     local blocking_commit=""
     local commit_subject=""
     while IFS='|' read -r commit_hash commit_subject; do
@@ -481,16 +602,12 @@ do_hard_reset() {
         return 1
     fi
 
-    local requested_target="origin/main"
-    if [ -n "$TARGET_COMMIT" ]; then
-        requested_target="$TARGET_COMMIT"
-    fi
     local target
-    if ! target=$(git rev-parse --verify "${requested_target}^{commit}" 2>/dev/null); then
-        print_err "Целевая версия недоступна: $requested_target"
+    if ! target=$(resolve_install_target "${TARGET_COMMIT:-}"); then
         release_update_operation_lock
         return 1
     fi
+    print_ok "Выбрана версия для перезаписи: ${target:0:8}"
 
     local mode="installer_reset"
     if [ "$REINSTALL_EXISTING" = "1" ]; then
@@ -531,6 +648,8 @@ do_hard_reset() {
         -e backup/ \
         -e config.py \
         -e custom_extensions/ \
+        -e custom_web/ \
+        -e web_runtime/ \
         -e database/vpn_bot.db \
         -e database/vpn_bot.db-wal \
         -e database/vpn_bot.db-shm \
@@ -613,6 +732,47 @@ do_rollback() {
         --service-name "yadreno-vpn"
 }
 
+# The installed Python entry point owns validation, system changes and recovery.
+# The four existing actions and their positional arguments remain unchanged.
+do_web_setup() {
+    local python_bin="$VENV_DIR/bin/python"
+    if [ ! -x "$python_bin" ] || [ ! -f "$INSTALL_DIR/web_api/management.py" ]; then
+        echo 'Не найдена установленная версия с Web Core и Python environment.' >&2
+        if [[ " $* " == *" --output json "* ]] || [[ " $* " == *" --output=json "* ]]; then
+            echo '{"ok":false,"code":"installation_missing","stage":"preflight","changed":false,"public_url":null,"listen":null,"button":{"changed":false,"code":"not_attempted"}}'
+        fi
+        return 3
+    fi
+    if [ "$AUTO_MODE" = "1" ]; then
+        (cd "$INSTALL_DIR" && "$python_bin" -m web_api.management --project-root "$INSTALL_DIR" setup "$@" < /dev/null)
+        return $?
+    fi
+    local web_proxy web_domain web_email web_tos web_origin
+    local web_args=()
+    echo 'Сайт и Mini App используют отдельный домен в корне /.'
+    echo '1) Nginx и HTTPS на этом сервере; 2) Подготовленный внешний прокси'
+    read -r -p 'Режим [1/2]: ' web_proxy
+    case "$web_proxy" in
+        1)
+            read -r -p 'Домен или поддомен: ' web_domain
+            read -r -p 'Email для сертификата: ' web_email
+            echo 'Условия ACME: https://letsencrypt.org/repository/'
+            read -r -p 'Принимаете условия выдачи сертификата? (yes/no): ' web_tos
+            if [ "$web_tos" != 'yes' ]; then
+                echo 'Подключение отменено.'
+                return 0
+            fi
+            web_args=(--proxy managed-nginx --domain "$web_domain" --email "$web_email" --agree-tos)
+            ;;
+        2)
+            read -r -p 'Готовый публичный HTTPS URL: ' web_origin
+            web_args=(--proxy external --public-url "$web_origin")
+            ;;
+        *) echo 'Неверный режим.' >&2; return 2 ;;
+    esac
+    (cd "$INSTALL_DIR" && "$python_bin" -m web_api.management --project-root "$INSTALL_DIR" setup "${web_args[@]}" < /dev/null)
+}
+
 # ============================================================
 # ГЛАВНОЕ МЕНЮ
 # ============================================================
@@ -627,16 +787,18 @@ show_menu() {
     echo "  2) 🔄 Мягкое обновление (git pull)"
     echo "  3) ⚠️  Жёсткая перезапись (с GitHub)"
     echo "  4) ↩️  Откат обновления"
+    echo "  5) 🌐 Подключить сайт и Mini App — домен и HTTPS"
     echo ""
     echo "  0) Выход"
     echo ""
-    read -p "  Выберите действие [0-4]: " choice
+    read -p "  Выберите действие [0-5]: " choice
 
     case $choice in
         1) do_install ;;
         2) do_soft_update ;;
         3) do_hard_reset ;;
         4) do_rollback ;;
+        5) do_web_setup ;;
         0) echo "Пока! 👋"; exit 0 ;;
         *) echo "Неверный выбор"; return 1 ;;
     esac
@@ -644,6 +806,13 @@ show_menu() {
 
 # Проверка root-прав
 if [ "$EUID" -ne 0 ]; then
+    if [ "$1" = "web-setup" ]; then
+        echo 'Подключение веба требует root (sudo).' >&2
+        if [[ " $* " == *" --output json "* ]] || [[ " $* " == *" --output=json "* ]]; then
+            echo '{"ok":false,"code":"root_required","stage":"preflight","changed":false,"public_url":null,"listen":null,"button":{"changed":false,"code":"not_attempted"}}'
+        fi
+        exit 3
+    fi
     print_err "Скрипт должен быть запущен от root (sudo)"
     exit 1
 fi
@@ -684,8 +853,16 @@ if [ -n "$1" ]; then
             fi
             exit 1
             ;;
+        web-setup)
+            shift
+            if do_web_setup "$@"; then
+                exit 0
+            else
+                exit $?
+            fi
+            ;;
         *)
-            print_err "Неизвестное действие: $ACTION. Доступно: install, update, reset, rollback"
+            print_err "Неизвестное действие: $ACTION. Доступно: install, update, reset, rollback, web-setup"
             exit 1
             ;;
     esac

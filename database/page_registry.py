@@ -53,6 +53,7 @@ CORE_EDITOR_PAGE_KEYS = (
     'balance_topup_amount',
     'balance_topup_result',
     'support_start',
+    'support_admin_notification',
     'support_status',
     'promo_enter',
     'promo_status',

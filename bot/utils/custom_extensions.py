@@ -67,6 +67,7 @@ _PUBLIC_CUSTOM_EXTENSIONS_API = {
     'register_access_guard',
     'register_callback_handler',
     'register_command_handler',
+    'register_input_handler',
     'register_extension_schema',
     'register_extension_settings',
     'register_guard',
@@ -112,6 +113,7 @@ _REGISTRATION_KINDS = (
     'payment_providers',
     'callback_handlers',
     'command_handlers',
+    'input_handlers',
     'user_access_guards',
     'schemas',
     'settings',
@@ -242,6 +244,22 @@ def register_command_handler(
     )
     _record_registration('command_handlers', action_key)
     return action_key
+
+
+def register_input_handler(name: str, handler: Callable, *, replace: bool = False) -> str:
+    """Register an owner-local handler for explicitly requested text input."""
+    _ensure_extension_mutation_allowed('register_input_handler')
+    from bot.utils.extension_inputs import register_extension_input_handler
+
+    if not callable(handler):
+        raise ValueError('input handler must be callable')
+    key = register_extension_input_handler(
+        _require_current_extension(), name,
+        _bind_extension_callable(handler, invocation_kind='input_handler'),
+        replace=replace,
+    )
+    _record_registration('input_handlers', key)
+    return key
 
 
 def register_action_policy(
@@ -580,6 +598,7 @@ def get_custom_extensions_diagnostics(
     """Returns a read-only snapshot for admin diagnostics of extensions."""
     from database.requests import get_page_classification_diagnostics, get_setting
     from core.extensions.registry import inspect_modules
+    from bot.utils.extension_inputs import input_capabilities
 
     configured_value = get_setting(CUSTOM_EXTENSIONS_ENABLED_SETTING, '0')
     if enabled is None:
@@ -687,6 +706,7 @@ def get_custom_extensions_diagnostics(
             'recipient': 'explicit_or_current_user',
             'delivery_policy': 'single_attempt',
         },
+        'input_capabilities': input_capabilities(),
         'finance_capabilities': {
             'contract_version': 1,
             'payment_read_access': 'installation', 'promo_management_access': 'installation',
@@ -757,7 +777,9 @@ def _load_extension_module(path: Path) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     try:
-        spec.loader.exec_module(module)
+        # An explicit reload must use current source even when an old timestamp
+        # .pyc matches a same-size edit within the filesystem's timestamp window.
+        exec(compile(path.read_bytes(), str(path), 'exec', dont_inherit=True), module.__dict__)
     except Exception:
         sys.modules.pop(module_name, None)
         raise
@@ -922,7 +944,7 @@ def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) ->
                 if actions is not None:
                     normalize_action_policy_actions(actions)
                 break
-        elif func_name == 'register_task_handler':
+        elif func_name in {'register_task_handler', 'register_input_handler'}:
             from bot.utils.action_origin_context import normalize_completion_handler_name
 
             name = _literal_string_arg(node.args[0]) if node.args else _literal_keyword_string_arg(node, 'name')
@@ -1826,6 +1848,7 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
     from bot.utils.action_registry import ACTION_REGISTRY
     from bot.utils.extension_callbacks import remove_extension_callback_handlers
     from bot.utils.extension_commands import remove_extension_command_handlers
+    from bot.utils.extension_inputs import remove_extension_input_handlers
     from bot.utils.extension_completion_registry import remove_extension_completion_handlers
     from bot.utils.extension_event_registry import EXTENSION_EVENT_HANDLERS
     from bot.utils.extension_settings import remove_extension_settings
@@ -1868,12 +1891,14 @@ def _remove_extension_runtime_registrations(extension_id: str) -> None:
             PAYMENT_PROVIDERS.pop(name, None)
     remove_extension_callback_handlers(extension_id, registrations.get('callback_handlers', set()))
     remove_extension_command_handlers(extension_id, registrations.get('command_handlers', set()))
+    remove_extension_input_handlers(extension_id, registrations.get('input_handlers', set()))
     remove_user_access_guards(registrations.get('user_access_guards', set()))
     if registrations.get('settings'):
         remove_extension_settings(extension_id)
 
 
 def _snapshot_runtime_registries() -> dict[str, Any]:
+    from bot.utils.extension_inputs import EXTENSION_INPUT_HANDLERS
     from core.extensions.registry import snapshot as snapshot_shared_modules
     from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
     from bot.utils.policy_registry import BASE_PRICING_POLICIES
@@ -1916,6 +1941,7 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
         'callback_handlers': dict(EXTENSION_CALLBACK_HANDLERS),
         'access_check_callbacks': set(EXTENSION_ACCESS_CHECK_CALLBACKS),
         'command_handlers': dict(EXTENSION_COMMAND_HANDLERS),
+        'input_handlers': dict(EXTENSION_INPUT_HANDLERS),
         'command_definitions': dict(EXTENSION_COMMAND_DEFINITIONS),
         'user_access_guards': dict(USER_ACCESS_GUARDS),
         'settings': {
@@ -1926,6 +1952,7 @@ def _snapshot_runtime_registries() -> dict[str, Any]:
 
 
 def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
+    from bot.utils.extension_inputs import EXTENSION_INPUT_HANDLERS
     from core.extensions.registry import restore as restore_shared_modules
     restore_shared_modules(snapshot.get('shared_modules', {}))
     from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
@@ -1980,6 +2007,8 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
     EXTENSION_ACCESS_CHECK_CALLBACKS.update(snapshot.get('access_check_callbacks', set()))
     EXTENSION_COMMAND_HANDLERS.clear()
     EXTENSION_COMMAND_HANDLERS.update(snapshot.get('command_handlers', {}))
+    EXTENSION_INPUT_HANDLERS.clear()
+    EXTENSION_INPUT_HANDLERS.update(snapshot.get('input_handlers', {}))
     EXTENSION_COMMAND_DEFINITIONS.clear()
     EXTENSION_COMMAND_DEFINITIONS.update(snapshot.get('command_definitions', {}))
     USER_ACCESS_GUARDS.clear()
@@ -1989,6 +2018,7 @@ def _restore_runtime_registries(snapshot: dict[str, Any]) -> None:
 
 
 def _registry_totals() -> dict[str, int]:
+    from bot.utils.extension_inputs import EXTENSION_INPUT_HANDLERS
     from bot.utils.extension_task_registry import EXTENSION_TASK_HANDLERS
     from bot.utils.policy_registry import BASE_PRICING_POLICIES
     from bot.utils.extension_event_registry import EXTENSION_EVENT_HANDLERS
@@ -2023,6 +2053,7 @@ def _registry_totals() -> dict[str, int]:
         'payment_providers': len(PAYMENT_PROVIDERS),
         'callback_handlers': len(EXTENSION_CALLBACK_HANDLERS),
         'command_handlers': len(EXTENSION_COMMAND_DEFINITIONS),
+        'input_handlers': len(EXTENSION_INPUT_HANDLERS),
         'user_access_guards': len(USER_ACCESS_GUARDS),
         'settings': sum(len(fields) for fields in EXTENSION_SETTINGS.values()),
     }
@@ -2081,6 +2112,7 @@ __all__ = [
     'register_referral_reward_policy',
     'register_user_access_guard',
     'reset_custom_extensions_runtime',
+    'register_input_handler',
     'register_event_handler',
     'register_task_handler',
     'validate_custom_extension_file',

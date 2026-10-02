@@ -5,7 +5,7 @@ import asyncio
 from weakref import WeakValueDictionary
 
 from bot.services.payment_intents import (
-    _payment_quote, cancel_payment_intent, confirm_internal_payment_settlement, load_payment_intent,
+    PURPOSE_REGISTRY, _payment_quote, cancel_payment_intent, confirm_internal_payment_settlement, load_payment_intent,
 )
 from core.accounts import owned_key, require_account
 from core.context import bind_account_context
@@ -24,6 +24,11 @@ def owned_order(account, order_id):
     require_account(account)
     if not isinstance(order_id, str) or len(order_id) > 128:
         raise CoreError('invalid_request')
+    stored = db.get_payment_intent(order_id)
+    # Trial and historical audit rows have no financial navigation or completion.
+    if (stored is None or stored.get('user_id') != account.account_id
+            or stored.get('intent_version') != 1 or stored.get('purpose') not in PURPOSE_REGISTRY):
+        raise CoreError('order_not_found')
     intent = load_payment_intent(order_id)
     if intent is None or intent.user_id != account.account_id:
         raise CoreError('order_not_found')

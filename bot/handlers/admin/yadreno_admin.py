@@ -35,6 +35,7 @@ from bot.handlers.admin.yadreno_admin_input import (
     render_yaa_input_error,
 )
 from bot.utils.yadreno_admin_audio import audio_upload_meta, message_audio_kind
+from bot.services.temporary_files import UPLOAD_MAX_BYTES, UPLOAD_MAX_FILES
 from bot.services.page_context import PageContext, get_page_context
 from bot.services.yadreno_admin_page_binding import (
     YaaPageBinding,
@@ -104,8 +105,8 @@ YADRENO_ADMIN_ALLOWED_TOPIC_IDS = frozenset({
     YADRENO_ADMIN_YAA_TOPIC_ID,
 })
 YADRENO_ADMIN_UPLOAD_MAX_MB = 10
-YADRENO_ADMIN_UPLOAD_MAX_BYTES = YADRENO_ADMIN_UPLOAD_MAX_MB * 1024 * 1024
-YADRENO_ADMIN_UPLOAD_MAX_FILES = 5
+YADRENO_ADMIN_UPLOAD_MAX_BYTES = UPLOAD_MAX_BYTES
+YADRENO_ADMIN_UPLOAD_MAX_FILES = UPLOAD_MAX_FILES
 YADRENO_ADMIN_ALBUM_DEBOUNCE_SEC = 1.0
 
 
@@ -1255,19 +1256,10 @@ async def _download_yadreno_upload(message: Message) -> list[YadrenoAdminUpload]
     ]
 
 
-def _cleanup_yadreno_uploads(uploads: list[YadrenoAdminUpload]) -> None:
-    """Deletes temporary best-effort upload files."""
-    for upload in uploads:
-        try:
-            upload.path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-
 async def _download_yadreno_turn_uploads(
     messages: list[Message], uploads: list[YadrenoAdminUpload],
 ) -> tuple[str, int]:
-    """Collect one turn, preserving valid album files and caller-owned cleanup."""
+    """Collect one turn, preserving valid album files for the shared retention cleanup."""
     errors: list[YadrenoAdminError] = []
     overflow_count = 0
     for message in messages:
@@ -1618,8 +1610,6 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
                 e,
             ),
         )
-    finally:
-        _cleanup_yadreno_uploads(uploads)
 
 
 def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
@@ -1634,6 +1624,32 @@ def _extract_yaa_task_html(message: Message, command: CommandObject) -> str:
     return (command.args or "").strip()
 
 
+async def _reset_yaa_chat(message, state, api_key, topic_id, pending_input=None) -> bool:
+    """Use the existing reset/busy contract before entering the common /yaa flow."""
+    previous_binding = get_yaa_page_binding(message.from_user.id, topic_id)
+    try:
+        result = await start_new_chat(message.from_user.id, api_key, topic_id=topic_id)
+    except YadrenoAdminError as error:
+        await render_yaa_input_error(
+            message, state, pending_input, error,
+            _yadreno_request_error_keyboard(message.from_user.id, topic_id, error), force_new=True,
+        )
+        return False
+    if result.status != 'ok':
+        rendered = await safe_edit_or_send(
+            pending_input.prompt_message if pending_input else message,
+            escape_html(result.response_text),
+            reply_markup=yadreno_admin_agent_kb(topic_id, cancel_button_text=result.cancel_button_text),
+            force_new=pending_input is None,
+        )
+        if pending_input is not None:
+            pending_input.prompt_message = rendered
+        return False
+    if topic_id == YADRENO_ADMIN_YAA_TOPIC_ID and get_yaa_page_binding(message.from_user.id, topic_id) is previous_binding:
+        clear_yaa_page_binding(message.from_user.id, topic_id)
+    return True
+
+
 async def _handle_broadcast_yaa(
     message: Message,
     state: FSMContext,
@@ -1642,13 +1658,13 @@ async def _handle_broadcast_yaa(
     task_html: str,
     pending_input: PendingYaaInput | None = None,
     messages: list[Message] | None = None,
+    new_chat_started: bool = False,
 ) -> None:
     """Open a fresh topic-1003 editor session from the broadcast screen."""
     from bot.services.broadcast_editor import (
         ensure_broadcast_editor_stage,
         stage_local_broadcast_photo,
     )
-    from bot.services.broadcast_audience import BROADCAST_FILTER_LABELS
 
     await asyncio.to_thread(ensure_broadcast_editor_stage, message.from_user.id)
     if message.photo:
@@ -1666,72 +1682,15 @@ async def _handle_broadcast_yaa(
                 force_new=True,
             )
             return
-    try:
-        new_chat = await start_new_chat(
-            message.from_user.id,
-            api_key,
-            topic_id=YADRENO_ADMIN_BROADCAST_TOPIC_ID,
-        )
-    except YadrenoAdminError as error:
-        await render_yaa_input_error(
-            message, state, pending_input, error,
-            (
-                _yadreno_request_error_keyboard(
-                    message.from_user.id,
-                    YADRENO_ADMIN_BROADCAST_TOPIC_ID,
-                    error,
-                )
-                if error.kind == "configuration"
-                else broadcast_editor_kb()
-            ),
-            force_new=True,
-        )
-        return
-    if new_chat.status != "ok":
-        await safe_edit_or_send(
-            message,
-            "⚠️ <b>Редактор пока занят</b>\n\n"
-            + escape_html(new_chat.response_text or "Дождитесь завершения текущего ответа."),
-            reply_markup=broadcast_editor_kb(),
-            force_new=True,
-        )
-        return
-
+    if not (new_chat_started or pending_input and pending_input.new_chat_started):
+        if not await _reset_yaa_chat(message, state, api_key, YADRENO_ADMIN_BROADCAST_TOPIC_ID, pending_input):
+            return
     admission = {}
     if pending_input is None:
         await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_BROADCAST_TOPIC_ID)
     else:
         admission["accepted_callback"] = partial(accept_yaa_input, state, pending_input)
-    prompt = (
-        "Команда администратора в контекстном редакторе рассылок. "
-        "Служебный контекст безопасной поверхности:\n"
-        + json.dumps(
-            {
-                "surface": "admin.broadcast",
-                "task_format": "telegram_html",
-                "task_html": task_html,
-                "changes": "stage_only",
-                "send_requires_local_confirmation": True,
-                "audience_contract": {
-                    "version": 2,
-                    "available_filters": [
-                        {"key": key, "label": label}
-                        for key, label in BROADCAST_FILTER_LABELS.items()
-                    ],
-                    "logic": "and",
-                    "empty_selection_means": "all_eligible_users",
-                    "write_action": "stage_filter",
-                    "write_argument": "audience_filters",
-                    "write_value": "complete_replacement_array",
-                    "clear_value": [],
-                    "legacy_audience_filter_supported": True,
-                    "zero_recipients_blocks_launch": True,
-                },
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    )
+    prompt = task_html
     status_message = await safe_edit_or_send(
         pending_input.prompt_message if pending_input else message,
         "✍️ <b>Редактор рассылки</b>\n\n⏳ Отправляю запрос...",
@@ -1788,8 +1747,6 @@ async def _handle_broadcast_yaa(
             ),
         )
         return
-    finally:
-        _cleanup_yadreno_uploads(uploads)
     await _deliver_final_response(
         progress.final_target,
         final,
@@ -1805,7 +1762,7 @@ async def _handle_broadcast_yaa(
     )
 
 
-@router.message(Command("yaa"))
+@router.message(Command("yaa", "yaan"))
 async def handle_yaa_command(message: Message, command: CommandObject, state: FSMContext):
     """Administrator context command from a user page."""
     if not is_admin(message.from_user.id):
@@ -1842,6 +1799,14 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
         )
         return
 
+    topic_id = YADRENO_ADMIN_BROADCAST_TOPIC_ID if is_broadcast_surface else YADRENO_ADMIN_YAA_TOPIC_ID
+    new_chat_started = command.command == 'yaan'
+    if new_chat_started:
+        if not await _reset_yaa_chat(message, state, api_key, topic_id, pending):
+            return
+        if pending is not None:
+            pending.new_chat_started = True
+
     has_attachment = any(getattr(message, name, None) for name in (
         "photo", "document", "video", "animation", "voice", "audio",
     ))
@@ -1862,6 +1827,7 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
             page_context = make_yaa_page_binding(page_context, backup_path="").page_context()
         invitation = PendingYaaInput(
             topic_id, page_context, pending.return_state if pending else current_state,
+            new_chat_started=new_chat_started or bool(pending and pending.new_chat_started),
         )
         invitation.prompt_message = await safe_edit_or_send(
             pending.prompt_message if pending else message,
@@ -1885,6 +1851,7 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
             state,
             api_key=api_key,
             task_html=task_html,
+            **({'new_chat_started': True} if new_chat_started else {}),
         )
     else:
         await _submit_page_yaa(message, state, api_key, task_html, page_context)
@@ -1970,8 +1937,6 @@ async def _submit_page_yaa(
             _yadreno_request_error_keyboard(message.from_user.id, YADRENO_ADMIN_YAA_TOPIC_ID, e),
         )
         return
-    finally:
-        _cleanup_yadreno_uploads(uploads)
 
     if await _rerender_bound_yaa_page_if_changed(
         progress,
@@ -2231,5 +2196,3 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
                 e,
             ),
         )
-    finally:
-        _cleanup_yadreno_uploads(uploads)

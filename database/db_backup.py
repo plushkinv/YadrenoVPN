@@ -3,17 +3,40 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
 from database import connection as db_connection
 
 
-__all__ = ["backup_bot_database_to", "create_bot_database_backup"]
+__all__ = ["backup_bot_database_to", "create_bot_database_backup", "validate_backup_database"]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKUP_DIR = PROJECT_ROOT / "backup"
+
+
+def validate_backup_database(path: str | Path) -> int:
+    """Read-only integrity and supported-version check before candidate migration."""
+    from database.migrations import INITIAL_VERSION, LATEST_VERSION
+
+    with closing(sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True)) as connection:
+        rows = connection.execute('PRAGMA integrity_check').fetchall()
+        if rows != [('ok',)]:
+            raise ValueError('Проверка целостности базы не пройдена')
+        if connection.execute('PRAGMA foreign_key_check').fetchone():
+            raise ValueError('Нарушена целостность связей в базе')
+        rows = connection.execute('SELECT version FROM schema_version').fetchall()
+        if len(rows) != 1 or type(rows[0][0]) is not int:
+            raise ValueError('Некорректная версия базы в бэкапе')
+        version = rows[0][0]
+        if not INITIAL_VERSION <= version <= LATEST_VERSION:
+            raise ValueError(
+                f'Версия базы {version} не поддерживается этой установкой '
+                f'(поддерживаются {INITIAL_VERSION}–{LATEST_VERSION})'
+            )
+        return version
 
 
 def backup_bot_database_to(

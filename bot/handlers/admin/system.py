@@ -17,6 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import GITHUB_REPO_URL
 from bot.utils.admin import is_admin
+from bot.utils.placeholder_help import EDITOR_PLACEHOLDER_HELP
 from bot.utils.git_utils import (
     check_git_available,
     get_current_branch,
@@ -121,6 +122,7 @@ _EXTENSION_REGISTRATION_LABELS = {
     'task_handlers': 'отложенные задачи',
     'payment_providers': 'payment providers',
     'callback_handlers': 'callbacks',
+    'input_handlers': 'ввод пользователя',
     'user_access_guards': 'user access',
     'schemas': 'schemas',
     'settings': 'settings',
@@ -1425,39 +1427,13 @@ async def edit_text_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Недопустимый параметр", show_alert=True)
         return
     
-    # Help texts for each key
-    help_texts = {
-        'main': (
-            "📝 <b>Справка: Текст главной страницы</b>\n\n"
-            "Чтобы изменить текст, вернитесь и просто отправьте боту новое сообщение с нужным текстом.\n"
-            "Вы можете прикрепить фото/видео.\n\n"
-            "Переменные:\n"
-            "• <code>%тарифы%</code> — список тарифов с ценами\n"
-            "• <code>%без_тарифов%</code> — не добавлять тарифы"
-        ),
-        'key_delivery': (
-            "📝 <b>Справка: Текст выдачи ключа</b>\n\n"
-            "Формат: <b>только текст</b> (без фото).\n\n"
-            "Переменные:\n"
-            "• <code>%ключ_для_копирования%</code> — ссылка или ключ в моноширинном виде для копирования\n"
-            "• <code>%ключ_ссылка%</code> — чистая ссылка без code/pre, кликабельная для HTTP/HTTPS подписки\n"
-            "• <code>%ключ_ссылка_url%</code> — URL-кодированная ссылка для URL-кнопок\n"
-            "• <code>%payment_coupon%</code> — готовый блок купона за текущую оплату\n"
-            "• <code>%payment_coupon(field=code)%</code> — код купона\n"
-            "• <code>%payment_coupon(field=discount_percent)%</code> — размер скидки\n"
-            "• <code>%payment_coupon(field=lifetime_days)%</code> — срок действия в днях\n\n"
-            "Данные купона вне платёжной выдачи остаются пустыми.\n\n"
-            "Можно использовать любое сочетание переменных."
-        ),
-    }
-    
     current_allowed_types = ['text'] if key == 'key_delivery' else ['text', 'photo', 'video', 'animation']
     
     await show_message_editor(
         callback.message, state,
         key=key,
         back_callback='admin_edit_texts',
-        help_text=help_texts.get(key),
+        help_text=EDITOR_PLACEHOLDER_HELP.get(key),
         allowed_types=current_allowed_types,
     )
     await callback.answer()

@@ -9,6 +9,7 @@ def bot_settings_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text='🔄 Обновления', callback_data='admin_update_bot'))
     builder.row(InlineKeyboardButton(text='🌐 Веб и Mini App', callback_data='admin_web'))
+    builder.row(InlineKeyboardButton(text='📦 Создать бэкап', callback_data='admin_backup_create'))
     builder.row(InlineKeyboardButton(
         text='📱 Ограничение устройств',
         callback_data='admin_device_limit',

@@ -164,6 +164,7 @@ def normalize_extension_callback_result(raw_result: Mapping[str, Any] | None) ->
         'action',
         'params',
         'origin_context',
+        'input',
     }
     result = dict(raw_result)
     unknown = set(result) - allowed
@@ -235,6 +236,9 @@ def normalize_extension_callback_result(raw_result: Mapping[str, Any] | None) ->
         if not isinstance(result['context'], Mapping):
             raise ValueError('context must be a mapping')
         result['context'] = dict(result['context'])
+    from bot.utils.extension_inputs import normalize_input_request
+
+    normalize_input_request(result)
     return result
 
 

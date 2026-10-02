@@ -302,6 +302,20 @@ def _validated_backup_root(project_root: Path) -> Path:
 
 def _validate_persistent_git_ignores(project_root: Path) -> None:
     """Require every installation-local persistent path to stay Git-ignored."""
+    # Older supported targets predate these paths. Keep their exclusions local
+    # as well, so reverting Git code cannot expose or clean installation UI data.
+    exclude_name = _git_output(project_root, ["rev-parse", "--git-path", "info/exclude"], stage="Resolving local Git exclusions").strip()
+    exclude = Path(exclude_name)
+    if not exclude.is_absolute():
+        exclude = project_root / exclude
+    if exclude.is_symlink() or exclude.parent.is_symlink():
+        raise UpdateRollbackError("Git exclusions must not be symbolic links")
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    previous = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    additions = [name for name in ("/custom_web/", "/web_runtime/") if name not in previous.splitlines()]
+    if additions:
+        with exclude.open("a", encoding="utf-8") as stream:
+            stream.write("\n" + "\n".join(additions) + "\n")
     required_paths = (
         "backup/",
         "config.py",
@@ -309,6 +323,8 @@ def _validate_persistent_git_ignores(project_root: Path) -> None:
         "database/vpn_bot.db-wal",
         "database/vpn_bot.db-shm",
         "custom_extensions/",
+        "custom_web/",
+        "web_runtime/",
         "logs/",
         "venv/",
     )
@@ -808,7 +824,7 @@ def _run_registered_service_request(
         raise UpdateRollbackError("Updater service request is not pending")
 
     operation = request.get("operation")
-    if operation not in {"update", "rollback"}:
+    if operation not in {"update", "rollback", "restore_backup"}:
         raise UpdateRollbackError("Unsupported updater service operation")
     try:
         admin_id = int(request["admin_id"])
@@ -827,7 +843,12 @@ def _run_registered_service_request(
         time.sleep(min(float(start_delay), 10.0))
 
     try:
-        if operation == "rollback":
+        if operation == "restore_backup":
+            # This runner is copied outside the source tree by the registered service.
+            sys.path.insert(0, str(root))
+            from bot.services.backup_restore_worker import perform_restore
+            result = perform_restore(snapshot_id, admin_id, root=root, service_name=service_name)
+        elif operation == "rollback":
             result: UpdateExecutionResult | RollbackExecutionResult = perform_rollback(
                 snapshot_id,
                 project_root=root,
@@ -999,6 +1020,17 @@ def create_pre_update_snapshot(
     temp_dir.mkdir(mode=0o700)
     preflight_error: Exception | None = None
     try:
+        from web_tools import paths as ui_paths
+        backup_local = ui_paths.backup_local
+        # The saved runner remains self-contained after rollback to a version
+        # predating Web Core; its protected backup helper travels with it.
+        helper_dir = temp_dir / 'web_tools'
+        helper_dir.mkdir(mode=0o700)
+        (helper_dir / '__init__.py').write_text('', encoding='utf-8')
+        shutil.copy2(ui_paths.__file__, helper_dir / 'paths.py')
+        for helper in ('system_backup.py', 'setup_paths.py'):
+            shutil.copy2(Path(ui_paths.__file__).with_name(helper), helper_dir / helper)
+        backup_local(temp_dir, root)
         backup_path = temp_dir / DATABASE_BACKUP_FILENAME
         database_size: int | None = None
         database_hash: str | None = None
@@ -1190,6 +1222,8 @@ def _refresh_pre_update_snapshot(
     temp_database = snapshot.snapshot_dir / f".vpn_bot.final.{os.getpid()}.db"
     temp_database.unlink(missing_ok=True)
     try:
+        from web_tools.paths import backup_local
+        backup_local(snapshot.snapshot_dir, project_root)
         _backup_database(live_database, temp_database)
         if temp_database.stat().st_dev != live_database.parent.stat().st_dev:
             raise UpdateRollbackError(
@@ -1655,6 +1689,8 @@ def _validate_update_strategy(
         "database/vpn_bot.db-wal",
         "database/vpn_bot.db-shm",
         "custom_extensions",
+        "custom_web",
+        "web_runtime",
         "logs",
         "venv",
     )
@@ -1722,6 +1758,10 @@ def _apply_git_target(
                 "config.py",
                 "-e",
                 "custom_extensions/",
+                "-e",
+                "custom_web/",
+                "-e",
+                "web_runtime/",
                 "-e",
                 "database/vpn_bot.db",
                 "-e",
@@ -2167,6 +2207,9 @@ def _recover_failed_rollback(
             stage="Restoring pre-rollback Git commit",
         )
         _install_requirements(project_root)
+        change = rescue_root / 'web-ui-rollback.json'
+        if change.exists():
+            _web_release_command(project_root, 'restore-pointer', '--change', str(change))
         _restore_database_atomically(
             rescue_root / DATABASE_BACKUP_FILENAME,
             _database_path(project_root),
@@ -2228,6 +2271,10 @@ def perform_rollback(
                 _systemctl("stop", service_name, project_root=root)
                 service_stopped = True
             rescue_root = _prepare_rescue_snapshot(root, current_commit)
+            if (root / 'web_tools/release.py').is_file():
+                _web_release_command(root, 'rollback-core', '--snapshot', str(point.database_path.parent),
+                                     '--target', point.source_commit,
+                                     '--change', str(rescue_root / 'web-ui-rollback.json'))
             _git_output(
                 root,
                 ["reset", "--hard", point.source_commit],
@@ -2256,6 +2303,11 @@ def perform_rollback(
                     raise UpdateRollbackError(
                         "Bot service did not become stably active after rollback"
                     )
+            if not _prepare_web_toolchain(root):
+                success_message += (
+                    " Инструменты веб-редактора пока недоступны; их подготовка "
+                    "повторится при обновлении. Бот и сайт продолжают работать."
+                )
             _write_rollback_result(
                 root,
                 admin_id=admin_id,
@@ -2359,6 +2411,48 @@ def _emergency_restore_pre_update_state(
         )
 
 
+def _web_release_command(root: Path, *arguments: str) -> str:
+    return _run_checked(
+        [sys.executable, "-m", "web_tools.release", "--root", str(root), *arguments],
+        cwd=root, timeout=180, stage="Checking managed UI release",
+    )
+
+
+def _prepare_web_toolchain(root: Path) -> bool:
+    """Prepare derived compiler inputs after service recovery; never undo the update."""
+    if not (root / 'web_tools/toolchain.py').is_file():
+        return True
+    try:
+        _run_checked([sys.executable, '-m', 'web_tools.toolchain', '--root', str(root), 'prepare'],
+                     cwd=root, timeout=660, stage='Preparing local Web compiler')
+    except (OSError, subprocess.SubprocessError, UpdateRollbackError):
+        logger.warning('Web compiler preparation failed; installed bot and UI remain active')
+        return False
+    return True
+
+
+def _prepare_web_release(root: Path, snapshot: PreparedUpdateSnapshot, target_commit: str) -> None:
+    if (root / 'web_tools/release.py').is_file():
+        _web_release_command(root, 'preflight', '--target', target_commit,
+                             '--save', str(snapshot.snapshot_dir / 'web-ui-update.json'))
+
+
+def _apply_web_release(root: Path, snapshot: PreparedUpdateSnapshot) -> None:
+    plan = snapshot.snapshot_dir / 'web-ui-update.json'
+    if not plan.exists() and (root / 'web_tools/release.py').is_file():
+        _prepare_web_release(root, snapshot, _current_commit(root))
+    if plan.exists():
+        value = json.loads(plan.read_text(encoding='utf-8'))
+        if value.get('capabilities') is not None:
+            _web_release_command(root, 'upgrade', '--plan', str(plan))
+
+
+def _undo_web_release(root: Path, snapshot: PreparedUpdateSnapshot) -> None:
+    change = snapshot.snapshot_dir / 'web-ui-applied.json'
+    if change.exists():
+        _web_release_command(root, 'restore-pointer', '--change', str(change))
+
+
 def perform_update_transaction(
     snapshot_id: str,
     *,
@@ -2393,6 +2487,8 @@ def perform_update_transaction(
                 strategy=strategy,
             )
 
+            _prepare_web_release(root, snapshot, target_commit)
+
             if manage_service:
                 _systemctl("stop", service_name, project_root=root)
                 service_stopped = True
@@ -2411,6 +2507,7 @@ def perform_update_transaction(
             )
 
             _install_requirements(root)
+            _apply_web_release(root, snapshot)
             candidate = _run_candidate_migrations(
                 project_root=root,
                 snapshot=snapshot,
@@ -2459,11 +2556,17 @@ def perform_update_transaction(
                 )
             else:
                 _update_health_path(root).unlink(missing_ok=True)
+            compiler_ready = _prepare_web_toolchain(root)
             success_message = (
                 f"Обновление успешно установлено: commit {target_commit[:8]}. "
                 "Миграции и целостность базы данных проверены. "
                 f"Snapshot для ручного отката: {snapshot.snapshot_id}."
             )
+            if not compiler_ready:
+                success_message += (
+                    " Инструменты веб-редактора пока недоступны; их подготовка "
+                    "повторится при обновлении. Бот и сайт продолжают работать."
+                )
             _try_write_update_result(
                 root,
                 admin_id=admin_id,
@@ -2490,6 +2593,11 @@ def perform_update_transaction(
             except Exception:
                 logger.exception("Cannot determine Git state after update failure")
             if git_changed:
+                try:
+                    _undo_web_release(root, snapshot)
+                except Exception as ui_error:
+                    logger.exception("Cannot restore this update's UI pointer; retained files remain available")
+                    failure_detail += "; UI pointer recovery: " + _bounded_detail(ui_error)
                 try:
                     mark_snapshot_applied(
                         snapshot.snapshot_id,

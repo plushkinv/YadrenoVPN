@@ -28,12 +28,13 @@ def _paging(request):
 
 async def bootstrap(request):
     from core.payment_offers import balance_spending_enabled
+    from core.web_ui import public_modules
     from web_api.auth import SESSION_KEY
     offers = (await trials.list_offers(account(request)) if SESSION_KEY in request else
               [db.get_account_trial_eligibility(None, offer['offer_id'])
                for offer in db.get_all_trial_offers() if offer['is_enabled']])
     trial_available = any(offer['eligible'] for offer in offers)
-    return web.json_response({'api_version': 1, 'auth': public_auth_settings(),
+    return web.json_response({'api_version': 1, 'auth': public_auth_settings(), 'modules': public_modules(),
             'features': {'subscriptions': True, 'trial': trial_available, 'promotions': db.has_available_promo_codes(),
                          'referrals': db.is_referral_enabled(), 'balance': balance_spending_enabled(),
                          'subscription_import': True, 'support_chat': False}})

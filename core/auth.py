@@ -11,6 +11,7 @@ import phonenumbers
 from core.context import AccountContext
 from core.passwords import hash_password, verify_password
 from core.results import CoreError
+from core.phone_verification_settings import public_auth_settings, verification_settings
 from database import requests as db
 from runtime.readiness import require_active
 
@@ -31,21 +32,6 @@ def normalize_phone(value: str) -> str:
         return phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164)
     except (ValueError, phonenumbers.NumberParseException):
         raise CoreError('phone_invalid', details={'format': 'E.164'}) from None
-
-
-def sms_settings() -> dict:
-    enabled = db.get_setting('web_sms_enabled', '0') == '1'
-    key = db.get_setting('web_sms_api_key', '') or ''
-    return {'available': enabled and bool(key), 'api_key': key,
-            'required': enabled and db.get_setting('web_sms_registration_required', '0') == '1'}
-
-
-def public_auth_settings() -> dict:
-    settings = sms_settings()
-    return {'phone_format': 'E.164', 'sms_available': settings['available'],
-            'sms_registration_required': settings['required'],
-            'password_recovery_available': settings['available'],
-            'unverified_phone_warning_required': not settings['required']}
 
 
 def _limit(kind: str, ip: str, phone: str | None = None, *, now: int | None = None):
@@ -94,9 +80,9 @@ async def register(*, phone: str, password: str, ip: str, proof: str | None = No
                                       or not referral_code.isascii() or not referral_code.isalnum()):
         raise CoreError('invalid_request', details={'field': 'referral_code'})
     _limit('register', ip, phone)
-    settings = sms_settings()
-    if settings['required'] and not proof:
-        raise CoreError('sms_proof_required')
+    settings = verification_settings()
+    if settings['available'] and not proof:
+        raise CoreError('verification_proof_required')
     encoded = await hash_password(password)
     user = db.create_account_credentials(phone=phone, password_hash=encoded, now=int(time.time()),
                                          verified=bool(proof), proof_hash=secret_hash(proof) if proof else None,
@@ -146,10 +132,10 @@ async def set_credentials(
     phone = normalize_phone(phone)
     _limit('credentials', ip, phone)
     old = db.get_account_credentials(session['user_id'])
-    settings = sms_settings()
+    settings = verification_settings()
     changed_phone = old is None or old['phone'] != phone
-    if changed_phone and settings['required'] and not proof:
-        raise CoreError('sms_proof_required')
+    if changed_phone and settings['available'] and not proof:
+        raise CoreError('verification_proof_required')
     if old is not None and not await verify_password(old['password_hash'], current_password):
         raise CoreError('authentication_failed')
     encoded = await hash_password(password)
@@ -172,56 +158,11 @@ async def set_credentials(
     return create_session(user['id'], session['source'], version)
 
 
-async def request_sms(*, phone: str, purpose: str, ip: str, session: dict | None = None) -> dict:
-    require_active()
-    phone = normalize_phone(phone)
-    settings = sms_settings()
-    if not settings['available']:
-        raise CoreError('sms_unavailable')
-    if purpose not in ('register', 'reset', 'credentials'):
-        raise CoreError('invalid_request')
-    if purpose == 'credentials' and session is None:
-        raise CoreError('authentication_required')
-    now = int(time.time())
-    _limit('sms', ip, phone, now=now)
-    if not db.consume_auth_limits([
-        ('sms:send:' + secret_hash(phone), 1, 60),
-        ('sms:daily:' + secret_hash(phone), 10, 86400),
-        ('sms:installation_hour', 100, 3600),
-        ('sms:installation_day', 500, 86400),
-    ], now):
-        raise CoreError('rate_limited', retryable=True)
-    challenge_id, code = secrets.token_urlsafe(24), f'{secrets.randbelow(1000000):06}'
-    db.create_auth_challenge(challenge_id=challenge_id, phone=phone, purpose=purpose,
-                             code_hash=secret_hash(challenge_id + ':' + code), now=now,
-                             session_hash=session['token_hash'] if purpose == 'credentials' else None,
-                             user_id=session['user_id'] if purpose == 'credentials' else None)
-    from bot.services.sms import send_auth_code
-    state = await send_auth_code(api_key=settings['api_key'], phone=phone, code=code)
-    db.finish_auth_challenge_send(challenge_id, state)
-    return {'challenge_id': challenge_id, 'expires_at': now + 300, 'send_state': state}
-
-
-def verify_sms(*, challenge_id: str, code: str, ip: str, session: dict | None = None) -> dict:
-    require_active()
-    _limit('sms_verify', ip)
-    if not isinstance(challenge_id, str) or len(challenge_id) > 64 or not isinstance(code, str) or len(code) != 6:
-        raise CoreError('sms_code_invalid')
-    proof = secrets.token_urlsafe(32)
-    if not db.verify_auth_challenge(
-        challenge_id=challenge_id, code_hash=secret_hash(challenge_id + ':' + code),
-        proof_hash=secret_hash(proof), now=int(time.time()),
-        session_hash=session['token_hash'] if session else None,
-    ):
-        raise CoreError('sms_code_invalid')
-    return {'proof': proof}
-
-
 async def reset_password(*, phone: str, password: str, proof: str, ip: str) -> None:
     require_active()
     phone = normalize_phone(phone)
     _limit('reset', ip, phone)
-    if not sms_settings()['available']:
-        raise CoreError('sms_unavailable')
+    if not verification_settings()['available']:
+        raise CoreError('verification_unavailable')
     encoded = await hash_password(password)
     db.reset_account_password(phone=phone, password_hash=encoded, proof_hash=secret_hash(proof), now=int(time.time()))

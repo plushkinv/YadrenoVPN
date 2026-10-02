@@ -16,17 +16,17 @@ from database.requests import (
     save_support_admin_notification_delivery,
     set_support_message_delivery,
 )
-from bot.keyboards.support import admin_support_reply_kb
 from bot.utils.page_renderer import (
     PreparedPageRender,
     prepare_page_render,
 )
 from bot.utils.text import escape_html, get_message_text_for_storage, send_media_or_text
+from bot.utils.placeholders import SUPPORT_TICKET_FIELDS_CONTEXT_KEY
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_SUPPORT_MEDIA_TYPES = {"text", "photo", "video", "animation"}
 SUPPORT_REPLY_PAGE_KEY = "support_reply"
+SUPPORT_ADMIN_PAGE_KEY = "support_admin_notification"
 
 
 @dataclass
@@ -55,22 +55,13 @@ async def support_thread_operation(thread_id: int):
 
 
 def extract_support_payload(message: Message) -> Optional[Dict[str, Any]]:
-    """Retrieves a supported support message without downloading files."""
-    media_type = "text"
-    media_file_id = None
-
-    if message.animation:
-        media_type = "animation"
-        media_file_id = message.animation.file_id
-    elif message.video:
-        media_type = "video"
-        media_file_id = message.video.file_id
-    elif message.photo:
-        media_type = "photo"
-        media_file_id = message.photo[-1].file_id
-    elif message.text:
-        media_type = "text"
-    else:
+    """Extracts text or a Telegram file attachment without downloading it."""
+    media_type = message.content_type
+    attachment = getattr(message, media_type, None)
+    if media_type == "photo":
+        attachment = attachment[-1]
+    media_file_id = getattr(attachment, "file_id", None)
+    if media_type != "text" and not media_file_id:
         return None
 
     text_html = get_message_text_for_storage(message, "html")
@@ -83,18 +74,16 @@ def extract_support_payload(message: Message) -> Optional[Dict[str, Any]]:
     }
 
 
-def support_unsupported_text() -> str:
-    return (
-        "❌ <b>Формат не поддерживается</b>\n\n"
-        "Отправьте текст, фото, видео или GIF."
-    )
-
-
 def format_support_user_line(user: Dict[str, Any]) -> str:
     """Generates a short username for support cards."""
+    return escape_html(_support_user_name(user))
+
+
+def _support_user_name(user: Dict[str, Any]) -> str:
+    """Return plain display data; each output surface owns HTML escaping."""
     username = user.get("username")
     if username:
-        return f"@{escape_html(username)}"
+        return f"@{username}"
 
     parts = []
     if user.get("first_name"):
@@ -102,7 +91,7 @@ def format_support_user_line(user: Dict[str, Any]) -> str:
     if user.get("last_name"):
         parts.append(str(user["last_name"]))
     if parts:
-        return escape_html(" ".join(parts))
+        return " ".join(parts)
     return f"ID: {user['telegram_id']}" if user.get('telegram_id') is not None else f"Аккаунт: {user['id']}"
 
 
@@ -113,27 +102,51 @@ def support_identity_line(thread):
     return f"🌐 Аккаунт сайта: <code>{thread['user_id']}</code>"
 
 
-def format_admin_support_card(
+async def _send_admin_support_card(
+    bot: Bot,
     *,
+    admin_id: int,
     title: str,
     thread: Dict[str, Any],
     user: Dict[str, Any],
     assigned_admin_id: Optional[int],
-) -> str:
-    """A request card that is sent to the admin after a copy of the message."""
-    lines = [
-        f"💬 <b>{escape_html(title)}</b>",
-        "",
-        f"👤 Пользователь: {format_support_user_line(user)}",
-        support_identity_line(thread),
-        f"🧵 Диалог: <code>{thread['id']}</code>",
-    ]
+) -> Message:
+    """Render the shared card with the recipient as actor and a separate subject."""
     if assigned_admin_id:
-        lines.append(f"👨‍💻 Закреплён за: <code>{assigned_admin_id}</code>")
+        assignment = f"👨‍💻 Закреплён за: <code>{int(assigned_admin_id)}</code>"
     else:
-        lines.append("👨‍💻 Диалог пока не закреплён. Первый ответ закрепит его за вами.")
-    lines.extend(["", "Выше сообщение пользователя."])
-    return "\n".join(lines)
+        assignment = "👨‍💻 Диалог пока не закреплён. Первый ответ закрепит его за вами."
+    telegram_id = thread.get('user_telegram_id')
+    prepared = await prepare_page_render(
+        bot,
+        SUPPORT_ADMIN_PAGE_KEY,
+        context={
+            'telegram_id': int(admin_id),
+            'support_thread_id': int(thread['id']),
+            SUPPORT_TICKET_FIELDS_CONTEXT_KEY: {
+                'id': int(thread['id']),
+                'status': str(thread.get('status') or ''),
+                'user_id': int(thread['user_id']),
+                'telegram_id': telegram_id,
+                'user_name': _support_user_name(user),
+                'assigned_admin_id': assigned_admin_id,
+                'title': title,
+                'identity_label': '📱 Telegram ID' if telegram_id is not None else '🌐 Аккаунт сайта',
+                'identity_id': telegram_id if telegram_id is not None else int(thread['user_id']),
+                'assignment': assignment,
+            },
+        },
+    )
+    if not isinstance(prepared, PreparedPageRender) or prepared.page_key != SUPPORT_ADMIN_PAGE_KEY:
+        raise RuntimeError('Administrator support page is unavailable')
+    return await send_media_or_text(
+        bot,
+        chat_id=admin_id,
+        text=prepared.text,
+        media=prepared.media,
+        media_type=prepared.media_type,
+        reply_markup=prepared.reply_markup,
+    )
 
 
 async def copy_support_message(
@@ -185,16 +198,13 @@ async def send_user_message_to_admins(
                 chat_id=admin_id,
                 source_message=source_message,
             )
-            card = await send_media_or_text(
+            card = await _send_admin_support_card(
                 bot,
-                chat_id=admin_id,
-                text=format_admin_support_card(
-                    title=title,
-                    thread=thread,
-                    user=user,
-                    assigned_admin_id=assigned_admin_id,
-                ),
-                reply_markup=admin_support_reply_kb(thread["id"]),
+                admin_id=admin_id,
+                title=title,
+                thread=thread,
+                user=user,
+                assigned_admin_id=assigned_admin_id,
             )
             if save_notification:
                 from database.requests import record_support_admin_notification
@@ -262,16 +272,13 @@ async def send_generated_user_message_to_admins(
                 )
 
             if not card_message_id:
-                card = await send_media_or_text(
+                card = await _send_admin_support_card(
                     bot,
-                    chat_id=admin_id,
-                    text=format_admin_support_card(
-                        title="Новое обращение в поддержку",
-                        thread=thread,
-                        user=user,
-                        assigned_admin_id=assigned,
-                    ),
-                    reply_markup=admin_support_reply_kb(int(thread["id"])),
+                    admin_id=admin_id,
+                    title="Новое обращение в поддержку",
+                    thread=thread,
+                    user=user,
+                    assigned_admin_id=assigned,
                 )
                 card_message_id = getattr(card, "message_id", None)
                 delivery = save_support_admin_notification_delivery(

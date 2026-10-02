@@ -20,8 +20,10 @@ SESSION_KEY = getattr(web, 'RequestKey', web.AppKey)('account_session', dict)
 def client_ip(request: web.Request) -> str:
     remote = request.remote or 'unknown'
     try:
-        if ipaddress.ip_address(remote).is_loopback:
-            # The stage-3 proxy must overwrite this header, never append to it.
+        from web_api.app import SETTINGS_KEY
+        peer = ipaddress.ip_address(remote)
+        if any(peer in ipaddress.ip_network(value) for value in request.app[SETTINGS_KEY].trusted_proxies):
+            # The configured proxy overwrites this single address, never appends.
             forwarded = request.headers.get('X-Real-IP')
             if forwarded:
                 return str(ipaddress.ip_address(forwarded))
@@ -42,7 +44,7 @@ def _error_status(error: CoreError) -> int:
         return 401
     if error.code in ('csrf_failed', 'origin_invalid', 'access_denied'):
         return 403
-    if error.code in ('phone_in_use', 'credentials_changed', 'credentials_already_exist'):
+    if error.code in ('conflict', 'phone_in_use', 'credentials_changed', 'credentials_already_exist'):
         return 409
     if error.retryable:
         return 503
@@ -70,7 +72,9 @@ async def _security_response(request: web.Request, handler):
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
             if request.headers.get('Origin') != request.app[SETTINGS_KEY].public_origin:
                 raise CoreError('origin_invalid')
-            if request.content_type != 'application/json':
+            expected_type = ('multipart/form-data' if request.path == '/api/v1/admin/ui/editor/uploads'
+                             else 'application/json')
+            if request.content_type != expected_type:
                 raise CoreError('invalid_request')
         token = request.cookies.get(SESSION_COOKIE)
         session = None
@@ -80,11 +84,12 @@ async def _security_response(request: web.Request, handler):
             except CoreError:
                 pass
         anonymous = request.path in {
-            '/api/v1/bootstrap', '/api/v1/openapi.json',
+            '/api/v1/bootstrap', '/api/v1/openapi.json', '/api/v1/ui/settings', '/api/v1/ui/manifest',
             '/api/v1/auth/settings', '/api/v1/auth/register', '/api/v1/auth/login',
-            '/api/v1/auth/telegram', '/api/v1/auth/sms/request',
-            '/api/v1/auth/sms/verify', '/api/v1/auth/password/reset',
+            '/api/v1/auth/telegram', '/api/v1/auth/verification/request', '/api/v1/auth/verification/status',
+            '/api/v1/auth/verification/verify', '/api/v1/auth/password/reset',
         }
+        anonymous = anonymous or request.method in {'GET', 'HEAD'} and request.path.startswith('/api/v1/ui/packages/')
         if not anonymous and session is None:
             raise CoreError('authentication_required')
         from web_api.schemas import validate_request, validate_response
@@ -195,22 +200,6 @@ async def credentials(request):
     return _session_response(result)
 
 
-async def sms_request(request):
-    body = await _body(request)
-    result = await auth.request_sms(phone=_text(body, 'phone', max_length=64),
-                                    purpose=_text(body, 'purpose', max_length=20),
-                                    ip=client_ip(request), session=request.get(SESSION_KEY))
-    return web.json_response(result)
-
-
-async def sms_verify(request):
-    body = await _body(request)
-    result = auth.verify_sms(challenge_id=_text(body, 'challenge_id', max_length=64),
-                              code=_text(body, 'code', max_length=6), ip=client_ip(request),
-                              session=request.get(SESSION_KEY))
-    return web.json_response(result)
-
-
 async def password_reset(request):
     body = await _body(request)
     await auth.reset_password(phone=_text(body, 'phone', max_length=64),
@@ -224,7 +213,6 @@ def add_routes(app: web.Application) -> None:
         ('auth/settings', settings, 'GET'), ('auth/register', register, 'POST'),
         ('auth/login', login, 'POST'), ('auth/telegram', telegram, 'POST'),
         ('auth/logout', logout, 'POST'), ('auth/session', session_info, 'GET'),
-        ('account/credentials', credentials, 'POST'), ('auth/sms/request', sms_request, 'POST'),
-        ('auth/sms/verify', sms_verify, 'POST'), ('auth/password/reset', password_reset, 'POST'),
+        ('account/credentials', credentials, 'POST'), ('auth/password/reset', password_reset, 'POST'),
     ):
         app.router.add_route(method, '/api/v1/' + path, handler)

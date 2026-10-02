@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from aiogram import Bot
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardButton, InlineKeyboardMarkup,
+    InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -510,6 +510,7 @@ def _build_keyboard(
         # Processing by type
         callback_data = None
         url = None
+        web_app_url = None
 
         if action_type == 'system_collection':
             if is_hidden:
@@ -618,6 +619,24 @@ def _build_keyboard(
                 logger.warning("Некорректный callback_data для action_value '%s': %s", action_value, e)
                 continue
 
+        elif action_type == 'web_app':
+            if is_hidden:
+                continue
+            from bot.utils.web_app_buttons import validate_web_app_url
+            if context.get('telegram_chat_type', 'private') != 'private' or context.get('telegram_business_message'):
+                logger.warning("web_app button '%s' is unavailable outside a private non-business chat", btn_id)
+                continue
+            action_value = require_string_value(action_value, 'action_value', btn_id)
+            if action_value is None:
+                continue
+            try:
+                validate_web_app_url(action_value, template=True)
+                web_app_url = render_url(action_value, btn_id)
+                validate_web_app_url(web_app_url)
+            except ValueError:
+                logger.warning("web_app button '%s' has an invalid or unavailable HTTPS URL", btn_id)
+                continue
+
         elif action_type == 'url':
             action_value = require_string_value(action_value, 'action_value', btn_id)
             if action_value is None:
@@ -669,10 +688,12 @@ def _build_keyboard(
             continue
 
         resolved_buttons.append({
+            'id': btn_id,
             'label': rendered_label,
             'icon_custom_emoji_id': icon_custom_emoji_id,
             'callback_data': callback_data,
             'url': url,
+            'web_app_url': web_app_url,
             'style': _resolve_button_style(color),
             'row': row,
             'col': col,
@@ -696,12 +717,25 @@ def _build_keyboard(
             rows_map[r].append(btn)
 
         # Sort rows by number
+        anchor = None
+        if context.get('_stock_main_admin_before_web') and context.get('page_key') == 'main' and append_buttons:
+            from core.web_ui import stock_web_button_position
+            anchor = stock_web_button_position()
         for row_num in sorted(rows_map.keys()):
             row_buttons = rows_map[row_num]
+            if (row_num == anchor == max(rows_map) and len(row_buttons) == 1
+                    and row_buttons[0].get('id') == 'open_web_cabinet' and row_buttons[0].get('web_app_url')):
+                for extra_row in append_buttons or []:
+                    builder.row(*extra_row)
+                append_buttons = None
             # Forming InlineKeyboardButton objects
             kb_buttons = []
             for btn in row_buttons:
-                if btn['url']:
+                if btn.get('web_app_url'):
+                    kb_buttons.append(InlineKeyboardButton(text=btn['label'], web_app=WebAppInfo(url=btn['web_app_url']),
+                        **({'icon_custom_emoji_id': btn['icon_custom_emoji_id']} if btn['icon_custom_emoji_id'] else {}),
+                        **({'style': btn['style']} if btn['style'] else {})))
+                elif btn['url']:
                     kb_buttons.append(
                         InlineKeyboardButton(
                             text=btn['label'],
@@ -868,12 +902,15 @@ def serialize_inline_button_rows(
             }
             callback_data = getattr(button, 'callback_data', None)
             url = getattr(button, 'url', None)
+            web_app = getattr(button, 'web_app', None)
             style = getattr(button, 'style', None)
             icon_custom_emoji_id = getattr(button, 'icon_custom_emoji_id', None)
             if callback_data:
                 item['callback_data'] = callback_data
             if url:
                 item['url'] = url
+            if web_app:
+                item['web_app'] = {'url': web_app.url}
             if style:
                 item['style'] = style
             if icon_custom_emoji_id:
@@ -1040,6 +1077,11 @@ def _build_render_context(
     if bot_username:
         render_context['bot_username'] = bot_username
     render_context.update(_normalize_context_mapping(context))
+    message = target.message if isinstance(target, CallbackQuery) else target
+    chat = getattr(message, 'chat', None)
+    if chat is not None:
+        render_context['telegram_chat_type'] = chat.type
+        render_context['telegram_business_message'] = bool(getattr(message, 'business_connection_id', None))
     return render_context
 
 

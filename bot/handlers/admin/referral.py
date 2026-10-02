@@ -22,6 +22,7 @@ from database.requests import (
 )
 from bot.states.admin_states import AdminStates
 from bot.utils.admin import is_admin
+from bot.utils.placeholder_help import EDITOR_PLACEHOLDER_HELP
 from bot.keyboards.admin import (
     referral_main_kb,
     referral_level_kb,
@@ -336,22 +337,12 @@ async def referral_conditions_start(callback: CallbackQuery, state: FSMContext):
     
     from bot.handlers.admin.message_editor import show_message_editor
     
-    help_text = (
-        "📝 <b>Справка: Реферальная страница</b>\n\n"
-        "В тексте доступны плейсхолдеры, которые автоматически подставляются "
-        "при показе пользователю:\n\n"
-        "Переменные:\n"
-        "• <code>%реферальная_ссылка%</code> — реферальная ссылка пользователя\n"
-        "• <code>%реферальная_ссылка_url%</code> — URL-кодированная ссылка для URL-кнопок\n"
-        "• <code>%реферальная_статистика%</code> — статистика по уровням и баланс"
-    )
-    
     await show_message_editor(
         callback.message, state,
         key='referral',
         back_callback='admin_referral',
         allowed_types=['text', 'photo', 'video', 'animation'],
-        help_text=help_text,
+        help_text=EDITOR_PLACEHOLDER_HELP['referral'],
     )
     await callback.answer()
 
