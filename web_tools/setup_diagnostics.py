@@ -26,15 +26,16 @@ def _steps(code, details, options):
             steps.append('Исправьте публикацию порта в настройках соответствующего контейнера или его Compose-проекта.')
         elif 'xray' in service or 'x-ui' in service:
             steps.append('В панели найдите соответствующий inbound, порт панели или подписки. '
-                         'Освободите порт для Nginx: перенесите этот listener либо отключите ненужный inbound. '
-                         'Перед переносом работающего VPN учтите обновление подключений клиентов; не останавливайте весь Xray.')
+                         'Для Reality или общего порта 443 сначала подготовьте полный план маршрутизации и возврата. '
+                         'Перенос listener и включение нового маршрута выполняйте согласованно, чтобы VPN оставался доступен. '
+                         'Не переносите работающий inbound отдельным предварительным шагом и не останавливайте весь Xray.')
         else:
             steps.append('Измените порт или привязку обнаруженной службы через её штатные настройки, сохранив её работу.')
         steps.append('Если служба должна сохранить этот порт, подготовьте совместную маршрутизацию вручную '
                      'и завершите подключение служебной командой для готового HTTPS-прокси ниже. '
                      'Повторный запуск мастера сам порт не освободит.')
         return steps
-    if code in {'renewal_conflict', 'renewal_changed', 'renewal_http_unavailable'}:
+    if code == 'renewal_conflict':
         return ['Определите, какой клиент и какое задание продлевают указанный сертификат: acme.sh, Certbot, cron или systemd.',
                 'Настройте HTTP-проверку через работающий Nginx (webroot) либо сохраните другой совместимый способ. '
                 'Проверка должна быть доступна по HTTP на порту 80 для всех имён/IP этого сертификата.',
@@ -65,9 +66,10 @@ def _steps(code, details, options):
                 'Убедитесь, что корень / и /api/ ведут к этой установке бота, а не к панели, другому сайту или старому upstream.',
                 'Проверьте применение конфигурации Nginx и работу yadreno-vpn. Готовый прокси должен передавать запросы '
                 'без подмены страницы, дополнительной авторизации и неожиданных перенаправлений.']
-    if code in {'certificate_unusable', 'renewal_not_ready'}:
+    if code in {'certificate_unusable', 'renewal_not_ready', 'renewal_scheduler_unknown'}:
         return ['Проверьте выдачу сертификата для выбранного домена, HTTP-проверку на порту 80 и срок сертификата.',
-                'Проверьте созданное задание продления, его журнал и перезагрузку Nginx после продления. '
+                'Проверьте штатный certbot.timer либо расписание Snap Certbot, журнал клиента и reload Nginx после продления. '
+                'Собственные таймеры и обходные штампы готовности не создавайте. '
                 'Существующие сертификаты панели и подписок должны сохранить своё продление.']
     if code in {'setup_incomplete', 'setup_recovery_invalid'}:
         return ['Восстановите прерванную настройку штатной командой recover из этой установки. '
@@ -155,9 +157,10 @@ def manual_setup_report(payload, options, root):
     for index, issue in enumerate(issues, 1):
         lines.append('')
         lines.append(f'{index}. {issue["message"]} [код: {issue["code"]}]')
-        for field in ('path', 'file', 'address'):
+        for field in ('path', 'file', 'address', 'log', 'service_log'):
             if issue.get('details', {}).get(field):
-                lines.append('   ' + {'path': 'Путь', 'file': 'Файл', 'address': 'Адрес'}[field] + ': ' + str(issue['details'][field]))
+                lines.append('   ' + {'path': 'Путь', 'file': 'Файл', 'address': 'Адрес',
+                                     'log': 'Диагностика', 'service_log': 'Журнал команды'}[field] + ': ' + str(issue['details'][field]))
         for step in _steps(issue['code'], issue.get('details', {}), options):
             if step not in actions:
                 lines.append('   — ' + step)
@@ -174,7 +177,7 @@ def manual_setup_report(payload, options, root):
                       _command(_retry(root, options, prepared=True) + ([] if options.backend_port else ['--backend-port', '18764']))]
         lines += ['', 'Проверьте открытие сайта и Mini App, работу панели/VPN/подписок и продление их сертификатов.']
     if payload.get('stage') == 'recovery' or payload['code'] in {'setup_incomplete', 'setup_recovery_invalid', 'setup_failed'}:
-        command = [str(Path(root) / 'venv/bin/python'), '-m', 'web_api.management', '--project-root', str(root), 'recover']
+        command = [str(Path(root) / 'venv/bin/python'), '-m', 'web_tools.setup_cli', '--project-root', str(root), 'recover']
         lines += ['', 'Команда восстановления незавершённой настройки:',
                   'cd ' + shlex.quote(str(root)) + ' && ' + shlex.join(command)]
     lines += ['', COPY_END]

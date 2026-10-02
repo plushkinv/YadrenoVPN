@@ -7,10 +7,11 @@ import json
 from pathlib import Path
 import re
 
-from web_api.setup_options import SetupError
-from web_api.setup_detection import prepared_local_nginx
-from web_api.setup_certificates import certificate_paths, inspect_renewals
-from web_api.setup_system import owned_paths, system_path, verify_owned_file
+from web_tools.setup_options import SetupError
+from web_tools.setup_detection import prepared_local_nginx
+from web_tools.setup_certificates import check_profile, inspect_renewals, renewal_timer
+from web_tools.setup_paths import certificate_name as lineage_name
+from web_tools.setup_system import owned_paths, system_path, verify_owned_file
 from web_tools.package import MAX_BYTES, digest, verify_package
 from web_tools.paths import local_path
 from web_tools.publication import manifest_path, read_pointer
@@ -114,18 +115,16 @@ def overlaps(first, second):
     return first == second or first.is_unspecified or second.is_unspecified
 
 
-def nginx_configuration_preflight(system, options, paths, instance, certificate_addresses=()):
-    for name in ('nginx', 'renew_service', 'renew_timer'):
-        verify_owned_file(system, paths[name], instance)
-    cert_root = system_path(system, paths['certbot'])
-    if cert_root.exists():
-        owner = cert_root / '.yadreno-owner'
-        if owner.is_symlink() or not owner.is_file() or owner.read_text().strip() != instance:
-            raise SetupError('certificate_directory_collision', 'Каталог сертификата не принадлежит этой установке.')
+def nginx_configuration_preflight(system, options, paths, instance):
+    verify_owned_file(system, paths['nginx'], instance)
+    system_path(system, paths['certbot'])
+    check_profile(system, paths, certificate_name(system, paths, options.domain))
     if system.which('nginx'):
         dump = system.run(['nginx', '-T'], check=False)
         if dump.returncode:
-            raise SetupError('nginx_invalid', 'Существующая конфигурация Nginx не проходит проверку.')
+            failure = system.command_error(['nginx', '-T'], dump.stderr, dump.returncode)
+            raise SetupError('nginx_invalid', 'Существующая конфигурация Nginx не проходит проверку. ' + str(failure),
+                             details=failure.details)
         if re.search(r'\bstream\s*\{', re.sub(r'#[^\n]*', '', dump.stdout)):
             raise SetupError('nginx_complex_configuration',
                 'Nginx содержит маршрутизацию TCP/UDP (stream); совместное использование портов требует отдельной проверки.')
@@ -149,11 +148,11 @@ def nginx_configuration_preflight(system, options, paths, instance, certificate_
             raise SetupError('nginx_include_missing', 'Подготовьте include /etc/nginx/conf.d/*.conf внутри http; основной конфиг не изменён.')
         chunks = re.split(r'^# configuration file (.+):\s*$', dump.stdout, flags=re.M)
         for index in range(1, len(chunks), 2):
-            if chunks[index] in {paths['nginx'], *(certificate_paths(address)['nginx'] for address in certificate_addresses)}:
+            if chunks[index] == paths['nginx']:
                 continue
             for names in re.findall(r'\bserver_name\s+([^;]+);', re.sub(r'#[^\n]*', '', chunks[index + 1])):
                 for name in names.split():
-                    if (name in {options.domain, *certificate_addresses}
+                    if (name == options.domain
                             or name.startswith('*.') and options.domain.endswith(name[1:]) or name.startswith('~')):
                         raise SetupError('server_name_conflict', 'Домен уже обслуживается другим virtual host; чужая конфигурация не изменена.')
 
@@ -169,16 +168,16 @@ def infrastructure_error(issues, addresses=()):
 
 def nginx_preflight(system, options, paths, instance, addresses=None):
     addresses = system.addresses() if addresses is None else addresses
-    plans, issues = inspect_renewals(system, paths, addresses, options.listen_address)
+    issues = inspect_renewals(system)
     try:
-        nginx_configuration_preflight(system, options, paths, instance, [item['address'] for item in plans])
+        nginx_configuration_preflight(system, options, paths, instance)
     except SetupError as exc:
         issues.insert(0, exc)
     infrastructure_error(issues, addresses)
-    return plans
 
 
 def preflight(root, options, system, store):
+    system.diagnostic_path = None  # Read-only checks never create diagnostic files.
     signed, trust = publication(root)
     paths = owned_paths(trust['instance_id'])
     saved = store.snapshot()
@@ -231,7 +230,7 @@ def preflight(root, options, system, store):
     else:
         raise SetupError('backend_port_conflict', 'Выбранный внутренний порт занят; сохранённый или явный порт автоматически не меняется.')
     if options.proxy == 'managed-nginx':
-        for command in ('systemd-analyze',) + (('apt-get',) if not system.which('nginx') or not system.which('certbot') else ()):
+        for command in (('apt-get',) if not system.which('nginx') or not system.which('certbot') else ()):
             if not system.which(command):
                 raise SetupError('command_missing', 'Не найдена необходимая команда: ' + command)
         issues = []
@@ -247,12 +246,16 @@ def preflight(root, options, system, store):
                         'Для Nginx нужен свободный порт. Перенос VPN, панели или другого прокси требует '
                         'отдельной настройки; службы не изменены.',
                         details={'address': item['host'], 'port': item['port'], 'service': service}))
-        plans, renewal_issues = inspect_renewals(system, paths, addresses, options.listen_address)
+        renewal_issues = inspect_renewals(system)
         try:
-            nginx_configuration_preflight(system, options, paths, trust['instance_id'], [item['address'] for item in plans])
+            nginx_configuration_preflight(system, options, paths, trust['instance_id'])
         except SetupError as exc:
             issues.append(exc)
         issues.extend(renewal_issues)
+        try:
+            timer = renewal_timer(system)
+        except SetupError as exc:
+            issues.append(exc)
         infrastructure_error(issues, addresses)
         if not usable_certificate(system, paths, options.domain, min_days=-36500) and (not options.email or not options.agree_tos):
             raise SetupError('acme_arguments_required',
@@ -260,18 +263,14 @@ def preflight(root, options, system, store):
                 stage='arguments', exit_code=2)
     return options, signed, trust, saved, paths, {'dns': resolved, 'server_addresses': addresses,
         'existing_local_proxy': prepared['file'] if prepared else None,
-        'acme_http01': plans if options.proxy == 'managed-nginx' else [],
+        'renewal_timer': timer if options.proxy == 'managed-nginx' else None,
         'tls_renewal': 'managed' if options.proxy == 'managed-nginx' else 'external_owner',
         'certificate_name': certificate_name(system, paths, options.domain) if options.proxy == 'managed-nginx' else None,
         'upstream': 'http://' + ('[' + options.backend_bind + ']' if ':' in options.backend_bind else options.backend_bind) + ':' + str(options.backend_port)}
 
 
 def certificate_name(system, paths, domain):
-    # Keep the first implementation's fixed lineage only for its own domain.
-    # Domain changes must never overwrite the working old certificate before proof.
-    if usable_certificate(system, paths, domain, min_days=-36500, cert_name='web'):
-        return 'web'
-    return 'web-' + digest(domain.encode('ascii'))
+    return lineage_name(paths, domain)
 
 
 def usable_certificate(system, paths, domain, *, min_days=30, cert_name=None):
@@ -279,10 +278,12 @@ def usable_certificate(system, paths, domain, *, min_days=30, cert_name=None):
     from datetime import datetime, timedelta, timezone
     base = system.path(paths['certbot'])
     cert_name = cert_name or certificate_name(system, paths, domain)
-    cert = base / 'config/live' / cert_name / 'fullchain.pem'
-    key = base / 'config/live' / cert_name / 'privkey.pem'
+    cert = base / 'live' / cert_name / 'fullchain.pem'
+    key = base / 'live' / cert_name / 'privkey.pem'
     try:
-        if not cert.resolve().is_relative_to(base.resolve()) or not key.resolve().is_relative_to(base.resolve()) or not key.is_file():
+        archive = system_path(system, paths['certbot'] + '/archive/' + cert_name)
+        system_path(system, paths['certbot'] + '/live/' + cert_name)
+        if cert.resolve().parent != archive.resolve() or key.resolve().parent != archive.resolve() or not key.is_file():
             return False
         value = x509.load_pem_x509_certificate(cert.read_bytes())
         names = value.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)

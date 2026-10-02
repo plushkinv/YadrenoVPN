@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 import sys
 
-from web_api.setup_options import SetupError, SetupOptions, result
-from web_api.setup_preflight import SettingsStore, preflight
-from web_api.setup_system import System, setup_lock
+from web_tools.setup_options import SetupError, SetupOptions, result
+from web_tools.setup_preflight import SettingsStore, preflight
+from web_tools.setup_system import System, setup_lock
 from web_tools.paths import PROJECT_ROOT, local_path
 
 
@@ -41,7 +41,7 @@ def parser():
 
 
 def perform_setup(root, options, *, system=None, store=None):
-    from web_api.setup_apply import apply, recover_interrupted_setup
+    from web_tools.setup_apply import apply, recover_interrupted_setup
     system, store = system or System(), store or SettingsStore()
     journal = local_path(Path(root) / 'web_runtime', 'secrets/setup-transaction.json')
     if options.check_only:
@@ -74,7 +74,7 @@ def main(argv=None):
             options = SetupOptions.parse(args)
             payload = perform_setup(root, options)
         else:
-            from web_api.setup_apply import recover_interrupted_setup
+            from web_tools.setup_apply import recover_interrupted_setup
             changed = recover_interrupted_setup(root)
             payload = result(ok=True, code='recovered' if changed else 'nothing_to_recover', stage='recovery', changed=changed)
         status = 0 if payload['ok'] else 4
@@ -90,13 +90,13 @@ def main(argv=None):
         status = 4
     manual = not payload['ok'] and payload['stage'] not in {'arguments', 'complete'}
     if manual:
-        from web_api.setup_diagnostics import manual_setup_report
+        from web_tools.setup_diagnostics import manual_setup_report
         payload['message'] = manual_setup_report(payload, options, root)
     if output_json:
         print(json.dumps(payload, ensure_ascii=False))
     else:
         if manual:
-            from web_api.setup_diagnostics import terminal_report
+            from web_tools.setup_diagnostics import terminal_report
             print(terminal_report(payload['message']))
         else:
             print(payload.get('message') or ('Сайт и Mini App готовы: ' + str(payload['public_url']) if payload['code'] == 'ready'
@@ -107,9 +107,6 @@ def main(argv=None):
             print('Найдено готовое локальное подключение домена. Конфигурация Nginx и сертификат сохраняются.')
         if payload.get('tls_renewal') == 'external_owner':
             print('Продление сертификата остаётся в существующей конфигурации HTTPS; будущая выдача здесь не проверяется.')
-        if payload['ok'] and payload.get('acme_http01'):
-            print('Продление существующего IP-сертификата: HTTP-проверка через Nginx' +
-                  (' будет настроена при установке.' if options.check_only else ' настроена.'))
     return status
 
 

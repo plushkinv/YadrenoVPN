@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import ssl
@@ -13,7 +14,7 @@ import subprocess
 import sys
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, build_opener
 
-from web_api.setup_options import SetupError
+from web_tools.setup_options import SetupError
 from web_tools.paths import atomic_write, local_path
 from web_tools.setup_paths import marker, owned_paths
 
@@ -29,6 +30,7 @@ class System:
     """All subprocesses are noninteractive; tests replace this narrow boundary."""
     def __init__(self, filesystem=Path('/')):
         self.filesystem = Path(filesystem)
+        self.diagnostic_path = None
 
     def path(self, absolute):
         if not absolute.startswith('/') or '..' in Path(absolute).parts:
@@ -46,13 +48,49 @@ class System:
             completed = subprocess.run(arguments, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, encoding='utf-8', errors='replace', timeout=timeout,
                 env={**os.environ, 'LC_ALL': 'C', 'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_MODE': 'l'})
-        except (OSError, subprocess.TimeoutExpired):
-            raise SetupError('command_failed', 'Команда недоступна или не завершилась: ' + arguments[0], stage='apply', exit_code=4) from None
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            reason = 'Превышено время ожидания.' if isinstance(exc, subprocess.TimeoutExpired) else 'Не удалось запустить команду.'
+            raise self.command_error(arguments, reason, None) from None
         if check and completed.returncode:
-            # Nginx/ACME output can contain unrelated configuration or credentials.
-            raise SetupError('command_failed', 'Команда завершилась с ошибкой: ' + ' '.join(arguments[:2]),
-                             stage='apply', exit_code=4, details={'returncode': completed.returncode})
+            raise self.command_error(arguments, completed.stderr, completed.returncode)
         return completed
+
+    def command_error(self, arguments, stderr, returncode):
+        """Report bounded causes; never copy arbitrary command output into a handoff."""
+        reason = 'Подробности доступны в журнале системной команды.'
+        causes = (
+            ('unrecognized arguments', 'Установленная версия команды не поддерживает переданные параметры.'),
+            ('permission denied', 'Недостаточно прав для выполнения команды.'),
+            ('address already in use', 'Требуемый сетевой порт занят.'),
+            ('rate limit', 'Сервис ограничил частоту запросов.'),
+            ('unauthorized', 'Проверка владения доменом не пройдена.'),
+            ('nxdomain', 'Домен не найден в DNS.'),
+            ('connection refused', 'Не удалось подключиться к требуемому сервису.'),
+            ('timed out', 'Превышено время ожидания.'),
+        )
+        for needle, message in causes:
+            if needle in stderr.lower():
+                reason = message
+                break
+        if returncode is None:
+            reason = stderr
+        details = {'command': Path(arguments[0]).name, 'returncode': returncode, 'reason': reason}
+        if self.diagnostic_path is not None:
+            # The log is deliberately bounded and sanitized too: nginx -T and
+            # ACME stderr may contain arbitrary neighbouring secrets.
+            flags = sorted(set(re.findall(r'--[a-z][a-z-]{1,60}\b', stderr))) if 'unrecognized arguments' in stderr else []
+            try:
+                atomic_write(self.diagnostic_path, (json.dumps({**details, 'unsupported_options': flags}, ensure_ascii=False) + '\n').encode())
+                details['log'] = str(self.diagnostic_path)
+            except OSError:
+                pass
+        if Path(arguments[0]).name == 'certbot':
+            details['service_log'] = '/var/log/letsencrypt/letsencrypt.log'
+        elif Path(arguments[0]).name in {'nginx', 'systemctl'}:
+            details['service_log'] = 'journalctl -u nginx -u certbot.service -u yadreno-vpn'
+        return SetupError('command_failed', 'Команда ' + details['command'] + ' завершилась с ошибкой'
+                          + (f' (код {returncode})' if returncode is not None else '') + '. ' + reason,
+                          stage='apply', exit_code=4, details=details)
 
     def resolve(self, domain):
         try:

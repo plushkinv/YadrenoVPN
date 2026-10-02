@@ -736,7 +736,7 @@ do_rollback() {
 # The four existing actions and their positional arguments remain unchanged.
 do_web_setup() {
     local python_bin="$VENV_DIR/bin/python"
-    if [ ! -x "$python_bin" ] || [ ! -f "$INSTALL_DIR/web_api/management.py" ]; then
+    if [ ! -x "$python_bin" ] || [ ! -f "$INSTALL_DIR/web_tools/setup_cli.py" ]; then
         echo 'Не найдена установленная версия с Web Core и Python environment.' >&2
         if [[ " $* " == *" --output json "* ]] || [[ " $* " == *" --output=json "* ]]; then
             echo '{"ok":false,"code":"installation_missing","stage":"preflight","changed":false,"public_url":null,"listen":null,"button":{"changed":false,"code":"not_attempted"}}'
@@ -744,7 +744,7 @@ do_web_setup() {
         return 3
     fi
     if [ "$AUTO_MODE" = "1" ]; then
-        (cd "$INSTALL_DIR" && "$python_bin" -m web_api.management --project-root "$INSTALL_DIR" setup "$@" < /dev/null)
+        (cd "$INSTALL_DIR" && "$python_bin" -m web_tools.setup_cli --project-root "$INSTALL_DIR" setup "$@" < /dev/null)
         return $?
     fi
     local web_domain
@@ -754,7 +754,7 @@ do_web_setup() {
     echo 'Если потребуется ручная настройка, появится инструкция для администратора.'
     echo
     read -r -p 'Домен или поддомен: ' web_domain
-    (cd "$INSTALL_DIR" && "$python_bin" -m web_api.management --project-root "$INSTALL_DIR" setup --domain "$web_domain" --agree-tos < /dev/null)
+    (cd "$INSTALL_DIR" && "$python_bin" -m web_tools.setup_cli --project-root "$INSTALL_DIR" setup --domain "$web_domain" --agree-tos < /dev/null)
 }
 
 # ============================================================

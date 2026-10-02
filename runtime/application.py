@@ -28,23 +28,17 @@ def prepare_web_setup(*, root=None, finish_verified=False):
     """An invalid optional setup journal closes only the new web ingress."""
     global _web_setup_error
     from core.results import CoreError
-    from web_api.setup_apply import finish_verified_setup, recover_interrupted_setup
-    from web_api.setup_options import SetupError
+    from web_tools.setup_apply import finish_verified_setup, recover_interrupted_setup
+    from web_tools.setup_options import SetupError
     operation = finish_verified_setup if finish_verified else recover_interrupted_setup
     arguments = {'root': root} if root is not None else {}
     try:
-        completed = operation(startup=True, **arguments)
+        operation(startup=True, **arguments)
     except (SetupError, CoreError, ValueError, OSError, KeyError, TypeError) as exc:
         _web_setup_error = 'web_setup_recovery_failed'
         logger.warning('Optional web setup recovery failed type=%s', type(exc).__name__)
     else:
         _web_setup_error = None
-        if not finish_verified or completed:
-            from web_api.setup_apply import refresh_upload_limit
-            try:
-                refresh_upload_limit(**arguments)
-            except (SetupError, ValueError, OSError, KeyError, TypeError) as exc:
-                logger.warning('Managed proxy upload-limit refresh failed type=%s', type(exc).__name__)
 
 
 def prepare_optional_ui():

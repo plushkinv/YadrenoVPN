@@ -8,20 +8,16 @@ from pathlib import Path
 import re
 import time
 
-from web_api.setup_options import SetupError, result
-from web_api.setup_certificates import migrate_profiles, prepare_routes, restore_profiles, restore_routes, snapshot_profiles, validate_snapshots
-from web_api.setup_preflight import SETTING_KEYS, SettingsStore, nginx_preflight, usable_certificate, verify_endpoint
-from web_api.setup_system import NGINX_CONFIG_HEADER, System, marker, owned_paths, setup_lock, system_path, verify_owned_file, write_owned
+from web_tools.setup_options import SetupError, result
+from web_tools.setup_certificates import check_profile, deploy_hook, renewal_timer
+from web_tools.setup_preflight import SETTING_KEYS, SettingsStore, nginx_preflight, usable_certificate, verify_endpoint
+from web_tools.setup_system import NGINX_CONFIG_HEADER, System, marker, owned_paths, setup_lock, system_path, verify_owned_file, write_owned
 from web_tools.package import digest
 from web_tools.paths import PROJECT_ROOT, atomic_write, canonical, local_path
 
 SERVICE = 'yadreno-vpn'
 JOURNAL = 'secrets/setup-transaction.json'
-OWNED_FILES = ('nginx', 'renew_service', 'renew_timer')
-
-
-def _timer(paths):
-    return paths['name'] + '-renew.timer'
+OWNED_FILES = ('nginx',)
 
 
 def _journal_path(root):
@@ -41,12 +37,7 @@ def _snapshot(root, options, trust, saved, paths, system, metadata):
             files[name] = {'bytes': base64.b64encode(path.read_bytes()).decode(), 'mode': path.stat().st_mode & 0o777} if path.exists() else None
     value = {'format_version': 1, 'instance_id': trust['instance_id'], 'phase': 'applying',
         'settings': saved, 'files': files, 'setup': _read_state(root), 'target': metadata,
-        'services': {'bot': system.active(SERVICE), 'nginx': system.active('nginx') if options.proxy == 'managed-nginx' else None,
-                     'timer_active': system.active(_timer(paths)) if options.proxy == 'managed-nginx' else None,
-                     'timer_enabled': system.enabled(_timer(paths)) if options.proxy == 'managed-nginx' else None}}
-    profiles = snapshot_profiles(system, metadata.get('acme_http01', []), paths)
-    if profiles:
-        value['acme_profiles'] = profiles
+        'services': {'bot': system.active(SERVICE), 'nginx': system.active('nginx') if options.proxy == 'managed-nginx' else None}}
     atomic_write(_journal_path(root), canonical(value))
     return value
 
@@ -54,16 +45,15 @@ def _snapshot(root, options, trust, saved, paths, system, metadata):
 def _validated_journal(root):
     value = json.loads(_journal_path(root).read_bytes())
     trust = json.loads(local_path(Path(root) / 'web_runtime', 'identity.json').read_bytes())
-    if (not isinstance(value, dict) or set(value) - {'acme_profiles'} != {'format_version', 'instance_id', 'phase', 'settings', 'files', 'setup', 'target', 'services'}
+    if (not isinstance(value, dict) or set(value) != {'format_version', 'instance_id', 'phase', 'settings', 'files', 'setup', 'target', 'services'}
             or value['format_version'] != 1 or value['instance_id'] != trust['instance_id']
             or value['phase'] not in {'applying', 'verified'}):
         raise ValueError('invalid setup journal')
     paths = owned_paths(value['instance_id'])
-    validate_snapshots(value.get('acme_profiles', {}), paths)
     if (not isinstance(value['settings'], dict) or set(value['settings']) != set(SETTING_KEYS)
             or any(item is not None and (not isinstance(item, str) or len(item) > 4096) for item in value['settings'].values())
             or not isinstance(value['files'], dict) or set(value['files']) not in (set(), set(OWNED_FILES))
-            or not isinstance(value['services'], dict) or set(value['services']) != {'bot', 'nginx', 'timer_active', 'timer_enabled'}
+            or not isinstance(value['services'], dict) or set(value['services']) != {'bot', 'nginx'}
             or type(value['services']['bot']) is not bool
             or any(item is not None and type(item) is not bool for item in value['services'].values())):
         raise ValueError('invalid setup journal fields')
@@ -95,7 +85,6 @@ def _finish(root, journal, store):
 
 
 def _restore(root, journal, paths, system, store, *, startup=False):
-    restore_routes(system, journal.get('acme_profiles', {}), paths)
     for name, item in journal['files'].items():
         target = verify_owned_file(system, paths[name], journal['instance_id'])
         if item is None:
@@ -109,22 +98,11 @@ def _restore(root, journal, paths, system, store, *, startup=False):
     else:
         atomic_write(state, base64.b64decode(journal['setup'], validate=True))
     if journal['files']:
-        system.run(['systemctl', 'daemon-reload'])
-        timer = _timer(paths)
-        if not journal['services']['timer_active']:
-            system.run(['systemctl', 'stop', timer], check=False)
-        if not journal['services']['timer_enabled']:
-            system.run(['systemctl', 'disable', timer], check=False)
-        if journal['services']['timer_enabled']:
-            system.run(['systemctl', 'enable', timer])
-        if journal['services']['timer_active']:
-            system.run(['systemctl', 'start', timer])
         if journal['services']['nginx']:
             system.run(['nginx', '-t'])
             system.run(['systemctl', 'reload-or-restart', 'nginx'])
         elif system.which('nginx'):
             system.run(['systemctl', 'stop', 'nginx'])
-    restore_profiles(system, journal.get('acme_profiles', {}), paths)
     if not startup:
         system.run(['systemctl', 'restart' if journal['services']['bot'] else 'stop', SERVICE])
     _journal_path(root).unlink()
@@ -177,7 +155,7 @@ def _nginx(root, options, paths, facts, *, challenge=False):
     values = {'HTTP_LISTEN': _listen_lines(options, facts['server_addresses'], 80),
               'HTTPS_LISTEN': _listen_lines(options, facts['server_addresses'], options.https_port, ' ssl'),
               'DOMAIN': options.domain, 'PUBLIC_URL': options.public_url, 'ACME_ROOT': paths['acme'],
-              'CERT_ROOT': paths['certbot'] + '/config/live/' + str(facts['certificate_name']), 'UPSTREAM': facts['upstream']}
+              'CERT_ROOT': paths['certbot'] + '/live/' + str(facts['certificate_name']), 'UPSTREAM': facts['upstream']}
     text = template.read_text(encoding='utf-8')
     for name, value in values.items():
         text = text.replace('@' + name + '@', value)
@@ -196,57 +174,6 @@ def _managed_configuration(root, options, paths, facts, instance):
     return text.replace(placeholder, header), fingerprint
 
 
-def refresh_upload_limit(root=PROJECT_ROOT, *, system=None):
-    """Upgrade the released upload bound in an owned proxy without changing other directives."""
-    state = local_path(Path(root) / 'web_runtime', 'setup.json')
-    if not state.exists():
-        return False
-    with setup_lock(root, optional=True) as acquired:
-        if not acquired or _journal_path(root).exists():
-            return False
-        saved = json.loads(state.read_bytes())
-        if saved.get('options', {}).get('proxy') != 'managed-nginx':
-            return False
-        identity = json.loads(local_path(Path(root) / 'web_runtime', 'identity.json').read_bytes())
-        instance = identity['instance_id']
-        paths = owned_paths(instance)
-        if saved.get('instance_id') != instance or saved.get('owned') != paths:
-            raise ValueError('managed proxy identity mismatch')
-        system = system or System()
-        target = verify_owned_file(system, paths['nginx'], instance)
-        if not target.exists():
-            return False
-        previous = target.read_text(encoding='utf-8')
-        # Only the released value is migrated. Explicit administrator limits and
-        # external proxy configuration retain their existing ownership.
-        pattern = r'(location\s*=\s*/api/v1/admin/ui/editor/uploads\s*\{\s*client_max_body_size\s+)10304k(\s*;)'
-        updated, count = re.subn(pattern, r'\g<1>51264k\2', previous)
-        if not count:
-            return False
-        if count != 1:
-            raise ValueError('ambiguous upload location')
-        updated = updated.replace('# Match the existing 10 MiB voice + 64 KiB multipart metadata bound.',
-                                  '# Five 10 MiB attachments (including voice) plus 64 KiB multipart metadata.')
-        proof = r'        add_header ' + NGINX_CONFIG_HEADER + r' "[a-f0-9]{64}" always;\n'
-        unsigned, count = re.subn(proof, '', updated)
-        if count != 1:
-            raise ValueError('managed proxy configuration proof missing')
-        updated = re.sub(proof, '        add_header ' + NGINX_CONFIG_HEADER + ' "' + digest(unsigned.encode()) + '" always;\n', updated)
-        mode = target.stat().st_mode & 0o777
-        running = system.active('nginx')
-        atomic_write(target, updated.encode(), mode=mode)
-        try:
-            system.run(['nginx', '-t'])
-            if running:
-                system.run(['systemctl', 'reload', 'nginx'])
-        except Exception:
-            atomic_write(target, previous.encode(), mode=mode)
-            if running:
-                _reload_nginx(system)
-            raise
-        return True
-
-
 def _verify_ready(system, origin, signed, trust, *, nginx_configuration=None):
     deadline = time.monotonic() + 60
     while True:
@@ -259,26 +186,20 @@ def _verify_ready(system, origin, signed, trust, *, nginx_configuration=None):
             time.sleep(1)
 
 
-def _certbot(paths):
-    return ['--config-dir', paths['certbot'] + '/config', '--work-dir', paths['certbot'] + '/work',
-            '--logs-dir', paths['certbot'] + '/logs', '--non-interactive']
-
-
 def _reload_nginx(system):
     system.run(['nginx', '-t'])
     system.run(['systemctl', 'reload' if system.active('nginx') else 'start', 'nginx'])
 
 
-def _managed(root, options, system, trust, paths, facts, configuration, profiles):
+def _managed(root, options, system, trust, paths, facts, configuration):
     missing = [name for name in ('nginx', 'certbot') if not system.which(name)]
     if missing:
         system.run(['apt-get', 'update', '-qq'], timeout=600)
         system.run(['apt-get', 'install', '-y', '-o', 'Dpkg::Options::=--force-confold', *missing], timeout=600)
     nginx_preflight(system, options, paths, trust['instance_id'])
-    prepare_routes(system, profiles, paths)
-    cert_root = system_path(system, paths['certbot'])
-    cert_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    atomic_write(cert_root / '.yadreno-owner', trust['instance_id'].encode())
+    timer = renewal_timer(system)
+    facts['renewal_timer'] = timer
+    check_profile(system, paths, facts['certificate_name'])
     acme = system_path(system, paths['acme'])
     acme.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     acme.mkdir(mode=0o755, exist_ok=True)
@@ -292,48 +213,38 @@ def _managed(root, options, system, trust, paths, facts, configuration, profiles
         write_owned(system, paths['nginx'], previous or challenge, trust['instance_id'])
         _reload_nginx(system)
         if usable_certificate(system, paths, options.domain, min_days=-36500):
-            system.run(['certbot', 'renew', *_certbot(paths), '--cert-name', facts['certificate_name'], '--no-random-sleep-on-renew'], timeout=300)
+            system.run(['certbot', 'renew', '--non-interactive', '--cert-name', facts['certificate_name'], '--no-random-sleep-on-renew'], timeout=300)
         else:
-            system.run(['certbot', 'certonly', *_certbot(paths), '--webroot', '--webroot-path', paths['acme'],
+            system.run(['certbot', 'certonly', '--non-interactive', '--webroot', '--webroot-path', paths['acme'],
                 '--cert-name', facts['certificate_name'], '--domain', options.domain, '--email', options.email,
-                '--agree-tos', '--keep-until-expiring'], timeout=300)
+                '--agree-tos', '--keep-until-expiring', '--deploy-hook', deploy_hook(system)], timeout=300)
         if not usable_certificate(system, paths, options.domain, min_days=0):
             raise SetupError('certificate_unusable', 'Сертификат не соответствует домену или сроку.', stage='certificate', exit_code=4)
     write_owned(system, paths['nginx'], configuration, trust['instance_id'])
     _reload_nginx(system)
-    command = [system.which('certbot'), 'renew', *_certbot(paths), '--no-random-sleep-on-renew',
-               '--cert-name', facts['certificate_name'],
-               '--deploy-hook', '/usr/sbin/nginx -t && /bin/systemctl reload nginx']
-    # These values are only fixed executable names and validated owned paths.
-    rendered = ' '.join('"' + item.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"' for item in command)
-    service = '[Unit]\nDescription=Yadreno web certificate renewal\n[Service]\nType=oneshot\nUMask=0077\nExecStart=' + rendered + '\n'
-    timer = '[Unit]\nDescription=Yadreno web certificate renewal timer\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=12h\nPersistent=true\n[Install]\nWantedBy=timers.target\n'
-    write_owned(system, paths['renew_service'], service, trust['instance_id'])
-    write_owned(system, paths['renew_timer'], timer, trust['instance_id'])
-    system.run(['systemd-analyze', 'verify', paths['renew_service'], paths['renew_timer']])
-    system.run(['systemctl', 'daemon-reload'])
-    system.run(['systemctl', 'enable', '--now', _timer(paths)])
-    system.run(['certbot', 'renew', *_certbot(paths), '--dry-run', '--no-random-sleep-on-renew',
-                '--cert-name', facts['certificate_name'],
-                '--run-deploy-hooks', '--deploy-hook', '/usr/sbin/nginx -t && /bin/systemctl reload nginx'], timeout=300)
-    if not system.active(_timer(paths)) or not system.enabled(_timer(paths)):
-        raise SetupError('renewal_not_ready', 'Автопродление не включено или не запущено.', stage='renewal', exit_code=4)
+    system.run(['snap', 'start', '--enable', 'certbot.renew'] if timer.startswith('snap.')
+               else ['systemctl', 'enable', '--now', timer])
+    system.run(['certbot', 'renew', '--non-interactive', '--dry-run', '--no-random-sleep-on-renew',
+                '--cert-name', facts['certificate_name']], timeout=300)
+    # Dry runs intentionally do not execute deploy hooks on older Certbot.
+    # Validate the same two commands explicitly, without version-specific flags.
+    _reload_nginx(system)
+    if not system.active(timer) or not system.enabled(timer):
+        raise SetupError('renewal_not_ready', 'Штатное автопродление Certbot не включено или не работает.', stage='renewal', exit_code=4)
 
 
 def re_domain_present(text, domain):
-    import re
     return any(domain in names.split() for names in re.findall(r'\bserver_name\s+([^;]+);', text))
 
 
 def apply(root, checked, system, store):
     options, signed, trust, saved, paths, facts = checked
+    system.diagnostic_path = local_path(Path(root) / 'web_runtime', 'secrets/setup-command.log')
     configuration, fingerprint = (_managed_configuration(root, options, paths, facts, trust['instance_id'])
                                   if options.proxy == 'managed-nginx' else (None, None))
     metadata = {'format_version': 1, 'instance_id': trust['instance_id'], 'options': asdict(options), 'owned': paths,
                 'build_id': signed['manifest']['build_id'], 'content_hash': signed['manifest']['content_hash'],
                 'tls_renewal': facts['tls_renewal'], 'certificate_name': facts['certificate_name']}
-    if facts.get('acme_http01'):
-        metadata['acme_http01'] = facts['acme_http01']
     metadata['options']['trusted_proxies'] = list(options.trusted_proxies)
     state_path = local_path(Path(root) / 'web_runtime', 'setup.json')
     if state_path.exists():
@@ -345,9 +256,9 @@ def apply(root, checked, system, store):
             'web_listen_port': str(options.backend_port), 'web_public_origin': options.public_url,
             'web_trusted_proxies': json.dumps(options.trusted_proxies)}
         same_system = options.proxy == 'external' or (
-            usable_certificate(system, paths, options.domain) and system.active('nginx')
-            and not any(item['needs_migration'] for item in facts.get('acme_http01', []))
-            and system.active(_timer(paths)) and system.enabled(_timer(paths))
+            facts['renewal_timer'] and usable_certificate(system, paths, options.domain) and system.active('nginx')
+            and system.active(facts['renewal_timer']) and system.enabled(facts['renewal_timer'])
+            and verify_owned_file(system, paths['nginx'], trust['instance_id']).is_file()
             and verify_owned_file(system, paths['nginx'], trust['instance_id']).read_text() == marker(trust['instance_id']) + configuration)
         if same_options and same_settings and same_system and system.active(SERVICE):
             _verify_ready(system, options.public_url, signed, trust, nginx_configuration=fingerprint)
@@ -358,8 +269,7 @@ def apply(root, checked, system, store):
     journal = _snapshot(root, options, trust, saved, paths, system, metadata)
     try:
         if options.proxy == 'managed-nginx':
-            _managed(root, options, system, trust, paths, facts, configuration, journal.get('acme_profiles', {}))
-            migrate_profiles(system, journal.get('acme_profiles', {}), paths)
+            _managed(root, options, system, trust, paths, facts, configuration)
         store.configure(options)
         system.run(['systemctl', 'restart', SERVICE], timeout=90)
         _verify_ready(system, options.public_url, signed, trust, nginx_configuration=fingerprint)
