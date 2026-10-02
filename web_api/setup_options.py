@@ -65,6 +65,8 @@ class SetupOptions:
             if values.backend_port is not None and not 1 <= values.backend_port <= 65535:
                 raise ValueError('Внутренний порт должен быть 1–65535.')
             email = values.email
+            if email is None and proxy == 'managed-nginx':
+                email = 'admin@' + domain
             if email and not re.fullmatch(r'[^\s@\x00-\x1f]+@[^\s@\x00-\x1f]+\.[^\s@\x00-\x1f]+', email):
                 raise ValueError('Некорректный контакт для сертификата.')
             listen = str(ipaddress.ip_address(values.listen_address)) if values.listen_address else None

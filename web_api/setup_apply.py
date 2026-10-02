@@ -9,6 +9,7 @@ import re
 import time
 
 from web_api.setup_options import SetupError, result
+from web_api.setup_certificates import migrate_profiles, prepare_routes, restore_profiles, restore_routes, snapshot_profiles, validate_snapshots
 from web_api.setup_preflight import SETTING_KEYS, SettingsStore, nginx_preflight, usable_certificate, verify_endpoint
 from web_api.setup_system import NGINX_CONFIG_HEADER, System, marker, owned_paths, setup_lock, system_path, verify_owned_file, write_owned
 from web_tools.package import digest
@@ -43,6 +44,9 @@ def _snapshot(root, options, trust, saved, paths, system, metadata):
         'services': {'bot': system.active(SERVICE), 'nginx': system.active('nginx') if options.proxy == 'managed-nginx' else None,
                      'timer_active': system.active(_timer(paths)) if options.proxy == 'managed-nginx' else None,
                      'timer_enabled': system.enabled(_timer(paths)) if options.proxy == 'managed-nginx' else None}}
+    profiles = snapshot_profiles(system, metadata.get('acme_http01', []), paths)
+    if profiles:
+        value['acme_profiles'] = profiles
     atomic_write(_journal_path(root), canonical(value))
     return value
 
@@ -50,11 +54,12 @@ def _snapshot(root, options, trust, saved, paths, system, metadata):
 def _validated_journal(root):
     value = json.loads(_journal_path(root).read_bytes())
     trust = json.loads(local_path(Path(root) / 'web_runtime', 'identity.json').read_bytes())
-    if (not isinstance(value, dict) or set(value) != {'format_version', 'instance_id', 'phase', 'settings', 'files', 'setup', 'target', 'services'}
+    if (not isinstance(value, dict) or set(value) - {'acme_profiles'} != {'format_version', 'instance_id', 'phase', 'settings', 'files', 'setup', 'target', 'services'}
             or value['format_version'] != 1 or value['instance_id'] != trust['instance_id']
             or value['phase'] not in {'applying', 'verified'}):
         raise ValueError('invalid setup journal')
     paths = owned_paths(value['instance_id'])
+    validate_snapshots(value.get('acme_profiles', {}), paths)
     if (not isinstance(value['settings'], dict) or set(value['settings']) != set(SETTING_KEYS)
             or any(item is not None and (not isinstance(item, str) or len(item) > 4096) for item in value['settings'].values())
             or not isinstance(value['files'], dict) or set(value['files']) not in (set(), set(OWNED_FILES))
@@ -90,6 +95,7 @@ def _finish(root, journal, store):
 
 
 def _restore(root, journal, paths, system, store, *, startup=False):
+    restore_routes(system, journal.get('acme_profiles', {}), paths)
     for name, item in journal['files'].items():
         target = verify_owned_file(system, paths[name], journal['instance_id'])
         if item is None:
@@ -118,6 +124,7 @@ def _restore(root, journal, paths, system, store, *, startup=False):
             system.run(['systemctl', 'reload-or-restart', 'nginx'])
         elif system.which('nginx'):
             system.run(['systemctl', 'stop', 'nginx'])
+    restore_profiles(system, journal.get('acme_profiles', {}), paths)
     if not startup:
         system.run(['systemctl', 'restart' if journal['services']['bot'] else 'stop', SERVICE])
     _journal_path(root).unlink()
@@ -262,12 +269,13 @@ def _reload_nginx(system):
     system.run(['systemctl', 'reload' if system.active('nginx') else 'start', 'nginx'])
 
 
-def _managed(root, options, system, trust, paths, facts, configuration):
+def _managed(root, options, system, trust, paths, facts, configuration, profiles):
     missing = [name for name in ('nginx', 'certbot') if not system.which(name)]
     if missing:
         system.run(['apt-get', 'update', '-qq'], timeout=600)
         system.run(['apt-get', 'install', '-y', '-o', 'Dpkg::Options::=--force-confold', *missing], timeout=600)
     nginx_preflight(system, options, paths, trust['instance_id'])
+    prepare_routes(system, profiles, paths)
     cert_root = system_path(system, paths['certbot'])
     cert_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     atomic_write(cert_root / '.yadreno-owner', trust['instance_id'].encode())
@@ -324,6 +332,8 @@ def apply(root, checked, system, store):
     metadata = {'format_version': 1, 'instance_id': trust['instance_id'], 'options': asdict(options), 'owned': paths,
                 'build_id': signed['manifest']['build_id'], 'content_hash': signed['manifest']['content_hash'],
                 'tls_renewal': facts['tls_renewal'], 'certificate_name': facts['certificate_name']}
+    if facts.get('acme_http01'):
+        metadata['acme_http01'] = facts['acme_http01']
     metadata['options']['trusted_proxies'] = list(options.trusted_proxies)
     state_path = local_path(Path(root) / 'web_runtime', 'setup.json')
     if state_path.exists():
@@ -336,6 +346,7 @@ def apply(root, checked, system, store):
             'web_trusted_proxies': json.dumps(options.trusted_proxies)}
         same_system = options.proxy == 'external' or (
             usable_certificate(system, paths, options.domain) and system.active('nginx')
+            and not any(item['needs_migration'] for item in facts.get('acme_http01', []))
             and system.active(_timer(paths)) and system.enabled(_timer(paths))
             and verify_owned_file(system, paths['nginx'], trust['instance_id']).read_text() == marker(trust['instance_id']) + configuration)
         if same_options and same_settings and same_system and system.active(SERVICE):
@@ -347,7 +358,8 @@ def apply(root, checked, system, store):
     journal = _snapshot(root, options, trust, saved, paths, system, metadata)
     try:
         if options.proxy == 'managed-nginx':
-            _managed(root, options, system, trust, paths, facts, configuration)
+            _managed(root, options, system, trust, paths, facts, configuration, journal.get('acme_profiles', {}))
+            migrate_profiles(system, journal.get('acme_profiles', {}), paths)
         store.configure(options)
         system.run(['systemctl', 'restart', SERVICE], timeout=90)
         _verify_ready(system, options.public_url, signed, trust, nginx_configuration=fingerprint)

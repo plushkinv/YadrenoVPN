@@ -25,7 +25,7 @@ def parser():
     setup.add_argument('--proxy', required=True, choices=('managed-nginx', 'external'))
     setup.add_argument('--domain')
     setup.add_argument('--public-url')
-    setup.add_argument('--email')
+    setup.add_argument('--email', help='Контакт для сертификата; по умолчанию admin@<домен>.')
     setup.add_argument('--agree-tos', action='store_true')
     setup.add_argument('--backend-port', type=int)
     setup.add_argument('--backend-bind', default='127.0.0.1')
@@ -62,6 +62,7 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     output_json = '--output=json' in argv or '--output' in argv and argv[argv.index('--output') + 1:][:1] == ['json']
     options = None
+    root = PROJECT_ROOT
     try:
         args = parser().parse_args(argv)
         output_json = args.output == 'json'
@@ -86,6 +87,9 @@ def main(argv=None):
                          message='Настройка не завершена; повтор восстановит сохранённую конфигурацию.',
                          details={'error_type': type(exc).__name__})
         status = 4
+    if not payload['ok'] and payload['stage'] not in {'arguments', 'complete'}:
+        from web_api.setup_diagnostics import manual_setup_report
+        payload['message'] = manual_setup_report(payload, options, root)
     if output_json:
         print(json.dumps(payload, ensure_ascii=False))
     else:
@@ -95,6 +99,9 @@ def main(argv=None):
             print('Закрытый upstream: ' + payload['upstream'])
         if payload.get('tls_renewal') == 'external_owner':
             print('TLS и продление обслуживает владелец внешнего прокси; будущая выдача здесь не проверяется.')
+        if payload['ok'] and payload.get('acme_http01'):
+            print('Продление существующего IP-сертификата: HTTP-проверка через Nginx' +
+                  (' будет настроена при установке.' if options.check_only else ' настроена.'))
     return status
 
 

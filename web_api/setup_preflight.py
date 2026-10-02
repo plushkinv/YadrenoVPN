@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from web_api.setup_options import SetupError
+from web_api.setup_certificates import certificate_paths, inspect_renewals
 from web_api.setup_system import owned_paths, system_path, verify_owned_file
 from web_tools.package import MAX_BYTES, digest, verify_package
 from web_tools.paths import local_path
@@ -112,7 +113,7 @@ def overlaps(first, second):
     return first == second or first.is_unspecified or second.is_unspecified
 
 
-def nginx_preflight(system, options, paths, instance):
+def nginx_configuration_preflight(system, options, paths, instance, certificate_addresses=()):
     for name in ('nginx', 'renew_service', 'renew_timer'):
         verify_owned_file(system, paths[name], instance)
     cert_root = system_path(system, paths['certbot'])
@@ -124,6 +125,9 @@ def nginx_preflight(system, options, paths, instance):
         dump = system.run(['nginx', '-T'], check=False)
         if dump.returncode:
             raise SetupError('nginx_invalid', 'Существующая конфигурация Nginx не проходит проверку.')
+        if re.search(r'\bstream\s*\{', re.sub(r'#[^\n]*', '', dump.stdout)):
+            raise SetupError('nginx_complex_configuration',
+                'Nginx содержит маршрутизацию TCP/UDP (stream); совместное использование портов требует отдельной проверки.')
         # A supported include must occur inside http{}, including across lines.
         context, directive, includes = [], [], []
         for token in re.findall(r'"[^"\n]*"|\'[^\'\n]*\'|[^\s{};#]+|[{};]|#[^\n]*', dump.stdout):
@@ -144,20 +148,33 @@ def nginx_preflight(system, options, paths, instance):
             raise SetupError('nginx_include_missing', 'Подготовьте include /etc/nginx/conf.d/*.conf внутри http; основной конфиг не изменён.')
         chunks = re.split(r'^# configuration file (.+):\s*$', dump.stdout, flags=re.M)
         for index in range(1, len(chunks), 2):
-            if chunks[index] == paths['nginx']:
+            if chunks[index] in {paths['nginx'], *(certificate_paths(address)['nginx'] for address in certificate_addresses)}:
                 continue
             for names in re.findall(r'\bserver_name\s+([^;]+);', re.sub(r'#[^\n]*', '', chunks[index + 1])):
                 for name in names.split():
-                    if name == options.domain or name.startswith('*.') and options.domain.endswith(name[1:]) or name.startswith('~'):
+                    if (name in {options.domain, *certificate_addresses}
+                            or name.startswith('*.') and options.domain.endswith(name[1:]) or name.startswith('~')):
                         raise SetupError('server_name_conflict', 'Домен уже обслуживается другим virtual host; чужая конфигурация не изменена.')
-    for pattern in ('etc/letsencrypt/renewal/*.conf', 'root/.acme.sh/*/*.conf', 'home/*/.acme.sh/*/*.conf',
-                    'etc/cron.d/*', 'var/spool/cron/crontabs/*', 'etc/systemd/system/*.service'):
-        for path in system.filesystem.glob(pattern):
-            if not path.is_file() or path.stat().st_size > 1024 * 1024:
-                continue
-            text = path.read_text(errors='replace')
-            if re.search(r'authenticator\s*=\s*standalone|--standalone\b|Le_Webroot=[\"\']?(?:no|standalone)[\"\']?(?:\s|$)', text):
-                raise SetupError('renewal_conflict', 'Обнаружено standalone-продление на HTTP-порту; подготовьте совместимую схему или внешний прокси.', details={'file': str(path.relative_to(system.filesystem))})
+
+
+def infrastructure_error(issues, addresses=()):
+    """Keep the first stable error code while reporting independent prerequisites together."""
+    if issues:
+        first = issues[0]
+        details = {**first.details, 'server_addresses': list(addresses),
+                   'issues': [{'code': item.code, 'message': str(item), 'details': item.details} for item in issues]}
+        raise SetupError(first.code, str(first), stage=first.stage, exit_code=first.exit_code, details=details)
+
+
+def nginx_preflight(system, options, paths, instance, addresses=None):
+    addresses = system.addresses() if addresses is None else addresses
+    plans, issues = inspect_renewals(system, paths, addresses, options.listen_address)
+    try:
+        nginx_configuration_preflight(system, options, paths, instance, [item['address'] for item in plans])
+    except SetupError as exc:
+        issues.insert(0, exc)
+    infrastructure_error(issues, addresses)
+    return plans
 
 
 def preflight(root, options, system, store):
@@ -208,17 +225,32 @@ def preflight(root, options, system, store):
     else:
         raise SetupError('backend_port_conflict', 'Выбранный внутренний порт занят; сохранённый или явный порт автоматически не меняется.')
     if options.proxy == 'managed-nginx':
+        issues = []
         public_hosts = [options.listen_address] if options.listen_address else ['0.0.0.0', '::']
         if options.backend_port in {80, options.https_port} and any(overlaps(options.backend_bind, host) for host in public_hosts):
             raise SetupError('backend_port_conflict', 'Внутренний listener пересекается с публичным Nginx listener.')
         for item in occupied:
             if item['port'] in {80, options.https_port} and any(overlaps(item['host'], host) for host in public_hosts):
                 if not item['process'] or 'nginx' not in item['process'] or 'docker' in item['process']:
-                    raise SetupError('public_port_conflict', 'Освободите TCP-порт для Nginx или подготовьте маршрут во внешнем прокси; службы не изменены.', details={'address': item['host'], 'port': item['port'], 'service': item['process'][:200]})
-        nginx_preflight(system, options, paths, trust['instance_id'])
+                    service = item['process'][:200]
+                    issues.append(SetupError('public_port_conflict',
+                        f'TCP-порт {item["port"]}, адрес {item["host"]}, уже занят: {service or "процесс не определён"}. '
+                        'Для Nginx нужен свободный порт. Перенос VPN, панели или другого прокси требует '
+                        'отдельной настройки; службы не изменены.',
+                        details={'address': item['host'], 'port': item['port'], 'service': service}))
+        plans, renewal_issues = inspect_renewals(system, paths, addresses, options.listen_address)
+        try:
+            nginx_configuration_preflight(system, options, paths, trust['instance_id'], [item['address'] for item in plans])
+        except SetupError as exc:
+            issues.append(exc)
+        issues.extend(renewal_issues)
+        infrastructure_error(issues, addresses)
         if not usable_certificate(system, paths, options.domain, min_days=-36500) and (not options.email or not options.agree_tos):
-            raise SetupError('acme_arguments_required', 'Для новой выдачи нужны --email и --agree-tos.', stage='arguments', exit_code=2)
+            raise SetupError('acme_arguments_required',
+                'Для новой выдачи нужен --agree-tos; email по умолчанию admin@<домен>, другой можно задать через --email.',
+                stage='arguments', exit_code=2)
     return options, signed, trust, saved, paths, {'dns': resolved, 'server_addresses': addresses,
+        'acme_http01': plans if options.proxy == 'managed-nginx' else [],
         'tls_renewal': 'managed' if options.proxy == 'managed-nginx' else 'external_owner',
         'certificate_name': certificate_name(system, paths, options.domain) if options.proxy == 'managed-nginx' else None,
         'upstream': 'http://' + ('[' + options.backend_bind + ']' if ':' in options.backend_bind else options.backend_bind) + ':' + str(options.backend_port)}

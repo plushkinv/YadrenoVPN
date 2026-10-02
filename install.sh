@@ -747,22 +747,19 @@ do_web_setup() {
         (cd "$INSTALL_DIR" && "$python_bin" -m web_api.management --project-root "$INSTALL_DIR" setup "$@" < /dev/null)
         return $?
     fi
-    local web_proxy web_domain web_email web_tos web_origin
+    local web_proxy web_domain web_origin
     local web_args=()
     echo 'Сайт и Mini App используют отдельный домен в корне /.'
-    echo '1) Nginx и HTTPS на этом сервере; 2) Подготовленный внешний прокси'
+    echo '1) Настроить HTTPS на этом сервере — установить или использовать Nginx.'
+    echo '   Для обычной установки: домен указывает сюда, порты 80/443 свободны или заняты Nginx.'
+    echo '2) Использовать HTTPS-прокси, уже настроенный администратором (например, Nginx или Caddy).'
+    echo '   Для готовой схемы: домен, сертификат и маршрут запросов к боту подготовлены заранее.'
+    echo '   Второй режим не устанавливает прокси и не устраняет занятость портов.'
     read -r -p 'Режим [1/2]: ' web_proxy
     case "$web_proxy" in
         1)
             read -r -p 'Домен или поддомен: ' web_domain
-            read -r -p 'Email для сертификата: ' web_email
-            echo 'Условия ACME: https://letsencrypt.org/repository/'
-            read -r -p 'Принимаете условия выдачи сертификата? (yes/no): ' web_tos
-            if [ "$web_tos" != 'yes' ]; then
-                echo 'Подключение отменено.'
-                return 0
-            fi
-            web_args=(--proxy managed-nginx --domain "$web_domain" --email "$web_email" --agree-tos)
+            web_args=(--proxy managed-nginx --domain "$web_domain" --agree-tos)
             ;;
         2)
             read -r -p 'Готовый публичный HTTPS URL: ' web_origin
