@@ -3,6 +3,7 @@ import type { Api } from '../api/client';
 import type { Bootstrap, Session, UiSettings } from '../api/contracts';
 import type { Preset, Theme } from '../model';
 import type { Environment } from './environment';
+import { parentRoute } from './navigation';
 
 export interface AppContextValue {
   api: Api; environment: Environment; session: Session | null; bootstrap: Bootstrap; settings: UiSettings;
@@ -12,10 +13,18 @@ export interface AppContextValue {
   preview: boolean;
 }
 export const AppContext = createContext<AppContextValue | null>(null);
+export const BackContext = createContext<(() => void) | null>(null);
 export function useApp(): AppContextValue {
   const value = useContext(AppContext);
   if (!value) throw new Error('Application context is missing');
   return value;
+}
+
+/** Stock and custom pages share return behavior; old source-owned shells retain a parent fallback. */
+export function useBack() {
+  const back = useContext(BackContext);
+  const { navigate, route, param } = useApp();
+  return back ?? (() => navigate(parentRoute(route + (param ? '/' + param : ''))));
 }
 
 /** Discard late responses after navigation/account switch; never replay a mutation. */

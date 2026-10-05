@@ -1,12 +1,14 @@
 """Durable coordination between local bindings and panel identity renames."""
 import json
+from datetime import datetime, timezone
 
 from core.results import CoreError
 from .connection import get_db
 
 __all__ = ['get_pending_panel_identity', 'get_due_panel_identity_renames',
            'save_panel_identity_snapshot', 'finish_panel_identity_rename', 'defer_panel_identity_rename',
-           'get_panel_binding_conflicts', 'get_pending_panel_identity_ids', 'assert_panel_identity_ready']
+           'get_panel_binding_conflicts', 'get_pending_panel_identity_ids', 'assert_panel_identity_ready',
+           'get_panel_subscription_keys', 'bind_panel_subscription']
 
 
 def assert_panel_identity_ready(server: dict, email: str) -> None:
@@ -32,27 +34,24 @@ def get_panel_binding_conflicts(server_ids: list[int], names: list[str], sub_id:
     with get_db() as conn:
         server_marks = ','.join('?' for _ in server_ids)
         name_marks = ','.join('?' for _ in names)
-        conflicts = conn.execute(f'SELECT id, panel_email FROM vpn_keys WHERE server_id IN ({server_marks}) AND id != ? '
+        owner = conn.execute('SELECT user_id FROM vpn_keys WHERE id = ?', (key_id,)).fetchone()
+        if owner is None:
+            return True
+        conflicts = conn.execute(f'SELECT id, user_id, panel_email FROM vpn_keys WHERE server_id IN ({server_marks}) AND id != ? '
                                  f'AND (LOWER(panel_email) IN ({name_marks}) OR sub_id = ?)',
                                  (*server_ids, key_id, *(name.casefold() for name in names), sub_id)).fetchall()
-        own = conn.execute('SELECT import_id FROM subscription_import_members WHERE key_id = ?',
-                           (key_id,)).fetchone()
         for conflict in conflicts:
-            other = conn.execute('SELECT import_id FROM subscription_import_members WHERE key_id = ?',
-                                 (conflict['id'],)).fetchone()
             if (conflict['panel_email'].casefold() in {name.casefold() for name in names} or
-                    not own or not other or own[0] != other[0]):
+                    conflict['user_id'] != owner['user_id']):
                 return True
-        pending = conn.execute(f"SELECT key_id, old_email, new_email FROM panel_identity_renames WHERE server_id IN ({server_marks}) "
+        pending = conn.execute(f"SELECT key_id, user_id, old_email, new_email FROM panel_identity_renames WHERE server_id IN ({server_marks}) "
                             f"AND key_id != ? AND state != 'done' AND (LOWER(old_email) IN ({name_marks}) "
                             f"OR LOWER(new_email) IN ({name_marks}) OR sub_id = ?)",
                             (*server_ids, key_id, *(name.casefold() for name in names),
                              *(name.casefold() for name in names), sub_id)).fetchall()
         for item in pending:
-            other = conn.execute('SELECT import_id FROM subscription_import_members WHERE key_id = ?',
-                                 (item['key_id'],)).fetchone()
             if (any(item[field].casefold() in {name.casefold() for name in names}
-                    for field in ('old_email', 'new_email')) or not own or not other or own[0] != other[0]):
+                    for field in ('old_email', 'new_email')) or item['user_id'] != owner['user_id']):
                 return True
         return False
 
@@ -84,6 +83,24 @@ def save_panel_identity_snapshot(operation_id: int, snapshot: dict) -> dict:
         return snapshot
 
 
+def _enqueue_telegram_panel_renames(conn, user_id: int, telegram_id: int, now: int) -> int:
+    """Use the same queue when Telegram is linked during an unfinished rename."""
+    prefix = f'site_{user_id}_'
+    keys = conn.execute('SELECT id, server_id, panel_email, sub_id FROM vpn_keys WHERE user_id = ? '
+                        'AND server_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM panel_identity_renames r '
+                        "WHERE r.key_id = vpn_keys.id AND r.state != 'done')", (user_id,)).fetchall()
+    count = 0
+    for key in keys:
+        if not str(key['panel_email'] or '').startswith(prefix):
+            continue
+        conn.execute('INSERT INTO panel_identity_renames(key_id, user_id, server_id, old_email, '
+                     'new_email, sub_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                     (key['id'], user_id, key['server_id'], key['panel_email'],
+                      f'user_{telegram_id}_' + key['panel_email'][len(prefix):], key['sub_id'], now))
+        count += 1
+    return count
+
+
 def finish_panel_identity_rename(operation_id: int, now: int) -> None:
     with get_db() as conn:
         conn.execute('BEGIN IMMEDIATE')
@@ -96,23 +113,16 @@ def finish_panel_identity_rename(operation_id: int, now: int) -> None:
                                 row['sub_id'], row['old_email'])).rowcount
         if changed != 1:
             raise CoreError('panel_identity_changed')
-        imported = conn.execute('SELECT m.*, i.endpoint FROM subscription_import_members m '
-                                'JOIN subscription_imports i ON i.id = m.import_id WHERE key_id = ?',
-                                (row['key_id'],)).fetchone()
-        if imported:
-            snapshot = json.loads(imported['snapshot_json'])
-            active_snapshot = snapshot.get('replacement') or snapshot
-            active_snapshot['record']['email'] = row['new_email']
-            for placement in active_snapshot['placements']:
-                placement['client']['email'] = row['new_email']
-            conn.execute('UPDATE subscription_import_members SET email = ?, snapshot_json = ? WHERE key_id = ?',
-                         (row['new_email'], json.dumps(snapshot, ensure_ascii=True, sort_keys=True), row['key_id']))
-            conn.execute("UPDATE subscription_import_resources SET identity = ? WHERE endpoint = ? "
-                         "AND kind = 'email' AND identity = ? AND import_id = ?",
-                         (row['new_email'].casefold(), imported['endpoint'], row['old_email'].casefold(),
-                          imported['import_id']))
-        conn.execute("UPDATE panel_identity_renames SET state = 'done', completed_at = ?, error_code = NULL "
+        snapshot = json.loads(row['snapshot_json'] or '{}')
+        if snapshot.get('source') == 'subscription_link':
+            conn.execute("INSERT INTO key_operation_log (vpn_key_id, user_id, operation_type, source, expires_after) "
+                         "SELECT id, user_id, 'subscription_link', 'panel', expires_at FROM vpn_keys WHERE id = ?",
+                         (row['key_id'],))
+        conn.execute("UPDATE panel_identity_renames SET state = 'done', completed_at = ?, error_code = NULL, snapshot_json = NULL "
                      'WHERE id = ?', (now, operation_id))
+        user = conn.execute('SELECT telegram_id FROM users WHERE id = ?', (row['user_id'],)).fetchone()
+        if user['telegram_id'] is not None and row['new_email'].startswith(f"site_{row['user_id']}_"):
+            _enqueue_telegram_panel_renames(conn, row['user_id'], user['telegram_id'], now)
 
 
 def defer_panel_identity_rename(operation_id: int, error_code: str, now: int) -> None:
@@ -120,3 +130,94 @@ def defer_panel_identity_rename(operation_id: int, error_code: str, now: int) ->
         conn.execute("UPDATE panel_identity_renames SET attempts = attempts + 1, error_code = ?, "
                      "next_attempt_at = ? + MIN(3600, 30 * (1 << MIN(attempts, 7))) "
                      "WHERE id = ? AND state != 'done'", (error_code, now, operation_id))
+
+
+def _panel_subscription_keys(conn, endpoint, sub_ids, names):
+    from core.panel_identity import physical_panel_key
+    peers = [row['id'] for row in conn.execute('SELECT * FROM servers')
+             if physical_panel_key(dict(row)) == endpoint]
+    marks = ','.join('?' for _ in peers)
+    names = {name.casefold() for name in names}
+    return [dict(row) for row in conn.execute(
+        f'SELECT k.*, t.group_id, r.old_email, r.new_email FROM vpn_keys k '
+        'JOIN tariffs t ON t.id = k.tariff_id '
+        "LEFT JOIN panel_identity_renames r ON r.key_id = k.id AND r.state != 'done' "
+        f'WHERE k.server_id IN ({marks})', peers)
+        if row['sub_id'] in sub_ids or any(str(row[field] or '').casefold() in names
+                                         for field in ('panel_email', 'old_email', 'new_email'))]
+
+
+def get_panel_subscription_keys(endpoint: str, sub_ids: list[str], names=()) -> list[dict]:
+    """Read ordinary ownership, including names reserved by an unfinished rename."""
+    with get_db() as conn:
+        return _panel_subscription_keys(conn, endpoint, sub_ids, names)
+
+
+def bind_panel_subscription(*, user_id: int, endpoint: str, group_id: int,
+                            members: list[dict], servers: list[dict], now: int) -> list[int]:
+    """Reserve the complete subscription as ordinary keys and enqueue their renames."""
+    from bot.utils.panel_email import generate_unique_panel_email
+    from core.panel_identity import physical_panel_key
+    from .db_keys import _allocate_key_custom_name_with_conn
+
+    names = {item['record']['email'].casefold() for item in members}
+    sub_ids = {item['record']['subId'] for item in members}
+    if not members or len(names) != len(members) or not all(sub_ids):
+        raise CoreError('subscription_ambiguous')
+    with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        user = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+        if user is None or user['is_banned']:
+            raise CoreError('account_unavailable')
+        tariff = conn.execute("SELECT id FROM tariffs WHERE group_id = ? AND system_type = 'admin_custom'",
+                              (group_id,)).fetchone()
+        if tariff is None:
+            raise CoreError('subscription_group_unavailable')
+        for selected in servers:
+            current = conn.execute('SELECT s.* FROM servers s JOIN server_groups g ON g.server_id = s.id '
+                                   'WHERE s.id = ? AND g.group_id = ? AND s.is_active = 1',
+                                   (selected['id'], group_id)).fetchone()
+            if (not current or physical_panel_key(dict(current)) != endpoint or
+                    current['inbound_group_id'] != selected['inbound_group_id']):
+                raise CoreError('subscription_group_unavailable')
+        existing = _panel_subscription_keys(conn, endpoint, sub_ids, names)
+        if any(row['user_id'] != user_id for row in existing):
+            raise CoreError('subscription_owned')
+        if existing:
+            if (len(existing) != len(members) or any(row['group_id'] != group_id for row in existing) or
+                    any(not any(row['sub_id'] == member['record']['subId'] and
+                                member['record']['email'].casefold() in
+                                {str(row[field] or '').casefold() for field in ('panel_email', 'old_email', 'new_email')}
+                                for row in existing) for member in members)):
+                raise CoreError('subscription_ambiguous')
+            return sorted(row['id'] for row in existing)
+        result = []
+        for item, server in zip(members, servers, strict=True):
+            record = item['record']
+            expiry = int(record.get('expiryTime') or 0)
+            expiry = now * 1000 - expiry if expiry < 0 else expiry
+            expires_at = (datetime.fromtimestamp(expiry / 1000, timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')
+                          if expiry else None)
+            total, used = int(record.get('totalGB') or 0), int(item['traffic_used'])
+            key_id = conn.execute('''INSERT INTO vpn_keys
+                (user_id, server_id, tariff_id, panel_email, sub_id, custom_name, expires_at,
+                 traffic_used, traffic_limit, traffic_limit_override, max_ips_override, traffic_updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (user_id, server['id'], tariff['id'], record['email'], record['subId'],
+                 _allocate_key_custom_name_with_conn(conn, user_id), expires_at, used, total, total,
+                 item['device_limit'])).lastrowid
+            target = generate_unique_panel_email(dict(user), stable_identity=
+                f"subscription:{endpoint}:{record['subId']}:{record['email']}:{key_id}")
+            if _panel_subscription_keys(conn, endpoint, (), [target]):
+                raise CoreError('panel_identity_conflict')
+            snapshot = {**item, 'version': 1, 'endpoint': endpoint, 'sub_id': record['subId'],
+                        'source': 'subscription_link'}
+            if int(record.get('expiryTime') or 0) < 0:
+                snapshot['expiry_time_ms'] = expiry
+            conn.execute('''INSERT INTO panel_identity_renames
+                (key_id, user_id, server_id, old_email, new_email, sub_id, snapshot_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (key_id, user_id, server['id'], record['email'], target, record['subId'],
+                 json.dumps(snapshot, sort_keys=True), now))
+            result.append(key_id)
+        return result

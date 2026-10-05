@@ -107,6 +107,7 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
         if key.get('max_ips_override') is not None
         else key.get('tariff_max_ips') or 1
     )
+    max_ips = str(max_ips) if max_ips else 'Без лимита'
     text = f'🔑 <b>{escape_html(key_name)}</b>\n\n🖥️ Сервер: {server_name}\n📋 Тариф: {tariff_name}\n💻 Устройств: {max_ips}\n{panel_email_line}\n📅 Создан: {created_at}\n⏰ Истекает: {expires_at}\n'
     from database.requests import is_key_active, is_traffic_exhausted
     if not is_key_active(key):

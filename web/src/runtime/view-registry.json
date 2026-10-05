@@ -6,7 +6,7 @@
     {"id":"connect","file":"src/pages/SubscriptionAccount.tsx","export":"Connection","title_key":"connect","preview_parameter":"1"},
     {"id":"purchase","file":"src/pages/Checkout.tsx","export":"Checkout","title_key":"buy"},
     {"id":"renewal","file":"src/pages/Checkout.tsx","export":"Checkout","title_key":"renew","preview_parameter":"1"},
-    {"id":"payment","file":"src/pages/Checkout.tsx","export":"OrderStatus","title_key":"paymentHistory","preview_parameter":"preview-order"},
+    {"id":"payment","file":"src/pages/Checkout.tsx","export":"OrderStatus","title":"Оплата","preview_parameter":"preview-order"},
     {"id":"payments","file":"src/pages/Information.tsx","export":"History","title_key":"history"},
     {"id":"history","file":"src/pages/Information.tsx","export":"History","title_key":"history","preview_parameter":"1"},
     {"id":"operation","file":"src/pages/SubscriptionAccount.tsx","export":"KeyOperation","title_key":"checkOperation","preview_parameter":"preview-operation"},

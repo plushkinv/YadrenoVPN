@@ -20,6 +20,7 @@
     --hero: #edf7f0;
     --warning: #8c5208;
     --warning-tint: #fff1da;
+    --danger: #a32d2d;
     --shadow: 0 6px 28px rgb(23 49 35 / 3%);
     --focus: #246dbd;
     color-scheme: light;
@@ -38,6 +39,7 @@
     --hero: #20382b;
     --warning: #f2c684;
     --warning-tint: #403322;
+    --danger: #ffb4ab;
     --shadow: none;
     --focus: #9bc8ff;
     color-scheme: dark;

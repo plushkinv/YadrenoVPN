@@ -40,17 +40,6 @@ async def renew_key_access(
     if not key_id or days is None:
         return result
 
-    from bot.services.imported_access import inspect_imported_renewal
-    try:
-        current = await inspect_imported_renewal(key_id)
-        if current:
-            from database.requests import observe_imported_key_state
-            observe_imported_key_state(key_id, **current)
-    except Exception as error:
-        logger.warning('Imported duration read failed key=%s type=%s', key_id, type(error).__name__)
-        result['sync_stats'] = {'errors': 1, 'ok': 0}
-        return result
-
     paid_traffic_limit: Optional[int] = None
     if tariff_id:
         from database.requests import get_tariff_by_id, get_vpn_key_by_id

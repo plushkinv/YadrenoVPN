@@ -559,6 +559,11 @@ def cleanup_old_backups() -> None:
     as complete directories and are additionally capped at three applied points.
     Other backup files retain the generic mtime-based cleanup behavior.
     """
+    try:
+        from web_tools.publication import cleanup
+        cleanup(os.path.join(PROJECT_ROOT, 'web_runtime'), retention_days=BACKUP_RETENTION_DAYS)
+    except Exception as exc:
+        logger.warning('Не удалось очистить временные ресурсы Web: %s', exc)
     if not os.path.exists(BACKUP_DIR):
         return
 
@@ -1207,8 +1212,6 @@ async def sync_traffic_stats(
             error,
         )
 
-    from bot.services.imported_access import observe_imported_snapshots
-    observe_imported_snapshots(keys, collection.snapshots)
     # Only changed cumulative counters are written to SQLite.
     traffic_updates = collect_changed_traffic_updates(keys, collection.snapshots)
     

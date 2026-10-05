@@ -20,11 +20,11 @@ export function bytes(value: number | null): string {
 }
 export function subscriptionView(item: Subscription): SubscriptionView {
   const days = item.expires_at ? Math.ceil((new Date(item.expires_at).getTime() - Date.now()) / 86400000) : null;
-  const state = item.access_status === 'pending' ? 'pending' : item.state === 'unconfigured' ? 'unconfigured' : item.state === 'disabled' ? 'disabled' : item.state === 'exhausted' ? 'traffic' : item.state === 'expired' ? 'expired' : item.state === 'first_use' ? 'active' : item.state !== 'active' ? 'unknown' : days != null && days > 0 && days <= 3 ? 'expiring' : 'active';
+  const state = item.access_status === 'pending' ? 'pending' : item.state === 'unconfigured' ? 'unconfigured' : item.state === 'disabled' ? 'disabled' : item.state === 'exhausted' ? 'traffic' : item.state === 'expired' ? 'expired' : item.state !== 'active' ? 'unknown' : days != null && days > 0 && days <= 3 ? 'expiring' : 'active';
   const used = item.traffic.known ? item.traffic.used_bytes : null;
   const limit = item.traffic.limit_bytes;
   return { id: String(item.id), name: item.name || `${t.subscription} ${item.id}`, plan: item.tariff_name ?? t.unknown,
-    state, expires: item.state === 'first_use' ? t.firstUse : date(item.expires_at), remaining: item.state === 'first_use' || days == null ? t.unknown : `${Math.max(0, days)} дн.`,
-    traffic: used == null ? null : `${bytes(used)} / ${limit ? bytes(limit) : t.unlimited}`,
+    state, expires: date(item.expires_at), remaining: days == null ? t.unknown : `${Math.max(0, days)} дн.`,
+    traffic: used == null && limit == null ? null : `${bytes(used)} / ${limit ? bytes(limit) : t.unlimited}`,
     trafficPercent: used != null && limit ? Math.min(100, used / limit * 100) : null, devices: null };
 }

@@ -170,7 +170,7 @@ def first_purchase_eligibility(context):
     from database import requests as db
     account = account_for_context(context)
     stats = db.get_user_payment_snapshot_stats(account.account_id)
-    imported = db.has_subscription_import(account.account_id)
+    imported = db.has_key_operation(account.account_id, 'subscription_link')
     eligible = not imported and int(stats['paid_key_count']) == 0
     inputs = {'benefit': 'first_purchase', 'eligible': eligible, 'has_subscription_import': imported,
               'payment_statistics': stats}

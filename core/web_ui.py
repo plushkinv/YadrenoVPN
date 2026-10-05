@@ -1,7 +1,6 @@
 """Small presentation settings and a read-only installation preview projection."""
 from __future__ import annotations
 
-import re
 import time
 import json
 from copy import deepcopy
@@ -12,13 +11,8 @@ from database.web_ui_defaults import WEB_UI_DEFAULTS as DEFAULTS
 
 
 PRESENTATION_CONSTRAINTS = {
-    'title': {'min_length': 1, 'max_length': 100, 'minimum_codepoint': 32},
-    'logo': {'empty_allowed': True,
-             'pattern': r'/ui/assets/[A-Za-z0-9_./-]+\.(?:png|jpg|jpeg|webp|gif|bmp|svg)',
-             'forbidden_path_segments': ['', '.', '..']},
     'preset': {'enum': ['clear', 'signal', 'friendly']},
     'theme': {'enum': ['light', 'dark']},
-    'accent': {'empty_allowed': True, 'pattern': r'#[0-9a-fA-F]{6}'},
     'sync_interval_seconds': {'ascii_digits': True, 'minimum': 30, 'maximum': 86400},
 }
 
@@ -31,6 +25,7 @@ def presentation_setting_contract(name: str) -> dict:
             'normalization': 'strip', 'constraints': deepcopy(PRESENTATION_CONSTRAINTS[name])}
 
 def public_settings():
+    from core.bot_profile import presentation
     values = {key: db.get_setting('web_ui_' + key, default) for key, default in DEFAULTS.items()}
     # Invalid saved values are diagnosed by the setter; read safe stock defaults.
     for key in values:
@@ -38,7 +33,7 @@ def public_settings():
             values[key] = validate_setting(key, values[key])
         except CoreError:
             values[key] = DEFAULTS[key]
-    return {**values, 'logo': values['logo'] or None, 'accent': values['accent'] or None,
+    return {**values, **presentation(),
             'sync_interval_seconds': int(values['sync_interval_seconds'])}
 
 
@@ -48,14 +43,6 @@ def validate_setting(name, value):
     value = value.strip()
     constraints = PRESENTATION_CONSTRAINTS[name]
     if 'enum' in constraints and value not in constraints['enum']:
-        raise CoreError('invalid_request')
-    if name == 'title' and (not constraints['min_length'] <= len(value) <= constraints['max_length']
-                            or any(ord(c) < constraints['minimum_codepoint'] for c in value)):
-        raise CoreError('invalid_request')
-    if name == 'accent' and value and not re.fullmatch(constraints['pattern'], value):
-        raise CoreError('invalid_request')
-    if name == 'logo' and value and (not re.fullmatch(constraints['pattern'], value)
-                                   or any(part in constraints['forbidden_path_segments'] for part in value.split('/')[1:])):
         raise CoreError('invalid_request')
     if name == 'sync_interval_seconds' and (not value.isascii() or not value.isdecimal()
             or not constraints['minimum'] <= int(value) <= constraints['maximum']):

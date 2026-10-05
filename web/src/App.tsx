@@ -4,11 +4,11 @@ import type { Bootstrap, Session, UiSettings } from './api/contracts';
 import { Shell } from './components/Shell';
 import { Button } from './components/Ui';
 import { Failure, Loading } from './components/Forms';
-import { AppContext, type AppContextValue } from './runtime/context';
+import { AppContext, BackContext, type AppContextValue } from './runtime/context';
+import { useNavigation } from './runtime/navigation';
 import type { Environment } from './runtime/environment';
 import { AccountApi } from './runtime/cache';
 import { registeredPages, customization } from './runtime/registry';
-import { UiOverrideProvider } from './runtime/overrides';
 import { announceSessionChange, configureStorage, forgetAccounts, logoutPending, observeSessionChange, remember, stored, syncGeneration } from './runtime/storage';
 import { observeUiVersion, registerShell, updateShell } from './runtime/versions';
 import { appText as t } from './i18n/app';
@@ -18,19 +18,13 @@ import { NativeConnection } from './components/NativeConnection';
 import { ErrorBoundary } from './runtime/ErrorBoundary';
 
 export interface ApplicationProps { environment: Environment; transport?: Api; preview?: boolean; }
-function readRoute() {
-  const hash = location.hash.slice(1);
-  const returnedOrder = /^\/orders\/([A-Za-z0-9_.:-]+)\/?$/.exec(location.pathname);
-  if (!hash && returnedOrder) return 'payment/' + returnedOrder[1];
-  return hash && !hash.includes('tgWebApp') && hash !== 'main-content' ? hash : 'home';
-}
 export function App({ environment, transport, preview = false }: ApplicationProps) {
-  return <ErrorBoundary><UiOverrideProvider components={customization.components}><AppRuntime environment={environment} transport={transport} preview={preview} /></UiOverrideProvider></ErrorBoundary>;
+  return <ErrorBoundary><AppRuntime environment={environment} transport={transport} preview={preview} /></ErrorBoundary>;
 }
 function AppRuntime({ environment, transport, preview = false }: ApplicationProps) {
   useMemo(() => { configureStorage(customization.instance_id); syncGeneration(); }, []);
   const api = useMemo(() => new AccountApi(transport ?? new HttpApi()), [transport]);
-  const [route, setRoute] = useState(readRoute);
+  const { route, navigate, back, reset, section } = useNavigation(preview);
   const [session, setSession] = useState<Session | null>(null);
   const [bootstrap, setBootstrap] = useState<Bootstrap>();
   const [settings, setSettings] = useState<UiSettings>();
@@ -47,15 +41,14 @@ function AppRuntime({ environment, transport, preview = false }: ApplicationProp
   const [updateError, setUpdateError] = useState<unknown>();
   const [updating, setUpdating] = useState(false);
   const refresh = useCallback(() => setRevision(value => value + 1), []);
-  const navigate = useCallback((value: string) => { location.hash = value; setRoute(value); window.scrollTo({ top: 0 }); }, []);
   const [path, ...parts] = route.split('/');
   const param = parts.join('/');
   const bindSession = useCallback((value: Session | null) => {
     const previous = stored<number | null>('owner', null);
-    if (previous !== value?.account_id) { forgetAccounts(); syncGeneration(); }
+    if (previous !== value?.account_id) { forgetAccounts(); syncGeneration(); reset(); }
     api.setAccount(value?.account_id ?? null); setSession(value);
     if (value) { remember('owner', value.account_id); remember('offline-session', { account_id: value.account_id, expires_at: value.expires_at, telegram_id: null, source: 'offline' }); }
-  }, [api]);
+  }, [api, reset]);
   useEffect(() => {
     let active = true;
     setLoading(true); setError(undefined);
@@ -106,18 +99,17 @@ function AppRuntime({ environment, transport, preview = false }: ApplicationProp
     return () => { active = false; };
   }, [api, environment, attempt, bindSession]);
   useEffect(() => {
-    const changed = () => { if (location.hash !== '#main-content') setRoute(readRoute()); };
     const network = () => { setOffline(!navigator.onLine); if (navigator.onLine) { setCachedAt(undefined); setAttempt(value => value + 1); } };
     const expired = () => { forgetAccounts(); api.setAccount(null); setSession(null); setCachedAt(undefined); };
     const accountChanged = () => { expired(); if (navigator.onLine) setAttempt(value => value + 1); };
     const cached = (event: Event) => setCachedAt((event as CustomEvent<number>).detail);
-    window.addEventListener('hashchange', changed); window.addEventListener('online', network); window.addEventListener('offline', network);
+    window.addEventListener('online', network); window.addEventListener('offline', network);
     window.addEventListener('account-expired', expired); window.addEventListener('account-cache-used', cached);
     window.addEventListener('account-changed', accountChanged);
     const stop = preview ? () => {} : observeSessionChange(accountChanged);
-    return () => { stop(); window.removeEventListener('account-changed', accountChanged); window.removeEventListener('hashchange', changed); window.removeEventListener('online', network); window.removeEventListener('offline', network); window.removeEventListener('account-expired', expired); window.removeEventListener('account-cache-used', cached); };
+    return () => { stop(); window.removeEventListener('account-changed', accountChanged); window.removeEventListener('online', network); window.removeEventListener('offline', network); window.removeEventListener('account-expired', expired); window.removeEventListener('account-cache-used', cached); };
   }, [api, refresh]);
-  useEffect(() => environment.back(path !== 'home', () => { if (history.length > 1) history.back(); else navigate('home'); }), [environment, path, navigate]);
+  useEffect(() => environment.back(path !== 'home' && path !== 'login', back), [environment, path, back]);
   useEffect(() => environment.observe?.(nextTheme => {
     if (nextTheme && !stored(`${session?.account_id}.appearance`, null)) setTheme(nextTheme);
   }), [environment, session?.account_id]);
@@ -157,18 +149,17 @@ function AppRuntime({ environment, transport, preview = false }: ApplicationProp
     },
     authenticated: identity => {
       logoutPending(false); bindSession(identity); remember('ui-settings', settings);
-      if (!preview) announceSessionChange(); refresh(); navigate('home');
+      if (!preview) announceSessionChange(); refresh(); reset('home');
       api.request<Bootstrap>('/bootstrap').then(result => { setBootstrap(result); remember('bootstrap', result); }, setError);
     },
     logout: async () => {
       setLoggingOut(true);
       if (!preview) logoutPending(true);
       try { await api.request('/auth/logout', 'POST'); logoutPending(false); }
-      finally { forgetAccounts(); bindSession(null); if (!preview) announceSessionChange(); setCachedAt(undefined); navigate('login'); setLoggingOut(false); }
+      finally { forgetAccounts(); bindSession(null); if (!preview) announceSessionChange(); setCachedAt(undefined); reset('login'); setLoggingOut(false); }
     },
   };
-  return <AppContext.Provider value={value}><Shell route={selected.id} navigate={navigate} preset={preset} theme={theme}
-    navigation={customization.navigation}
+  return <BackContext.Provider value={back}><AppContext.Provider value={value}><Shell route={selected.id} activeRoute={section} navigate={navigate} preset={preset} theme={theme}
     title={settings.title} logo={settings.logo?.startsWith('/ui/assets/') ? customization.asset_base + settings.logo.slice(4) : settings.logo} accountLabel={session ? `${t.account} ${session.account_id}` : t.login} account={() => navigate('account')}
     help={() => navigate('help')} toggleTheme={() => value.setTheme(theme === 'light' ? 'dark' : 'light')}
     review={preview ? null : <AdminPreview onSettingsSaved={value => { setSettings(value); setPreset(value.preset); remember('ui-settings', value); }} />}>
@@ -176,10 +167,9 @@ function AppRuntime({ environment, transport, preview = false }: ApplicationProp
     {newUi && <p className="notice" role="status">Доступна новая версия интерфейса. <Button tone="quiet" disabled={updating} onClick={() => { setUpdating(true); setUpdateError(undefined); void updateShell().catch(setUpdateError).finally(() => setUpdating(false)); }}>Обновить интерфейс</Button></p>}
     <Failure error={updateError} />
     {environment.native && !['home', 'connect'].includes(selected.id) && <NativeConnection bridge={environment.native} />}
-    {settings.accent && /^#[0-9a-fA-F]{6}$/.test(settings.accent) && <style>{`@layer admin {.app {--accent:${settings.accent};--accent-hover:color-mix(in srgb,${settings.accent},var(--text) 12%);}}`}</style>}
     {!definition ? <h1>{t.notFound}</h1> : definition.feature && !bootstrap.features[definition.feature] ? <p>{t.empty}</p>
       : definition.module_id && !bootstrap.modules?.some(module => module.module_id === definition.module_id && module.state === 'available' && module.api_version === 1)
       ? <p role="alert">Модуль этой страницы недоступен. Повторите позже.</p> : <Component key={`${selected.id}/${param}/${session?.account_id}`} />}
     {!session && selected.id !== 'login' && <Button onClick={() => navigate('login')}>{t.login}</Button>}
-  </Shell></AppContext.Provider>;
+  </Shell></AppContext.Provider></BackContext.Provider>;
 }

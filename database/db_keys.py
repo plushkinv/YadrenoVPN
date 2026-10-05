@@ -122,10 +122,6 @@ def extend_vpn_key(
         from .db_key_operations import _assert_key_mutation_ready
         _assert_key_mutation_ready(conn, key_id)
         normalized_days = int(days)
-        from .db_subscription_imports import _extend_imported_terms
-        if _extend_imported_terms(conn, key_id, normalized_days,
-                                  finite_from_now_if_unlimited=finite_from_now_if_unlimited) is not None:
-            return True
         modifier = f"{normalized_days:+} days"
         cursor = conn.execute("""
             UPDATE vpn_keys 
@@ -681,8 +677,8 @@ def reissue_vpn_key_plan(
         raise ValueError("traffic_limit_bytes must not be negative")
     if traffic_limit_override is not None and int(traffic_limit_override) < 0:
         raise ValueError("traffic_limit_override must not be negative")
-    if max_ips_override is not None and not 1 <= int(max_ips_override) <= 999:
-        raise ValueError("max_ips_override must be between 1 and 999")
+    if max_ips_override is not None and not 0 <= int(max_ips_override) <= 999:
+        raise ValueError("max_ips_override must be between 0 and 999")
 
     with get_db() as conn:
         from .db_key_operations import _assert_key_mutation_ready
@@ -811,6 +807,7 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
             LEFT JOIN tariffs t ON vk.tariff_id = t.id
             JOIN users u ON vk.user_id = u.id
             WHERE u.telegram_id = ?
+              AND NOT EXISTS (SELECT 1 FROM panel_identity_renames r WHERE r.key_id = vk.id AND r.state != 'done')
             ORDER BY vk.expires_at DESC
         """, (telegram_id,))
         
@@ -918,7 +915,8 @@ def _get_key_details(key_id, owner_id, *, by_account):
             LEFT JOIN tariffs t ON vk.tariff_id = t.id
             JOIN users u ON vk.user_id = u.id
             WHERE vk.id = ? AND {owner_column} = ?
-        """, (key_id, owner_id))
+              AND (? OR NOT EXISTS (SELECT 1 FROM panel_identity_renames r WHERE r.key_id = vk.id AND r.state != 'done'))
+        """, (key_id, owner_id, by_account))
         row = cursor.fetchone()
         if not row:
             return None

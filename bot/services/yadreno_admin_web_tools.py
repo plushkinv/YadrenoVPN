@@ -3,23 +3,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 from bot.services.yadreno_admin_customization_tools import _json_result
 from bot.services.yadreno_admin_web_binding import WebEditorBinding
 from core.results import CoreError
-from web_tools.compiler_sandbox import IsolatedCompileError
-from web_tools.editor_workspace import StaleRevision
+from web_tools.errors import WebSourceError
 
 WEB_INSPECT_SCOPES = frozenset({'web.context', 'web.workspace', 'web.source', 'web.candidate', 'web.publication'})
 WEB_APPLY_FIELDS = {
-    'web.file.write': {'operation', 'file', 'content', 'expected_revision'},
-    'web.asset.write': {'operation', 'file', 'source_path', 'expected_revision'},
-    'web.file.delete': {'operation', 'file', 'expected_revision'},
-    'web.build': {'operation', 'expected_revision'},
-    'web.publish': {'operation', 'expected_revision', 'build_id'},
-    'web.rollback': {'operation', 'expected_revision', 'build_id'},
+    'web.build': {'operation'},
+    'web.publish': {'operation', 'build_id'},
+    'web.restore': {'operation', 'source', 'publish'},
 }
+
 _KINDS = {'web_page': 'pages', 'web_component': 'components', 'web_style': 'styles'}
 
 
@@ -51,16 +47,22 @@ def is_web_operation(tool: str, args: dict) -> bool:
 
 def _integer(value, minimum, maximum):
     if type(value) is not int or not minimum <= value <= maximum:
-        raise ValueError('invalid inspection pagination')
+        raise WebSourceError('web_arguments_invalid', 'Invalid inspection pagination.',
+                             next_action='Use the returned cursor/offset and a limit within the exposed schema.')
     return value
 
 
 def _source(workspace, args):
     kind, key = args.get('kind'), args.get('key')
     if not isinstance(key, str) or not key or kind not in {'custom', *_KINDS}:
-        raise ValueError('web.source requires kind and exact key from the inventory')
+        raise WebSourceError('web_arguments_invalid', 'web.source requires kind and exact key from the inventory.',
+                             next_action='Read the tool schema or use ordinary file search/read in custom_web.')
     record = workspace.read_custom(key) if kind == 'custom' else workspace.read_effective(_KINDS[kind], key)
-    text = record.pop('content').decode('utf-8')
+    try:
+        text = record.pop('content').decode('utf-8')
+    except UnicodeDecodeError:
+        raise WebSourceError('web_file_not_text', 'This file is not UTF-8 text.', file=record['file'],
+                             next_action='Use the existing binary asset/attachment tools for this file.') from None
     offset = _integer(args.get('offset', 0), 0, len(text))
     length = _integer(args.get('length', 8000), 1, 8000)
     # Preserve exact source and continuation; never silently truncate a file.
@@ -81,15 +83,15 @@ def _inspect(binding, workspace, api_key, args):
     common = {'scope', 'cursor', 'limit'}
     allowed = common | {'kind', 'key', 'offset', 'length'} if scope == 'web.source' else common
     if scope not in WEB_INSPECT_SCOPES or set(args) - allowed:
-        raise ValueError('unsupported Web inspection arguments')
+        raise WebSourceError('web_arguments_invalid', 'Unsupported Web inspection arguments.',
+                             next_action='Use only fields listed for this scope in the exposed schema.')
     cursor = _integer(args.get('cursor', 0), 0, 2**31 - 1)
     limit = _integer(args.get('limit', 20), 1, 50)
     if scope == 'web.context':
         targets = workspace.inspect_targets()
         return _paginated({'status': 'ok', **binding.runtime_context(api_key),
                 'inspect_scopes': sorted(WEB_INSPECT_SCOPES), 'apply_operations': list(WEB_APPLY_FIELDS),
-                'asset_sources': ['source_path'],
-                'publication_available': True, 'revision': targets['revision']}, targets['targets'], cursor, limit)
+                'publication_available': True}, targets['targets'], cursor, limit)
     if scope == 'web.publication':
         from web_tools.editor_publication import inspect
         return {'status': 'ok', **inspect(workspace)}
@@ -100,7 +102,8 @@ def _inspect(binding, workspace, api_key, args):
         return {'status': 'ok', **workspace.candidate(expected_revision=snapshot['revision'])}
     files = [{'file': name, **facts} for name, facts in snapshot['files'].items()]
     return _paginated({'status': 'ok', 'revision': snapshot['revision'],
-                       'source_revision': snapshot['source_revision']}, files, cursor, limit)
+                       'source_revision': snapshot['source_revision'], 'backup': snapshot['backup'],
+                       'working_directory': snapshot['working_directory']}, files, cursor, limit)
 
 
 def _paginated(metadata, items, cursor, limit):
@@ -116,50 +119,45 @@ def _paginated(metadata, items, cursor, limit):
 
 
 def _apply(binding, workspace, api_key, args):
+    from web_tools.errors import WebSourceError
     operation = args.get('operation')
     fields = WEB_APPLY_FIELDS.get(operation)
     if fields is None or set(args) != fields:
-        raise ValueError('unsupported Web mutation arguments')
-    expected = args['expected_revision']
-    if operation in {'web.publish', 'web.rollback'}:
-        from bot.services.yadreno_admin_web_dialog import authorize_administrator
-        from web_tools.editor_publication import apply, undo
-        context = binding.runtime_context(api_key)['web_editor']
-
-        def current_authority():
-            identity = binding.authority(api_key)
-            if authorize_administrator(identity['telegram_id']) != api_key:
-                raise CoreError('access_denied')
-
-        if operation == 'web.rollback':
-            return undo(workspace, expected_revision=expected, build_id=args['build_id'], authorize=current_authority)
-        return apply(workspace, expected_revision=expected, build_id=args['build_id'],
-                     base_build_id=context['publication']['build_id'],
-                     rollback=operation == 'web.rollback', authorize=current_authority)
+        raise WebSourceError('web_arguments_invalid', 'Unsupported Web operation arguments.',
+                             next_action='Use web.build, web.publish(build_id), or web.restore(source, publish).')
     if operation == 'web.build':
-        return workspace.build_candidate(expected_revision=expected)
-    if operation == 'web.file.write':
-        return workspace.write_custom(args['file'], args['content'], expected_revision=expected)
-    if operation == 'web.file.delete':
-        return workspace.delete_custom(args['file'], expected_revision=expected)
-    if 'source_path' in args:
-        from bot.services.temporary_files import UPLOAD_MAX_BYTES, UPLOAD_RELATIVE
-        from web_tools.editor_files import read_regular
-        source = args['source_path']
-        if not isinstance(source, str) or not source or not Path(source).is_absolute():
-            raise ValueError('asset source requires an absolute uploaded-file path')
-        root = binding.project_root / UPLOAD_RELATIVE
-        name = Path(source).relative_to(root).as_posix()
-        content = read_regular(root, name, maximum=UPLOAD_MAX_BYTES)
-        return workspace.write_asset(args['file'], content, expected_revision=expected)
+        return {**workspace.build_candidate(), 'preview_available': True}
+    from bot.services.yadreno_admin_web_dialog import authorize_administrator
+    from web_tools.editor_publication import apply, restore
+    context = binding.runtime_context(api_key)['web_editor']
+
+    def current_authority():
+        identity = binding.authority(api_key)
+        if authorize_administrator(identity['telegram_id']) != api_key:
+            raise CoreError('access_denied')
+
+    if operation == 'web.restore':
+        if type(args['publish']) is not bool:
+            raise WebSourceError('web_arguments_invalid', 'publish must be a boolean.',
+                                 next_action='Use publish=false for draft restoration or true for an authorized live rollback.')
+        return restore(workspace, source=args['source'], publish=args['publish'],
+                       base_build_id=context['publication']['build_id'], authorize=current_authority)
+    return apply(workspace, build_id=args['build_id'],
+                 base_build_id=context['publication']['build_id'], authorize=current_authority)
 
 
 def execute_web_customization_tool(tool: str, args: dict, binding: WebEditorBinding, api_key: str) -> str:
     """Use trusted binding only; no roots, actor IDs or publish permission in args."""
+    from web_tools.publication import read_pointer
+    from web_tools.source_tree import fingerprint
+    from web_tools.editor_files import scan_sources
+    before_pointer = before_sources = None
     try:
         from web_tools.editor_publication import recover
         recover(binding.project_root)
         workspace = binding.workspace(api_key)
+        before_pointer = read_pointer(binding.project_root / 'web_runtime')
+        before_sources = fingerprint(scan_sources(workspace._custom))
         if tool == 'satellite_customization_inspect':
             result = _inspect(binding, workspace, api_key, args)
             if args.get('scope') == 'web.source':
@@ -170,20 +168,17 @@ def execute_web_customization_tool(tool: str, args: dict, binding: WebEditorBind
             raise ValueError('unsupported Web tool')
         return _json_result(result)
     except CoreError as error:
-        return _json_result({'status': 'error', **error.as_dict()})
-    except StaleRevision as error:
-        message = 'Inspect the current source revision before retrying.'
-        if str(error) == 'UI publication changed since task capture':
-            message = ('The publication changed or this task already published. Inspect web.publication; '
-                       'further changes need a new request bound to the current publication. '
-                       'Repeating this publish call cannot rebase the task.')
-        return _json_result({'status': 'error', 'code': 'conflict', 'error': message})
-    except IsolatedCompileError as error:
-        message = (str(error) + '\nDiagnostics refer to the task draft. Read the affected file with '
-                   'web.source (kind="custom", key=the path relative to custom_web), then fix that draft. '
-                   'The installed custom_web file is the published version and may differ.')
-        return _json_result({'status': 'error', 'code': 'web_build_failed', 'error': message})
-    except (OSError, ValueError, RuntimeError, KeyError, TypeError, UnicodeError):
-        # Compiler and path exceptions may contain private absolute paths.
-        return _json_result({'status': 'error', 'code': 'web_operation_failed',
-                            'error': 'The draft operation failed. Inspect its revision, file format and compiler readiness.'})
+        return _json_result({'status': 'error', **error.as_dict(), 'changed': False, 'publication_changed': False,
+                            'next_action': 'Reopen the Mini App as an administrator or inspect the current publication if this is a conflict.'})
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, UnicodeError) as error:
+        from web_tools.errors import failure
+        result = failure(error, operation=str(args.get('operation') or args.get('scope')), root=binding.project_root)
+        try:
+            recover(binding.project_root)
+            result['publication_changed'] = (read_pointer(binding.project_root / 'web_runtime') != before_pointer
+                                             if before_pointer is not None else None)
+            result['changed'] = (fingerprint(scan_sources(binding.project_root / 'custom_web')) != before_sources
+                                 if before_sources is not None else None)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            result.update(changed=None, publication_changed=None)
+        return _json_result(result)

@@ -10,7 +10,6 @@ from database.db_account_auth import *
 from database.db_auth_challenges import *
 from database.db_account_links import *
 from database.db_panel_identity import *
-from database.db_subscription_imports import *
 from database.db_order_terms import *
 from database.db_payment_offers import *
 from database.db_keys import *

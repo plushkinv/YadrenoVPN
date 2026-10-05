@@ -98,6 +98,11 @@ async def mutate_key(account, action, inputs, idempotency_key, *, _policy_checke
                         result = {'key_id': inputs['key_id'], 'state': 'completed'}
                     else:
                         raise CoreError('action_unavailable')
+                    if action in ('configure', 'replace') and actor.source != 'telegram':
+                        # Telegram offers this continuation after key delivery. Headless
+                        # callers use the same resolver and retain its result for recovery.
+                        from bot.services.subscription_host_flow import resolve_default_host
+                        result['composition'], _ = await resolve_default_host(inputs['key_id'])
                     db.finish_module_operation(actor.account_id, operation['id'], result)
                     return {'operation_id': operation['id'], **result}
                 except CoreError as exc:

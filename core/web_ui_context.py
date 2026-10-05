@@ -53,7 +53,8 @@ def capture_editor_context(telegram_id, *, root, viewed=None):
     try:
         root = admin_directory(Path(root))
         runtime = admin_directory(local_path(root, 'web_runtime'))
-        custom = local_path(root, 'custom_web')
+        from web_tools.source_tree import ensure
+        custom = ensure(root)
         pointer = read_pointer(runtime)
         build_id = pointer['current']
         if viewed is not None and viewed['ui_version'] != build_id:
@@ -72,21 +73,14 @@ def capture_editor_context(telegram_id, *, root, viewed=None):
             raise CoreError('invalid_request')
         base_revision = source_version(root, include_commit=False)[0]
         custom_revision = custom_source_fingerprint(custom)
-        if (base_revision != proof['base_build_id'] or proof['custom_fingerprint'] is not None
-                and custom_revision != proof['custom_fingerprint']):
-            raise _unavailable('ui_source_changed')
-        # A valid local inventory never makes an escaped/symlinked source readable.
-        for source in [*[item['source'] for item in ([page] if page else inventory['pages'])],
-                       *[item['source'] for item in inventory['components']], *inventory['styles']]:
-            source_root = root / 'web' if source['kind'] == 'stock' else custom
-            if not local_path(source_root, source['file']).is_file():
-                raise _unavailable('ui_source_unavailable')
+        # The viewed publication remains valid while ordinary working files are
+        # being edited or removed. Its inventory is a hint, never a file fallback.
         if (read_pointer(runtime) != pointer or source_version(root, include_commit=False)[0] != base_revision
                 or custom_source_fingerprint(custom) != custom_revision):
             raise _unavailable('ui_source_changed')
         require_administrator(telegram_id)
         # Browser data cannot supply source ownership, hashes, files or modules.
-        # Components are registered global replacements, not a claimed DOM trace.
+        # Registered components are discoverability facts, not a claimed DOM trace.
         return copy.deepcopy({'viewed': viewed, 'publication': {
             'build_id': build_id, 'base_build_id': manifest['base_build_id'],
             'customization_version': manifest['customization_version'], 'manifest_hash': proof['manifest_hash'],

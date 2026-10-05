@@ -69,12 +69,14 @@ SCHEMAS = {
         'max_ips': NI, 'tariff_is_active': NI, 'system_type': NS, 'group_id': NI, 'group_name': NS}))}),
     'TrialResult': obj({'ok': B, 'reason': NS, 'operation_id': S, 'key_id': I, 'order_id': S, 'state': S,
         'server_ids': array(I), 'composition': nullable(COMPOSITION), 'scope': NS}, ['ok', 'operation_id']),
-    'KeyResult': obj({'operation_id': S, 'key_id': I, 'state': S, 'deleted': B, 'reason': S, 'error': S}, ['operation_id']),
+    'KeyResult': obj({'operation_id': S, 'key_id': I, 'state': S, 'deleted': B, 'reason': S, 'error': S,
+        'composition': COMPOSITION}, ['operation_id']),
     'KeyOperation': obj({'operation_id': S, 'kind': S, 'key_id': I, 'state': S,
-        'result': nullable(obj({'key_id': I, 'state': S, 'deleted': B, 'reason': S, 'error': S}, []))}),
-    'Subscription': obj({'id': I, 'name': NS, 'tariff_id': NI, 'tariff_name': NS, 'tariff_known': B,
+        'result': nullable(obj({'key_id': I, 'state': S, 'deleted': B, 'reason': S, 'error': S,
+            'composition': COMPOSITION}, []))}),
+    'Subscription': obj({'id': I, 'name': NS, 'tariff_id': I, 'tariff_name': NS,
         'server_id': NI, 'server_name': NS, 'expires_at': NS, 'created_at': NS, 'state': S, 'access_status': S,
-        'imported': B, 'traffic': obj({'used_bytes': NI, 'limit_bytes': NI, 'known': B, 'updated_at': NS, 'source': S}),
+        'traffic': obj({'used_bytes': NI, 'limit_bytes': NI, 'known': B, 'updated_at': NS, 'source': S}),
         'devices_available': B, 'actions': obj({name: obj({'allowed': B, 'reason': NS}) for name in
             ('key.rename.start', 'key.renew.start', 'key.delete', 'key.configure.start', 'key.replace.start')}),
         'pending_operations': array(obj({'id': S, 'kind': S, 'created_at': I})),
@@ -84,7 +86,8 @@ SCHEMAS = {
     'Device': obj({'id': S, 'first_seen': NI, 'last_seen': NI, 'user_agent': S,
                    'device_os': S, 'os_version': S, 'device_model': S}),
     'Host': obj({'id': I, 'custom_name': NS, 'tariff_name': NS, 'server_name': NS, 'expires_at': NS}),
-    'Import': obj({'id': NI, 'state': S, 'key_ids': array(I)}),
+    'Import': obj({'state': {'enum': ['select_group', 'pending', 'completed']}, 'key_ids': array(I),
+                   'groups': array(obj({'id': I, 'name': S}))}),
     'Quote': obj({'quote_id': S, 'expires_at': I, 'version': I, 'purpose': S, 'tariff_id': NI, 'key_id': NI,
         'payment_type': S, 'base_currency': S, 'nominal_amount_minor': I, 'payable_amount_minor': I,
         'charge_minor': I, 'charge_currency': S, 'balance_deduct_minor': I, 'duration_days': NI,
@@ -112,7 +115,7 @@ def page(item):
     return obj({'items': array(item), **PAGING})
 
 
-SCHEMAS['UiSettings'] = obj({'title': S, 'logo': NS, 'preset': S, 'theme': S, 'accent': NS,
+SCHEMAS['UiSettings'] = obj({'title': S, 'logo': NS, 'preset': S, 'theme': S,
                            'sync_interval_seconds': I})
 SCHEMAS['UiPreview'] = obj({'settings': ref('UiSettings'), 'captured_at': I, 'currency': S,
     'modules': array(ref('ModuleAvailability')),
@@ -225,8 +228,7 @@ for action, fields in [('configure', {'server_id': ID}), ('replace', {'server_id
 route('POST', 'subscriptions/{id}/devices/{device}/delete', ref('KeyResult'), obj(), idempotent=True)
 route('POST', 'subscriptions/{id}/host', COMPOSITION, obj({'host_id': ID}), idempotent=True)
 route('GET', 'key-operations/{id}', ref('KeyOperation'))
-route('POST', 'subscription-imports', ref('Import'), obj({'url': text_bound(2048)}))
-route('GET', 'subscription-imports/{id}', ref('Import'))
+route('POST', 'subscription-imports', ref('Import'), obj({'url': text_bound(2048), 'group_id': ID}, ['url']))
 route('POST', 'quotes', ref('Quote'), obj({'purpose': {'type': 'string', 'enum': ['key_purchase', 'key_renewal', 'balance_topup']},
     'payment_type': text_bound(128), 'tariff_id': nullable(ID), 'key_id': nullable(ID),
     'nominal_amount_minor': nullable(ID), 'use_balance': B}, ['purpose', 'payment_type']))

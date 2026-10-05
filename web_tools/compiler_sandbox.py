@@ -21,7 +21,8 @@ from web_tools.compiler_rootfs import (HOST_ENV, NODE, NPM, custom_revision, pre
                                       reclaim_output, snapshot_sources)
 from web_tools.editor_files import read_regular
 from web_tools.package import file_inventory
-from web_tools.paths import atomic_write, local_path, relative_name
+from web_tools.paths import atomic_write, local_path
+from web_tools.errors import WebSourceError
 
 # These are compiler containment limits, not an agent latency or W2 performance
 # SLO. The existing 180 s subprocess limit and 512 MiB Node heap are preserved.
@@ -33,8 +34,11 @@ RUN_ROOT = Path('/run/yadreno-ui-compile')
 PRIVATE_RUN_ROOT = RUN_ROOT.parent / 'private' / RUN_ROOT.name
 
 
-class IsolatedCompileError(ValueError):
+class IsolatedCompileError(WebSourceError):
     """Bounded compiler diagnostics using source-relative, non-host paths."""
+
+    def __init__(self, message, *, code='web_build_failed', file=None):
+        super().__init__(code, message, file=file)
 
 
 def _property_word(value):
@@ -158,6 +162,8 @@ class _CompilerSandbox:
         required = ('YADRENO_CUSTOM_WEB', 'YADRENO_UI_OUT', 'YADRENO_VITE_CACHE',
                     'YADRENO_UI_BUILD', 'YADRENO_UI_BASE', 'YADRENO_UI_INSTANCE')
         environment = {name: str(requested[name]) for name in required}
+        if 'YADRENO_UI_CUSTOMIZATION' in requested:
+            environment['YADRENO_UI_CUSTOMIZATION'] = requested['YADRENO_UI_CUSTOMIZATION']
         environment.update(PATH='/toolchain/bin:/usr/bin:/bin', LANG='C.UTF-8', LC_ALL='C.UTF-8',
                            HOME=str(self.work / 'home'), TMPDIR='/tmp',
                            NODE_OPTIONS='--max-old-space-size=512 --require=/toolchain/compiler-guard.cjs',
@@ -265,18 +271,7 @@ class _CompilerSandbox:
             shutil.rmtree(self.folder)
 
 
-def _original_references(declaration, copied_custom, custom):
-    def original(value):
-        name = relative_name(Path(value).relative_to(copied_custom).as_posix(), hidden=True)
-        return str(custom / name)
-    declaration['styles'] = [original(value) for value in declaration['styles']]
-    for name in ('assets', 'pages', 'components'):
-        for item in declaration[name]:
-            item['file'] = original(item['file'])
-    return declaration
-
-
-def compile_isolated(root, runtime, custom, stage, *, build_id, instance_id, toolchain=None):
+def compile_isolated(root, runtime, custom, stage, *, build_id, instance_id, toolchain=None, customization_version=None):
     """Compile into an empty parent-owned stage; never sign, activate or fallback.
 
     The trusted caller supplies installation/task paths and holds its task lock.
@@ -294,11 +289,18 @@ def compile_isolated(root, runtime, custom, stage, *, build_id, instance_id, too
             raise ValueError('frontend sources changed while creating compiler snapshot')
         if custom_revision(sandbox.copy_custom) != revision:
             raise ValueError('custom sources changed while creating compiler snapshot')
+        # The stock template proves the platform version but is never a second
+        # source tree available to user imports during compilation.
+        for name in ('src', 'public'):
+            stock = local_path(sandbox.project, 'web/' + name)
+            if stock.exists():
+                shutil.rmtree(stock)
         try:
             declaration = compile_files(sandbox.project, sandbox.work / 'runtime', sandbox.copy_custom,
                                         sandbox.parent_stage, build_id=build_id, instance_id=instance_id,
-                                        toolchain=(NODE, NPM), run=sandbox.run)
-        except ValueError as error:
+                                        toolchain=(NODE, NPM), run=sandbox.run,
+                                        customization_version=customization_version)
+        except WebSourceError as error:
             detail = str(error)
             for path, label in ((sandbox.copy_custom, 'custom_web'), (sandbox.project / 'web', 'web'),
                                 (sandbox.parent_stage, '<build>'), (sandbox.work, '<compiler>')):
@@ -307,11 +309,10 @@ def compile_isolated(root, runtime, custom, stage, *, build_id, instance_id, too
             # but no discarded temporary paths or nonexistent log-link promises.
             detail = detail.replace(' Log: <build>/build.log', '')[-4000:]
             atomic_write(stage / 'build.log', detail.encode('utf-8'))
-            raise IsolatedCompileError(detail) from None
+            raise IsolatedCompileError(detail, code=error.code, file=error.file) from None
         if (source_version(root, include_commit=False)[0] != base
                 or custom_revision(custom) != revision):
             raise ValueError('UI sources changed during isolated compilation')
-        declaration = _original_references(declaration, sandbox.copy_custom, custom)
         output = sandbox.work / 'files'
         reclaim_output(output)
         inventory = file_inventory(output)

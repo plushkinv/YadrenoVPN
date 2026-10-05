@@ -46,6 +46,20 @@ async def package(request):
     return web.FileResponse(path, headers={'Content-Type': 'application/zip', 'ETag': '"' + content_hash + '"'})
 
 
+async def bot_avatar(request):
+    from core.bot_profile import avatar
+    content_hash = request.match_info['content_hash']
+    body = avatar(content_hash)
+    if body is None:
+        raise web.HTTPNotFound()
+    headers = {'ETag': '"' + content_hash + '"', 'Cache-Control': 'no-cache',
+               'Access-Control-Allow-Origin': '*', 'X-Content-Type-Options': 'nosniff',
+               'Referrer-Policy': 'no-referrer'}
+    if request.headers.get('If-None-Match') == headers['ETag']:
+        return web.Response(status=304, headers=headers)
+    return web.Response(body=body, content_type='image/jpeg', headers=headers)
+
+
 async def asset(request):
     runtime = request.app[RUNTIME_KEY]
     build_id = request.match_info.get('build_id')
@@ -89,4 +103,5 @@ def add_routes(app, runtime=None):
     app.router.add_get('/orders/{order_id}', asset)
     app.router.add_get('/sw.js', asset)
     app.router.add_get('/ui/assets/{name:.*}', asset)
+    app.router.add_get('/ui/bot-avatar/{content_hash}.jpg', bot_avatar)
     app.router.add_get('/ui/versions/{build_id}/{name:.*}', asset)

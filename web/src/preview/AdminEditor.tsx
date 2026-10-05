@@ -41,8 +41,9 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools }: {
     </form>
     {expanded && <>
       <div className="admin-editor-actions">
-        <Button tone="quiet" disabled={editor.busy} onClick={() => void editor.refresh()}>Ну чё там?</Button>
-        <Button tone="quiet" disabled={!editor.ready || editor.busy || editor.active || editor.recording} onClick={() => void editor.control('new-chat')}>Новый чат</Button>
+        <Button tone="secondary" disabled={editor.busy} onClick={() => void editor.refresh()}>Ну чё там?</Button>
+        <Button tone="secondary" disabled={!editor.ready || editor.busy || editor.active || editor.recording} onClick={() => void editor.control('new-chat')}>Новый чат</Button>
+        <Button tone="secondary" disabled={!editor.active || !editor.ready || editor.busy} onClick={() => void editor.control('cancel')}>{editor.latest?.cancel_button_text ?? editor.latest?.progress?.cancel_button_text ?? 'Прервать задачу'}</Button>
       </div>
       <div className="admin-editor-content">
         {editor.files.length > 0 && <ul className="admin-editor-files" aria-label="Выбранные файлы">{editor.files.map((file, index) => <li key={index}>
@@ -58,9 +59,8 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools }: {
           {editor.notice && <p>{editor.notice}</p>}
           {editor.error && <p role="alert">{editor.error}</p>}
         </div>
-        {(editor.active || editor.latest?.resume_allowed && !editor.latest.final && !editor.state?.local_polling) && <div className="button-row">
-          {editor.active && <Button tone="quiet" disabled={!editor.ready || editor.busy} onClick={() => void editor.control('cancel')}>{editor.latest?.cancel_button_text ?? editor.latest?.progress?.cancel_button_text ?? 'Остановить'}</Button>}
-          {editor.latest?.resume_allowed && !editor.latest.final && !editor.state?.local_polling && <Button tone="secondary" disabled={!editor.ready || editor.busy} onClick={() => void editor.control('resume')}>Продолжить ожидание</Button>}
+        {editor.latest?.resume_allowed && !editor.latest.final && !editor.state?.local_polling && <div className="button-row">
+          <Button tone="secondary" disabled={!editor.ready || editor.busy} onClick={() => void editor.control('resume')}>Продолжить ожидание</Button>
         </div>}
       </div>
     </>}

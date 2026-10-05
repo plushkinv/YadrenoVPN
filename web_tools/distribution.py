@@ -121,12 +121,9 @@ def build_base(root, runtime):
     capabilities = _capabilities(root)
     base_hash, product_version = source_version(root)
     stage = local_path(runtime, 'staging/' + uuid.uuid4().hex, directory=True)
-    # The selected directory is intentionally absent: installation customs never
-    # become part of the distributable stock UI, even when present at root.
-    declaration = compile_files(root, runtime, stage / 'no-customization', stage,
+    declaration = compile_files(root, runtime, root / 'web', stage,
                                 build_id=BUILD_MARKER, instance_id=INSTANCE_MARKER)
-    if (declaration['version'] != 'base' or any(declaration[name] for name in ('styles', 'assets', 'components', 'pages', 'modules'))
-            or 'navigation' in declaration):
+    if declaration['requirements']['modules']:
         raise ValueError('base UI compilation unexpectedly loaded customization')
     if source_version(root)[0] != base_hash:
         raise ValueError('frontend sources changed during base UI compilation')
@@ -176,6 +173,8 @@ def install_base(root, runtime):
         verify_package(content, identity, **verification_versions(capabilities))
         atomic_write(stage / 'manifest.json', canonical(signed))
         atomic_write(stage / 'package.zip', content)
+        from web_tools.source_tree import archive_bytes, template
+        atomic_write(stage / 'sources.zip', archive_bytes(template(root)))
         write_source_provenance(stage, signed, root=root)
     return {'build_id': build_id, 'stage': str(stage), 'content_hash': signed['manifest']['content_hash'],
             'customization_version': 'base', 'activated': False, 'requires_node': False,

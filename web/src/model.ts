@@ -16,8 +16,8 @@ export interface SubscriptionView {
   trafficPercent: number | null;
   devices: string | null;
 }
-export interface ClientView { id: string; name: string; platforms: string; }
-export interface QuoteView { id: string; title: string; price: string; caption: string; }
+export interface ClientView { id: string; name: string; platforms: string; description?: string; installLinks?: { label: string; url: string }[]; }
+export interface QuoteView { id: string; title: string; price: string; caption: string; details?: readonly string[]; }
 export interface OrderView {
   id: string;
   purpose: 'purchase' | 'renewal';

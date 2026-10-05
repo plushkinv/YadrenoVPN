@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from web_tools.package import verify_package
@@ -43,6 +44,13 @@ def _activate_verified(runtime, content, trust, signed, files):
     versions = local_path(runtime, 'publications', directory=True)
     directory = local_path(versions, manifest['build_id'])
     provenance = source_provenance(local_path(runtime, 'staging/' + manifest['build_id']), signed)
+    source_archive = local_path(runtime, 'staging/' + manifest['build_id'] + '/sources.zip')
+    source_content = source_archive.read_bytes() if source_archive.exists() else None
+    if source_content is not None:
+        from web_tools.source_tree import read_archive, fingerprint
+        source_files = read_archive(source_content)
+        if provenance is None or fingerprint(source_files) != provenance['custom_fingerprint']:
+            raise ValueError('publication sources do not match the verified candidate')
     if directory.exists():
         if manifest_path(runtime, manifest['build_id']).read_bytes() != canonical(signed):
             raise ValueError('publication identity collision')
@@ -52,6 +60,8 @@ def _activate_verified(runtime, content, trust, signed, files):
         atomic_write(local_path(directory, 'package.zip'), content)
         if provenance is not None and not local_path(directory, 'source.json').exists():
             atomic_write(local_path(directory, 'source.json'), canonical(provenance))
+        if source_content is not None:
+            atomic_write(local_path(directory, 'sources.zip'), source_content)
     else:
         temporary = Path(tempfile.mkdtemp(prefix='.ui-', dir=versions))
         try:
@@ -61,6 +71,8 @@ def _activate_verified(runtime, content, trust, signed, files):
             atomic_write(temporary / 'package.zip', content)
             if provenance is not None:
                 atomic_write(temporary / 'source.json', canonical(provenance))
+            if source_content is not None:
+                atomic_write(temporary / 'sources.zip', source_content)
             os.replace(temporary, directory)
         finally:
             if temporary.exists():
@@ -72,25 +84,45 @@ def _activate_verified(runtime, content, trust, signed, files):
         atomic_write(identity_path, canonical(trust))
     previous = read_pointer(runtime)
     if previous['current'] != manifest['build_id']:
-        atomic_write(runtime / 'active.json', canonical({'current': manifest['build_id'], 'previous': previous['current']}))
+        atomic_write(runtime / 'active.json', canonical({'current': manifest['build_id'], 'previous': None}))
+        if previous['current']:
+            retired = manifest_path(runtime, previous['current']).parent / 'retired.json'
+            atomic_write(retired, canonical({'retired_at': time.time()}))
+    (directory / 'retired.json').unlink(missing_ok=True)
     return {'build_id': manifest['build_id'], 'content_hash': manifest['content_hash'], 'changed': previous['current'] != manifest['build_id']}
 
 
-def rollback(runtime, trust):
+def cleanup(runtime, *, now=None, retention_days=7):
+    """Keep the current snapshot, recent public assets, and temporary candidates."""
+    runtime = Path(runtime)
+    now = time.time() if now is None else now
+    cutoff = now - retention_days * 86400
     with publication_lock(runtime):
-        previous = read_pointer(runtime)['previous']
-        if not previous:
-            raise ValueError('no previous UI publication')
-        selected = json.loads(manifest_path(runtime, previous).read_bytes())
-        manifest = selected['manifest']
-        if manifest['build_id'] != previous:
-            raise ValueError('rollback publication identity mismatch')
-        package = local_path(runtime, 'publications/' + previous + '/package.zip')
-        if not package.exists():
-            # Older publications retained only the content-addressed HTTP package.
-            package = local_path(runtime, 'packages/' + manifest['content_hash'] + '.zip')
-        content = package.read_bytes()
-        signed, files = verify_package(content, trust)
-        if signed != selected:
-            raise ValueError('rollback package does not match the selected publication')
-        return _activate_verified(runtime, content, trust, signed, files)
+        current = read_pointer(runtime)['current']
+        keep_hash = None
+        if current:
+            keep_hash = json.loads(manifest_path(runtime, current).read_bytes())['manifest']['content_hash']
+        for group in ('publications', 'staging'):
+            parent = local_path(runtime, group)
+            if not parent.exists():
+                continue
+            for entry in parent.iterdir():
+                if not re.fullmatch(r'[a-f0-9]{32}', entry.name) or entry.name == current:
+                    continue
+                entry = local_path(parent, entry.name)
+                if group == 'publications':
+                    retired = entry / 'retired.json'
+                    if not retired.exists():
+                        atomic_write(retired, canonical({'retired_at': now}))
+                    stamp = json.loads(retired.read_bytes())['retired_at']
+                    for name in ('package.zip', 'sources.zip', 'source.json'):
+                        local_path(entry, name).unlink(missing_ok=True)
+                else:
+                    stamp = entry.stat().st_mtime
+                if stamp < cutoff:
+                    shutil.rmtree(entry)
+        packages = local_path(runtime, 'packages')
+        if packages.exists():
+            for entry in packages.iterdir():
+                if re.fullmatch(r'[a-f0-9]{64}\.zip', entry.name) and entry.stem != keep_hash:
+                    local_path(packages, entry.name).unlink()

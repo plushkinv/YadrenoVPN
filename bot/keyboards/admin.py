@@ -30,6 +30,7 @@ __all__ = [
     'bot_settings_kb',
     'device_limit_mode_kb',
     'extensions_diagnostics_kb',
+    'extensions_details_kb',
     'force_overwrite_confirm_kb',
     'update_confirm_kb',
     'update_rollback_entry_kb',

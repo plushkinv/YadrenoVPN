@@ -75,6 +75,8 @@ def build_key_page_context(
         device_limit = key.get('max_ips')
     if device_limit is None:
         device_limit = '—'
+    elif device_limit == 0:
+        device_limit = render_ui_text('format.duration_unlimited')
 
     days_left: int | str = ''
     time_left = ''

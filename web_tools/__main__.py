@@ -7,14 +7,13 @@ from pathlib import Path
 from web_tools.build import build
 from web_tools.package import verify_package
 from web_tools.paths import PROJECT_ROOT, local_path
-from web_tools.publication import activate, rollback
+from web_tools.publication import activate, publication_lock
 
 
 def main():
     parser = argparse.ArgumentParser(description='Локальные build/validate/preview и подписанные пакеты UI')
     parser.add_argument('--root', type=Path, default=PROJECT_ROOT)
     parser.add_argument('--runtime', type=Path)
-    parser.add_argument('--custom', type=Path)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('build')
     commands.add_parser('build-base', help='Собрать готовую базовую поставку на машине разработчика')
@@ -23,7 +22,9 @@ def main():
     restore.add_argument('backup', type=Path)
     restore.add_argument('--system', action='store_true', help='Также восстановить собственные системные настройки без запуска сервисов')
     commands.add_parser('trust')
-    commands.add_parser('rollback')
+    reset = commands.add_parser('restore', help='Восстановить исходники; --publish также проверит и применит их')
+    reset.add_argument('source', help='published или идентификатор web-… из архива запроса')
+    reset.add_argument('--publish', action='store_true')
     for name in ('validate', 'publish', 'preview'):
         child = commands.add_parser(name)
         child.add_argument('build_id')
@@ -39,7 +40,10 @@ def main():
     restored_ui = None
     try:
         if args.command == 'build':
-            result = build(args.root, runtime, args.custom or args.root / 'custom_web')
+            from web_tools.source_tree import ensure
+            from web_tools.compiler_sandbox import compile_isolated
+            with publication_lock(runtime / 'source-lock'):
+                result = build(args.root, runtime, ensure(args.root), compiler=compile_isolated)
         elif args.command in {'build-base', 'install-base'}:
             from web_tools.distribution import build_base, install_base
             result = (build_base if args.command == 'build-base' else install_base)(args.root, runtime)
@@ -61,8 +65,17 @@ def main():
             trust = json.loads(local_path(runtime, 'identity.json').read_bytes())
             if args.command == 'trust':
                 result = trust
-            elif args.command == 'rollback':
-                result = rollback(runtime, trust)
+            elif args.command == 'restore':
+                import uuid
+                from web_tools.editor_workspace import EditorWorkspace
+                from web_tools.editor_publication import restore
+                from web_tools.publication import read_pointer
+                if runtime.resolve() != (args.root / 'web_runtime').resolve():
+                    raise ValueError('source restore uses the installation web_runtime directory')
+                task = local_path(runtime, 'editor_tasks/' + uuid.uuid4().hex, directory=True)
+                workspace = EditorWorkspace.create(args.root, task)
+                result = restore(workspace, source=args.source, publish=args.publish,
+                                 base_build_id=read_pointer(runtime)['current'], authorize=lambda: None)
             else:
                 stage = local_path(runtime, 'staging/' + args.build_id)
                 content = local_path(stage, 'package.zip').read_bytes()
@@ -70,7 +83,17 @@ def main():
                 if args.command == 'validate':
                     result = {'valid': True, 'manifest': signed['manifest'], 'activated': False}
                 elif args.command == 'publish':
-                    result = activate(runtime, content, trust)
+                    from web_tools.source_tree import fingerprint
+                    from web_tools.editor_files import scan_sources
+                    from web_tools.paths import source_provenance
+                    from web_tools.build import source_version
+                    from web_tools.editor_workspace import StaleRevision
+                    with publication_lock(runtime / 'source-lock'):
+                        proof = source_provenance(stage, signed)
+                        if (proof is None or proof['custom_fingerprint'] != fingerprint(scan_sources(args.root / 'custom_web'))
+                                or signed['manifest']['base_build_id'] != source_version(args.root, include_commit=False)[0]):
+                            raise StaleRevision('Working files or compiler inputs changed after this candidate was checked.')
+                        result = activate(runtime, content, trust)
                 else:
                     from web_tools.preview import preview
                     preview(stage, trust, args.port)
@@ -78,7 +101,8 @@ def main():
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except Exception as exc:
-        failure = {'error': type(exc).__name__, 'message': str(exc)}
+        from web_tools.errors import failure as describe_failure
+        failure = describe_failure(exc, operation=args.command, root=args.root)
         if restored_ui is not None:
             failure['ui_restore'] = restored_ui
         print(json.dumps(failure, ensure_ascii=False), file=sys.stderr)

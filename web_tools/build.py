@@ -15,6 +15,8 @@ from web_tools.package import create_package, verify_package, signing_identity, 
 from web_tools.paths import CUSTOM_SOURCE_IGNORED, atomic_write, canonical, local_path
 from web_tools.publication import publication_lock
 from web_tools.view_inventory import write_source_provenance
+from web_tools.errors import WebSourceError, WebPlatformError
+from web_tools.permissions import require_permissions
 
 
 def admin_directory(path):
@@ -22,8 +24,8 @@ def admin_directory(path):
     for ancestor in (path, *path.parents):
         if ancestor.is_symlink():
             raise ValueError('build paths must not contain symlinks')
-    if path.exists() and os.name != 'nt' and (path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o022):
-        raise ValueError('build directory must be owned by the invoking administrator and not writable by others')
+    if path.exists():
+        require_permissions(path, message='build directory must be owned by the invoking administrator and not writable by others')
     return path.resolve()
 
 
@@ -32,22 +34,25 @@ def source_version(root, *, include_commit=True):
     source = hashlib.sha256()
     web = local_path(root, 'web')
     root = web.parent
-    sources = local_path(root, 'web/src')
     names = []
     # Validate directories before walking them and every input before reading
     # any content. rglob/is_file alone can follow an escaped source symlink.
-    if sources.exists():
-        if not sources.is_dir():
-            raise ValueError('frontend source root must be a directory')
-        for directory, subdirs, files in os.walk(sources, followlinks=False):
-            for name in subdirs:
-                local_path(root, (Path(directory) / name).relative_to(root).as_posix(), hidden=True)
-            names.extend(Path(directory) / name for name in files)
-    names.extend(web / item for item in ('package.json', 'package-lock.json', 'vite.app.config.ts', 'customization.mjs', 'index.html', 'preview.html'))
+    for source_name in ('src', 'public'):
+        sources = local_path(root, 'web/' + source_name)
+        if sources.exists():
+            if not sources.is_dir():
+                raise ValueError('frontend source root must be a directory')
+            for directory, subdirs, files in os.walk(sources, followlinks=False):
+                for name in subdirs:
+                    local_path(root, (Path(directory) / name).relative_to(root).as_posix(), hidden=True)
+                names.extend(Path(directory) / name for name in files)
+    names.extend(web / item for item in ('package.json', 'package-lock.json', 'vite.app.config.ts', 'customization.mjs', 'index.html', 'preview.html', 'manifest.json'))
     names.extend(web.glob('tsconfig*.json'))
     names.extend(root / 'web_tools' / item for item in ('service_worker.js', 'compatibility.json', 'toolchain.json'))
     inputs = []
-    for file in sorted(names):
+    # Path ordering differs between Windows (case-folded) and POSIX. The shipped
+    # source identity uses one explicit portable relative-name order.
+    for file in sorted(names, key=lambda file: file.relative_to(root).as_posix()):
         checked = local_path(root, file.relative_to(root).as_posix(), hidden=True)
         if not checked.exists():
             continue
@@ -97,8 +102,7 @@ def custom_source_fingerprint(custom, *, copy_to=None):
             raise ValueError('custom UI sources must not contain symbolic links')
         checked = path
         info = checked.stat()
-        if os.name != 'nt' and (info.st_uid != os.getuid() or info.st_mode & 0o022):
-            raise ValueError('custom UI sources must be administrator-owned and not writable by others')
+        require_permissions(checked, info, message='custom UI sources must be administrator-owned and not writable by others')
         if checked.is_dir():
             continue
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -127,36 +131,60 @@ def require_toolchain(root):
     return node, npm
 
 
-def compile_files(root, runtime, custom, stage, *, build_id, instance_id, toolchain=None, run=None):
+def compile_files(root, runtime, custom, stage, *, build_id, instance_id, toolchain=None, run=None, customization_version=None):
     """Compile the same frontend for local customs and portable base distribution."""
     run = subprocess.run if run is None else run
     node, npm = toolchain or require_toolchain(root)
     web = root / 'web'
+    for name in ('package.json', 'package-lock.json', 'vite.app.config.ts', 'customization.mjs', 'tsconfig.json'):
+        if not (web / name).is_file():
+            raise WebPlatformError('Installed compiler input is missing: web/' + name)
     env = {**os.environ, 'YADRENO_CUSTOM_WEB': str(custom), 'YADRENO_UI_OUT': str(stage / 'files'),
            'YADRENO_VITE_CACHE': str(local_path(runtime, 'cache', directory=True)), 'YADRENO_UI_BUILD': build_id,
            'YADRENO_UI_BASE': '/ui/versions/' + build_id + '/', 'YADRENO_UI_INSTANCE': instance_id,
            'NODE_OPTIONS': '--max-old-space-size=512'}
     env['PATH'] = str(Path(node).parent) + os.pathsep + env.get('PATH', os.defpath)
+    if customization_version is not None or custom == web:
+        env['YADRENO_UI_CUSTOMIZATION'] = customization_version or 'base'
     declaration = run([node, '--input-type=module', '-e',
         "import {readCustomization} from './customization.mjs'; console.log(JSON.stringify(readCustomization(process.env.YADRENO_CUSTOM_WEB)));"],
         cwd=web, env=env, capture_output=True, text=True, timeout=180)
     if declaration.returncode:
-        raise ValueError('Invalid custom UI manifest: ' + declaration.stderr.strip()[-4000:])
+        if 'UI compiler isolation is unavailable' in declaration.stderr:
+            raise WebPlatformError('The installed compiler isolation check failed.')
+        raise WebSourceError('web_project_invalid', 'Project metadata validation failed: ' + declaration.stderr.strip()[-4000:], file='manifest.json')
     customization = json.loads(declaration.stdout)
-    # Resolve paths before invoking the compiler. The type checker sees custom
-    # source as well as the published SDK; Vite validates the same manifest again.
+    from web_tools.compatibility import check_requirements
+    try:
+        check_requirements(customization['requirements'])
+    except ValueError as error:
+        raise WebSourceError('web_project_invalid', str(error), file='manifest.json',
+                             next_action='Correct module compatibility metadata in the working manifest, then run web.build.') from error
+    if 'YADRENO_UI_CUSTOMIZATION' in env:
+        customization['version'] = env['YADRENO_UI_CUSTOMIZATION']
+    # The type checker and Vite consume exactly one complete source tree.
+    paths = json.loads((web / 'tsconfig.json').read_bytes())['compilerOptions']['paths']
+    paths = {key: [str((web / value).resolve()) for value in values] for key, values in paths.items()}
+    paths['@ui/*'] = [str(custom / 'src' / '*')]
+    # Stock web/ also contains Node-only build configs, outside its UI source tree.
+    typecheck_root = custom / 'src' if custom == web else custom
     tsconfig = {'extends': str(web / 'tsconfig.json'),
-                'compilerOptions': {'rootDirs': [str(custom / 'src'), str(web / 'src')]},
-                'include': [str(web / 'src' / '**' / '*'), str(custom / '**' / '*.tsx'), str(custom / '**' / '*.ts')]}
+                'compilerOptions': {'paths': paths, 'types': [], 'typeRoots': [str(web / 'node_modules/@types')]},
+                'include': [str(web / 'node_modules/vite/client.d.ts'),
+                            str(typecheck_root / '**' / '*.tsx'), str(typecheck_root / '**' / '*.ts')]}
     atomic_write(stage / 'tsconfig.json', canonical(tsconfig))
     with (stage / 'build.log').open('wb') as log:
         try:
             run([npm, 'exec', '--no', '--', 'tsc', '--project', str(stage / 'tsconfig.json')], cwd=web, env=env, check=True, stdout=log, stderr=log, timeout=180)
             run([npm, 'exec', '--no', '--', 'vite', 'build', '--config', 'vite.app.config.ts'], cwd=web, env=env, check=True, stdout=log, stderr=log, timeout=180)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired as exc:
+            raise WebPlatformError('The installed compiler exceeded its execution deadline.') from exc
+        except subprocess.CalledProcessError as exc:
             log.flush()
             detail = (stage / 'build.log').read_text(encoding='utf-8', errors='replace')[-4000:]
-            raise ValueError(f'UI build failed; active publication is unchanged. Log: {stage / "build.log"}\n{detail}') from exc
+            if exc.returncode in {137, -9} or 'heap out of memory' in detail.lower():
+                raise WebPlatformError('The installed compiler exhausted its memory limit.') from exc
+            raise WebSourceError('web_build_failed', f'Working project did not compile.\n{detail}') from exc
     return customization
 
 
@@ -180,23 +208,28 @@ def build(root, runtime, custom, *, product_version=None, toolchain=None, compil
     with publication_lock(runtime):
         key, identity = signing_identity(runtime)
     compile_source = compile_files if compiler is None else compiler
+    from web_tools.source_tree import unchanged, archive_bytes
+    from web_tools.editor_files import scan_sources
     customization = compile_source(root, runtime, custom, stage, build_id=build_id,
-                                   instance_id=identity['instance_id'], toolchain=toolchain)
+                                   instance_id=identity['instance_id'], toolchain=toolchain,
+                                   customization_version='base' if unchanged(root, scan_sources(custom)) else None)
     write_service_worker(root, stage / 'files', build_id=build_id, instance_id=identity['instance_id'])
     if source_version(root)[0] != base_hash or custom_source_fingerprint(custom) != source_fingerprint:
         raise ValueError('UI sources changed during compilation; rebuild before publication')
     with publication_lock(runtime):
-        signed, content = create_package(stage / 'files', key=key, identity=identity, product_version=product_version,
-            base_build_id=base_hash, build_id=build_id, customization_version=customization['version'],
-            requirements=customization['requirements'], core_api=customization['api'])
+        try:
+            signed, content = create_package(stage / 'files', key=key, identity=identity, product_version=product_version,
+                base_build_id=base_hash, build_id=build_id, customization_version=customization['version'],
+                requirements=customization['requirements'], core_api=customization['api'])
+        except ValueError as error:
+            raise WebSourceError('web_package_invalid', str(error),
+                                 next_action='Correct the working project metadata or reported public asset, then run web.build.') from error
         verify_package(content, identity)
         atomic_write(stage / 'manifest.json', canonical(signed))
         atomic_write(stage / 'package.zip', content)
+        atomic_write(stage / 'sources.zip', archive_bytes(scan_sources(custom)))
         write_source_provenance(stage, signed, root=root, custom=custom, declaration=customization,
                                 fingerprint=source_fingerprint)
     return {'build_id': build_id, 'stage': str(stage), 'content_hash': signed['manifest']['content_hash'],
             'customization_version': customization['version'], 'activated': False,
-            'ownership': {'pages': [item['id'] for item in customization['pages']],
-                          'components': [item['id'] for item in customization['components']],
-                          'navigation': 'custom' if 'navigation' in customization else 'base'},
-            'page_update_policy': 'Custom page replacements are preserved; base page changes are not merged into them.'}
+            'working_directory': str(custom)}

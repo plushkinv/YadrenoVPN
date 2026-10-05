@@ -25,6 +25,7 @@ from web_api.auth import SESSION_COOKIE, SESSION_KEY
 from web_tools.paths import local_path, source_provenance
 from web_tools.publication import read_pointer
 from web_tools import editor_publication
+from web_tools.editor_workspace import StaleRevision
 from web_tools.compatibility import current_capabilities
 from web_tools.package import digest, verify_package
 from web_tools.release import publication
@@ -67,7 +68,8 @@ class EditorPreviews:
             actual = editor_publication.inspect(workspace)
             runtime = binding.project_root / 'web_runtime'
             folder = 'staging/'
-            if actual['task_operation'] == 'rollback' and actual['task_is_current']:
+            if (actual['task_operation'] == 'restore' and actual['task_is_current']
+                    and not (workspace._folder / 'candidate.json').exists()):
                 signed, content, trust = publication(runtime, actual['current_build_id'], current_capabilities())
                 signed, files = verify_package(content, trust)
                 manifest = signed['manifest']
@@ -81,6 +83,8 @@ class EditorPreviews:
             proof = source_provenance(local_path(runtime, folder + bundle[0]['build_id']), bundle[1])
             if proof is None or proof['format_version'] != 2:
                 raise ValueError('candidate preview inventory unavailable')
+            if folder == 'publications/' and proof['custom_fingerprint'] != revision:
+                raise StaleRevision('Working files changed after restoration; the restored preview is no longer current.')
             pages = [{'id': page['id'], 'title': page.get('title')} for page in proof['inventory']['pages']]
             published = read_pointer(binding.project_root / 'web_runtime')['current'] == bundle[0]['build_id']
             return request_id, binding.task_id, viewed, bundle, pages, published
@@ -90,8 +94,11 @@ class EditorPreviews:
         try:
             request_id, task_id, viewed, bundle, pages, published = await asyncio.to_thread(self._candidate, api_key)
             candidate = bundle[0]
-        except (ValueError, OSError):
-            raise CoreError('conflict', details={'reason': 'editor_candidate_unavailable'}) from None
+        except (ValueError, OSError, RuntimeError) as error:
+            from web_tools.errors import failure
+            diagnostic = failure(error, operation='web.preview')
+            raise CoreError('conflict', details={**diagnostic, 'reason': 'editor_candidate_unavailable',
+                'message': diagnostic['error'] + ' ' + diagnostic['next_action']}) from None
         # A logout/key/rights change during validation cannot issue a usable handle.
         current = db.get_account_session(session['token_hash'], int(time.time()))
         if current is None or authorize(current) != api_key:

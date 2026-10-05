@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PERSISTENT = ('custom_web', 'web_runtime')
-CUSTOM_SOURCE_IGNORED = frozenset({'node_modules', '__pycache__', '.git'})
+CUSTOM_SOURCE_IGNORED = frozenset({'node_modules', '__pycache__', '.git', '.cache', 'dist'})
 BACKUP_ARCHIVE = 'ui-backup.zip'
 BACKUP_MANIFEST = 'ui-backup.json'
 
@@ -29,6 +29,29 @@ def relative_name(value, *, hidden=False):
     return PurePosixPath(value).as_posix()
 
 
+def private_directory(path):
+    """Create every missing level privately; never chmod/chown existing paths."""
+    path = Path(path)
+    for ancestor in (path, *path.parents):
+        if ancestor.is_symlink():
+            raise ValueError('UI paths must not contain symbolic links')
+    missing = []
+    parent = path
+    while not parent.exists():
+        missing.append(parent)
+        parent = parent.parent
+    if not parent.is_dir():
+        raise NotADirectoryError(str(parent))
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            # A concurrent creator retains ownership and mode; never repair it.
+            if directory.is_symlink() or not directory.is_dir():
+                raise ValueError('UI paths require directories without symbolic links')
+    return path
+
+
 def local_path(root, relative, *, directory=False, hidden=False):
     """Never follow links into installation data outside the selected tree."""
     root = Path(root)
@@ -36,7 +59,7 @@ def local_path(root, relative, *, directory=False, hidden=False):
         raise ValueError('UI root must not be a symbolic link')
     root = root.resolve()
     if directory:
-        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        private_directory(root)
     target = root
     for part in relative_name(relative, hidden=hidden).split('/'):
         target = target / part
@@ -83,13 +106,9 @@ def source_provenance(folder, signed):
                     or not isinstance(value['base_build_id'], str) or not re.fullmatch(r'[a-f0-9]{64}', value['base_build_id'])
                     or value['customization_version'] != manifest['customization_version']
                     or not isinstance(value['customization_version'], str)
-                    or (value['customization_version'] == 'base') != (fingerprint is None)
                     or not re.fullmatch(r'base|[0-9]{1,20}\.[0-9]{1,20}\.[0-9]{1,20}', value['customization_version'])):
                 return None
             validate_inventory(value['inventory'], modules={item['id'] for item in manifest.get('requirements', {}).get('modules', [])})
-            if value['customization_version'] == 'base' and any(source['kind'] != 'stock' for source in
-                    [item['source'] for name in ('pages', 'components') for item in value['inventory'][name]] + value['inventory']['styles']):
-                return None
         return value
     except (ValueError, OSError, TypeError, KeyError):
         return None
@@ -99,7 +118,7 @@ def atomic_write(path, content, *, mode=0o600):
     path = Path(path)
     if path.is_symlink() or path.parent.is_symlink():
         raise ValueError('metadata paths must not be symbolic links')
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    private_directory(path.parent)
     descriptor, temporary = tempfile.mkstemp(prefix='.' + path.name + '-', dir=path.parent)
     try:
         with os.fdopen(descriptor, 'wb') as stream:
@@ -155,7 +174,7 @@ def installation_files(root=PROJECT_ROOT, *, secrets=False):
             if _custom_source_path(path.relative_to(root).as_posix()):
                 return any(part in CUSTOM_SOURCE_IGNORED for part in parts)
             return (any(part in {'node_modules', '__pycache__'} or part.startswith('.') for part in parts)
-                    or name == 'web_runtime' and parts[0] in {'staging', 'cache', 'preview', 'locks'}
+                    or name == 'web_runtime' and parts[0] in {'staging', 'cache', 'preview', 'locks', 'source-lock'}
                     or name == 'web_runtime' and parts[0] == 'secrets' and not secrets)
         for directory, subdirs, files in os.walk(folder, followlinks=False):
             parent = Path(directory)
@@ -197,7 +216,7 @@ def backup_local(destination, root=PROJECT_ROOT):
     # Snapshot directories may be hidden while the outer updater prepares them.
     # Validate their ancestors as a root, not as a public relative asset name.
     destination = local_path(destination, BACKUP_ARCHIVE)
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    private_directory(destination.parent)
     with publication_lock(local_path(root, 'web_runtime')):
         _capture_local_backup(destination, root)
 
@@ -358,20 +377,13 @@ def restore_local(source, destination):
         target = local_path(destination, name)
         if target.exists() and (not target.is_dir() or any(target.iterdir())):
             raise ValueError('UI restore requires empty installation UI directories')
-    destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+    private_directory(destination)
     stage = Path(tempfile.mkdtemp(prefix='.ui-restore-', dir=destination))
     try:
         for name in PERSISTENT:
             local_path(stage, name, directory=True)
         for relative, content in contents.items():
             atomic_write(local_path(stage, relative, hidden=_custom_source_path(relative)), content)
-        # File inventories omit empty directories. Recreate only the fixed task
-        # layout; workspace reopening still verifies its saved baseline hash.
-        for relative in contents:
-            if re.fullmatch(r'web_runtime/editor_tasks/[a-f0-9]{32}/editor/state\.json', relative):
-                folder = str(PurePosixPath(relative).parent)
-                for name in ('baseline', 'custom_web'):
-                    local_path(stage, folder + '/' + name, directory=True)
         _replace_ui_trees(stage, destination, roots)
     finally:
         _remove_owned_tree(stage, destination)

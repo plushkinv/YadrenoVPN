@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { Button, PageHeading } from '../components/Ui';
 import { Field, Form, Failure, Resource } from '../components/Forms';
-import { useApp, useAction, useResource } from '../runtime/context';
-import type { Profile, Session } from '../api/contracts';
+import { useApp, useAction, useBack, useResource } from '../runtime/context';
+import type { Profile, Session, Subscription, SubscriptionImportResult } from '../api/contracts';
 import { appText as t } from '../i18n/app';
 import { remember, stored } from '../runtime/storage';
 import { usePhoneVerification, VerificationFields } from '../components/PhoneVerification';
 
 export function Authentication() {
+  const back = useBack();
   const { api, authenticated, bootstrap, route, navigate } = useApp();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -54,7 +55,7 @@ export function Authentication() {
     });
   }
   if (done) return <section className="panel"><p role="status">{t.resetDone}</p><Button onClick={() => navigate('login')}>{t.login}</Button></section>;
-  return <><PageHeading title={title} back={() => navigate('home')} /><section className="panel form-panel">
+  return <><PageHeading title={title} back={mode === 'login' ? undefined : back} /><section className="panel form-panel">
     {bootstrap.auth.unverified_phone_warning_required && mode !== 'login' && <p className="notice">{t.noRecovery}</p>}
     <Form onSubmit={submit} busy={action.busy || verification.busy}
       submitDisabled={needsVerification && !proof && verification.submitDisabled}
@@ -74,10 +75,11 @@ export function Authentication() {
 }
 
 export function Account() {
+  const back = useBack();
   const { navigate, logout } = useApp();
   const state = useResource<Profile>('/me');
   const action = useAction();
-  return <><PageHeading title={t.account} /><Resource state={state}>{profile => <section className="panel form-panel">
+  return <><PageHeading title={t.account} back={back} /><Resource state={state}>{profile => <section className="panel form-panel">
     <h2>{profile.first_name || profile.username || `${t.account} ${profile.account_id}`}</h2>
     <p>{profile.credentials.phone}</p><div className="action-list">
       <Button tone="secondary" onClick={() => navigate('credentials')}>{t.credentials}</Button>
@@ -88,6 +90,7 @@ export function Account() {
 }
 
 export function TelegramLink() {
+  const back = useBack();
   const { api, environment, refresh, navigate, session } = useApp();
   const action = useAction();
   type Link = { token: string; telegram_url: string; expires_at: number };
@@ -106,7 +109,7 @@ export function TelegramLink() {
       throw error;
     }
   });
-  return <><PageHeading title={t.telegramLink} back={() => navigate('account')} /><section className="panel form-panel">
+  return <><PageHeading title={t.telegramLink} back={back} /><section className="panel form-panel">
     <p>{t.linkCaption}</p>{!link ? <Button disabled={action.busy} onClick={() => action.run(async () => { const value = await api.request<Link>('/account/telegram/link', 'POST'); remember(savedKey, value); setLink(value); })}>{t.continue}</Button> : <div className="action-list">
       <Button onClick={() => environment.openLink(link.telegram_url)}>{t.openTelegram}</Button>
       <Button tone="secondary" disabled={action.busy} onClick={() => runLink(async () => setStatus(await api.request('/account/telegram/link/status', 'POST', { token: link.token })))}>{t.linkCheck}</Button>
@@ -118,14 +121,44 @@ export function TelegramLink() {
 }
 
 export function SubscriptionImport() {
+  const back = useBack();
   const { api, refresh, navigate } = useApp();
   const [url, setUrl] = useState('');
-  const [done, setDone] = useState(false);
+  const [result, setResult] = useState<SubscriptionImportResult | null>(null);
+  const [groupId, setGroupId] = useState('');
+  const [pollError, setPollError] = useState<unknown>();
   const action = useAction();
-  return <><PageHeading title={t.import} back={() => navigate('account')} /><section className="panel form-panel"><p>{t.importCaption}</p>
-    {done ? <><p role="status">{t.importDone}</p><Button onClick={() => navigate('subscriptions')}>{t.subscriptions}</Button></> : <Form busy={action.busy} submit={t.import} onSubmit={() => action.run(async () => {
-      await api.request('/subscription-imports', 'POST', { url }); setUrl(''); refresh(); setDone(true);
-    })}><Field label={t.importUrl}><input type="url" required maxLength={2048} autoComplete="off" value={url} onChange={e => setUrl(e.target.value)} /></Field></Form>}
-    <Failure error={action.error} />
+  useEffect(() => {
+    if (result?.state !== 'pending') return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    async function check() {
+      try {
+        const keys = await Promise.all(result!.key_ids.map(id => api.request<Subscription>('/subscriptions/' + id)));
+        if (!active) return;
+        setPollError(undefined);
+        if (keys.length && keys.every(key => key.access_status === 'ready')) {
+          setResult({ state: 'completed', key_ids: result!.key_ids, groups: [] }); refresh(); return;
+        }
+      } catch (error) { if (active) setPollError(error); }
+      if (active) timer = setTimeout(check, 3000);
+    }
+    void check();
+    return () => { active = false; clearTimeout(timer); };
+  }, [api, result, refresh]);
+  const submit = () => action.run(async () => {
+    const next = await api.request<SubscriptionImportResult>('/subscription-imports', 'POST', { url, ...(groupId ? { group_id: Number(groupId) } : {}) });
+    setResult(next); setPollError(undefined); refresh();
+  });
+  return <><PageHeading title={t.import} back={back} /><section className="panel form-panel">
+    {result?.state === 'completed' ? <><div role="status"><h2>{t.importDone}</h2></div><Button onClick={() => navigate('subscriptions')}>{t.subscriptions}</Button></>
+      : result?.state === 'pending' ? <><p role="status">{t.importPending}</p><Button disabled={action.busy} onClick={submit}>{t.retry}</Button><Button tone="secondary" onClick={() => navigate('subscriptions')}>{t.subscriptions}</Button></>
+      : <><p>{t.importCaption}</p><Form busy={action.busy} submit={t.import} onSubmit={submit}>
+        <Field label={t.importUrl}><input type="url" required maxLength={2048} autoComplete="off" value={url} onChange={e => { setUrl(e.target.value); setResult(null); setGroupId(''); }} /></Field>
+        {result?.state === 'select_group' && <Field label={t.importGroup}><select required value={groupId} onChange={e => setGroupId(e.target.value)}>
+          <option value="" disabled>{t.importGroup}</option>{result.groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
+        </select></Field>}
+      </Form></>}
+    <Failure error={action.error || pollError} />
   </section></>;
 }

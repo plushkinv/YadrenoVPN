@@ -3,9 +3,9 @@ import { appText as t, errorText } from '../i18n/app';
 import { Button } from './Ui';
 import { ApiError } from '../api/client';
 
-export function Field({ label, children }: { label: string; children: ReactElement }) {
+export function Field({ label, children, hideLabel = false }: { label: string; children: ReactElement; hideLabel?: boolean }) {
   const id = useId();
-  return <div className="form-field"><label htmlFor={id}>{label}</label>{cloneElement(children as ReactElement<{ id: string }>, { id })}</div>;
+  return <div className="form-field"><label className={hideLabel ? 'visually-hidden' : undefined} htmlFor={id}>{label}</label>{cloneElement(children as ReactElement<{ id: string }>, { id })}</div>;
 }
 export function Form({ children, onSubmit, busy, submit = t.continue, submitDisabled = false }: {
   children: ReactNode; onSubmit: () => void; busy: boolean; submit?: string; submitDisabled?: boolean;

@@ -1,6 +1,6 @@
 ﻿import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { Check, Settings, X } from 'lucide-react';
+import { Check, MessageSquareText, Settings, X } from 'lucide-react';
 import { Field } from '../components/Forms';
 import type { UiSettings } from '../api/contracts';
 import { useApp } from '../runtime/context';
@@ -158,7 +158,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
         {panel === 'settings' ? <div className="admin-settings-backdrop">
           <section className="admin-settings" aria-label="Настройки просмотра">
             <header className="admin-settings-header"><strong>Настройки</strong>
-              <EditorIcon label="Вернуться к редактору" disabled={pending} onClick={() => activate('editor')}><Settings /></EditorIcon>
+              <EditorIcon label="Вернуться к редактору" disabled={pending} onClick={() => activate('editor')}><MessageSquareText /></EditorIcon>
               <EditorIcon label="Отменить и закрыть" className="admin-icon--cancel" disabled={pending} onClick={close}><X /></EditorIcon>
               <EditorIcon label="Сохранить дизайн" className="admin-icon--save" disabled={pending || customDesign === undefined} onClick={() => void save()}><Check /></EditorIcon>
             </header>

@@ -52,135 +52,74 @@ class WebEditorBinding:
     @classmethod
     def prepare(cls, project_root: Path, session: dict, viewed: dict, api_key: str,
                 *, previous: WebEditorBinding | None = None) -> WebEditorBinding:
-        """Pin the viewed publication before admission; navigation cannot retarget it."""
+        """Bind a viewed publication/candidate; sources are shared, never forked."""
+        require_preview_administrator(session)
         from web_tools.editor_publication import recover
         recover(project_root)
-        seed, revision, fork_source_revision = None, None, None
+        candidate_source = None
         try:
             context = capture_view_context(session, viewed, root=project_root)
         except CoreError as error:
             if previous is None or error.details.get('reason') != 'ui_publication_changed':
                 raise
-            require_preview_administrator(session)
             viewed = _validate_viewed_context(viewed)
-            context = previous.runtime_context(api_key)['web_editor']
-            context.pop('task_id')
-            seed = previous.workspace(api_key)
-            revision = seed.inspect()['revision']
-            candidate, signed, _, _ = seed.candidate_bundle(expected_revision=revision)
-            if (viewed['ui_version'] != candidate['build_id']
-                    or viewed['customization_version'] != candidate['customization_version']):
+            workspace = previous.workspace(api_key)
+            candidate, signed, _, _ = workspace.candidate_bundle()
+            candidate_source = workspace
+            if (candidate['build_id'] != viewed['ui_version']
+                    or candidate['customization_version'] != viewed['customization_version']):
                 raise CoreError('conflict', details={'reason': 'ui_publication_changed'})
-            if read_pointer(project_root / 'web_runtime')['current'] != context['publication']['build_id']:
-                from web_tools.editor_publication import inspect
-                from web_tools.compatibility import current_capabilities
-                from web_tools.release import publication
-                actual = inspect(seed)
-                if actual['task_operation'] != 'publish' or not actual['task_is_current']:
-                    raise CoreError('conflict', details={'reason': 'ui_publication_changed'})
-                runtime = project_root / 'web_runtime'
-                current, _, _ = publication(runtime, actual['current_build_id'], current_capabilities())
-                live_proof = source_provenance(local_path(runtime, 'publications/' + actual['current_build_id']), current)
-                if live_proof is None or live_proof['format_version'] != 2:
-                    raise CoreError('conflict', details={'reason': 'ui_source_unavailable'})
-                # Capture the exact publication made by this parent task. The
-                # viewed draft may contain a page absent from that publication.
-                context = capture_view_context(session, {
-                    **viewed, 'ui_version': actual['current_build_id'],
-                    'customization_version': current['manifest']['customization_version'],
-                    'route': live_proof['inventory']['pages'][0]['id'],
-                    'scenario': live_proof['inventory']['scenarios'][0],
-                }, root=project_root)
-                fork_source_revision = context['source_revision']
             proof = source_provenance(local_path(project_root / 'web_runtime', 'staging/' + candidate['build_id']), signed)
-            if proof is None or proof['format_version'] != 2:
+            if proof is None:
                 raise CoreError('conflict', details={'reason': 'ui_source_unavailable'})
-            inventory = proof['inventory']
-            page = next((item for item in inventory['pages'] if item['id'] == viewed['route'].split('/')[0]), None)
-            if page is None or viewed['scenario'] not in inventory['scenarios']:
+            page = next((item for item in proof['inventory']['pages'] if item['id'] == viewed['route'].split('/')[0]), None)
+            if page is None or viewed['scenario'] not in proof['inventory']['scenarios']:
                 raise CoreError('invalid_request')
+            context = capture_editor_context(session['telegram_id'], root=project_root)
             context['viewed'] = viewed
-            context['effective_source'] = {'page': page, 'components': inventory['components'], 'styles': inventory['styles']}
-        key_hash = _key_hash(api_key)
-        binding = cls(project_root, uuid.uuid4().hex)
-        with directory_handle(binding.project_root, 'web_runtime/editor_tasks/' + binding.task_id, create=True):
-            pass
-        checked_directory(binding.store, private=True)
-        checked_directory(binding.task_root, private=True)
-        if seed is None:
-            EditorWorkspace.create(binding.project_root, binding.task_root,
-                                   expected_source_revision=context['source_revision'])
-        else:
-            seed.fork(binding.task_root, expected_revision=revision, source_revision=fork_source_revision)
-        data = canonical({'format_version': 1, 'task_id': binding.task_id,
-                          'telegram_id': session['telegram_id'], 'api_key_hash': key_hash,
-                          'view_context': context})
-        if len(data) > _MAX_BINDING_BYTES:
-            raise CoreError('invalid_request')
-        write_regular(binding.task_root, 'binding.json', data)
+            context['effective_source'] = {'page': page, 'components': proof['inventory']['components'],
+                                           'styles': proof['inventory']['styles']}
+        binding = cls.defer(project_root, session['telegram_id'], api_key)
+        value = binding.authority(api_key)
+        value['view_context'] = context
+        value.pop('previous_request_id', None)
+        write_regular(binding.task_root, 'binding.json', canonical(value))
+        if candidate_source is not None:
+            write_regular(binding.task_root / 'editor', 'candidate.json',
+                          read_regular(candidate_source._folder, 'candidate.json'))
         return binding
 
     @classmethod
     def defer(cls, project_root: Path, telegram_id: int, api_key: str,
               *, previous_request_id: int | None = None) -> WebEditorBinding:
-        """Remember a trusted Telegram turn without touching UI sources or compiler."""
+        """Back up sources before any tool can execute, including generic file tools."""
         require_administrator(telegram_id)
-        if previous_request_id is not None:
-            _request_name(previous_request_id)
         binding = cls(project_root, uuid.uuid4().hex)
         with directory_handle(binding.project_root, 'web_runtime/editor_tasks/' + binding.task_id, create=True):
             pass
-        checked_directory(binding.store, private=True)
-        checked_directory(binding.task_root, private=True)
+        EditorWorkspace.create(binding.project_root, binding.task_root)
         write_regular(binding.task_root, 'binding.json', canonical({
             'format_version': 1, 'task_id': binding.task_id, 'telegram_id': telegram_id,
             'api_key_hash': _key_hash(api_key), 'view_context': None,
-            'previous_request_id': previous_request_id,
+            'previous_request_id': None,
         }))
+        if previous_request_id is not None:
+            from web_tools.errors import WebSourceError
+            try:
+                prior = cls.for_request(project_root, previous_request_id, api_key).workspace(api_key)
+                prior.candidate_bundle()
+                write_regular(binding.task_root / 'editor', 'candidate.json', read_regular(prior._folder, 'candidate.json'))
+            except (CoreError, WebSourceError, FileNotFoundError):
+                pass  # New requests always keep the shared files, even without a reusable candidate.
         return binding
 
     def _materialize(self, api_key: str) -> None:
-        """Capture/fork only on the first Web operation, including after recovery."""
         with publication_lock(self.task_root):
             value = self.authority(api_key)
-            if value['view_context'] is not None:
-                return
-            previous, seen = value.get('previous_request_id'), set()
-            seed, parent_context = None, None
-            while previous is not None:
-                if previous in seen:
-                    raise CoreError('conflict')
-                seen.add(previous)
-                try:
-                    parent = self.for_request(self.project_root, previous, api_key)
-                except FileNotFoundError:
-                    break
-                parent_data = parent.authority(api_key)
-                if parent_data['view_context'] is not None:
-                    seed = parent.workspace(api_key)
-                    parent_context = parent_data['view_context']
-                    break
-                previous = parent_data.get('previous_request_id')
-            from web_tools.editor_publication import recover
-            recover(self.project_root)
-            context = capture_editor_context(value['telegram_id'], root=self.project_root)
-            if seed is not None:
-                from web_tools.editor_publication import inspect
-                status = inspect(seed)
-                if status['task_is_current'] and status['task_operation'] == 'rollback':
-                    seed = None
-                elif (context['publication']['build_id'] != parent_context['publication']['build_id']
-                      and not (status['task_is_current'] and status['task_operation'] == 'publish')):
-                    raise CoreError('conflict', details={'reason': 'ui_publication_changed'})
-            if seed is None:
-                EditorWorkspace.create(self.project_root, self.task_root,
-                                       expected_source_revision=context['source_revision'])
-            else:
-                seed.fork(self.task_root, expected_revision=seed.inspect()['revision'],
-                          source_revision=context['source_revision'])
-            value['view_context'] = context
-            value.pop('previous_request_id', None)
-            write_regular(self.task_root, 'binding.json', canonical(value))
+            if value['view_context'] is None:
+                value['view_context'] = capture_editor_context(value['telegram_id'], root=self.project_root)
+                value.pop('previous_request_id', None)
+                write_regular(self.task_root, 'binding.json', canonical(value))
 
     def authority(self, api_key: str) -> dict:
         """Recheck the private admission identity without acquiring a workspace lock."""
@@ -201,30 +140,21 @@ class WebEditorBinding:
         return value
 
     def _read(self, api_key: str) -> dict:
-        value = self.authority(api_key)
-        if value['view_context'] is None:
-            return value
-        workspace = EditorWorkspace(self.project_root, self.task_root)
-        if value['view_context'].get('source_revision') != workspace.source_revision():
-            raise CoreError('conflict', details={'reason': 'editor_binding_changed'})
-        return value
+        return self.authority(api_key)
 
     def runtime_context(self, api_key: str) -> dict:
-        """Source facts only; attachment references belong to their upload message."""
+        """Compact request facts; the addressed KB owns the workflow."""
         value = self._read(api_key)
-        if value['view_context'] is None:
-            return {}
-        return {'web_editor': {'task_id': self.task_id, **{
-            name: copy.deepcopy(value['view_context'][name])
-            for name in ('viewed', 'publication', 'source_revision', 'effective_source')
-        }}}
+        workspace = EditorWorkspace.open(self.project_root, self.task_root)
+        state = workspace._state()
+        return {'web_editor': {'task_id': self.task_id,
+                'working_directory': str(workspace._custom), 'backup': state['backup'],
+                **copy.deepcopy(value['view_context'] or {'viewed': None})}}
 
     def workspace(self, api_key: str) -> EditorWorkspace:
         self._materialize(api_key)
         self._read(api_key)
-        # Each actual draft operation validates its snapshot under the task lock.
-        # Admission/status must not compete with a running compiler for that lock.
-        return EditorWorkspace(self.project_root, self.task_root)
+        return EditorWorkspace.open(self.project_root, self.task_root)
 
     def bind_request(self, request_id: int, api_key: str) -> None:
         """Attach an accepted Hub request once; repeating the same binding is safe."""

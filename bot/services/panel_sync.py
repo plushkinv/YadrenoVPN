@@ -233,10 +233,10 @@ async def _apply_clients_api_bulk_prelude(
     states_by_email: Dict[str, PanelClientState] = {}
     seen_emails: set[str] = set()
 
-    from database.requests import get_imported_panel_key_ids, get_pending_key_mutation_ids
-    imported_ids = get_imported_panel_key_ids() | get_pending_key_mutation_ids()
+    from database.requests import get_pending_key_mutation_ids
+    pending_ids = get_pending_key_mutation_ids()
     for key in server_keys:
-        if key.get('id') in imported_ids:
+        if key.get('id') in pending_ids:
             continue
         email = str(key.get("panel_email") or "").strip()
         if not is_managed_key(key):
@@ -415,7 +415,7 @@ def collect_changed_traffic_updates(
 ) -> List[tuple[int, int]]:
     """Return only changed ``(traffic_used, key_id)`` database rows."""
     updates: List[tuple[int, int]] = []
-    for key in keys:
+    for key in _managed_keys(keys, operation='traffic synchronization'):
         key['_traffic_snapshot_known'] = False
         try:
             snapshot = snapshots[int(key["server_id"])]
@@ -470,8 +470,7 @@ def build_panel_import_change(
 
     panel_expiry = (
         None
-        if int(state.expiry_time or 0) == 0 or
-        (key.get('tariff_id') is None and int(state.expiry_time or 0) < 0)
+        if int(state.expiry_time or 0) == 0
         else datetime.fromtimestamp(int(state.expiry_time) / 1000, tz=timezone.utc)
     )
     panel_revives = panel_expiry is None or panel_expiry > now_utc

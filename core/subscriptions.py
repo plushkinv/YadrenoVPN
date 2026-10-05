@@ -21,18 +21,9 @@ async def summary(account, key_id):
     active, exhausted = db.is_key_active(key), db.is_traffic_exhausted(key)
     pending = db.get_account_pending_key_operations(account.account_id, key_id)
     identity = db.get_pending_panel_identity(key_id)
-    imported = db.get_imported_key_binding(key_id)
-    observation = imported['snapshot'].get('observation', {}) if imported else {}
-    first_use = bool(imported and imported['preserve_terms'] and
-                     int(imported['snapshot'].get('control', {}).get('expiry_ms',
-                         observation.get('expiry_ms', imported['snapshot']['record'].get('expiryTime') or 0))) < 0)
     entitlement = db.get_key_entitlement(key_id)
-    panel_enabled = (imported['snapshot'].get('control', {}).get('ban_restore_enable',
-                     observation.get('enabled', imported['snapshot']['record'].get('enable', True))) if imported else True)
-    access = ('unconfigured' if not configured else 'exhausted' if exhausted else 'expired' if not active
-              else 'disabled' if imported and imported['preserve_terms'] and not panel_enabled
-              else 'first_use' if first_use else 'active')
-    readiness = 'pending' if entitlement and not entitlement['panel_applied'] else 'ready' if configured else 'unconfigured'
+    access = ('unconfigured' if not configured else 'exhausted' if exhausted else 'expired' if not active else 'active')
+    readiness = 'pending' if identity or (entitlement and not entitlement['panel_applied']) else 'ready' if configured else 'unconfigured'
     eligible = {'key.rename.start': True, 'key.renew.start': True, 'key.delete': not active,
                 'key.configure.start': not configured and active and not exhausted,
                 'key.replace.start': configured and active and not exhausted}
@@ -48,10 +39,10 @@ async def summary(account, key_id):
                     allowed, reason = False, 'action_unavailable'
             actions[name] = {'allowed': allowed, 'reason': reason}
     return {'id': key_id, 'name': key.get('custom_name'), 'tariff_id': key.get('tariff_id'),
-            'tariff_name': key.get('tariff_name'), 'tariff_known': key.get('tariff_id') is not None,
+            'tariff_name': key.get('tariff_name'),
             'server_id': key.get('server_id'), 'server_name': key.get('server_name'),
             'expires_at': key.get('expires_at'), 'created_at': key.get('created_at'),
-            'state': access, 'access_status': readiness, 'imported': bool(imported),
+            'state': access, 'access_status': readiness,
             'traffic': {'used_bytes': key.get('traffic_used'), 'limit_bytes': key.get('traffic_limit'),
                         'known': key.get('traffic_updated_at') is not None, 'updated_at': key.get('traffic_updated_at'),
                         'source': 'panel' if key.get('traffic_updated_at') is not None else 'unknown'},
@@ -73,6 +64,7 @@ async def access(account, key_id):
     key = owned_key(account, positive_id(key_id, 'key_id'))
     if not key.get('server_id') or not key.get('panel_email') or not key.get('sub_id'):
         raise CoreError('subscription_unconfigured')
+    db.assert_key_mutation_ready(key_id)
     try:
         url = await get_subscription_url_for_key(key, suppress_errors=False)
     except Exception:

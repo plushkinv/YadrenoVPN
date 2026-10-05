@@ -39,23 +39,40 @@ def device_limit_mode_kb(mode: str) -> InlineKeyboardMarkup:
 def extensions_diagnostics_kb(
     enabled: bool,
     setting_buttons: Optional[List[Dict[str, str]]] = None,
+    *,
+    core_edit_blocked: bool = True,
 ) -> InlineKeyboardMarkup:
-    """Custom extension diagnostic screen keyboard."""
+    """Extension overview controls with explicit loader and core protection states."""
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
         enabled,
-        'Включено',
+        'Загрузка включена',
         'admin_extensions_set:1',
-        'Выключено',
+        'Загрузка выключена',
         'admin_extensions_set:0',
+    ))
+    builder.row(*state_pair_buttons(
+        core_edit_blocked,
+        'Запрет включён',
+        'admin_extensions_core_guard_set:1',
+        'Запрет выключен',
+        'admin_extensions_core_guard_set:0',
     ))
     for button in setting_buttons or []:
         text = str(button.get('text') or '').strip()
         callback_data = str(button.get('callback_data') or '').strip()
         if text and callback_data:
             builder.row(InlineKeyboardButton(text=text, callback_data=callback_data))
-    builder.row(InlineKeyboardButton(text='🔄 Обновить', callback_data='admin_extensions_diagnostics'))
+    builder.row(InlineKeyboardButton(text='📋 Подробности', callback_data='admin_extensions_details'))
     builder.row(back_button('admin_panel'), home_button())
+    return builder.as_markup()
+
+
+def extensions_details_kb() -> InlineKeyboardMarkup:
+    """Refresh detailed diagnostics or return to the extension overview."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text='🔄 Обновить', callback_data='admin_extensions_details'))
+    builder.row(back_button('admin_extensions_diagnostics'), home_button())
     return builder.as_markup()
 
 

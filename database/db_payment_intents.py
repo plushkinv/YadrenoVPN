@@ -851,7 +851,6 @@ def fulfill_key_renewal_once(
     tariff_id: int,
     days: int,
     traffic_limit_bytes: int,
-    imported_state: dict | None = None,
 ) -> dict[str, Any]:
     """Extends one owned key exactly once and records the effect atomically."""
     with get_db() as conn:
@@ -896,20 +895,6 @@ def fulfill_key_renewal_once(
         elif key['tariff_group_id'] != tariff['group_id']:
             return {'ok': False, 'reason': 'owned_key_or_tariff_not_found'}
         key = dict(key)
-        if key['tariff_id'] is None:
-            import datetime
-            if (not imported_state or
-                    (key['server_id'], key['panel_email'], key['sub_id']) !=
-                    (imported_state['server_id'], imported_state['email'], imported_state['sub_id'])):
-                return {'ok': False, 'reason': 'imported_terms_unavailable'}
-            expiry = int(imported_state['expiry_ms'])
-            expires_at = (datetime.datetime.fromtimestamp(expiry / 1000, datetime.timezone.utc) if expiry > 0 else
-                          datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(milliseconds=-expiry) if expiry < 0 else None)
-            conn.execute('UPDATE vpn_keys SET expires_at=?,traffic_used=?,traffic_limit=? WHERE id=?',
-                         (expires_at.strftime('%Y-%m-%d %H:%M:%S') if expires_at else None,
-                          imported_state['traffic_used'], imported_state['traffic_limit'], key_id))
-            key['traffic_used'], key['traffic_limit'] = imported_state['traffic_used'], imported_state['traffic_limit']
-
         modifier = f"{int(days):+} days"
         current_limit = int(key['traffic_limit'] or 0)
         current_used = int(key['traffic_used'] or 0)

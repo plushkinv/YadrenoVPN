@@ -1,16 +1,17 @@
 import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { ArrowLeft, ArrowUpRight, Check, ChevronRight, X } from 'lucide-react';
 import { ru } from '../i18n/ru';
-import { replaceable } from '../runtime/overrides';
 
 function BaseButton({ children, tone = 'primary', className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'primary' | 'secondary' | 'quiet' }) {
   return <button type="button" className={`button button--${tone} ${className}`} {...props}>{children}</button>;
 }
 
-function BasePageHeading({ title, caption, back, action }: { title: string; caption?: string; back?: () => void; action?: ReactNode }) {
+function BasePageHeading({ title, caption, back, action, autoFocus = false }: { title: string; caption?: string; back?: () => void; action?: ReactNode; autoFocus?: boolean }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (autoFocus) heading.current?.focus({ preventScroll: true }); }, [autoFocus, title]);
   return <div className="page-heading">
     {back && <Button tone="quiet" onClick={back} className="back-button"><ArrowLeft size={18} />{ru.back}</Button>}
-    <div className="heading-row"><div><h1>{title}</h1>{caption && <p>{caption}</p>}</div>{action}</div>
+    <div className="heading-row"><div><h1 ref={heading} tabIndex={autoFocus ? -1 : undefined}>{title}</h1>{caption && <p>{caption}</p>}</div>{action}</div>
   </div>;
 }
 
@@ -18,10 +19,10 @@ function BaseBadge({ children, tone = 'success' }: { children: ReactNode; tone?:
   return <span className={`badge badge--${tone}`}><span className="status-dot" />{children}</span>;
 }
 
-function BaseRowButton({ icon, title, caption, onClick, trailing }: { icon: ReactNode; title: string; caption?: string; onClick: () => void; trailing?: ReactNode }) {
-  return <button className="row-button" type="button" onClick={onClick}>
+function BaseRowButton({ icon, title, caption, onClick, trailing, danger = false, 'data-ui': dataUi }: { icon: ReactNode; title: string; caption?: string; onClick: () => void; trailing?: ReactNode; danger?: boolean; 'data-ui'?: string }) {
+  return <button className={'row-button' + (danger ? ' row-button--danger' : '')} type="button" onClick={onClick} data-ui={dataUi}>
     <span className="icon-box">{icon}</span><span className="row-text"><strong>{title}</strong>{caption && <span>{caption}</span>}</span>
-    {trailing ?? <ChevronRight size={20} className="muted" />}
+    {trailing ?? <ChevronRight size={20} className="muted" aria-hidden="true" />}
   </button>;
 }
 
@@ -31,9 +32,12 @@ function BaseDialog({ title, children, onClose }: { title: string; children: Rea
   useEffect(() => {
     const element = dialog.current;
     const previous = document.activeElement;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     element?.showModal();
     return () => {
       element?.close();
+      document.body.style.overflow = overflow;
       if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
     };
   }, []);
@@ -60,9 +64,9 @@ function BaseCheckList({ items }: { items: readonly string[] }) {
 
 export function ExternalArrow() { return <ArrowUpRight size={20} aria-hidden="true" />; }
 
-export const Button = replaceable('button', BaseButton);
-export const PageHeading = replaceable('page.heading', BasePageHeading);
-export const Badge = replaceable('badge', BaseBadge);
-export const RowButton = replaceable('row.button', BaseRowButton);
-export const Dialog = replaceable('dialog', BaseDialog);
-export const CheckList = replaceable('check.list', BaseCheckList);
+export const Button = BaseButton;
+export const PageHeading = BasePageHeading;
+export const Badge = BaseBadge;
+export const RowButton = BaseRowButton;
+export const Dialog = BaseDialog;
+export const CheckList = BaseCheckList;

@@ -60,7 +60,7 @@ def save_key_operation_progress(user_id, operation_id, progress):
                      (json.dumps(progress, sort_keys=True), user_id, operation_id))
 
 
-def switch_key_operation_binding(user_id, operation_id, *, imported_snapshot=None):
+def switch_key_operation_binding(user_id, operation_id):
     """Compare-and-swap the original binding and advance progress in one transaction."""
     from .db_modules import _operation
     with get_db() as conn:
@@ -73,21 +73,13 @@ def switch_key_operation_binding(user_id, operation_id, *, imported_snapshot=Non
         key_id, progress = request['inputs']['key_id'], request['progress']
         _assert_key_mutation_ready(conn, key_id)
         old, target = progress['old'], progress['target']
-        changed = conn.execute('UPDATE vpn_keys SET server_id=?,panel_email=?,sub_id=?,traffic_used=?,traffic_limit=?,expires_at=?, '
-                               'traffic_limit_override=CASE WHEN tariff_id IS NULL THEN ? ELSE traffic_limit_override END '
+        changed = conn.execute('UPDATE vpn_keys SET server_id=?,panel_email=?,sub_id=?,traffic_used=?,traffic_limit=?,expires_at=? '
                                'WHERE id=? AND user_id=? AND server_id IS ? AND panel_email IS ? AND sub_id IS ?',
                                (target['server_id'], target['email'], target['sub_id'], progress['traffic_used'],
-                                progress['traffic_limit'], progress['expires_at'], progress['traffic_limit'],
+                                progress['traffic_limit'], progress['expires_at'],
                                 key_id, user_id, old['server_id'], old['email'], old['sub_id'])).rowcount
         if not changed:
             raise CoreError('panel_identity_changed')
-        if imported_snapshot is not None:
-            member = conn.execute('SELECT snapshot_json FROM subscription_import_members WHERE key_id=?', (key_id,)).fetchone()
-            if member:
-                snapshot = json.loads(member['snapshot_json'])
-                snapshot['replacement'] = imported_snapshot
-                conn.execute('UPDATE subscription_import_members SET email=?,snapshot_json=? WHERE key_id=?',
-                             (target['email'], json.dumps(snapshot, sort_keys=True), key_id))
         progress['phase'] = 'switched'
         conn.execute('UPDATE account_operations SET request_json=? WHERE id=?', (json.dumps(request, sort_keys=True), operation_id))
 

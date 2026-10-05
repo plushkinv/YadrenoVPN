@@ -220,7 +220,11 @@ def _run_command(
     timeout: int = 120,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
+        creation_options = ({"umask": 0o077}
+                            if os.name != "nt" and Path(args[0]).stem.lower() == "git"
+                            and len(args) > 1 and args[1] in {"clone", "checkout", "reset", "restore", "switch", "pull"}
+                            else {})
+        result = subprocess.run(
             list(args),
             cwd=str(cwd),
             capture_output=True,
@@ -228,7 +232,15 @@ def _run_command(
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            **creation_options,
         )
+        if (result.returncode and Path(args[0]).stem.lower() == 'git'
+                and 'detected dubious ownership' in result.stdout + result.stderr
+                and (Path(cwd) / 'web_tools/permissions.py').is_file()):
+            # Git can reject the root before either target or snapshot selection.
+            logger.error('Git rejected repository ownership: %s', result.stderr)
+            _web_release_command(Path(cwd), 'check-paths', '--git-owner')
+        return result
     except FileNotFoundError as exc:
         raise UpdateRollbackError(f"Command is unavailable: {args[0]}") from exc
     except subprocess.TimeoutExpired as exc:
@@ -1493,7 +1505,9 @@ def update_operation_lock(
     """Serialize update and rollback mutations on Linux production hosts."""
     root = _resolve_project_root(project_root)
     lock_root = _ensure_inside(_pre_update_root(root), root)
-    lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # The installation already exists; create both missing backup levels explicitly.
+    (root / 'backup').mkdir(mode=0o700, exist_ok=True)
+    lock_root.mkdir(mode=0o700, exist_ok=True)
     lock_path = lock_root / OPERATION_LOCK_FILENAME
     lock_file = lock_path.open("a+", encoding="utf-8")
     try:
@@ -2412,10 +2426,76 @@ def _emergency_restore_pre_update_state(
 
 
 def _web_release_command(root: Path, *arguments: str) -> str:
-    return _run_checked(
-        [sys.executable, "-m", "web_tools.release", "--root", str(root), *arguments],
-        cwd=root, timeout=180, stage="Checking managed UI release",
+    result = _run_command(
+        [sys.executable, "-B", "-m", "web_tools.release", "--root", str(root), *arguments],
+        cwd=root, timeout=180,
     )
+    if result.returncode:
+        logger.error("Managed UI command %s failed:\n%s\n%s", arguments[0], result.stdout, result.stderr)
+        try:
+            payload = json.loads(result.stdout)
+            if (payload.get('format_version') == 1 and payload.get('code') == 'ui_path_permissions'
+                    and isinstance(payload.get('issues'), list) and payload['issues']):
+                raise UpdateRollbackError(_ui_permissions_message(payload['issues']))
+        except (ValueError, TypeError, AttributeError, KeyError):
+            pass
+        raise UpdateRollbackError(
+            f"Checking managed UI release failed (exit {result.returncode}): "
+            + ((result.stdout + result.stderr).strip() or "no output")
+        )
+    return (result.stdout + result.stderr).strip()
+
+
+def _ui_permissions_message(issues: list[dict[str, Any]]) -> str:
+    """Render only bounded metadata; the complete failure stays in the existing log."""
+    lines = [f"Неверный владелец или права файлов веб-интерфейса. Нарушений: {len(issues)}."]
+    shown = 0
+    footer = ("Исправьте указанные настройки на сервере и повторите обновление. "
+              "Владельцы и права автоматически не изменялись.")
+    for issue in issues[:3]:
+        actual = f"{str(issue.get('owner_name') or 'пользователь')[:40]} (uid {int(issue['owner_uid'])})"
+        expected = f"{str(issue.get('expected_name') or 'пользователь')[:40]} (uid {int(issue['expected_uid'])})"
+        reasons = []
+        if issue['owner_mismatch']:
+            reasons.append('владелец не совпадает с пользователем обновления')
+        if int(issue['forbidden_mode'], 8):
+            reasons.append('доступ группы/остальных к закрытому ключу' if issue['private']
+                           else 'разрешена запись группе или остальным')
+        path = str(issue['path']).replace('\n', '\\n').replace('\r', '\\r')
+        line = (f"{_bounded_detail(path, limit=160)}: владелец {actual}, требуется {expected}; "
+                f"права {issue['mode']}; {', '.join(reasons)}.")
+        if shown and len('\n'.join([*lines, line, footer])) > 1100:
+            break
+        lines.append(line)
+        shown += 1
+    if len(issues) > shown:
+        lines.append(f"Ещё нарушений: {len(issues) - shown}. Полный список — в журнале бота/обновлятора.")
+    lines.append(footer)
+    return '\n'.join(lines)
+
+
+def _check_web_permissions(root: Path, target_commit: str) -> None:
+    if (root / 'web_tools/release.py').is_file():
+        _web_release_command(root, 'check-paths', '--target', target_commit)
+
+
+def _notify_unstarted_update(root: Path) -> None:
+    """Use the current installation's Telegram transport without coupling the saved runner to it."""
+    script = '''import asyncio
+from aiogram import Bot
+from bot.middlewares.parse_mode_fallback import SafeParseSession
+from bot.services.update_rollback import notify_pending_update_result
+from config import BOT_TOKEN
+async def deliver():
+    async with Bot(token=BOT_TOKEN, session=SafeParseSession()) as bot:
+        await notify_pending_update_result(bot, pending_timeout_seconds=0)
+asyncio.run(deliver())
+'''
+    try:
+        _run_checked([sys.executable, '-B', '-c', script], cwd=root, timeout=30,
+                     stage='Delivering update preflight result')
+    except Exception:
+        logger.exception('Cannot deliver update preflight result; saved result remains for startup')
 
 
 def _prepare_web_toolchain(root: Path) -> bool:
@@ -2474,11 +2554,12 @@ def perform_update_transaction(
         else update_operation_lock(root, wait_seconds=30)
     )
     with lock_context:
-        snapshot = _load_prepared_snapshot(snapshot_id, project_root=root)
+        snapshot: PreparedUpdateSnapshot | None = None
         target_commit = ""
         service_stopped = False
         git_changed = False
         try:
+            snapshot = _load_prepared_snapshot(snapshot_id, project_root=root)
             target_commit = _resolve_update_target(root, target)
             _validate_update_strategy(
                 root,
@@ -2487,6 +2568,7 @@ def perform_update_transaction(
                 strategy=strategy,
             )
 
+            _check_web_permissions(root, target_commit)
             _prepare_web_release(root, snapshot, target_commit)
 
             if manage_service:
@@ -2584,14 +2666,15 @@ def perform_update_transaction(
             failure_detail = _bounded_detail(exc)
             logger.exception(
                 "Managed update %s failed at target %s",
-                snapshot.snapshot_id,
+                snapshot_id,
                 target_commit or target,
             )
             _update_health_path(root).unlink(missing_ok=True)
-            try:
-                git_changed = _current_commit(root) != snapshot.source_commit
-            except Exception:
-                logger.exception("Cannot determine Git state after update failure")
+            if snapshot is not None:
+                try:
+                    git_changed = _current_commit(root) != snapshot.source_commit
+                except Exception:
+                    logger.exception("Cannot determine Git state after update failure")
             if git_changed:
                 try:
                     _undo_web_release(root, snapshot)
@@ -2689,17 +2772,19 @@ def perform_update_transaction(
                     if recovered
                     else "Не удалось подтвердить повторный запуск текущей версии. "
                 )
-                + f"Snapshot: {snapshot.snapshot_id}."
+                + f"Snapshot: {snapshot_id}."
             )
             _try_write_update_result(
                 root,
                 admin_id=admin_id,
                 status="not_started" if recovered else "failed",
                 message=message,
-                snapshot_id=snapshot.snapshot_id,
+                snapshot_id=snapshot_id,
                 target_commit=target_commit or None,
             )
-            return UpdateExecutionResult(False, message, snapshot.snapshot_id)
+            if manage_service and not service_stopped and admin_id is not None:
+                _notify_unstarted_update(root)
+            return UpdateExecutionResult(False, message, snapshot_id)
 
 
 def run_managed_update(
@@ -2733,6 +2818,7 @@ def run_managed_update(
             target_commit=target_commit,
             strategy=strategy,
         )
+        _check_web_permissions(root, target_commit)
         snapshot = create_pre_update_snapshot(
             update_mode=update_mode,
             requested_target=target_commit,
@@ -2798,6 +2884,7 @@ def schedule_admin_update(
                 target_commit=target_commit,
                 strategy=strategy,
             )
+            _check_web_permissions(root, target_commit)
             snapshot = create_pre_update_snapshot(
                 update_mode=update_mode,
                 requested_target=target_commit,
@@ -3209,7 +3296,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(unit_path)
             return 0
     except UpdateRollbackError as exc:
-        print(f"Ошибка: {exc}", file=sys.stderr)
+        title = "Обновление не началось" if args.command == "update" else "Ошибка"
+        print(f"{title}: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
         logger.exception("Unexpected update rollback error")

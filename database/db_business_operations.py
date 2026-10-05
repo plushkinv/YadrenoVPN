@@ -11,6 +11,7 @@ from .connection import get_db
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    'has_key_operation',
     'apply_balance_operation',
     'apply_key_days_operation_once',
     'create_business_operation_tables',
@@ -221,9 +222,7 @@ def apply_key_days_operation_once(
         key_id = int(key['id'])
         from .db_key_operations import _assert_key_mutation_ready
         _assert_key_mutation_ready(conn, key_id)
-        from .db_subscription_imports import _extend_imported_terms
-        imported_change = _extend_imported_terms(conn, key_id, normalized_days)
-        if key['expires_at'] is None and (imported_change is None or imported_change['unlimited']):
+        if key['expires_at'] is None:
             operation = conn.execute(
                 """
                 INSERT INTO key_operation_log (
@@ -258,8 +257,7 @@ def apply_key_days_operation_once(
             }
         expires_before = str(key['expires_at']) if key['expires_at'] is not None else None
         modifier = f'{normalized_days:+} days'
-        if imported_change is None:
-            conn.execute(
+        conn.execute(
             """
             UPDATE vpn_keys
             SET expires_at = MAX(
@@ -312,6 +310,13 @@ def apply_key_days_operation_once(
             'expires_before': expires_before,
             'expires_after': expires_after,
         }
+
+
+def has_key_operation(user_id: int, operation_type: str) -> bool:
+    """Read durable history without using it as a current ownership registry."""
+    with get_db() as conn:
+        return conn.execute('SELECT 1 FROM key_operation_log WHERE user_id = ? AND operation_type = ? LIMIT 1',
+                            (user_id, operation_type)).fetchone() is not None
 
 
 def record_key_operation(

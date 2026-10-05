@@ -1534,22 +1534,37 @@ async def _execute_shell(
 
 
 async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
-    """Executes satellite_write_file: writes content to the explicitly passed path."""
-    raw_path = str(args.get("path", "")).strip()
-    if not raw_path:
-        return {"result": "", "error": "empty path"}
+    """Write a concrete file or apply one fully validated context-edit batch."""
+    from bot.services.yadreno_admin_file_edits import edit_files
+    from web_tools.errors import WebSourceError, failure
+    from web_tools.paths import atomic_write, publication_lock
 
-    content = args.get("content", "")
-    if content is None:
-        content = ""
+    def write():
+        # All regular writers use the same source lock as builds/restoration.
+        with publication_lock(PROJECT_ROOT / 'web_runtime/source-lock'):
+            if 'edits' in args:
+                if set(args) != {'edits'}:
+                    raise WebSourceError('file_edits_invalid', 'Use either edits or path plus content, not both.',
+                                         next_action='Remove unrelated arguments and retry the same batch.')
+                return edit_files(args['edits'], _resolve_tool_path)
+            raw_path = str(args.get('path', '')).strip()
+            content = args.get('content', '')
+            if not raw_path or not isinstance(content, str):
+                raise WebSourceError('file_write_invalid', 'A path and UTF-8 text content are required.',
+                                     next_action='Supply path and content, or an edits array.')
+            path = _resolve_tool_path(raw_path)
+            previous = path.read_bytes() if path.is_file() else None
+            atomic_write(path, content.encode('utf-8'), mode=path.stat().st_mode & 0o777 if path.is_file() else 0o600)
+            return {'status': 'ok', 'changed': previous != content.encode('utf-8'), 'file': str(path),
+                    'publication_changed': False}
 
     try:
-        path = _resolve_tool_path(raw_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(path.write_text, str(content), encoding="utf-8")
-        return {"result": f"File {path} written successfully.", "error": None}
-    except Exception as e:
-        return {"result": "", "error": str(e)}
+        result = await asyncio.to_thread(write)
+        message = json.dumps(result, ensure_ascii=False) if 'edits' in args else f"File {result['file']} written successfully."
+        return {'result': message, 'error': None}
+    except (OSError, ValueError, RuntimeError, UnicodeError) as error:
+        result = failure(error, operation='file.write', root=PROJECT_ROOT)
+        return {'result': '', 'error': json.dumps(result, ensure_ascii=False)}
 
 
 async def _run_script(
@@ -1843,15 +1858,17 @@ def _core_guard_integrity_error_for_tool(
     if not _core_guard_enabled(topic_id):
         return None
     if tool == "satellite_write_file":
-        raw_path = str(args.get("path", "")).strip()
-        if not raw_path:
-            return None
-        try:
-            path = _resolve_tool_path(raw_path)
-        except (OSError, RuntimeError, ValueError) as e:
-            return f"core protection integrity check rejected invalid path: {e}"
-        if _is_inside(path, PROJECT_ROOT / ".git"):
-            return "core protection integrity check rejected: direct .git mutation"
+        edits = args.get('edits')
+        paths = [item.get('path') for item in edits if isinstance(item, dict)] if isinstance(edits, list) else [args.get('path')]
+        for raw_path in paths:
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            try:
+                path = _resolve_tool_path(raw_path)
+            except (OSError, RuntimeError, ValueError) as error:
+                return f"core protection integrity check rejected invalid path: {error}"
+            if _is_inside(path, PROJECT_ROOT / '.git'):
+                return 'core protection integrity check rejected: direct .git mutation'
         return None
     if tool == "satellite_execute":
         return _core_guard_integrity_error(str(args.get("command", "")).strip())

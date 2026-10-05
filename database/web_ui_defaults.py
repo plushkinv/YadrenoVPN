@@ -1,6 +1,6 @@
 """Versioned stock presentation data; runtime changes remain database settings."""
 
-WEB_UI_DEFAULTS = {'title': 'Ядрёно VPN', 'logo': '', 'preset': 'clear', 'theme': 'light', 'accent': '',
+WEB_UI_DEFAULTS = {'preset': 'clear', 'theme': 'light',
                    'sync_interval_seconds': '300'}
 WEB_CABINET_BUTTON_ID = 'open_web_cabinet'
 

@@ -227,9 +227,6 @@ async def _apply_purpose(intent) -> dict[str, Any]:
 
     if intent.purpose == PURPOSE_KEY_RENEWAL:
         key_id = int(payload.get('key_id') or intent.vpn_key_id or 0)
-        from bot.services.imported_access import inspect_imported_renewal
-        imported_state = (await inspect_imported_renewal(key_id)
-                          if not is_payment_effect_completed(intent.order_id, 'purpose') else None)
         result = fulfill_key_renewal_once(
             intent.order_id,
             user_id=intent.user_id,
@@ -237,7 +234,6 @@ async def _apply_purpose(intent) -> dict[str, Any]:
             tariff_id=tariff_id,
             days=days,
             traffic_limit_bytes=traffic_limit,
-            imported_state=imported_state,
         )
         if result.get('ok') and not result.get('already_applied'):
             await _sync_renewed_key(key_id)

@@ -74,13 +74,16 @@ def run_git_command(args: List[str], timeout: int = 30) -> Tuple[bool, str]:
         (success, output) - success and output of the command
     """
     try:
+        creation_options = ({'umask': 0o077} if os.name != 'nt' and args
+                            and args[0] in {'clone', 'checkout', 'reset', 'restore', 'switch', 'pull'} else {})
         result = subprocess.run(
             ['git'] + args,
             cwd=get_project_root(),
             capture_output=True,
             text=True,
             encoding='utf-8',
-            timeout=timeout
+            timeout=timeout,
+            **creation_options,
         )
         output = result.stdout + result.stderr
         success = result.returncode == 0

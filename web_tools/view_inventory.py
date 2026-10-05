@@ -61,64 +61,44 @@ def validate_inventory(value, *, modules=()):
 
 
 def build_inventory(root, custom=None, declaration=None):
-    """Project canonical build data; legacy source trees have no editor proof."""
-    root = Path(root)
-    registry = local_path(root / 'web', REGISTRY)
+    """Read the one registry in the selected complete source tree; never fall back."""
+    try:
+        return _build_inventory(root, custom, declaration)
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        if custom is None:
+            raise
+        from web_tools.errors import WebSourceError
+        raise WebSourceError('web_registry_invalid', str(error), file=REGISTRY,
+                             next_action='Correct the working page/component registry and its referenced files, then run web.build.') from error
+
+
+def _build_inventory(root, custom, declaration):
+    folder = Path(custom) if custom is not None else Path(root) / 'web'
+    registry = local_path(folder, REGISTRY)
     if not registry.exists():
-        return None
+        raise ValueError('src/runtime/view-registry.json is missing from the working project')
     if not registry.is_file() or registry.stat().st_nlink != 1:
-        raise ValueError('UI registry must be a local regular file without hardlinks')
-    stock = json.loads(registry.read_bytes())
-    declaration = declaration or {}
-    for name in ('pages', 'components'):
-        identifiers = [item['id'] for item in stock[name]]
-        if len(identifiers) != len(set(identifiers)):
-            raise ValueError('duplicate stock UI source registration')
+        raise ValueError('UI registry must be a regular local file')
+    data = json.loads(registry.read_bytes())
+    kind = 'custom' if custom is not None else 'stock'
 
-    def stock_source(item):
-        source = {'kind': 'stock', 'file': item['file'], 'export': item['export']}
-        file = local_path(root / 'web', source['file'])
+    def source(item):
+        name = item['file'] if isinstance(item, dict) else item
+        file = local_path(folder, name)
         if not file.is_file() or file.stat().st_nlink != 1:
-            raise ValueError('registered stock UI source is missing')
-        if custom is not None:
-            override = local_path(custom, source['file'])
-            if override.exists():
-                if not override.is_file() or override.stat().st_nlink != 1:
-                    raise ValueError('mirrored UI source must be a regular file')
-                source['kind'] = 'custom'
-        return source
+            raise ValueError('Registered working source is missing: ' + name)
+        return {'kind': kind, 'file': name, **({'export': item['export']} if isinstance(item, dict) else {})}
 
-    def custom_source(item):
-        # readCustomization has already validated ownership, imports and files.
-        name = Path(item['file']).relative_to(Path(custom).resolve()).as_posix()
-        file = local_path(custom, name)
-        if not file.is_file() or file.stat().st_nlink != 1:
-            raise ValueError('registered custom UI source is missing')
-        return {'kind': 'custom', 'file': name, 'export': 'default'}
-
-    pages = {item['id']: {'id': item['id'], 'source': stock_source(item),
-                        **({'preview_parameter': item['preview_parameter']} if 'preview_parameter' in item else {})}
-             for item in stock['pages']}
-    for item in declaration.get('pages', []):
-        pages[item['id']] = {**pages.get(item['id'], {}), 'id': item['id'], 'source': custom_source(item),
-                             **({'title': item['title']} if item.get('title') is not None else {}),
-                             **({'module_id': item['module_id']} if item.get('module_id') else {})}
-    replacements = {item['id']: item for item in declaration.get('components', [])}
-    components = []
-    for item in stock['components']:
-        replacement = replacements.get(item['id']) or replacements.get(item.get('fallback'))
-        components.append({'id': item['id'], 'source': custom_source(replacement) if replacement else stock_source(item)})
-    styles = [{'kind': ('custom' if custom is not None and local_path(custom, name).exists() else 'stock'),
-               'file': name} for name in stock['styles']]
-    styles.extend({'kind': 'custom', 'file': Path(name).relative_to(Path(custom).resolve()).as_posix()}
-                  for name in declaration.get('styles', []))
-    for item in styles:
-        file = local_path(root / 'web' if item['kind'] == 'stock' else custom, item['file'])
-        if not file.is_file() or file.stat().st_nlink != 1:
-            raise ValueError('registered UI stylesheet is missing')
-    result = {'format_version': 1, 'pages': list(pages.values()), 'components': components,
-              'styles': styles, 'scenarios': list(stock['scenarios'])}
-    return validate_inventory(result, modules={item['id'] for item in declaration.get('modules', [])})
+    result = {'format_version': 1,
+              'pages': [{'id': item['id'], 'source': source(item),
+                         **{key: item[key] for key in ('title', 'preview_parameter', 'module_id') if key in item}}
+                        for item in data['pages']],
+              'components': [{'id': item['id'], 'source': source(item)} for item in data['components']],
+              'styles': [source(item) for item in data['styles']], 'scenarios': list(data['scenarios'])}
+    modules = (declaration or {}).get('requirements', {}).get('modules')
+    if modules is None:
+        modules = json.loads((folder / 'manifest.json').read_bytes()).get('modules', [])
+    return validate_inventory(result, modules={item['id'] for item in modules})
 
 
 def write_source_provenance(stage, signed, *, root, custom=None, declaration=None, fingerprint=None):
@@ -128,10 +108,13 @@ def write_source_provenance(stage, signed, *, root, custom=None, declaration=Non
     from web_tools.build import custom_source_fingerprint, source_version
 
     inventory = build_inventory(root, custom, declaration)
+    if custom is None:
+        from web_tools.source_tree import fingerprint as source_fingerprint, template
+        fingerprint = source_fingerprint(template(root))
     value = {'format_version': 1, 'manifest_hash': digest(canonical(signed)), 'custom_fingerprint': fingerprint}
     if inventory is not None:
         if (source_version(root)[0] != signed['manifest']['base_build_id']
-                or fingerprint is not None and custom_source_fingerprint(custom) != fingerprint):
+                or custom is not None and fingerprint is not None and custom_source_fingerprint(custom) != fingerprint):
             raise ValueError('UI sources changed during source inventory capture')
         value.update(format_version=2, base_build_id=signed['manifest']['base_build_id'],
                      customization_version=signed['manifest']['customization_version'], inventory=inventory)

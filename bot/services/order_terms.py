@@ -15,4 +15,4 @@ def key_servers(key: dict):
     entitlement = db.get_key_entitlement(key['id'])
     if entitlement and db.get_groups_count() > 1:
         return db.get_active_servers_by_group(int(entitlement['tariff'].get('group_id') or 1))
-    return get_servers_for_key(key['tariff_id']) if key.get('tariff_id') else db.get_active_servers()
+    return get_servers_for_key(key['tariff_id'])

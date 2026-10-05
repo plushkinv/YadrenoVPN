@@ -89,26 +89,11 @@ def _key_tariff_group_allowed_with_conn(conn, key_id, group_id, *, key=None):
                            "COALESCE(json_extract(e.tariff_json,'$.group_id'),t.group_id) AS group_id "
                            'FROM vpn_keys k LEFT JOIN tariffs t ON t.id=k.tariff_id '
                            'LEFT JOIN key_entitlements e ON e.key_id=k.id WHERE k.id=?', (key_id,)).fetchone()
-    if key and key['tariff_id'] is None:
-        from core.panel_identity import physical_panel_key
-        imported = conn.execute('SELECT 1 FROM subscription_import_members m '
-                                'JOIN subscription_imports i ON i.id=m.import_id WHERE m.key_id=? AND i.user_id=?',
-                                (key_id, key['user_id'])).fetchone()
-        if not imported:
-            return False
-        server = conn.execute('SELECT * FROM servers WHERE id=?', (key['server_id'],)).fetchone()
-        if not server:
-            return False
-        endpoint = physical_panel_key(dict(server))
-        peers = [row['id'] for row in conn.execute('SELECT * FROM servers')
-                 if physical_panel_key(dict(row)) == endpoint]
-        return any(conn.execute('SELECT 1 FROM server_groups WHERE server_id=? AND group_id=?',
-                                (server_id, group_id)).fetchone() for server_id in peers)
     return bool(key and key['group_id'] is not None and int(key['group_id']) == int(group_id))
 
 
 def is_key_tariff_group_allowed(key_id, group_id):
-    """Use bought group terms, or the actual configured panel for unknown imports."""
+    """Use the ordinary key tariff or purchased group terms."""
     with get_db() as conn:
         return _key_tariff_group_allowed_with_conn(conn, key_id, group_id)
 

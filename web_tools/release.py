@@ -11,6 +11,7 @@ from web_tools.compatibility import current_capabilities, release_capabilities, 
 from web_tools.package import verify_package
 from web_tools.paths import PROJECT_ROOT, atomic_write, canonical, local_path
 from web_tools.publication import activate, manifest_path, publication_lock, read_pointer
+from web_tools.permissions import PathPermissionsError, check_release_paths, require_permissions
 
 
 def target_capabilities(root, commit):
@@ -49,11 +50,12 @@ def preflight(root, capabilities, *, modules=()):
             raise ValueError('target has no Web Core compatibility declaration; active UI/modules cannot be verified')
         return {'format_version': 1, 'pointer': pointer, 'selected': None, 'capabilities': None}
     capabilities = release_capabilities(capabilities)
+    check_release_paths(root)
     for module in modules:
         if module.get('api_version') != capabilities['module_api']:
             raise ValueError('incompatible saved shared module: ' + str(module.get('module_id', 'unknown')))
     errors = []
-    for build_id in (pointer['current'], pointer['previous']):
+    for build_id in (pointer['current'],):
         if not build_id:
             continue
         try:
@@ -69,6 +71,11 @@ def preflight(root, capabilities, *, modules=()):
 
 
 def upgrade(root, plan_path):
+    with publication_lock(Path(root) / 'web_runtime/source-lock'):
+        return _upgrade_locked(root, plan_path)
+
+
+def _upgrade_locked(root, plan_path):
     root, plan_path = Path(root), Path(plan_path)
     runtime = local_path(root, 'web_runtime')
     plan = json.loads(plan_path.read_bytes())
@@ -76,54 +83,69 @@ def upgrade(root, plan_path):
         raise ValueError('target compatibility changed after preflight')
     if plan['pointer'] != read_pointer(runtime):
         raise ValueError('UI publication changed after release preflight; repeat the update')
-    selected = plan['selected']
-    diagnostic = 'updated'
-    if selected and plan.get('customization_version') != 'base':
-        from web_tools.release_build import prepared_candidate
-        candidate, diagnostic = prepared_candidate(root, plan)
-        if candidate is None:
-            # Keep a compatible publication if tooling/source proof is unavailable.
-            signed, content, trust = publication(runtime, selected, current_capabilities())
-        else:
-            signed, content, trust = candidate
-        next_id = signed['manifest']['build_id']
-    else:
-        from web_tools.distribution import install_base
-        result = install_base(root, runtime)
-        content = local_path(runtime, 'staging/' + result['build_id'] + '/package.zip').read_bytes()
-        trust = json.loads(local_path(runtime, 'identity.json').read_bytes())
-        next_id = result['build_id']
-    expected = (plan['pointer'] if next_id == plan['pointer']['current'] else
-                {'current': next_id, 'previous': plan['pointer']['current']})
-    change = {'before': plan['pointer'], 'after': expected}
+    from web_tools.source_tree import ensure, unchanged, update_template, archive_bytes, inventory, template
+    from web_tools.editor_files import scan_sources
+    folder = ensure(root)
+    before_sources = scan_sources(folder)
+    if not unchanged(root, before_sources):
+        # This also protects unpublished edits over a stock live publication.
+        if plan.get('target_commit') and plan['selected']:
+            from web_tools.release_build import record_status
+            record_status(root, plan['target_commit'], plan['selected'], 'custom_preserved')
+        return {'changed': False, 'build_id': plan['selected'], 'custom_preserved': True,
+                'custom_rebuild_required': False, 'ui_release_code': 'custom_preserved'}
+    from web_tools.distribution import install_base
+    result = install_base(root, runtime)
+    stage = local_path(runtime, 'staging/' + result['build_id'])
+    content = local_path(stage, 'package.zip').read_bytes()
+    trust = json.loads(local_path(runtime, 'identity.json').read_bytes())
+    change = {'before': plan['pointer'], 'after': {'current': result['build_id'], 'previous': None},
+              'source_backup': 'web-ui-before-sources.zip', 'template_backup': 'web-ui-before-template.json',
+              'sources_after': inventory(template(root))}
+    atomic_write(plan_path.with_name(change['source_backup']), archive_bytes(before_sources))
+    atomic_write(plan_path.with_name(change['template_backup']), (runtime / 'source-template.json').read_bytes())
+    if plan['pointer']['current']:
+        _, before_package, _ = publication(runtime, plan['pointer']['current'], current_capabilities())
+        atomic_write(plan_path.with_name('web-ui-before-package.zip'), before_package)
+        proof = runtime / 'publications' / plan['pointer']['current'] / 'source.json'
+        if proof.exists():
+            atomic_write(plan_path.with_name('web-ui-before-source.json'), proof.read_bytes())
     if plan.get('target_commit'):
         from web_tools.release_build import capture_status
         change['release_status_before'] = capture_status(root)
-    atomic_write(plan_path.with_name('web-ui-applied.json'), canonical(change))
-    activate(runtime, content, trust, expected_pointer=plan['pointer'], **verification_versions(current_capabilities()))
-    applied = read_pointer(runtime)
+    change_path = plan_path.with_name('web-ui-applied.json')
+    atomic_write(change_path, canonical(change))
+    try:
+        update_template(root)
+        activate(runtime, content, trust, expected_pointer=plan['pointer'], **verification_versions(current_capabilities()))
+    except BaseException:
+        _restore_pointer_locked(root, change_path)
+        raise
     if plan.get('target_commit'):
         from web_tools.release_build import record_status
-        record_status(root, plan['target_commit'], applied['current'], diagnostic)
-    return {'changed': applied != plan['pointer'], 'build_id': applied['current'],
-            'custom_rebuild_required': diagnostic != 'updated', 'ui_release_code': diagnostic}
+        record_status(root, plan['target_commit'], result['build_id'], 'updated')
+    return {'changed': True, 'build_id': result['build_id'], 'custom_rebuild_required': False, 'ui_release_code': 'updated'}
 
 
 def ensure_base(root=PROJECT_ROOT):
-    """Bootstrap old installers and refresh stock UI; never overwrite a custom."""
+    """Seed the working project and update only a verifiably unchanged template."""
+    from web_tools.source_tree import ensure, unchanged
     root = Path(root)
-    runtime = local_path(root, 'web_runtime')
+    runtime = local_path(root, 'web_runtime', directory=True)
+    ensure(root)
     before = read_pointer(runtime)
-    capabilities = current_capabilities()
     if before['current']:
-        plan = preflight(root, capabilities)
-        signed, content, trust = publication(runtime, plan['selected'], capabilities)
-        if signed['manifest']['customization_version'] != 'base':
-            result = activate(runtime, content, trust, expected_pointer=before)
-            return {**result, 'custom_preserved': True}
+        plan = preflight(root, current_capabilities())
+        signed, _, _ = publication(runtime, plan['selected'], current_capabilities())
+        if not unchanged(root):
+            return {'changed': False, 'build_id': before['current'], 'custom_preserved': True}
         from web_tools.build import source_version
         if signed['manifest']['base_build_id'] == source_version(root)[0]:
-            return activate(runtime, content, trust, expected_pointer=before)
+            return {'changed': False, 'build_id': before['current']}
+        # Use the same reversible release operation for an old installer's boot.
+        plan_path = local_path(runtime, 'bootstrap-update/plan.json')
+        atomic_write(plan_path, canonical(plan))
+        return upgrade(root, plan_path)
     from web_tools.distribution import install_base
     result = install_base(root, runtime)
     content = local_path(runtime, 'staging/' + result['build_id'] + '/package.zip').read_bytes()
@@ -132,29 +154,57 @@ def ensure_base(root=PROJECT_ROOT):
 
 
 def restore_pointer(root, change_path):
-    """Only undo this update's pointer; preserve all assets, customs and money."""
-    runtime, change_path = local_path(root, 'web_runtime'), Path(change_path)
+    """Restore this update's UI and template from its existing protected snapshot."""
+    with publication_lock(Path(root) / 'web_runtime/source-lock'):
+        return _restore_pointer_locked(root, change_path)
+
+
+def _restore_pointer_locked(root, change_path):
+    from web_tools.source_tree import read_archive, replace_tree
+    from web_tools.publication import _activate_verified
+    root, change_path = Path(root), Path(change_path)
+    runtime = local_path(root, 'web_runtime')
     if not change_path.exists():
         return {'changed': False}
     change = json.loads(change_path.read_bytes())
     with publication_lock(runtime):
         current = read_pointer(runtime)
-        if current == change['before']:
-            if 'release_status_before' in change:
-                from web_tools.release_build import restore_status
-                restore_status(root, change['release_status_before'])
-            return {'changed': False}
-        if current != change['after']:
+        if current not in (change['before'], change['after']):
             raise ValueError('another UI publication followed this update; refusing to overwrite it')
-        # This pointer was captured before mutation. Original archives are retained.
-        for build_id in change['before'].values():
-            if build_id:
-                manifest_path(runtime, build_id)
-        atomic_write(local_path(runtime, 'active.json'), canonical(change['before']))
+        if 'source_backup' in change:
+            if change['source_backup'] != 'web-ui-before-sources.zip' or change.get('template_backup') != 'web-ui-before-template.json':
+                raise ValueError('invalid update source recovery files')
+            source_bytes = change_path.with_name('web-ui-before-sources.zip').read_bytes()
+            from web_tools.source_tree import inventory
+            from web_tools.editor_files import scan_sources
+            sources_before = read_archive(source_bytes)
+            original = inventory(sources_before)
+            actual = inventory(scan_sources(root / 'custom_web'))
+            after = change.get('sources_after', original)
+            if any(actual.get(name) not in (original.get(name), after.get(name))
+                   for name in set(actual) | set(original) | set(after)):
+                raise ValueError('working files changed after this update; refusing to discard those changes')
+            replace_tree(root / 'custom_web', sources_before)
+            atomic_write(runtime / 'source-template.json', change_path.with_name('web-ui-before-template.json').read_bytes())
+            prior = change['before']['current']
+            if prior and current != change['before']:
+                content = change_path.with_name('web-ui-before-package.zip').read_bytes()
+                trust = json.loads((runtime / 'identity.json').read_bytes())
+                signed, files = verify_package(content, trust)
+                if signed['manifest']['build_id'] != prior:
+                    raise ValueError('update recovery package does not match its saved publication')
+                stage = local_path(runtime, 'staging/' + prior, directory=True)
+                saved_proof = change_path.with_name('web-ui-before-source.json')
+                if saved_proof.exists():
+                    atomic_write(stage / 'source.json', saved_proof.read_bytes())
+                    atomic_write(stage / 'sources.zip', source_bytes)
+                _activate_verified(runtime, content, trust, signed, files)
+                atomic_write(local_path(runtime, 'publications/' + prior + '/sources.zip'), source_bytes)
+        atomic_write(runtime / 'active.json', canonical(change['before']))
         if 'release_status_before' in change:
             from web_tools.release_build import restore_status
             restore_status(root, change['release_status_before'])
-        return {'changed': True}
+        return {'changed': current != change['before']}
 
 
 def prepare_core_rollback(root, snapshot, target, change_path):
@@ -163,15 +213,15 @@ def prepare_core_rollback(root, snapshot, target, change_path):
     runtime = local_path(root, 'web_runtime')
     before = read_pointer(runtime)
     capabilities = target_capabilities(root, target)
+    from web_tools.paths import read_local_backup
+    try:
+        protected, _ = read_local_backup(snapshot)
+    except FileNotFoundError:
+        protected = {}
     saved = snapshot / 'web-ui-update.json'
     preferred = json.loads(saved.read_bytes())['pointer']['current'] if saved.exists() else None
     if preferred is None:
-        from web_tools.paths import read_local_backup
-        try:
-            files, _ = read_local_backup(snapshot)
-            preferred = json.loads(files.get('web_runtime/active.json', b'{}')).get('current')
-        except FileNotFoundError:
-            pass  # Older snapshots have no UI material.
+        preferred = json.loads(protected.get('web_runtime/active.json', b'{}')).get('current')
     if capabilities is None and preferred is None:
         # A pre-Web-Core target has no web listener; its ignored UI data stays.
         return {'changed': False, 'web_supported': False}
@@ -181,6 +231,16 @@ def prepare_core_rollback(root, snapshot, target, change_path):
             selected = publication(runtime, preferred, capabilities or current_capabilities())
         except (OSError, ValueError, KeyError, TypeError):
             selected = None
+        saved_package = snapshot / 'web-ui-before-package.zip'
+        snapshot_package = protected.get('web_runtime/publications/' + preferred + '/package.zip')
+        if snapshot_package is None and saved_package.is_file():
+            snapshot_package = saved_package.read_bytes()
+        if selected is None and snapshot_package is not None:
+            trust = json.loads(local_path(runtime, 'identity.json').read_bytes())
+            content = snapshot_package
+            signed, _ = verify_package(content, trust, **verification_versions(capabilities or current_capabilities()))
+            if signed['manifest']['build_id'] == preferred:
+                selected = signed, content, trust
     if selected is None and capabilities is not None:
         plan = preflight(root, capabilities)
         if plan['selected']:
@@ -193,7 +253,17 @@ def prepare_core_rollback(root, snapshot, target, change_path):
         return {'changed': False}
     signed, content, trust = selected
     next_id = signed['manifest']['build_id']
-    after = before if next_id == before['current'] else {'current': next_id, 'previous': before['current']}
+    # A core-update snapshot is independent of the expiring public-asset cache.
+    # Restore its source proof as well, so the restored core can open the editor.
+    stage = local_path(runtime, 'staging/' + next_id, directory=True)
+    prefix = 'web_runtime/publications/' + next_id + '/'
+    for name, fallback in (('source.json', 'web-ui-before-source.json'), ('sources.zip', 'web-ui-before-sources.zip')):
+        data = protected.get(prefix + name)
+        if data is None and next_id == preferred and (snapshot / fallback).is_file():
+            data = (snapshot / fallback).read_bytes()
+        if data is not None:
+            atomic_write(stage / name, data)
+    after = before if next_id == before['current'] else {'current': next_id, 'previous': None}
     atomic_write(change_path, canonical({'before': before, 'after': after}))
     activate(runtime, content, trust, expected_pointer=before,
              **verification_versions(capabilities or current_capabilities()))
@@ -205,6 +275,10 @@ def main():
     parser.add_argument('--root', type=Path, default=PROJECT_ROOT)
     actions = parser.add_subparsers(dest='action', required=True)
     actions.add_parser('ensure-base')
+    paths = actions.add_parser('check-paths')
+    path_mode = paths.add_mutually_exclusive_group(required=True)
+    path_mode.add_argument('--target')
+    path_mode.add_argument('--git-owner', action='store_true')
     check = actions.add_parser('preflight')
     check.add_argument('--target', required=True)
     check.add_argument('--save', type=Path, required=True)
@@ -219,6 +293,12 @@ def main():
     args = parser.parse_args()
     if args.action == 'ensure-base':
         result = ensure_base(args.root)
+    elif args.action == 'check-paths':
+        if args.git_owner:
+            require_permissions(args.root)
+        elif target_capabilities(args.root, args.target) is not None:
+            check_release_paths(args.root)
+        result = {'ok': True}
     elif args.action == 'preflight':
         modules = []
         if (args.root / 'database/vpn_bot.db').is_file():
@@ -226,8 +306,8 @@ def main():
             connection.DB_PATH = args.root / 'database/vpn_bot.db'
             modules = db.get_core_module_manifests().values()
         result = preflight(args.root, target_capabilities(args.root, args.target), modules=modules)
-        from web_tools.release_build import prepare_custom
-        result = prepare_custom(args.root, args.target, args.save.parent, result)
+        from web_tools.release_build import prepare_sources
+        result = prepare_sources(args.root, args.target, args.save.parent, result)
         atomic_write(args.save, canonical(result))
     elif args.action == 'upgrade':
         result = upgrade(args.root, args.plan)
@@ -239,4 +319,11 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except PathPermissionsError as error:
+        # The installed worker renders the structured stdout; stderr remains a full journal trace.
+        import traceback
+        print(json.dumps({'format_version': 1, 'code': 'ui_path_permissions', 'issues': error.issues}))
+        traceback.print_exc()
+        raise SystemExit(1)

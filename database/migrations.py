@@ -72,7 +72,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 125
+LATEST_VERSION = 126
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -3820,17 +3820,23 @@ def migration_114(conn: sqlite3.Connection) -> None:
 
 def _make_column_nullable(conn: sqlite3.Connection, table: str, column: str) -> None:
     """Preserve installed DDL, custom objects and identities during a SQLite rebuild."""
-    if (table, column) not in {('users', 'telegram_id'), ('vpn_keys', 'tariff_id'),
+    if (table, column) not in {('users', 'telegram_id'),
                              ('support_threads', 'user_telegram_id')}:
         raise ValueError('Unexpected nullable-column migration')
     columns = conn.execute(f'PRAGMA table_xinfo({table})').fetchall()
     if not next(row['notnull'] for row in columns if row['name'] == column):
         return
+    _rebuild_table(conn, table, lambda sql, temporary: _nullable_column_ddl(sql, column, temporary))
+
+
+def _rebuild_table(conn: sqlite3.Connection, table: str, transform) -> None:
+    """Change only requested DDL while retaining rows, custom objects and sequences."""
+    columns = conn.execute(f'PRAGMA table_xinfo({table})').fetchall()
     original = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,),
     ).fetchone()[0]
     temporary = '__web_core_' + table + '_' + uuid4().hex
-    ddl = _nullable_column_ddl(original, column, temporary)
+    ddl = transform(original, temporary)
     objects = conn.execute(
         "SELECT type, name, tbl_name, sql FROM sqlite_master "
         "WHERE sql IS NOT NULL AND (type IN ('view', 'trigger') OR "
@@ -3859,7 +3865,7 @@ def _make_column_nullable(conn: sqlite3.Connection, table: str, column: str) -> 
                     conn.execute(item['sql'])
         if sequence:
             conn.execute('UPDATE sqlite_sequence SET seq = ? WHERE name = ?', (sequence[0], table))
-        _assert_migration_database_integrity(conn, stage=f'after nullable {table}.{column}')
+        _assert_migration_database_integrity(conn, stage=f'after rebuilding {table}')
         conn.commit()
     except Exception:
         conn.rollback()
@@ -3935,38 +3941,6 @@ def migration_116(conn: sqlite3.Connection) -> None:
     )
     conn.executemany('INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)',
                      [('web_bot_id', ''), ('web_bot_username', '')])
-
-
-def migration_117(conn: sqlite3.Connection) -> None:
-    """Adopt complete panel groups without guessing their original tariff."""
-    _make_column_nullable(conn, 'vpn_keys', 'tariff_id')
-    statements = (
-        '''CREATE TABLE IF NOT EXISTS subscription_imports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL REFERENCES users(id),
-            endpoint TEXT NOT NULL, source_url TEXT NOT NULL,
-            created_at INTEGER NOT NULL
-        )''',
-        '''CREATE INDEX IF NOT EXISTS idx_subscription_import_owner
-            ON subscription_imports(user_id)''',
-        '''CREATE TABLE IF NOT EXISTS subscription_import_resources (
-            endpoint TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('email', 'sub_id')),
-            identity TEXT NOT NULL,
-            import_id INTEGER NOT NULL REFERENCES subscription_imports(id),
-            PRIMARY KEY(endpoint, kind, identity)
-        )''',
-        '''CREATE INDEX IF NOT EXISTS idx_subscription_import_resources_group
-            ON subscription_import_resources(import_id)''',
-        '''CREATE TABLE IF NOT EXISTS subscription_import_members (
-            import_id INTEGER NOT NULL REFERENCES subscription_imports(id),
-            email TEXT NOT NULL COLLATE NOCASE,
-            key_id INTEGER UNIQUE REFERENCES vpn_keys(id) ON DELETE SET NULL,
-            snapshot_json TEXT NOT NULL,
-            PRIMARY KEY(import_id, email)
-        )''',
-    )
-    for sql in statements:
-        conn.execute(sql)
 
 
 def migration_118(conn: sqlite3.Connection) -> None:
@@ -4122,6 +4096,24 @@ def migration_125(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM auth_rate_limits WHERE bucket LIKE 'sms:%' OR bucket LIKE 'sms_verify:%'")
 
 
+def migration_126(conn: sqlite3.Connection) -> None:
+    """Remove unpublished import bookkeeping and restore ordinary key constraints."""
+    def key_ddl(sql, temporary):
+        sql = re.sub(r'^(CREATE\s+TABLE\s+)(?:"[^"]+"|\w+)',
+                     lambda match: match[1] + '"' + temporary + '"', sql, count=1, flags=re.I)
+        if not next(row['notnull'] for row in conn.execute('PRAGMA table_info(vpn_keys)')
+                    if row['name'] == 'tariff_id'):
+            sql, count = re.subn(r'(\btariff_id\s+INTEGER)\b', r'\1 NOT NULL', sql, count=1, flags=re.I)
+            if count != 1:
+                raise RuntimeError('Missing ordinary key tariff column')
+        return re.sub(r'(\bmax_ips_override\s+BETWEEN\s+)1(\s+AND\s+999)',
+                      r'\g<1>0\2', sql, flags=re.I)
+
+    _rebuild_table(conn, 'vpn_keys', key_ddl)
+    for table in ('subscription_import_resources', 'subscription_import_members', 'subscription_imports'):
+        conn.execute(f'DROP TABLE IF EXISTS {table}')
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -4142,7 +4134,6 @@ MIGRATIONS = {
     114: migration_114,
     115: migration_115,
     116: migration_116,
-    117: migration_117,
     118: migration_118,
     119: migration_119,
     120: migration_120,
@@ -4151,6 +4142,7 @@ MIGRATIONS = {
     123: migration_123,
     124: migration_124,
     125: migration_125,
+    126: migration_126,
 }
 
 

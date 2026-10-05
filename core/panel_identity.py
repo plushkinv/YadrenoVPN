@@ -1,4 +1,4 @@
-"""Recover durable site-to-Telegram name changes in the existing scheduler."""
+"""Recover durable panel name changes in the existing scheduler."""
 from __future__ import annotations
 
 import json
@@ -62,15 +62,22 @@ async def process_panel_identity_renames(*, key_id: int | None = None) -> dict:
         if not acquired:
             stats['pending'] = len(operations)
             return stats
-        for operation in operations:
-            stats['seen'] += 1
-            try:
-                await _resume(operation)
-            except Exception as error:
-                code = error.code if isinstance(error, CoreError) else 'panel_unavailable'
-                db.defer_panel_identity_rename(operation['id'], code, int(time.time()))
-                logger.warning('Panel identity recovery deferred operation=%s code=%s', operation['id'], code)
-                stats['pending'] += 1
-            else:
-                stats['done'] += 1
+        stats = await resume_panel_identity_renames(operations)
+    return stats
+
+
+async def resume_panel_identity_renames(operations: list[dict]) -> dict:
+    """Run under the caller's exclusive panel coordinator scope."""
+    stats = {'seen': 0, 'done': 0, 'pending': 0}
+    for operation in operations:
+        stats['seen'] += 1
+        try:
+            await _resume(operation)
+        except Exception as error:
+            code = error.code if isinstance(error, CoreError) else 'panel_unavailable'
+            db.defer_panel_identity_rename(operation['id'], code, int(time.time()))
+            logger.warning('Panel identity recovery deferred operation=%s code=%s', operation['id'], code)
+            stats['pending'] += 1
+        else:
+            stats['done'] += 1
     return stats

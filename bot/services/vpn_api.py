@@ -391,7 +391,7 @@ def _base_traffic_limit_for_key(key: Dict[str, Any]) -> int:
 def get_key_limit_ip(key: Dict[str, Any]) -> int:
     override = key.get("max_ips_override")
     if override is not None:
-        return max(1, min(999, int(override)))
+        return max(0, min(999, int(override)))
     tariff_max_ips = key.get("tariff_max_ips")
     if tariff_max_ips is None and key.get("tariff_id"):
         from database.db_tariffs import get_tariff_by_id
@@ -412,7 +412,7 @@ def resolve_panel_client_limits(
         get_device_limit_mode,
     )
 
-    normalized_limit = max(1, min(999, int(limit_value or 1)))
+    normalized_limit = max(0, min(999, int(limit_value if limit_value is not None else 1)))
     effective_mode = mode or get_device_limit_mode()
     if effective_mode == DEVICE_LIMIT_MODE_HWID:
         return PanelClientLimits(limit_ip=0, limit_hwid=normalized_limit)
@@ -702,16 +702,6 @@ async def _ensure_subscription_keys_on_server_impl(
             stats["skipped"] = 1
             stats["ok"] = 1
             return stats
-        from database.requests import get_imported_key_binding
-        imported = get_imported_key_binding(int(key_id))
-        if imported and imported['preserve_terms']:
-            # Unknown historical terms belong to the panel until an explicit
-            # tariff purchase. A background pass must not reissue this access.
-            from bot.services.imported_access import sync_preserved_controls
-            return await sync_preserved_controls(key, imported, dry_run=dry_run)
-        if imported:
-            from bot.services.imported_access import sync_imported_entitlement
-            return await sync_imported_entitlement(key, imported, dry_run=dry_run, device_limit_mode=device_limit_mode)
         email = str(key["panel_email"])
         if not is_managed_key(key):
             stats["errors"] = 1
@@ -1026,10 +1016,8 @@ async def get_subscription_url_for_key(
         return None
     try:
         if key.get('id') is not None:
-            from database.requests import get_imported_key_binding
-            imported = get_imported_key_binding(int(key['id']))
-            if imported and imported['source_url']:
-                return imported['source_url']
+            from database.requests import assert_key_mutation_ready
+            assert_key_mutation_ready(int(key['id']))
         client = await get_client(int(server_id))
         return await client.get_subscription_link(str(sub_id))
     except Exception:

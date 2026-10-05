@@ -36,6 +36,7 @@ from bot.keyboards.admin import (
     bot_settings_kb,
     device_limit_mode_kb,
     extensions_diagnostics_kb,
+    extensions_details_kb,
     update_confirm_kb,
     update_rollback_entry_kb,
     update_rollback_points_kb,
@@ -68,9 +69,11 @@ from bot.states.admin_states import AdminStates
 from database.requests import (
     DEVICE_LIMIT_MODE_HWID,
     DEVICE_LIMIT_MODE_IP,
+    YADRENO_ADMIN_CORE_CHANGES_ENABLED_SETTING,
     get_active_servers,
     get_device_limit_mode,
     get_yadreno_admin_api_key,
+    is_yadreno_admin_core_changes_enabled,
     set_device_limit_mode,
     set_setting,
 )
@@ -271,13 +274,50 @@ async def set_device_limit_mode_handler(callback: CallbackQuery, state: FSMConte
 
 @router.callback_query(F.data == "admin_extensions_diagnostics")
 async def show_extensions_diagnostics(callback: CallbackQuery, state: FSMContext):
-    """Shows diagnostics and loader controls for custom extensions."""
+    """Show the extension summary and its administrator controls."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
     await _render_extensions_diagnostics_screen(callback.message)
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_extensions_details")
+async def show_extensions_details(callback: CallbackQuery, state: FSMContext):
+    """Read fresh diagnostics on both entry and refresh."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    from bot.utils.custom_extensions import get_custom_extensions_diagnostics
+
+    await safe_edit_or_send(
+        callback.message,
+        _format_extensions_details(get_custom_extensions_diagnostics()),
+        reply_markup=extensions_details_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.in_({
+    "admin_extensions_core_guard_set:0", "admin_extensions_core_guard_set:1",
+}))
+async def set_extensions_core_guard(callback: CallbackQuery, state: FSMContext):
+    """Explicitly set the prohibition using the existing inverse permission flag."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    core_edit_blocked = callback.data.rsplit(':', 1)[1] == '1'
+    set_setting(YADRENO_ADMIN_CORE_CHANGES_ENABLED_SETTING, '0' if core_edit_blocked else '1')
+    logger.info(
+        "Core editing prohibition %s by admin %s",
+        'enabled' if core_edit_blocked else 'disabled',
+        callback.from_user.id,
+    )
+    await _render_extensions_diagnostics_screen(callback.message)
+    await callback.answer("Настройка сохранена. Перезапуск не требуется.")
 
 
 @router.callback_query(F.data.in_({"admin_extensions_set:0", "admin_extensions_set:1"}))
@@ -301,21 +341,24 @@ async def set_extensions_loading(callback: CallbackQuery, state: FSMContext):
 
 
 async def _render_extensions_diagnostics_screen(message: Message) -> None:
-    """Renders the current custom extension diagnostics in one message."""
+    """Render a compact summary and both effective configuration states."""
     from bot.utils.custom_extensions import get_custom_extensions_diagnostics
 
     diagnostics = get_custom_extensions_diagnostics()
+    core_edit_blocked = not is_yadreno_admin_core_changes_enabled()
     await safe_edit_or_send(
         message,
-        _format_extensions_diagnostics(diagnostics),
+        _format_extensions_diagnostics(diagnostics, core_edit_blocked=core_edit_blocked),
         reply_markup=extensions_diagnostics_kb(
             bool(diagnostics.get('enabled')),
             _extension_settings_menu_buttons(diagnostics),
+            core_edit_blocked=core_edit_blocked,
         ),
     )
 
 
-def _format_extensions_diagnostics(diagnostics: dict) -> str:
+def _format_extensions_diagnostics(diagnostics: dict, *, core_edit_blocked: bool = True) -> str:
+    """Format only the loader summary and current core editing prohibition."""
     enabled = bool(diagnostics.get('enabled'))
     status_icon = '🟢' if enabled else '⚪'
     directory = Path(str(diagnostics.get('directory') or 'custom_extensions'))
@@ -344,7 +387,19 @@ def _format_extensions_diagnostics(diagnostics: dict) -> str:
         f"<b>Последняя загрузка:</b> {escape_html(reason_label) if skipped else 'выполнена'}",
         f"<b>Файлы:</b> {len(files)} всего, {candidates} к загрузке, {invalid} с ошибкой имени, {ignored} приватных",
         f"<b>Итог:</b> {len(loaded)} загружено, {len(failed)} с ошибками",
+        "",
+        "<b>Запрет редактирования ядра:</b> "
+        + ('🟢 включён' if core_edit_blocked else '⚪ выключен'),
     ]
+    return "\n".join(lines)
+
+
+def _format_extensions_details(diagnostics: dict) -> str:
+    """Format the bounded diagnostic lists without changing their contents."""
+    lines = ["📋 <b>Подробности расширений</b>"]
+    last_load = diagnostics.get('last_load') or {}
+    loaded = list(last_load.get('loaded') or [])
+    failed = dict(last_load.get('failed') or {})
 
     if loaded:
         lines.extend(["", "<b>Загружены:</b>"])
@@ -1209,7 +1264,7 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
     if has_blocking and blocking_commit:
         await safe_edit_or_send(callback.message, 
             "🔄 <b>Обновление...</b>\n\n"
-            f"Проверяю БД перед версией <code>{blocking_commit['hash'][:8]}</code>..."
+            f"Проверяю права файлов и БД перед версией <code>{blocking_commit['hash'][:8]}</code>..."
         )
         target = blocking_commit['hash']
         strategy = "reset"
@@ -1217,7 +1272,7 @@ async def update_bot_confirmed(callback: CallbackQuery, state: FSMContext):
     else:
         await safe_edit_or_send(callback.message, 
             "🔄 <b>Обновление...</b>\n\n"
-            "Проверяю базу данных и подготавливаю обновление..."
+            "Проверяю права файлов, базу данных и подготавливаю обновление..."
         )
         target = f"origin/{get_current_branch() or 'main'}"
         strategy = "pull"

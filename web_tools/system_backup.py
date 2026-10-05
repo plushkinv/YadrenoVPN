@@ -10,7 +10,7 @@ import stat
 import zipfile
 from pathlib import Path
 
-from web_tools.paths import atomic_write, canonical, local_path, read_local_backup
+from web_tools.paths import atomic_write, canonical, local_path, private_directory, read_local_backup
 from web_tools.setup_paths import account_directory, certificate_name, marker, owned_paths, renewal_profile
 
 CERT_FILES = ('cert.pem', 'chain.pem', 'fullchain.pem', 'privkey.pem')
@@ -160,7 +160,7 @@ def restore_system(source, root, *, system_root=Path('/'), check_only=False):
                      mode=0o600 if name.startswith('certbot') else 0o644)
     for name, link in links.items():
         target = _target(name, owned, certificate, account, system_root)
-        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        private_directory(target.parent)
         if not target.is_symlink():
             target.symlink_to(link)
     return {'restored_system_files': len(contents) + len(links), 'services_started': False, 'https_revalidation_required': True}

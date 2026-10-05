@@ -31,5 +31,7 @@ async def bind(account, key_id, host_id, idempotency_key):
         with bind_account_context(replace(account, operation_id=operation['id'])):
             result = await bind_key_subscription(host_key_id=host_id, component_key_id=key_id,
                                                 source_namespace=CORE_GROUP_PARENT_SOURCE, owner_user_id=account.account_id)
+            if result.get('error_code') == 'component_already_bound':
+                result = {'ok': True, 'status': 'already_bound', 'applied': False, 'already_applied': True}
             db.finish_module_operation(account.account_id, operation['id'], result)
             return {'operation_id': operation['id'], **result}

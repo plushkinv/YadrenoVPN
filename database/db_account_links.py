@@ -100,18 +100,8 @@ def finish_account_link(*, token_hash: str, session_hash: str, bot_id: int, tele
                                 row['telegram_last_name'], row['user_id'])).rowcount
         if changed != 1:
             raise CoreError('link_conflict')
-        prefix = f"site_{row['user_id']}_"
-        keys = conn.execute('SELECT id, server_id, panel_email, sub_id FROM vpn_keys WHERE user_id = ? '
-                            'AND server_id IS NOT NULL', (row['user_id'],)).fetchall()
-        count = 0
-        for key in keys:
-            if not key['panel_email'].startswith(prefix):
-                continue
-            conn.execute('INSERT INTO panel_identity_renames(key_id, user_id, server_id, old_email, '
-                         'new_email, sub_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                         (key['id'], row['user_id'], key['server_id'], key['panel_email'],
-                          f"user_{telegram_id}_" + key['panel_email'][len(prefix):], key['sub_id'], now))
-            count += 1
+        from .db_panel_identity import _enqueue_telegram_panel_renames
+        count = _enqueue_telegram_panel_renames(conn, row['user_id'], telegram_id, now)
         conn.execute("UPDATE account_link_requests SET state = 'completed', completed_at = ? WHERE token_hash = ?",
                      (now, token_hash))
         return {'account_id': row['user_id'], 'telegram_id': telegram_id, 'pending_renames': count}

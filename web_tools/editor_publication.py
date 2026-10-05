@@ -1,219 +1,185 @@
-"""Promote an admitted task's exact UI artifact without touching business data.
-
-Task intent follows the existing customization apply contract. This internal
-adapter enforces source/publication CAS and uses the existing signed publisher.
-Its small write-ahead record recovers interrupted source promotion before another
-editor operation or startup; it is not an agent job or a second publication store.
-"""
+"""Publish an exact checked source snapshot, or restore sources and rebuild it."""
 from __future__ import annotations
 
 import json
 import re
+import shutil
+import uuid
 from pathlib import Path
 
 from web_tools.compatibility import current_capabilities
 from web_tools.editor_files import read_regular, remove_regular, scan_sources, write_regular
 from web_tools.editor_workspace import EditorWorkspace, StaleRevision
+from web_tools.errors import WebSourceError
 from web_tools.paths import canonical, local_path, publication_lock
 from web_tools.publication import _activate_verified, read_pointer
 from web_tools.release import publication
+from web_tools.source_tree import archive_bytes, fingerprint, read_archive, replace_tree, restore_source
 
 JOURNAL = 'editor-activation.json'
 RECEIPT = 'publication.json'
 LAST = 'editor-publication.json'
 
 
-def _live(root):
-    folder = local_path(root, 'custom_web')
-    return scan_sources(folder) if folder.exists() else None
-
-
-def _replace_sources(root, before, after):
-    """Change only captured frontend files; preserve ignored local directories."""
-    folder = local_path(root, 'custom_web')
-    actual = _live(root)
-    if any((actual or {}).get(name) not in ((before or {}).get(name), (after or {}).get(name))
-           for name in set(actual or {}) | set(before or {}) | set(after or {})):
-        raise StaleRevision('UI sources changed during publication recovery')
-    if after is not None:
-        folder.mkdir(mode=0o700, exist_ok=True)
-    for name in sorted(set(actual or {}) - set(after or {}), reverse=True):
-        remove_regular(folder, name)
-        parent = local_path(folder, name).parent
-        while parent != folder:
-            try:
-                parent.rmdir()
-            except OSError:
-                break
-            parent = parent.parent
-    for name, data in (after or {}).items():
-        if (actual or {}).get(name) != data:
-            write_regular(folder, name, data)
-    if after is None and folder.exists():
-        # Never recursively delete untracked/ignored installation material.
-        folder.rmdir()
-    if _live(root) != after:
-        raise StaleRevision('UI source promotion did not complete')
-
-
 def _record(workspace):
-    try:
-        return json.loads(read_regular(workspace._folder, RECEIPT, maximum=8192))
-    except FileNotFoundError:
-        return None
+    path = workspace._folder / RECEIPT
+    return json.loads(read_regular(workspace._folder, RECEIPT, maximum=8192)) if path.exists() else None
 
 
-def _finish(workspace, journal):
-    write_regular(workspace._folder, RECEIPT, canonical(journal))
-    write_regular(workspace._project / 'web_runtime', LAST, canonical(journal))
-    remove_regular(workspace._project / 'web_runtime', JOURNAL)
-
-
-def _recover_locked(root, journal):
-    if (not isinstance(journal, dict) or set(journal) != {
-            'format_version', 'task_id', 'operation', 'before', 'after', 'source_revision', 'revision', 'build_id'}
-            or journal['format_version'] != 1 or journal['operation'] not in {'publish', 'rollback'}
-            or not isinstance(journal['task_id'], str) or not re.fullmatch(r'[a-f0-9]{32}', journal['task_id'])):
-        raise ValueError('invalid editor publication recovery record')
-    workspace = EditorWorkspace.open(root, local_path(root, 'web_runtime/editor_tasks/' + journal['task_id']))
-    with workspace._locked():
-        state, draft, revision = workspace._snapshot()
-        if state['source_revision'] != journal['source_revision'] or revision != journal['revision']:
-            raise StaleRevision('editor sources changed during publication recovery')
-        baseline = scan_sources(workspace._baseline) if state['source_revision']['custom'] is not None else None
-        before, after = (baseline, draft) if journal['operation'] == 'publish' else (draft, baseline)
-        runtime = local_path(root, 'web_runtime')
-        pointer = read_pointer(runtime)
-        if pointer == journal['after']:
-            publication(runtime, pointer['current'], current_capabilities())
-            if _live(root) != after:
-                raise StaleRevision('published UI sources changed')
-            _finish(workspace, journal)
-        elif pointer == journal['before']:
-            _replace_sources(root, after, before)
-            remove_regular(runtime, JOURNAL)
-        else:
-            raise StaleRevision('another publication followed the interrupted editor operation')
-
-
-def recover(root):
-    """Resolve only a durable, installation-owned interrupted UI operation."""
-    root = Path(root)
-    runtime = local_path(root, 'web_runtime')
-    if not local_path(runtime, JOURNAL).exists():
-        return
-    with publication_lock(runtime):
-        try:
-            journal = json.loads(read_regular(runtime, JOURNAL, maximum=8192))
-        except FileNotFoundError:
-            return
-        _recover_locked(root, journal)
+def _projection(pointer, receipt):
+    return {'current_build_id': pointer['current'], 'previous_build_id': None,
+            'task_operation': receipt['operation'] if receipt else None,
+            'task_build_id': receipt['build_id'] if receipt else None,
+            'task_is_current': bool(receipt and pointer == receipt['after'])}
 
 
 def inspect(workspace):
-    """Report actual activation, including recovery after a lost tool response."""
     recover(workspace._project)
-    with workspace._locked():
-        receipt = _record(workspace)
-        pointer = read_pointer(workspace._project / 'web_runtime')
-        return {'current_build_id': pointer['current'], 'previous_build_id': pointer['previous'],
-                'task_operation': receipt['operation'] if receipt else None,
-                'task_build_id': receipt['build_id'] if receipt else None,
-                'task_is_current': bool(receipt and pointer == receipt['after'])}
+    return _projection(read_pointer(workspace._project / 'web_runtime'), _record(workspace))
 
 
-def undo(workspace, *, expected_revision, build_id, authorize):
-    """A later shared turn can undo the last exact editor publication it viewed."""
-    root = workspace._project
+def _finish(workspace, journal):
+    runtime = workspace._project / 'web_runtime'
+    write_regular(workspace._folder, RECEIPT, canonical(journal))
+    write_regular(runtime, LAST, canonical(journal))
+    remove_regular(runtime, JOURNAL)
+    (runtime / 'editor-before.zip').unlink(missing_ok=True)
+
+
+def recover(root):
+    """Resolve a single write-ahead activation; do not adopt unrelated source edits."""
+    root = Path(root)
     runtime = local_path(root, 'web_runtime')
-    recover(root)
-    with workspace._locked():
-        state, files, revision = workspace._snapshot()
-        workspace._require_current(state, revision, expected_revision)
-    last = json.loads(read_regular(runtime, LAST, maximum=8192))
-    task_id = last.get('task_id')
-    if (not isinstance(task_id, str) or not re.fullmatch(r'[a-f0-9]{32}', task_id)
-            or last.get('build_id') != build_id):
-        raise StaleRevision('the selected editor publication is no longer current')
-    original = EditorWorkspace.open(root, local_path(root, 'web_runtime/editor_tasks/' + task_id))
-    with original._locked():
-        if _record(original) != last or files != scan_sources(original._custom):
-            raise StaleRevision('another draft must not be discarded by UI rollback')
-    result = apply(original, expected_revision=last['revision'], build_id=build_id,
-                   base_build_id=(last['before']['current'] if last['operation'] == 'publish' else last['after']['current']),
-                   rollback=True, authorize=authorize)
-    if original._task != workspace._task:
-        # Associate the outcome with the requesting turn without copying sources.
-        with workspace._locked():
-            write_regular(workspace._folder, RECEIPT, read_regular(original._folder, RECEIPT, maximum=8192))
-    return result
-
-
-def apply(workspace, *, expected_revision, build_id, base_build_id, rollback=False, authorize):
-    """An explicit existing apply call is required; build/preview never call here."""
-    root = workspace._project
-    runtime = local_path(root, 'web_runtime')
-    recover(root)
-    # Read-only validations precede both live changes. No model-supplied receipt,
-    # filesystem root, permission flag or alternative signer is accepted.
-    with workspace._locked(), publication_lock(runtime):
-        state, draft, revision = workspace._snapshot()
-        workspace._require_current(state, revision, expected_revision)
-        candidate, signed, files, content = workspace._read_candidate(state, revision)
-        if candidate['build_id'] != build_id:
-            raise StaleRevision('candidate changed after inspection')
-        baseline = scan_sources(workspace._baseline) if state['source_revision']['custom'] is not None else None
+    if not (runtime / JOURNAL).exists():
+        return
+    with publication_lock(runtime / 'source-lock'), publication_lock(runtime):
+        if not (runtime / JOURNAL).exists():
+            return
+        value = json.loads(read_regular(runtime, JOURNAL, maximum=8192))
+        if value.get('format_version') == 1:
+            from web_tools.source_transition import recover_legacy
+            recover_legacy(root, value)
+            return
+        if value.get('format_version') != 2 or not re.fullmatch(r'[a-f0-9]{32}', value.get('task_id', '')):
+            raise ValueError('invalid publication recovery metadata')
+        workspace = EditorWorkspace.open(root, runtime / 'editor_tasks' / value['task_id'])
+        before = read_archive(read_regular(runtime, 'editor-before.zip'))
+        stage = local_path(runtime, 'staging/' + value['build_id'])
+        after = read_archive(read_regular(stage, 'sources.zip'))
+        actual = scan_sources(workspace._custom)
+        if any(actual.get(name) not in (before.get(name), after.get(name)) for name in set(before) | set(after) | set(actual)):
+            raise StaleRevision('Working files were changed outside the interrupted publication.')
         pointer = read_pointer(runtime)
-        receipt = _record(workspace)
-        operation = 'rollback' if rollback else 'publish'
-        authorize()
-        if (receipt and receipt['operation'] == operation and receipt['build_id'] == build_id
-                and receipt['revision'] == revision and pointer == receipt['after']):
-            if _live(root) != (baseline if rollback else draft):
-                raise StaleRevision('UI sources changed after publication')
+        if pointer == value['after']:
             publication(runtime, pointer['current'], current_capabilities())
-            return {**inspect_locked(pointer, receipt), 'changed': False}
-        if rollback:
-            if (not receipt or receipt['operation'] != 'publish' or receipt['build_id'] != build_id
-                    or receipt['revision'] != revision or pointer != receipt['after']
-                    or pointer['previous'] != base_build_id):
-                raise StaleRevision('only the unchanged task publication can be rolled back')
-            signed, content, _ = publication(runtime, pointer['previous'], current_capabilities())
-            from web_tools.package import verify_package
-            trust = json.loads(read_regular(runtime, 'identity.json', maximum=4096))
-            signed, files = verify_package(content, trust)
-            before, after = draft, baseline
+            replace_tree(workspace._custom, after)
+            _finish(workspace, value)
+        elif pointer == value['before']:
+            replace_tree(workspace._custom, before)
+            remove_regular(runtime, JOURNAL)
+            (runtime / 'editor-before.zip').unlink(missing_ok=True)
         else:
-            if receipt or pointer['current'] != base_build_id:
-                raise StaleRevision('UI publication changed since task capture')
-            before, after = baseline, draft
-        if _live(root) != before:
-            raise StaleRevision('live custom sources changed since task capture')
-        next_id = signed['manifest']['build_id']
-        journal = {'format_version': 1, 'task_id': workspace._task.name, 'operation': operation,
-                   'before': pointer, 'after': {'current': next_id, 'previous': pointer['current']},
-                   'source_revision': state['source_revision'], 'revision': revision, 'build_id': build_id}
-        trust = json.loads(read_regular(runtime, 'identity.json', maximum=4096))
+            raise StaleRevision('Another publication followed the interrupted operation.')
+
+
+def _activate(workspace, bundle, *, before_sources, after_sources, base_build_id, operation, authorize):
+    """Caller holds the source lock; pointer commit also selects its source archive."""
+    runtime = workspace._project / 'web_runtime'
+    candidate, signed, files, content = bundle
+    with publication_lock(runtime):
+        pointer = read_pointer(runtime)
+        if pointer['current'] == candidate['build_id']:
+            return {**_projection(pointer, _record(workspace)), 'changed': False}
+        receipt = _record(workspace)
+        if pointer['current'] != base_build_id and not (receipt and receipt['after'] == pointer):
+            raise StaleRevision('The live publication changed. Inspect web.publication before applying this candidate.')
+        if scan_sources(workspace._custom) != before_sources:
+            raise StaleRevision('Working sources changed before activation.')
+        authorize()
+        journal = {'format_version': 2, 'task_id': workspace._task.name, 'operation': operation,
+                   'before': pointer, 'after': {'current': candidate['build_id'], 'previous': None},
+                   'revision': fingerprint(after_sources), 'build_id': candidate['build_id']}
+        write_regular(runtime, 'editor-before.zip', archive_bytes(before_sources))
         write_regular(runtime, JOURNAL, canonical(journal))
         try:
-            _replace_sources(root, before, after)
+            replace_tree(workspace._custom, after_sources)
             authorize()
+            trust = json.loads(read_regular(runtime, 'identity.json', maximum=4096))
             _activate_verified(runtime, content, trust, signed, files)
-            # Read back the actual retained artifact and pointer before reporting.
-            publication(runtime, next_id, current_capabilities())
-            if read_pointer(runtime) != journal['after']:
-                raise StaleRevision('UI publication changed during activation')
+            publication(runtime, candidate['build_id'], current_capabilities())
             _finish(workspace, journal)
         except BaseException:
-            # The journal remains on an ambiguous result. Recovery distinguishes
-            # completed pointer activation from a failed source-only promotion.
             if read_pointer(runtime) == pointer:
-                _replace_sources(root, after, before)
+                replace_tree(workspace._custom, before_sources)
                 remove_regular(runtime, JOURNAL)
+                (runtime / 'editor-before.zip').unlink(missing_ok=True)
             raise
-        return {**inspect_locked(journal['after'], journal), 'changed': True}
+    return {**_projection(journal['after'], journal), 'changed': True}
 
 
-def inspect_locked(pointer, receipt):
-    return {'current_build_id': pointer['current'], 'previous_build_id': pointer['previous'],
-            'task_operation': receipt['operation'], 'task_build_id': receipt['build_id'], 'task_is_current': True}
+def apply(workspace, *, build_id, base_build_id, authorize):
+    recover(workspace._project)
+    with workspace._locked():
+        _, sources, revision = workspace._snapshot()
+        bundle = workspace._read_candidate(None, revision)
+        if bundle[0]['build_id'] != build_id:
+            checked_id = bundle[0]['build_id']
+            raise WebSourceError('web_candidate_mismatch',
+                                 f'This build_id does not identify the checked candidate {checked_id}.',
+                                 next_action=f'Use web.publish with build_id="{checked_id}" to apply this candidate. '
+                                 'No rebuild is needed while the working files remain unchanged.')
+        return _activate(workspace, bundle, before_sources=sources, after_sources=sources,
+                         base_build_id=base_build_id, operation='publish', authorize=authorize)
+
+
+def restore(workspace, *, source, publish, base_build_id, authorize):
+    """Preview-only restore never activates. Published restore builds before changing files."""
+    recover(workspace._project)
+    with workspace._locked():
+        before = scan_sources(workspace._custom)
+        pointer = read_pointer(workspace._project / 'web_runtime')
+        after = restore_source(workspace._project, source)
+        authorize()
+        if not publish:
+            try:
+                replace_tree(workspace._custom, after)
+                if source == 'published':
+                    # Reuse the verified live package after resetting its exact
+                    # sources; this receipt does not activate a publication.
+                    write_regular(workspace._folder, RECEIPT, canonical({
+                        'format_version': 2, 'task_id': workspace._task.name, 'operation': 'restore',
+                        'before': pointer, 'after': pointer, 'revision': fingerprint(after),
+                        'build_id': pointer['current'],
+                    }))
+            except BaseException:
+                replace_tree(workspace._custom, before)
+                raise
+            (workspace._folder / 'candidate.json').unlink(missing_ok=True)
+            return {'changed': before != after, 'publication_changed': False,
+                    'source': source, 'revision': fingerprint(after)}
+        from web_tools.build import build
+        from web_tools.compiler_sandbox import compile_isolated
+        folder = local_path(workspace._folder, 'restore-' + uuid.uuid4().hex, directory=True)
+        candidate_path = workspace._folder / 'candidate.json'
+        previous_candidate = candidate_path.read_bytes() if candidate_path.exists() else None
+        try:
+            replace_tree(folder, after)
+            candidate = build(workspace._project, workspace._project / 'web_runtime', folder,
+                              compiler=compile_isolated)
+            # Record only after the full build succeeds. Exact package checks do
+            # not depend on the temporary source directory surviving.
+            workspace.record_candidate(candidate, fingerprint(after))
+            bundle = workspace._read_candidate(None, fingerprint(after))
+            result = _activate(workspace, bundle, before_sources=before, after_sources=after,
+                               base_build_id=base_build_id, operation='restore', authorize=authorize)
+            return {**result, 'publication_changed': result['changed']}
+        except BaseException:
+            if not (workspace._project / 'web_runtime' / JOURNAL).exists():
+                if previous_candidate is None:
+                    candidate_path.unlink(missing_ok=True)
+                else:
+                    write_regular(workspace._folder, candidate_path.name, previous_candidate)
+            raise
+        finally:
+            if folder.resolve().is_relative_to(workspace._folder.resolve()):
+                shutil.rmtree(folder)

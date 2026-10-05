@@ -15,7 +15,7 @@ window.addEventListener('message', event => {
   if (window.parent === window || event.source !== window.parent || event.origin !== new URL(document.baseURI).origin) return;
   const message = event.data as PreviewMessage;
   if (message?.type !== 'yadreno.preview' || message.context?.contract_version !== 1 || !message.installation?.settings) return;
-  location.hash = message.context.route;
+  history.replaceState(null, '', '#' + message.context.route);
   root.render(<App key={JSON.stringify(message.context)} environment={environment} transport={new PreviewApi(message.installation, message.context)} preview />);
 });
 window.parent.postMessage({ type: 'yadreno.preview.ready' }, '*');

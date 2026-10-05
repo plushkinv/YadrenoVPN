@@ -1,6 +1,4 @@
 """Private administrator settings; never exposed through the user facade."""
-from core.results import CoreError
-from database import requests as db
 
 
 def web_diagnostics(application=None):
@@ -43,12 +41,3 @@ def ui_publication_status():
         return result
     except (OSError, ValueError, KeyError, TypeError):
         return {'state': 'unavailable'}
-
-
-def set_module_enabled(module_id, enabled):
-    from core.extensions.registry import MODULES, MANIFESTS
-    from runtime.readiness import require_active
-    require_active()
-    if type(enabled) is not bool or module_id not in set(MODULES) | set(MANIFESTS):
-        raise CoreError('module_not_found')
-    db.set_setting('core_module_enabled.' + module_id, '1' if enabled else '0')

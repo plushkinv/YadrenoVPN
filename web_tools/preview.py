@@ -16,7 +16,7 @@ def preview(stage, trust, port=5176):
     base = '/ui/versions/' + manifest['build_id'] + '/'
     # No installation credentials, accounts or network mutations are available.
     message = {'type': 'yadreno.preview', 'installation': {
-        'settings': {'title': 'Локальный просмотр', 'logo': None, 'preset': 'clear', 'theme': 'light', 'accent': None, 'sync_interval_seconds': 300},
+        'settings': {'title': 'Локальный просмотр', 'logo': None, 'preset': 'clear', 'theme': 'light', 'sync_interval_seconds': 300},
         'captured_at': 0, 'currency': 'RUB', 'features': {'subscriptions': True, 'subscription_import': True}, 'tariffs': [], 'trial_offers': [], 'modules': []},
         'context': {'contract_version': 1, 'route': 'home', 'scenario': 'active', 'preset': 'clear', 'theme': 'light',
             'ui_version': manifest['build_id'], 'customization_version': manifest['customization_version']}}

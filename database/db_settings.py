@@ -39,6 +39,7 @@ __all__ = [
     'get_yadreno_admin_server_ip',
     'set_yadreno_admin_server_ip',
     'delete_yadreno_admin_server_ip',
+    'YADRENO_ADMIN_CORE_CHANGES_ENABLED_SETTING',
     'is_yadreno_admin_core_changes_enabled',
     'get_yadreno_admin_active_request_id',
     'set_yadreno_admin_active_request_id',
@@ -365,7 +366,7 @@ def delete_yadreno_admin_server_ip() -> bool:
 
 
 def is_yadreno_admin_core_changes_enabled() -> bool:
-    """Return the hidden flag that allows core/source changes via Yadreno Admin."""
+    """Return whether customization agents may change core/source files."""
     return get_setting(YADRENO_ADMIN_CORE_CHANGES_ENABLED_SETTING, '0') == '1'
 
 

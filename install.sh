@@ -53,6 +53,12 @@ print_err() {
     echo -e "${RED}[✗]${NC} $1"
 }
 
+# Limit permissions only in the child that creates checked-out source paths.
+write_git_tree() (
+    umask 077
+    git "$@"
+)
+
 # Resolve an already fetched target and emit only its immutable commit hash.
 resolve_install_target() {
     local requested_target="${1:-}"
@@ -317,7 +323,7 @@ recover_legacy_tracked_service_file() {
     if [ "$legacy_cleanup" -ne 1 ]; then
         return 0
     fi
-    if ! git -C "$INSTALL_DIR" checkout -- "$legacy_unit"; then
+    if ! write_git_tree -C "$INSTALL_DIR" checkout -- "$legacy_unit"; then
         print_err "Не удалось восстановить удалённый старым установщиком шаблон службы"
         return 1
     fi
@@ -463,7 +469,7 @@ do_install() {
 
     # Клонирование репозитория
     print_header "Загрузка Yadreno VPN"
-    git clone --branch main "$REPO_URL" "$INSTALL_DIR" -q
+    write_git_tree clone --branch main "$REPO_URL" "$INSTALL_DIR" -q
     cd "$INSTALL_DIR"
     print_ok "Репозиторий клонирован"
 
@@ -471,7 +477,7 @@ do_install() {
     if ! target=$(resolve_install_target); then
         return 1
     fi
-    if ! git reset --hard "$target" -q; then
+    if ! write_git_tree reset --hard "$target" -q; then
         print_err "Не удалось выбрать стабильную версию для установки"
         return 1
     fi
@@ -519,7 +525,20 @@ do_soft_update() {
     # The downloaded installer may run against an older installed updater.
     # Resolve the marked stage here as well so that version cannot skip the
     # first blocking commit before the target code takes over this policy.
-    if ! git fetch -q origin; then
+    local fetch_error
+    if ! fetch_error=$(git fetch -q origin 2>&1); then
+        printf '%s\n' "$fetch_error"
+        if [[ "$fetch_error" == *"detected dubious ownership"* ]] && \
+            [ -f "$INSTALL_DIR/web_tools/permissions.py" ] && [ -x "$VENV_DIR/bin/python" ]; then
+            "$VENV_DIR/bin/python" -B - <<'PY'
+from pathlib import Path
+from bot.services.update_rollback import UpdateRollbackError, _web_release_command
+try:
+    _web_release_command(Path.cwd(), 'check-paths', '--git-owner')
+except UpdateRollbackError as error:
+    print('Обновление не началось: ' + str(error))
+PY
+        fi
         print_err "Не удалось получить список обновлений с GitHub"
         return 1
     fi
@@ -632,7 +651,7 @@ do_hard_reset() {
         return 1
     fi
 
-    if ! git reset --hard "$target" -q; then
+    if ! write_git_tree reset --hard "$target" -q; then
         print_err "Не удалось перезаписать Git-версию"
         systemctl start yadreno-vpn || true
         release_update_operation_lock

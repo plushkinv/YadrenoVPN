@@ -26,15 +26,18 @@ export interface Tariff {
 }
 export interface Catalog { purpose: string; subscription_id: number | null; tariffs: Tariff[]; groups: { id: number; name: string }[]; }
 export interface Subscription {
-  id: number; name: string | null; tariff_id: number | null; tariff_name: string | null; tariff_known: boolean;
+  id: number; name: string | null; tariff_id: number; tariff_name: string | null;
   server_id: number | null; server_name: string | null; expires_at: string | null; created_at: string | null;
-  state: string; access_status: string; imported: boolean;
+  state: string; access_status: string;
   traffic: { used_bytes: number | null; limit_bytes: number | null; known: boolean; updated_at: string | null; source: string };
   devices_available: boolean; actions: Record<string, { allowed: boolean; reason: string | null }>;
   pending_operations: { id: string; kind: string; created_at: number }[];
   servers: { id: number; name: string }[];
 }
 export interface Page<T> { items: T[]; limit: number; offset: number; }
+export interface SubscriptionImportResult {
+  state: 'select_group' | 'pending' | 'completed'; key_ids: number[]; groups: { id: number; name: string }[];
+}
 export interface TrialOffer {
   eligible: boolean; reason: string | null; scope: string;
   offer: { offer_id: number; tariff_name: string | null; duration_days: number | null; traffic_limit_gb: number | null } | null;
@@ -52,8 +55,13 @@ export interface Order {
   charge_amount?: string | null; charge_currency?: string | null; subscription_id?: number | null;
   access_status: string | null; payment_url?: string | null; presentation?: string;
 }
-export interface Operation { operation_id: string; key_id?: number; state?: string; ok?: boolean; reason?: string; result?: { state?: string; error?: string } | null; }
+export interface Composition { ok: boolean; status: string; error_code?: string | null; }
+export interface Operation {
+  operation_id: string; key_id?: number; state?: string; ok?: boolean; reason?: string;
+  composition?: Composition | null;
+  result?: { state?: string; error?: string; composition?: Composition } | null;
+}
 export interface UiSettings {
   title: string; logo: string | null; preset: 'clear' | 'signal' | 'friendly'; theme: 'light' | 'dark';
-  accent: string | null; sync_interval_seconds: number;
+  sync_interval_seconds: number;
 }

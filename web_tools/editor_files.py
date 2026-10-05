@@ -13,29 +13,37 @@ from pathlib import Path
 
 from web_tools.package import MAX_BYTES, MAX_FILES
 from web_tools.paths import CUSTOM_SOURCE_IGNORED, atomic_write, local_path, relative_name
+from web_tools.errors import WebSourceError
+from web_tools.permissions import require_permissions
 
-TEXT_EXTENSIONS = frozenset({'.ts', '.tsx', '.js', '.jsx', '.mjs', '.css', '.json', '.html'})
+TEXT_EXTENSIONS = frozenset({'.ts', '.tsx', '.js', '.jsx', '.mjs', '.css', '.json', '.html', '.md', '.txt'})
 ASSET_EXTENSIONS = frozenset({'.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.ico', '.woff2'})
 
 
 def source_name(name):
-    name = relative_name(name, hidden=True)
+    try:
+        name = relative_name(name, hidden=True)
+    except ValueError as error:
+        raise WebSourceError('web_source_path_invalid', str(error), file=name,
+                             next_action='Use an exact path relative to custom_web, with forward slashes and no parent traversal.') from error
     parts = name.split('/')
     if (any(part in CUSTOM_SOURCE_IGNORED or part.lower() == '.env'
             or part.lower().startswith('.env.') for part in parts)
             or Path(name).suffix not in TEXT_EXTENSIONS | ASSET_EXTENSIONS):
-        raise ValueError('unsupported editor source file')
+        raise WebSourceError('web_source_file_unsupported', 'Unsupported working-source file.', file=name,
+                             next_action='Keep secrets, databases and archives outside custom_web. '
+                             'Use a supported source or asset extension: ' + ', '.join(sorted(TEXT_EXTENSIONS | ASSET_EXTENSIONS)) + '.')
     return name
 
 
-def checked_info(info, *, directory=False, private=False):
+def checked_info(info, *, directory=False, private=False, path=None):
     if (stat.S_ISLNK(info.st_mode)
             or getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)
             or not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
             or not directory and info.st_nlink != 1):
         raise ValueError('editor paths require regular files and directories without links')
-    if os.name != 'nt' and (info.st_uid != os.getuid() or info.st_mode & (0o077 if private else 0o022)):
-        raise ValueError('editor files require private administrator ownership')
+    require_permissions(path or '<editor>', info, private=private,
+                        message='editor files require private administrator ownership')
     return info
 
 
@@ -47,7 +55,7 @@ def checked_directory(path, *, private=False):
         if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
                 or getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
             raise ValueError('editor directory must not contain links')
-    checked_info(path.lstat(), directory=True, private=private)
+    checked_info(path.lstat(), directory=True, private=private, path=path)
     return path.resolve(strict=True)
 
 
@@ -71,7 +79,7 @@ def directory_handle(root, relative='', *, create=False):
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
-        checked_info(os.fstat(descriptor), directory=True)
+        checked_info(os.fstat(descriptor), directory=True, path=root)
         current = root
         for part in parts:
             if create:
@@ -82,7 +90,7 @@ def directory_handle(root, relative='', *, create=False):
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
-            checked_info(os.fstat(descriptor), directory=True)
+            checked_info(os.fstat(descriptor), directory=True, path=current / part)
             current = current / part
         yield current, descriptor
     finally:
@@ -94,18 +102,18 @@ def read_regular(root, name, *, maximum=MAX_BYTES):
     parent, _, leaf = name.rpartition('/')
     with directory_handle(root, parent) as (folder, descriptor):
         before = checked_info(os.stat(leaf, dir_fd=descriptor, follow_symlinks=False)
-                              if descriptor is not None else (folder / leaf).lstat())
+                              if descriptor is not None else (folder / leaf).lstat(), path=folder / leaf)
         if before.st_size > maximum:
             raise ValueError('editor file exceeds resource limits')
         flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
                  | getattr(os, 'O_BINARY', 0))
         file_descriptor = os.open(leaf, flags, dir_fd=descriptor) if descriptor is not None else os.open(folder / leaf, flags)
         with os.fdopen(file_descriptor, 'rb') as stream:
-            opened = checked_info(os.fstat(stream.fileno()))
+            opened = checked_info(os.fstat(stream.fileno()), path=folder / leaf)
             if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
                 raise ValueError('editor file changed while opening')
             content = stream.read(maximum + 1)
-            after = checked_info(os.fstat(stream.fileno()))
+            after = checked_info(os.fstat(stream.fileno()), path=folder / leaf)
             if (len(content) > maximum or after.st_size != len(content)
                     or (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
                     != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
@@ -129,13 +137,13 @@ def scan_sources(root):
                     name = '/'.join(filter(None, (relative, entry.name)))
                     info = entry.stat(follow_symlinks=False)
                     if stat.S_ISDIR(info.st_mode):
-                        checked_info(info, directory=True)
+                        checked_info(info, directory=True, path=folder / entry.name)
                         directories += 1
                         if directories > MAX_FILES:
                             raise ValueError('editor tree exceeds resource limits')
                         pending.append(name)
                     else:
-                        checked_info(info)
+                        checked_info(info, path=folder / entry.name)
                         source_name(name)
                         if len(files) >= MAX_FILES:
                             raise ValueError('editor tree exceeds resource limits')
@@ -152,7 +160,7 @@ def write_regular(root, name, content):
     with directory_handle(root, parent, create=True) as (folder, descriptor):
         try:
             checked_info(os.stat(leaf, dir_fd=descriptor, follow_symlinks=False)
-                         if descriptor is not None else (folder / leaf).lstat())
+                         if descriptor is not None else (folder / leaf).lstat(), path=folder / leaf)
         except FileNotFoundError:
             pass
         if descriptor is None:
@@ -180,7 +188,7 @@ def remove_regular(root, name):
     parent, _, leaf = name.rpartition('/')
     with directory_handle(root, parent) as (folder, descriptor):
         checked_info(os.stat(leaf, dir_fd=descriptor, follow_symlinks=False)
-                     if descriptor is not None else (folder / leaf).lstat())
+                     if descriptor is not None else (folder / leaf).lstat(), path=folder / leaf)
         if descriptor is None:
             (folder / leaf).unlink()
         else:

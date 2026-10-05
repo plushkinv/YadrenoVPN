@@ -38,13 +38,8 @@ def is_managed_panel_email(email: object) -> bool:
 
 
 def is_managed_panel_binding(server_id: int | None, email: object) -> bool:
-    """Keep the legacy prefix contract and admit only explicitly claimed foreign names."""
-    if is_managed_panel_email(email):
-        return True
-    if server_id is None or not isinstance(email, str) or not email:
-        return False
-    from database.requests import is_imported_panel_binding
-    return is_imported_panel_binding(int(server_id), email)
+    """The prefix is mandatory on every logical server."""
+    return is_managed_panel_email(email)
 
 
 def is_managed_key(key) -> bool:

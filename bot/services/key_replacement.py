@@ -1,6 +1,4 @@
 """Recoverable candidate-first replacement shared by authenticated adapters."""
-from urllib.parse import quote
-
 from core.results import CoreError
 from database import requests as db
 
@@ -11,7 +9,6 @@ def _binding(key):
 
 async def replace_key(account, operation, key):
     from bot.services import vpn_api
-    from bot.services.panels.identity import inspect_client_identity, _record_payload
     from bot.utils.panel_email import generate_unique_panel_email, is_managed_key
     from core.panel_identity import physical_panel_key
     import uuid
@@ -44,30 +41,13 @@ async def replace_key(account, operation, key):
         if _binding(key) != progress['old']:
             raise CoreError('panel_identity_changed')
         traffic = int(key.get('traffic_used') or 0)
-        imported = db.get_imported_key_binding(key_id)
-        preserved = None
         if progress['old']['server_id'] and progress['old_active'] and progress['old_managed']:
             old_client = await vpn_api.get_client(progress['old']['server_id'])
-            if imported and imported['preserve_terms']:
-                preserved = await inspect_client_identity(old_client, progress['old']['email'])
-                original = imported['snapshot']['record']
-                if any(preserved['record'].get(field) != original.get(field) for field in ('id', 'uuid', 'password', 'subId')):
-                    raise CoreError('panel_identity_changed')
-                traffic = old_client._traffic_used(await old_client.get_client_stats(progress['old']['email']))
-                if traffic is None:
-                    raise CoreError('panel_traffic_unavailable', retryable=True)
-                key = {**key, 'traffic_limit': int(preserved['record'].get('totalGB') or 0)}
-                from datetime import datetime, timezone
-                expiry = int(preserved['record'].get('expiryTime') or 0)
-                key['expires_at'] = datetime.fromtimestamp(expiry / 1000, timezone.utc).strftime('%Y-%m-%d %H:%M:%S') if expiry > 0 else None
-            elif int(key.get('traffic_limit') or 0) > 0:
+            if int(key.get('traffic_limit') or 0) > 0:
                 snapshot = await vpn_api.get_key_traffic_snapshot(old_client, key)
                 if not snapshot:
                     raise CoreError('panel_traffic_unavailable', retryable=True)
                 traffic = snapshot['traffic_used']
-        elif imported and imported['preserve_terms']:
-            # Current foreign terms cannot be guessed from a stale initial snapshot.
-            raise CoreError('panel_unavailable', retryable=True)
         key = {**key, 'traffic_used': traffic}
         if not db.is_key_active(key) or db.is_traffic_exhausted(key):
             raise CoreError('action_unavailable')
@@ -81,47 +61,22 @@ async def replace_key(account, operation, key):
         existing_candidate = await panel._get_client_record(target['email'])
         if existing_candidate and panel._split_record(existing_candidate)[0].get('subId') != target['sub_id']:
             raise CoreError('panel_identity_changed')
-        record = preserved['record'] if preserved else {}
         # Persist before the first external write, including an unknown response.
         progress['candidate_started'] = True
         db.save_key_operation_progress(account.account_id, operation['id'], progress)
         candidate = await vpn_api.provision_client_on_server(
             server_id=target['server_id'], email=target['email'], sub_id=target['sub_id'],
             total_gb_bytes=progress['remaining_bytes'],
-            expiry_time_ms=int(record.get('expiryTime') or 0) if preserved else vpn_api.get_key_expiry_time_ms(key),
-            limit_ip=int(record.get('limitIp') or 0) if preserved else limits.limit_ip,
-            limit_hwid=int(record.get('limitHwid') or 0) if preserved else limits.limit_hwid,
-            enable=bool(record.get('enable', True)) and not key.get('is_banned'),
+            expiry_time_ms=vpn_api.get_key_expiry_time_ms(key),
+            limit_ip=limits.limit_ip,
+            limit_hwid=limits.limit_hwid,
+            enable=not key.get('is_banned'),
             tg_id=str(account.telegram_id) if account.telegram_id is not None else '', client=panel)
         if not candidate.attached_inbound_ids or candidate.sub_id != target['sub_id']:
             raise CoreError('panel_provisioning_pending', retryable=True)
         progress['repair_needed'] = not candidate.complete
         db.save_key_operation_progress(account.account_id, operation['id'], progress)
-        active_snapshot = None
-        if imported:
-            active_snapshot = await inspect_client_identity(panel, target['email'])
-            if preserved:
-                # Keep all existing non-identity restrictions when rotating credentials.
-                identity_fields = ('id', 'uuid', 'password', 'auth', 'secret', 'privateKey', 'publicKey',
-                                   'preSharedKey', 'email', 'subId', 'tgId', 'created_at', 'updated_at')
-                merged = {**{field: value for field, value in record.items() if field not in identity_fields},
-                          **{field: active_snapshot['record'][field] for field in identity_fields
-                                      if field in active_snapshot['record']}, 'totalGB': progress['remaining_bytes'],
-                          'enable': bool(record.get('enable', True)) and not key.get('is_banned')}
-                await panel._request('POST', '/panel/api/clients/update/' + quote(target['email'], safe=''),
-                                     data=_record_payload(merged, target['email']), retry=False)
-                active_snapshot = await inspect_client_identity(panel, target['email'])
-                for field in ('expiryTime', 'limitIp', 'limitHwid', 'enable', 'reset', 'resetDay', 'resetMax',
-                              'trafficReset', 'trafficResetDay', 'allowedIPs'):
-                    expected = merged.get(field)
-                    if active_snapshot['record'].get(field) != expected:
-                        raise CoreError('panel_terms_not_preserved', retryable=True)
-            if progress['repair_needed']:
-                # Imported limits are opaque to the ordinary materializer.
-                # Retrying the same candidate completes its target placements.
-                raise CoreError('panel_provisioning_pending', retryable=True)
-            active_snapshot['endpoint'] = physical_panel_key(db.get_server_by_id(target['server_id']))
-        db.switch_key_operation_binding(account.account_id, operation['id'], imported_snapshot=active_snapshot)
+        db.switch_key_operation_binding(account.account_id, operation['id'])
         progress['phase'] = 'switched'
         from bot.services.subscription_composition import schedule_key_subscription_reconciles
         schedule_key_subscription_reconciles(key_id=key_id)

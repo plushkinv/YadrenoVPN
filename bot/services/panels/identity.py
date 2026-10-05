@@ -69,6 +69,9 @@ def _verify_placements(expected, current, names):
         if observed.get('email') not in names:
             raise CoreError('panel_identity_changed')
         for field in _CREDENTIALS + _TERMS:
+            if field == 'expiryTime' and 'expiry_time_ms' in expected:
+                if observed.get(field) in (original.get(field), expected['expiry_time_ms']):
+                    continue
             if original.get(field) != observed.get(field):
                 raise CoreError('panel_identity_changed')
 
@@ -98,7 +101,10 @@ async def rename_client_identity(client, old_email: str, new_email: str, expecte
         endpoint = '/panel/api/clients/update/' + quote(source, safe='')
         if ids:
             endpoint += '?' + urlencode({'inboundIds': ','.join(map(str, ids))})
-        await client._request('POST', endpoint, data=_record_payload(record, target), retry=False)
+        payload = _record_payload(record, target)
+        if 'expiry_time_ms' in expected_identity:
+            payload['expiryTime'] = expected_identity['expiry_time_ms']
+        await client._request('POST', endpoint, data=payload, retry=False)
 
     if canonical_name == new_email and old_ids:
         # Newer panels select by email. Restore only the changed placements,
@@ -108,8 +114,16 @@ async def rename_client_identity(client, old_email: str, new_email: str, expecte
         old_ids += new_ids
     if canonical_name == old_email:
         await update(old_email, new_email, old_ids)
+    elif 'expiry_time_ms' in expected_identity and (
+            record.get('expiryTime') != expected_identity['expiry_time_ms'] or
+            any(item['client'].get('expiryTime') != expected_identity['expiry_time_ms'] for item in placements)):
+        await update(new_email, new_email, new_ids)
     verified = await inspect_client_identity(client, new_email)
     _verify_placements(expected_identity, verified['placements'], {new_email})
+    if 'expiry_time_ms' in expected_identity and (
+            verified['record'].get('expiryTime') != expected_identity['expiry_time_ms'] or
+            any(item['client'].get('expiryTime') != expected_identity['expiry_time_ms'] for item in verified['placements'])):
+        raise CoreError('panel_identity_changed')
     if await client._get_client_record(old_email):
         raise CoreError('panel_identity_ambiguous')
     return verified

@@ -1,11 +1,11 @@
-"""Account-owned import: validate a URL identifier, inspect, then atomically claim."""
+"""Attach a panel subscription by renaming its clients into ordinary account keys."""
 from __future__ import annotations
 
 import time
 from urllib.parse import unquote, urlsplit
 
 from core.context import AccountContext
-from core.panel_identity import physical_panel_key
+from core.panel_identity import physical_panel_key, resume_panel_identity_renames
 from core.results import CoreError
 from database import requests as db
 from runtime.readiness import require_active
@@ -58,11 +58,62 @@ async def _matching_sub_id(client, value: str) -> str | None:
     return None
 
 
-async def import_subscription(context: AccountContext, subscription_url: str) -> dict:
+async def _group_candidates(endpoint, members):
+    from bot.services.vpn_api import get_client_from_server_data
+    servers = [server for server in db.get_all_servers()
+               if server['is_active'] and physical_panel_key(server) == endpoint]
+    placements = [{item['inbound_id'] for item in member['placements']} for member in members]
+    scoped = {}
+    for server in servers:
+        inbounds = await get_client_from_server_data(server).get_inbounds(include_ignored=True)
+        scoped[server['id']] = {int(item['id']) for item in inbounds}
+    result = {}
+    for group in db.get_all_groups():
+        available = [server for server in servers if group['id'] in db.get_server_group_ids(server['id'])]
+        selected = []
+        for ids in placements:
+            matching = [server for server in available if ids and ids <= scoped[server['id']]]
+            if not matching:
+                break
+            selected.append(min(matching, key=lambda server: (len(scoped[server['id']]), server['id'])))
+        if len(selected) == len(members) and db.get_admin_custom_tariff(group['id']):
+            result[group['id']] = {'id': group['id'], 'name': group['name'], 'servers': selected}
+    return result
+
+
+def _validate_members(snapshot):
+    """Only accept terms representable by the ordinary key model."""
+    if len(snapshot['sub_ids']) != 1:
+        raise CoreError('subscription_ambiguous')
+    mode = db.get_device_limit_mode()
+    field = 'limitHwid' if mode == db.DEVICE_LIMIT_MODE_HWID else 'limitIp'
+    for member in snapshot['members']:
+        record = member['record']
+        limit = int(record.get(field) or 0)
+        if not 0 <= limit <= 999 or int(record.get('totalGB') or 0) < 0 or member['traffic_used'] < 0:
+            raise CoreError('subscription_ambiguous')
+        if not member['placements'] or any(
+                any(item['client'].get(name, 0) != record.get(name, 0)
+                    for name in ('subId', 'expiryTime', 'totalGB', 'limitIp', 'limitHwid'))
+                for item in member['placements']):
+            raise CoreError('subscription_ambiguous')
+        member['device_limit'] = limit
+
+
+def _owned_keys(user_id, endpoint, sub_ids, names=()):
+    keys = db.get_panel_subscription_keys(endpoint, sub_ids, names)
+    if any(key['user_id'] != user_id for key in keys):
+        raise CoreError('subscription_owned')
+    return keys
+
+
+async def import_subscription(context: AccountContext, subscription_url: str, group_id: int | None = None) -> dict:
     require_active()
     if not isinstance(context, AccountContext):
         raise CoreError('authentication_required')
     _url(subscription_url)
+    if group_id is not None and (type(group_id) is not int or group_id <= 0):
+        raise CoreError('invalid_request')
     user = db.get_user_by_id(context.account_id)
     if not user or user['is_banned']:
         raise CoreError('account_unavailable')
@@ -95,7 +146,35 @@ async def import_subscription(context: AccountContext, subscription_url: str) ->
         if len(matches) != 1:
             raise CoreError('subscription_ambiguous')
         endpoint, server, client, sub_id = matches[0]
+        existing = _owned_keys(context.account_id, endpoint, [sub_id])
+        if group_id is not None and any(key['group_id'] != group_id for key in existing):
+            raise CoreError('subscription_group_unavailable')
+        pending = [operation for key in existing if (operation := db.get_pending_panel_identity(key['id']))]
+        if pending:
+            await resume_panel_identity_renames(pending)
+            if any(db.get_pending_panel_identity(key['id']) for key in existing):
+                return {'state': 'pending', 'key_ids': sorted(key['id'] for key in existing), 'groups': []}
         snapshot = await inspect_subscription_group(client, sub_id)
-        return db.claim_panel_subscription(user_id=context.account_id, endpoint=endpoint,
-                                          server_id=server['id'], source_url=subscription_url,
-                                          snapshot=snapshot, now=int(time.time()))
+        _validate_members(snapshot)
+        members = snapshot['members']
+        existing = _owned_keys(context.account_id, endpoint, snapshot['sub_ids'],
+                               [member['record']['email'] for member in members])
+        if existing and group_id is None:
+            groups = {key['group_id'] for key in existing}
+            if len(groups) != 1:
+                raise CoreError('subscription_ambiguous')
+            group_id = groups.pop()
+        candidates = await _group_candidates(endpoint, members)
+        if not candidates or group_id is not None and group_id not in candidates:
+            raise CoreError('subscription_group_unavailable')
+        if group_id is None and len(candidates) > 1:
+            return {'state': 'select_group', 'key_ids': [],
+                    'groups': [{'id': item['id'], 'name': item['name']} for item in candidates.values()]}
+        selected = candidates[group_id] if group_id is not None else next(iter(candidates.values()))
+        key_ids = db.bind_panel_subscription(user_id=context.account_id, endpoint=endpoint,
+                                            group_id=selected['id'], members=members,
+                                            servers=selected['servers'], now=int(time.time()))
+        operations = [operation for key_id in key_ids if (operation := db.get_pending_panel_identity(key_id))]
+        await resume_panel_identity_renames(operations)
+        state = 'pending' if any(db.get_pending_panel_identity(key_id) for key_id in key_ids) else 'completed'
+        return {'state': state, 'key_ids': key_ids, 'groups': []}

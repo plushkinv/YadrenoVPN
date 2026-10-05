@@ -100,11 +100,12 @@ async def accept_managed_update() -> None:
 def start_background_tasks(bot: Any) -> list[asyncio.Task]:
     from bot.services.scheduler import run_daily_tasks, run_update_check_scheduler, run_traffic_sync_scheduler
     from bot.services.payment_auto_check import run_payment_auto_check_scheduler
+    from core.bot_profile import run_profile_refresh
 
     readiness.require_active()
     return [asyncio.create_task(worker(bot), name=worker.__name__) for worker in (
         run_daily_tasks, run_update_check_scheduler,
-        run_traffic_sync_scheduler, run_payment_auto_check_scheduler,
+        run_traffic_sync_scheduler, run_payment_auto_check_scheduler, run_profile_refresh,
     )]
 
 

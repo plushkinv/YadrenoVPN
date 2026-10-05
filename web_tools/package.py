@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 from web_tools.paths import atomic_write, canonical, local_path, relative_name
 from web_tools.compatibility import bounds, check_requirements
+from web_tools.permissions import require_permissions
 
 MAX_FILES = 2000
 MAX_BYTES = 64 * 1024 * 1024
@@ -53,8 +54,8 @@ def signing_identity(runtime):
         atomic_write(key_path, key.private_bytes_raw())
         atomic_write(identity_path, canonical(identity))
     else:
-        if os.name != 'nt' and (key_path.stat().st_uid != os.getuid() or key_path.stat().st_mode & 0o077):
-            raise ValueError('signing key must be owned by the invoking administrator with private permissions')
+        require_permissions(key_path, private=True,
+                            message='signing key must be owned by the invoking administrator with private permissions')
         key = Ed25519PrivateKey.from_private_bytes(key_path.read_bytes())
         identity = _json(identity_path.read_bytes())
         public = key.public_key().public_bytes_raw()
