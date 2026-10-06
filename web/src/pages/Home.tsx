@@ -38,7 +38,7 @@ export function Home({ state, subscription, hasMultiple, client, onSubscriptions
     {state === 'expired' && <p className="state-hint">{ru.expiredCaption}</p>}
     {state === 'traffic' && <p className="state-hint">{ru.trafficCaption}</p>}
     {devices && <p className="state-hint">{ru.devicesCaption}</p>}
-    <Button className="wide main-action" disabled={connecting} onClick={action} data-ui="home.connect.primary">{label}{renewal || devices || !canConnect ? <ArrowRight size={20} aria-hidden="true" /> : <ArrowUpRight size={20} aria-hidden="true" />}</Button>
+    <Button className="wide main-action" disabled={connecting && !renewal && !devices && canConnect} onClick={action} data-ui="home.connect.primary">{label}{renewal || devices || !canConnect ? <ArrowRight size={20} aria-hidden="true" /> : <ArrowUpRight size={20} aria-hidden="true" />}</Button>
     {canConnect && !renewal && !devices && <><RowButton data-ui="home.client.change" icon={<Smartphone size={21} aria-hidden="true" />} title={client.name} caption={ru.client} onClick={onClient} />
       <Button tone="secondary" className="wide" onClick={onGuide}>{ru.connectionHelp}<ArrowRight size={20} aria-hidden="true" /></Button></>}
     {!canConnect && <Button tone="secondary" className="wide separated" onClick={onRetry}>{ru.refresh}</Button>}

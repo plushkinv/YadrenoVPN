@@ -23,7 +23,7 @@ declare global { interface Window { Telegram?: { WebApp?: TelegramApp }; Yadreno
 export interface Environment {
   kind: 'browser' | 'telegram' | 'native'; initData?: string; native?: NativeBridge; initialTheme?: 'light' | 'dark';
   copy: (value: string) => Promise<boolean>; share: (url: string) => Promise<boolean>;
-  openLink: (url: string) => void; importSubscription: (client: string, url: string) => Promise<boolean>;
+  openLink: (url: string) => void; importSubscription: (client: string, url: string, importUrl?: string) => Promise<boolean>;
   payment: (url: string, presentation?: string) => Promise<void>;
   back: (visible: boolean, listener: () => void) => () => void;
   observe?: (listener: (theme?: 'light' | 'dark') => void) => () => void;
@@ -84,14 +84,26 @@ export function createEnvironment(hostIntegration = true): Environment {
       else if (tg) tg.openLink(url.href);
       else window.open(url.href, '_blank', 'noopener,noreferrer');
     },
-    importSubscription: async (client, url) => {
+    importSubscription: async (client, url, importUrl) => {
       // Existing panels can expose HTTP subscription links. The interface must
       // preserve that core result when importing into an external/native client.
       externalUrl(url, ['http:', 'https:']);
       if (native) { await native.importSubscription(url); return true; }
       const scheme = clients.find(item => item.id === client)?.scheme;
       if (!scheme) return false;
-      location.href = scheme(url);
+      if (importUrl) {
+        const target = externalUrl(importUrl);
+        if (target.origin !== location.origin || target.pathname !== '/open-client') throw new ApiError('invalid_request');
+        const parameters = new URLSearchParams(target.hash.slice(1));
+        parameters.set('client', client);
+        target.hash = parameters.toString();
+        if (tg) tg.openLink(target.href);
+        else window.open(target.href, '_blank', 'noopener,noreferrer');
+        return false;
+      }
+      // Keep the released two-argument contract for saved source customizations
+      // and older cores. Current stock UI supplies the signed HTTPS handoff.
+      window.open(scheme(url), '_blank', 'noopener,noreferrer');
       // Dispatch only: the web platform cannot confirm an installed app or tunnel.
       return false;
     },

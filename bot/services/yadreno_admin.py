@@ -21,6 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
+from bot.knowledge_version import KNOWLEDGE_VERSION
 from bot.services.yadreno_admin_broadcast_context import (
     BroadcastRuntimeContextError,
     build_broadcast_runtime_context,
@@ -97,6 +98,7 @@ PROGRESS_EVENTS_CAPABILITY = "progress_events"
 BROADCAST_EDITOR_CAPABILITY = "broadcast_editor_v1"
 RICH_MESSAGES_CAPABILITY = "rich_messages_v1"
 RUNTIME_CONTEXT_CAPABILITY = "runtime_context_v1"
+KNOWLEDGE_VERSION_CAPABILITY = "knowledge_version_v1"
 CUSTOMIZATION_TOOLS_CAPABILITY = "customization_tools_v2"
 CUSTOMIZATION_TOOLS_V3_CAPABILITY = "customization_tools_v3"
 YADRENO_ADMIN_TELEGRAM_HTML_TASK_FORMAT = "telegram_html"
@@ -253,7 +255,7 @@ def _capabilities_for_skill(
     customization_tools_v3_supported: bool = False,
 ) -> list[str]:
     """Advertise optional capabilities only inside their isolated skills."""
-    capabilities = list(SATELLITE_CAPABILITIES)
+    capabilities = [*SATELLITE_CAPABILITIES, KNOWLEDGE_VERSION_CAPABILITY]
     if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
         capabilities.append(BROADCAST_EDITOR_CAPABILITY)
     if runtime_context_supported:
@@ -1318,21 +1320,31 @@ async def _negotiate_runtime_context_support(
     _raise_for_capability_status(data)
     capabilities = data.get("capabilities")
     allowed_skills = data.get("allowed_skill_ids")
-    supported = bool(
+    valid_peer = bool(
         data.get("protocol_version") == SATELLITE_PROTOCOL_VERSION
         and data.get("satellite_type") == YADRENO_ADMIN_SATELLITE_TYPE
         and isinstance(capabilities, list)
-        and RUNTIME_CONTEXT_CAPABILITY in capabilities
         and isinstance(allowed_skills, list)
         and skill_id in allowed_skills
     )
-    if supported and negotiated_capabilities is not None:
+    if valid_peer and negotiated_capabilities is not None:
         negotiated_capabilities.update(
             item for item in capabilities if isinstance(item, str)
         )
+    supported = valid_peer and RUNTIME_CONTEXT_CAPABILITY in capabilities
     if skill_id == YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID and not supported:
         raise _incompatible_customization_hub("capability response mismatch")
     return supported
+
+
+def _require_knowledge_version_support(capabilities: set[str]) -> None:
+    """Never silently route a versioned request through an older Hub."""
+    if KNOWLEDGE_VERSION_CAPABILITY not in capabilities:
+        raise YadrenoAdminError(
+            "Hub lacks knowledge_version_v1",
+            user_message="Hub не поддерживает выбор версии БЗ. Обратитесь к администратору Hub для обновления.",
+            kind="protocol",
+        )
 
 
 def _validate_specialized_hub_response(data: dict[str, Any], skill_id: str) -> None:
@@ -1535,7 +1547,7 @@ async def _execute_shell(
 
 async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
     """Write a concrete file or apply one fully validated context-edit batch."""
-    from bot.services.yadreno_admin_file_edits import edit_files
+    from bot.services.yadreno_admin_file_edits import edit_files, invalid_edits
     from web_tools.errors import WebSourceError, failure
     from web_tools.paths import atomic_write, publication_lock
 
@@ -1544,14 +1556,19 @@ async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
         with publication_lock(PROJECT_ROOT / 'web_runtime/source-lock'):
             if 'edits' in args:
                 if set(args) != {'edits'}:
-                    raise WebSourceError('file_edits_invalid', 'Use either edits or path plus content, not both.',
-                                         next_action='Remove unrelated arguments and retry the same batch.')
+                    fields = ', '.join(f'arguments.{key}' for key in args if key != 'edits')
+                    raise invalid_edits(f'arguments.edits cannot be combined with {fields}; '
+                                        'use only edits or only path plus content.')
                 return edit_files(args['edits'], _resolve_tool_path)
             raw_path = str(args.get('path', '')).strip()
             content = args.get('content', '')
             if not raw_path or not isinstance(content, str):
-                raise WebSourceError('file_write_invalid', 'A path and UTF-8 text content are required.',
-                                     next_action='Supply path and content, or an edits array.')
+                reason = ('arguments.path must be a nonempty file path.' if not raw_path else
+                          'arguments.content must be a string containing the complete file contents.')
+                raise WebSourceError('file_write_invalid', reason + ' No files were changed.',
+                                     next_action='Correct the indicated argument and retry. Use '
+                                                 '{"path":"file.txt","content":"complete file text"}; '
+                                                 'content replaces the entire file. Use edits for fragment changes.')
             path = _resolve_tool_path(raw_path)
             previous = path.read_bytes() if path.is_file() else None
             atomic_write(path, content.encode('utf-8'), mode=path.stat().st_mode & 0o777 if path.is_file() else 0o600)
@@ -2300,6 +2317,7 @@ async def run_dialog(
             effective_skill_id,
             negotiated_capabilities,
         )
+        _require_knowledge_version_support(negotiated_capabilities)
         if topic_id == YADRENO_ADMIN_WEB_TOPIC_ID and (
             not runtime_context_supported or CUSTOMIZATION_TOOLS_V3_CAPABILITY not in negotiated_capabilities
         ):
@@ -2333,6 +2351,7 @@ async def run_dialog(
         )
         payload: dict[str, Any] = {
             "message": agent_message,
+            "knowledge_version": KNOWLEDGE_VERSION,
             "server_ip": server_ip,
             "topic_id": topic_id,
             "skill_id": effective_skill_id,
@@ -2442,6 +2461,7 @@ async def run_dialog_with_uploads(
             effective_skill_id,
             negotiated_capabilities,
         )
+        _require_knowledge_version_support(negotiated_capabilities)
         if topic_id == YADRENO_ADMIN_WEB_TOPIC_ID and (
             not runtime_context_supported or CUSTOMIZATION_TOOLS_V3_CAPABILITY not in negotiated_capabilities
         ):
@@ -2488,6 +2508,7 @@ async def run_dialog_with_uploads(
         )
         fields: dict[str, str | int] = {
             "message": agent_message,
+            "knowledge_version": KNOWLEDGE_VERSION,
             "topic_id": topic_id,
             "server_ip": server_ip,
             "skill_id": effective_skill_id,

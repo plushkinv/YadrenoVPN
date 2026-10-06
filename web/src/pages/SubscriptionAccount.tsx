@@ -1,5 +1,5 @@
 import { ArrowUpRight, History, Pencil, RefreshCw, Settings2, Trash2 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Operation, Page, Subscription, TrialOffer } from '../api/contracts';
 import { mutationKey } from '../api/client';
 import { Badge, Button, Dialog, PageHeading, RowButton } from '../components/Ui';
@@ -34,16 +34,31 @@ function useClientChoice() {
   } };
 }
 
-function useClientImport(client: (typeof clients)[number]) {
-  const { api, environment } = useApp();
+function useClientImport(client: (typeof clients)[number], id: string | number | null) {
+  const { api, environment, session, revision } = useApp();
   const action = useAction();
   const [notice, setNotice] = useState<string>();
-  return { ...action, notice, add: (id: string | number) => action.run(async () => {
+  const [retry, setRetry] = useState(0);
+  const binding = useMemo(() => ({ api, id }), [api, id, session?.account_id, revision, retry]);
+  const [result, setResult] = useState<{ binding: typeof binding; data?: { url: string; client_import_url?: string }; error?: unknown }>();
+  // Prepare owned access before the click, without persisting the secret. A new
+  // subscription/account/refresh invalidates it immediately, even before effects.
+  useEffect(() => {
+    let active = true;
+    if (binding.id !== null) binding.api.request<{ url: string; client_import_url?: string }>('/subscriptions/' + encodeURIComponent(binding.id) + '/access').then(
+      data => { if (active) setResult({ binding, data }); },
+      error => { if (active) setResult({ binding, error }); },
+    );
+    return () => { active = false; };
+  }, [binding]);
+  const current = result?.binding === binding ? result : undefined;
+  const access = { data: current?.data, error: current?.error, loading: id !== null && !current, retry: () => setRetry(value => value + 1) };
+  return { ...action, access, notice, add: () => action.run(async () => {
     setNotice(undefined);
-    // Both entrypoints request current owned access at the time of the click.
-    const access = await api.request<{ url: string }>('/subscriptions/' + encodeURIComponent(id) + '/access');
-    if (client.scheme) await environment.importSubscription(client.id, access.url);
-    else setNotice(await environment.copy(access.url) ? ru.copied : ru.copyFailed);
+    if (!access.data) return;
+    // The HTTPS handoff must open in the click's call stack, without a new read.
+    if (client.scheme) await environment.importSubscription(client.id, access.data.url, access.data.client_import_url);
+    else setNotice(await environment.copy(access.data.url) ? ru.copied : ru.copyFailed);
   }) };
 }
 
@@ -57,7 +72,8 @@ function HomeAccountContent() {
   const state = useSelectedSubscription();
   const { selected } = state;
   const { client, select } = useClientChoice();
-  const clientImport = useClientImport(client);
+  const canConnect = selected?.access_status === 'ready' && selected.state !== 'disabled';
+  const clientImport = useClientImport(client, canConnect && !environment.native ? selected.id : null);
   const [choose, setChoose] = useState(false), [chooseSubscription, setChooseSubscription] = useState(false);
   const empty = { id: '', name: '', plan: '', state: 'active' as const, expires: t.unknown, remaining: t.unknown, traffic: null, trafficPercent: null, devices: null };
   if (environment.native && selected) return <><PageHeading title={t.subscriptions} /><section className="panel form-panel"><h2>{selected.name || selected.tariff_name}</h2><p>{subscriptionView(selected).expires}</p><Button onClick={() => navigate('connect/' + selected.id)}>Добавить подписку</Button><Button tone="secondary" onClick={() => navigate('subscriptions')}>{t.subscriptions}</Button></section></>;
@@ -66,11 +82,12 @@ function HomeAccountContent() {
     hasMultiple={state.hasMultiple} client={client} onSubscriptions={() => navigate('subscriptions')} onSelectSubscription={() => setChooseSubscription(true)}
     onDetails={() => navigate('subscription/' + selected?.id)}
     onDevices={selected?.devices_available ? () => navigate('devices/' + selected.id) : undefined}
-    canConnect={selected?.access_status === 'ready' && selected.state !== 'disabled'}
-    onConnect={() => { if (selected) void clientImport.add(selected.id); }} onGuide={() => navigate('connect/' + selected?.id)} onClient={() => setChoose(true)}
+    canConnect={canConnect}
+    onConnect={() => void clientImport.add()} onGuide={() => navigate('connect/' + selected?.id)} onClient={() => setChoose(true)}
     onRenew={() => navigate('renewal/' + selected?.id)} onBuy={() => navigate('purchase')} onTrial={() => navigate('trials')} onRetry={state.retry}
     trialAvailable={bootstrap.features.trial} renewAvailable={selected?.actions['key.renew.start']?.allowed ?? false}
-    connecting={clientImport.busy} connectLabel={client.scheme ? undefined : ru.copyForClient(client.name)} />
+    connecting={clientImport.busy || canConnect && !clientImport.access.data} connectLabel={client.scheme ? undefined : ru.copyForClient(client.name)} />
+    <Failure error={clientImport.access.error} retry={clientImport.access.retry} />
     <Failure error={clientImport.error} />{clientImport.notice && <p role="status" className="notice">{clientImport.notice}</p>}
     {choose && <ClientPicker selected={client.id} onSelect={id => { select(id); if (selected) navigate('connect/' + selected.id); }} onClose={() => setChoose(false)} />}
     {chooseSubscription && <SubscriptionPicker selected={selected?.id} onSelect={state.select} onClose={() => setChooseSubscription(false)} />}
@@ -138,17 +155,16 @@ export function Connection() {
   const back = useBack();
   const { api, param, environment } = useApp();
   const subscription = useResource<Subscription>('/subscriptions/' + encodeURIComponent(param));
-  const access = useResource<{ url: string }>('/subscriptions/' + encodeURIComponent(param) + '/access');
   const { client, select } = useClientChoice();
-  const clientImport = useClientImport(client);
+  const clientImport = useClientImport(client, environment.native ? null : param);
   const [choose, setChoose] = useState(false);
   if (environment.native) return <><PageHeading title={t.connect} back={back} /><NativeConnection bridge={environment.native} importProfile={async () => {
     const fresh = await api.request<{ url: string }>('/subscriptions/' + encodeURIComponent(param) + '/access');
     await environment.importSubscription('native', fresh.url);
   }} /></>;
-  return <Resource state={subscription}>{item => <><Resource state={access}>{value => <Connect subscription={subscriptionView(item)} client={client} accessUrl={value.url}
+  return <Resource state={subscription}>{item => <><Resource state={clientImport.access}>{value => <Connect subscription={subscriptionView(item)} client={client} accessUrl={value.url}
     onBack={back} onClient={() => setChoose(true)} canImport={Boolean(client.scheme)} importing={clientImport.busy}
-    onOpen={() => void clientImport.add(item.id)} onInstall={url => environment.openLink(url ?? client.install)} copy={environment.copy} />}</Resource>
+    onOpen={() => void clientImport.add()} onInstall={url => environment.openLink(url ?? client.install)} copy={environment.copy} />}</Resource>
     <Failure error={clientImport.error} />
     {choose && <ClientPicker selected={client.id} onSelect={select} onClose={() => setChoose(false)} />}
   </>}</Resource>;

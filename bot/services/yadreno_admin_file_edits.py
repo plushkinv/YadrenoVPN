@@ -7,17 +7,39 @@ from web_tools.errors import WebSourceError
 from web_tools.paths import atomic_write
 
 
+def invalid_edits(message: str) -> WebSourceError:
+    """Explain a rejected batch without repeating file contents or writing files."""
+    return WebSourceError(
+        'file_edits_invalid', message + ' No files were changed.',
+        next_action='Correct the indicated argument and retry the batch. Put path inside each edits item; '
+                    'omit top-level path/content. Example shape (illustrative values): '
+                    '{"edits":[{"path":"file.txt","old_text":"before","new_text":"after"}]}',
+    )
+
+
 def edit_files(edits, resolve):
     """Check every exact fragment before writing; roll back writes on I/O failure."""
-    if not isinstance(edits, list) or not edits:
-        raise WebSourceError('file_edits_invalid', 'edits must be a nonempty list.',
-                             next_action='Supply edits=[{path, old_text, new_text}], or path plus content.')
+    if not isinstance(edits, list):
+        raise invalid_edits('arguments.edits must be an array.')
+    if not edits:
+        raise invalid_edits('arguments.edits must contain at least 1 item; received 0.')
     original, updated = {}, {}
     for index, edit in enumerate(edits):
-        if (not isinstance(edit, dict) or set(edit) != {'path', 'old_text', 'new_text'}
-                or not all(isinstance(edit[key], str) for key in edit) or not edit['old_text']):
-            raise WebSourceError('file_edits_invalid', f'Edit {index + 1} requires path, nonempty old_text and new_text.',
-                                 next_action='Use an exact existing nonempty fragment as old_text.')
+        address = f'arguments.edits[{index}]'
+        if not isinstance(edit, dict):
+            raise invalid_edits(f'{address} must be an object.')
+        fields = ('path', 'old_text', 'new_text')
+        missing = [f'{address}.{key}' for key in fields if key not in edit]
+        if missing:
+            raise invalid_edits('Missing required field(s): ' + ', '.join(missing) + '.')
+        for key in edit:
+            if key not in fields:
+                raise invalid_edits(f'{address}.{key} is not supported; allowed fields: path, old_text, new_text.')
+        for key in fields:
+            if not isinstance(edit[key], str):
+                raise invalid_edits(f'{address}.{key} must be a string.')
+        if not edit['old_text']:
+            raise invalid_edits(f'{address}.old_text must contain at least 1 character; received 0.')
         path = Path(resolve(edit['path']))
         if path not in original:
             if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
@@ -40,7 +62,7 @@ def edit_files(edits, resolve):
             count = updated[path].count(old)
         if count != 1:
             raise WebSourceError('file_edit_conflict',
-                                 f'Edit {index + 1}: old_text occurs {count} times; no files were changed.',
+                                 f'{address}.old_text occurs {count} times; no files were changed.',
                                  file=edit['path'], next_action='Read this file and include enough exact surrounding text for one match.')
         updated[path] = updated[path].replace(old, new, 1)
     # Detect an independent writer between validation and the first write.

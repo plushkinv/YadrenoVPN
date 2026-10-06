@@ -195,6 +195,10 @@ def _redact_context(
     runtime_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     result = dict(runtime_context or {})
+    if isinstance(result.get('client_import_urls'), dict):
+        result['client_import_urls'] = {
+            client: 'https://redacted.invalid/open-client' for client in result['client_import_urls']
+        }
     if page_key == YAA_KEY_DELIVERY_PAGE:
         for key in YAA_KEY_DELIVERY_CONTEXT_KEYS:
             if key in result:
@@ -205,15 +209,25 @@ def _redact_context(
 def _redact_text_replacements(
     page_key: str,
     text_replacements: dict[str, Any] | None,
+    runtime_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if not text_replacements:
-        return None
-    result = dict(text_replacements)
+    result = dict(text_replacements or {})
+    # Keep issued URL buttons visible in the snapshot without minting a new
+    # capability from the redacted raw subscription during context enrichment.
+    import_urls = (runtime_context or {}).get('client_import_urls')
+    if isinstance(import_urls, dict):
+        explicit = {str(placeholder).casefold() for placeholder in result}
+        for client in import_urls:
+            placeholder = f'%client_import_url(client={client})%'
+            if placeholder.casefold() not in explicit:
+                result[placeholder] = 'https://redacted.invalid/open-client'
     if page_key == YAA_KEY_DELIVERY_PAGE:
         for placeholder in list(result):
             if str(placeholder).casefold() in YAA_KEY_DELIVERY_PLACEHOLDERS:
                 result[placeholder] = YAA_REDACTED_USER_KEY
-    return result
+            elif str(placeholder).casefold().startswith('%client_import_url(') and result[placeholder]:
+                result[placeholder] = 'https://redacted.invalid/open-client'
+    return result or None
 
 
 def _redact_visible_keyboard_urls(
@@ -302,6 +316,7 @@ def build_yaa_binding_runtime_context(binding: YaaPageBinding) -> dict[str, Any]
             text_replacements=_redact_text_replacements(
                 binding.page_key,
                 binding.text_replacements,
+                runtime_context,
             ),
             prepend_buttons=binding.prepend_buttons,
             append_buttons=binding.append_buttons,

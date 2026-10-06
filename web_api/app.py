@@ -42,6 +42,8 @@ def create_app(settings: WebSettings | None = None, *, ui_runtime=None) -> web.A
     add_module_routes(app)
     from web_api.user import add_routes as add_user_routes
     add_user_routes(app)
+    from web_api.client_import import add_routes as add_client_import_routes
+    add_client_import_routes(app)
     from web_api.ui import add_routes as add_ui_routes
     add_ui_routes(app)
     from web_api.editor import add_routes as add_editor_routes

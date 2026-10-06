@@ -218,6 +218,9 @@ def _page_state(page_key: str) -> dict[str, Any] | None:
         'button_action_types': sorted(_PAGE_BUTTON_ACTION_TYPES),
         'web_app_contract': {'url_scheme': 'https', 'chat_type': 'private', 'business_supported': False,
                              'origin_placeholder': '%web_app_url%'},
+        'client_import_contract': {'action_type': 'url', 'placeholder': '%client_import_url(client=incy)%',
+                                   'requires': ['enabled_web_origin', 'current_subscription_delivery'],
+                                   'clients': get_placeholder_contract()['parameters']['client_import_url']['client']},
         'custom': {
             'text_custom': row.get('text_custom'),
             'image_custom': row.get('image_custom'),

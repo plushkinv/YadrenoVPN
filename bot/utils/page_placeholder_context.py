@@ -247,6 +247,25 @@ def enrich_page_placeholder_context_sync(
         from bot.utils.web_app_buttons import public_web_app_url
         enriched.setdefault('web_app_url', public_web_app_url())
 
+    import_tokens = [token for token in placeholders - explicit if token.startswith('%client_import_url(')]
+    if import_tokens:
+        from bot.utils.placeholders import KEY_DELIVERY_RAW_CONTEXT_KEY, valid_placeholder_parameters
+        from bot.utils.web_app_buttons import public_web_app_url
+        from core.client_import import import_link
+        origin = public_web_app_url()
+        raw_url = enriched.get(KEY_DELIVERY_RAW_CONTEXT_KEY)
+        values = {}
+        if origin and raw_url:
+            for token in import_tokens:
+                spec = get_template_placeholder_specs(token).get(token)
+                if spec and valid_placeholder_parameters(*spec):
+                    client = spec[1]['client'].casefold()
+                    try:
+                        values[client] = import_link(raw_url, origin, client)
+                    except ValueError:
+                        pass
+        enriched['client_import_urls'] = values
+
     if (TARIFF_PLACEHOLDERS & placeholders) - explicit and 'tariffs_html' not in enriched:
         enriched['tariffs_html'] = build_tariff_text()
 

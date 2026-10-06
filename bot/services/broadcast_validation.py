@@ -144,7 +144,7 @@ def _placeholder_test_value(name: str) -> str:
     """Use synthetic values so validation never loads recipient or catalogue data."""
     if name in {
         "referral_link", "referral_link_url", "key_link", "key_link_url",
-        "payment_link", "payment_link_url",
+        "payment_link", "payment_link_url", "client_import_url",
     }:
         return "https://example.test/link?value=sample"
     if name.endswith("telegram_id"):

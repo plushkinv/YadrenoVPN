@@ -83,9 +83,14 @@ def save_panel_identity_snapshot(operation_id: int, snapshot: dict) -> dict:
         return snapshot
 
 
-def _enqueue_telegram_panel_renames(conn, user_id: int, telegram_id: int, now: int) -> int:
+def _enqueue_telegram_panel_renames(conn, user_id: int, now: int) -> int:
     """Use the same queue when Telegram is linked during an unfinished rename."""
+    from bot.utils.panel_email import get_panel_email_prefix
+    user = conn.execute('SELECT id, telegram_id, username FROM users WHERE id = ?', (user_id,)).fetchone()
+    if user['telegram_id'] is None:
+        return 0
     prefix = f'site_{user_id}_'
+    new_prefix = get_panel_email_prefix(dict(user))
     keys = conn.execute('SELECT id, server_id, panel_email, sub_id FROM vpn_keys WHERE user_id = ? '
                         'AND server_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM panel_identity_renames r '
                         "WHERE r.key_id = vpn_keys.id AND r.state != 'done')", (user_id,)).fetchall()
@@ -96,7 +101,7 @@ def _enqueue_telegram_panel_renames(conn, user_id: int, telegram_id: int, now: i
         conn.execute('INSERT INTO panel_identity_renames(key_id, user_id, server_id, old_email, '
                      'new_email, sub_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
                      (key['id'], user_id, key['server_id'], key['panel_email'],
-                      f'user_{telegram_id}_' + key['panel_email'][len(prefix):], key['sub_id'], now))
+                      new_prefix + key['panel_email'][len(prefix):], key['sub_id'], now))
         count += 1
     return count
 
@@ -120,9 +125,8 @@ def finish_panel_identity_rename(operation_id: int, now: int) -> None:
                          (row['key_id'],))
         conn.execute("UPDATE panel_identity_renames SET state = 'done', completed_at = ?, error_code = NULL, snapshot_json = NULL "
                      'WHERE id = ?', (now, operation_id))
-        user = conn.execute('SELECT telegram_id FROM users WHERE id = ?', (row['user_id'],)).fetchone()
-        if user['telegram_id'] is not None and row['new_email'].startswith(f"site_{row['user_id']}_"):
-            _enqueue_telegram_panel_renames(conn, row['user_id'], user['telegram_id'], now)
+        if row['new_email'].startswith(f"site_{row['user_id']}_"):
+            _enqueue_telegram_panel_renames(conn, row['user_id'], now)
 
 
 def defer_panel_identity_rename(operation_id: int, error_code: str, now: int) -> None:
@@ -206,8 +210,7 @@ def bind_panel_subscription(*, user_id: int, endpoint: str, group_id: int,
                 (user_id, server['id'], tariff['id'], record['email'], record['subId'],
                  _allocate_key_custom_name_with_conn(conn, user_id), expires_at, used, total, total,
                  item['device_limit'])).lastrowid
-            target = generate_unique_panel_email(dict(user), stable_identity=
-                f"subscription:{endpoint}:{record['subId']}:{record['email']}:{key_id}")
+            target = generate_unique_panel_email(dict(user))
             if _panel_subscription_keys(conn, endpoint, (), [target]):
                 raise CoreError('panel_identity_conflict')
             snapshot = {**item, 'version': 1, 'endpoint': endpoint, 'sub_id': record['subId'],

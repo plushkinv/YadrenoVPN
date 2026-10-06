@@ -45,6 +45,8 @@ _KEY_LINK_HELP = "\n\n".join((
     _example("Ссылка моноширинным текстом для копирования", "%key_copy%",
              "<code>https://vpn.example/sub/demo</code>"),
     _example("Обычная ссылка в тексте", "%key_link%", "https://vpn.example/sub/demo"),
+    _example("URL-кнопка добавления в INCY при включённом Web/Mini App",
+             "%client_import_url(client=incy)%", "https://vpn.example/open-client#token=…&client=incy"),
     _example(
         "Ссылка внутри параметра URL-кнопки",
         "https://app.example/import?url=%key_link_url%",

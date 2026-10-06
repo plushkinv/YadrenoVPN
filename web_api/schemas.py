@@ -5,6 +5,7 @@ import json
 import re
 
 from core.results import CoreError
+from core.client_import import CLIENTS, MAX_TOKEN_LENGTH
 
 S, B, I, N = {'type': 'string'}, {'type': 'boolean'}, {'type': 'integer'}, {'type': 'number'}
 
@@ -219,7 +220,9 @@ route('POST', 'trials/{id}/activate', ref('TrialResult'), obj(), idempotent=True
 route('GET', 'subscriptions', page(ref('Subscription')), paging=True)
 route('GET', 'subscriptions/{id}', ref('Subscription'))
 route('GET', 'subscriptions/{id}/history', page(ref('KeyHistoryItem')), paging=True)
-route('GET', 'subscriptions/{id}/access', obj({'subscription_id': I, 'url': S}))
+route('GET', 'subscriptions/{id}/access', obj({'subscription_id': I, 'url': S, 'client_import_url': S}, ['subscription_id', 'url']))
+route('POST', 'client-import/resolve', obj({'client_name': S, 'uri': S, 'url': S}),
+      obj({'token': text_bound(MAX_TOKEN_LENGTH), 'client': {'type': 'string', 'enum': list(CLIENTS)}}), anonymous=True)
 route('GET', 'subscriptions/{id}/devices', obj({'devices': array(ref('Device'))}))
 route('GET', 'subscriptions/{id}/host-candidates', obj({'hosts': array(ref('Host'))}))
 for action, fields in [('configure', {'server_id': ID}), ('replace', {'server_id': ID}),

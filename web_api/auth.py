@@ -88,6 +88,7 @@ async def _security_response(request: web.Request, handler):
             '/api/v1/auth/settings', '/api/v1/auth/register', '/api/v1/auth/login',
             '/api/v1/auth/telegram', '/api/v1/auth/verification/request', '/api/v1/auth/verification/status',
             '/api/v1/auth/verification/verify', '/api/v1/auth/password/reset',
+            '/api/v1/client-import/resolve',
         }
         anonymous = anonymous or request.method in {'GET', 'HEAD'} and request.path.startswith('/api/v1/ui/packages/')
         if not anonymous and session is None:

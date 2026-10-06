@@ -126,6 +126,7 @@ for _name, _aliases in {
     for _alias in _aliases:
         _PLACEHOLDER_ALIASES[_alias.casefold()] = _name
 _PARAMETERIZED_PAGE_PLACEHOLDERS = frozenset({
+    'client_import_url',
     'key',
     'payment_coupon',
     'support_ticket',
@@ -381,7 +382,10 @@ def _parse_positive_int(value: Any) -> int | None:
 def valid_placeholder_parameters(name: str, params: Mapping[str, str]) -> bool:
     """Apply the same bounded parameter contract in rendering and validation."""
     if not params:
-        return name not in {'key', 'support_ticket'}
+        return name not in {'key', 'support_ticket', 'client_import_url'}
+    if name == 'client_import_url':
+        from core.client_import import CLIENTS
+        return set(params) == {'client'} and params['client'].casefold() in CLIENTS
     if name == 'tariffs':
         return set(params) == {'group_id'} and _parse_positive_int(params['group_id']) is not None
     fields = _PARAMETER_FIELDS.get(name)
@@ -425,6 +429,7 @@ def get_template_placeholder_specs(
 
 def get_placeholder_contract(*, include_events: bool = False) -> dict[str, Any]:
     """Describe installed placeholder capabilities without recipient values."""
+    from core.client_import import CLIENTS
     return {
         'engine': 'page',
         'common': {f'%{name}%': list(aliases) for name, aliases in _PAGE_PLACEHOLDER_ALIASES_BY_NAME.items()},
@@ -436,6 +441,7 @@ def get_placeholder_contract(*, include_events: bool = False) -> dict[str, Any]:
         'parameters': {
             **{name: {'field': sorted(fields)} for name, fields in _PARAMETER_FIELDS.items()},
             'tariffs': {'group_id': 'positive_integer'},
+            'client_import_url': {'client': sorted(CLIENTS)},
         },
         'missing_context': 'empty',
         'unknown': 'preserved_at_render',
@@ -541,6 +547,9 @@ def _resolve_registered_placeholder(
         return _format_value(_context_value(context, 'page_key'), mode)
     if name == 'web_app_url':
         return _format_value(_context_value(context, 'web_app_url'), mode)
+    if name == 'client_import_url':
+        values = context.get('client_import_urls')
+        return _format_value(values.get(params['client'].casefold()), mode) if isinstance(values, Mapping) else ''
     if name == 'tariffs':
         return _resolve_tariffs_placeholder(context, mode, params)
     if name == 'key':

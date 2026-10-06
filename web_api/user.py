@@ -76,7 +76,15 @@ async def subscription_history(request):
 
 
 async def access(request):
-    return web.json_response(await subscriptions.access(account(request), _id(request)))
+    from core.client_import import import_link
+    from web_api.app import SETTINGS_KEY
+    result = await subscriptions.access(account(request), _id(request))
+    try:
+        result['client_import_url'] = import_link(result['url'], request.app[SETTINGS_KEY].public_origin)
+    except ValueError:
+        # Preserve raw access if a legacy panel value cannot use the handoff.
+        pass
+    return web.json_response(result)
 
 
 async def key_mutation(request):

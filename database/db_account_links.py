@@ -101,7 +101,7 @@ def finish_account_link(*, token_hash: str, session_hash: str, bot_id: int, tele
         if changed != 1:
             raise CoreError('link_conflict')
         from .db_panel_identity import _enqueue_telegram_panel_renames
-        count = _enqueue_telegram_panel_renames(conn, row['user_id'], telegram_id, now)
+        count = _enqueue_telegram_panel_renames(conn, row['user_id'], now)
         conn.execute("UPDATE account_link_requests SET state = 'completed', completed_at = ? WHERE token_hash = ?",
                      (now, token_hash))
         return {'account_id': row['user_id'], 'telegram_id': telegram_id, 'pending_renames': count}
