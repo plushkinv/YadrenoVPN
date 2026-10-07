@@ -2,6 +2,7 @@
 from aiohttp import web
 
 from bot.services.yadreno_admin_web_dialog import WebEditorDialog, authorize
+from bot.services import yadreno_admin_web_diagnostics as diagnostics
 from core.content import safe_html
 from web_api.auth import SESSION_KEY, _body
 
@@ -36,6 +37,7 @@ async def start(request):
 async def upload(request):
     from web_api.editor_upload import read_uploads
     authorize(request[SESSION_KEY])
+    diagnostics.update(stage='read_uploads')
     message, viewed, uploads = await read_uploads(request)
     return _response(await request.app[EDITOR_KEY].start(request[SESSION_KEY], message, viewed, uploads=uploads))
 

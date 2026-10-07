@@ -2505,8 +2505,8 @@ def _prepare_web_toolchain(root: Path) -> bool:
     try:
         _run_checked([sys.executable, '-m', 'web_tools.toolchain', '--root', str(root), 'prepare'],
                      cwd=root, timeout=660, stage='Preparing local Web compiler')
-    except (OSError, subprocess.SubprocessError, UpdateRollbackError):
-        logger.warning('Web compiler preparation failed; installed bot and UI remain active')
+    except (OSError, subprocess.SubprocessError, UpdateRollbackError) as error:
+        logger.warning('Web compiler preparation failed; installed bot and UI remain active: %s', str(error)[-2000:])
         return False
     return True
 

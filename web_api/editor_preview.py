@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from aiohttp import web
 
 from bot.services.yadreno_admin_web_dialog import authorize
+from bot.services import yadreno_admin_web_diagnostics as diagnostics
 from core import auth
 from core.results import CoreError
 from database import requests as db
@@ -63,6 +64,8 @@ class EditorPreviews:
                     raise CoreError('action_unavailable', details={'reason': 'editor_candidate_unavailable'})
             else:
                 binding = self.dialog._request_binding(request_id, api_key)
+            diagnostics.update(stage='prepare_preview', request_id=request_id,
+                               task_id=binding.task_id, admission='accepted')
             workspace = binding.workspace(api_key)
             revision = workspace.inspect()['revision']
             actual = editor_publication.inspect(workspace)
@@ -96,9 +99,9 @@ class EditorPreviews:
             candidate = bundle[0]
         except (ValueError, OSError, RuntimeError) as error:
             from web_tools.errors import failure
-            diagnostic = failure(error, operation='web.preview')
+            diagnostic = failure(error, operation='web.preview', log=False)
             raise CoreError('conflict', details={**diagnostic, 'reason': 'editor_candidate_unavailable',
-                'message': diagnostic['error'] + ' ' + diagnostic['next_action']}) from None
+                'message': diagnostic['error'] + ' ' + diagnostic['next_action']}) from error
         # A logout/key/rights change during validation cannot issue a usable handle.
         current = db.get_account_session(session['token_hash'], int(time.time()))
         if current is None or authorize(current) != api_key:

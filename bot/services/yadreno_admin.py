@@ -21,6 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
+from bot.services import yadreno_admin_web_diagnostics as web_diagnostics
 from bot.knowledge_version import KNOWLEDGE_VERSION
 from bot.services.yadreno_admin_broadcast_context import (
     BroadcastRuntimeContextError,
@@ -1092,6 +1093,7 @@ async def _request_json(
     endpoints = _hub_endpoint_selector.candidates(max_attempts)
 
     for attempt, endpoint in enumerate(endpoints, start=1):
+        web_diagnostics.request_started(method, path, endpoint, attempt, api_key)
         try:
             async with session.request(
                 method,
@@ -1099,11 +1101,14 @@ async def _request_json(
                 headers=headers,
                 json=json_payload,
             ) as response:
+                web_diagnostics.response_received(response.status)
                 if allow_no_content and response.status == 204:
                     _hub_endpoint_selector.mark_success(endpoint)
                     return response.status, None
                 if response.status >= 400:
-                    await response.text()
+                    body = await response.text()
+                    web_diagnostics.response_received(response.status, body)
+                    web_diagnostics.failure_reason('hub_http_error')
                     raise YadrenoAdminError(
                         f"Hub returned HTTP {response.status}",
                         status_code=response.status,
@@ -1111,21 +1116,28 @@ async def _request_json(
                 try:
                     data = await response.json()
                 except json.JSONDecodeError as exc:
+                    web_diagnostics.failure_reason('invalid_json')
                     raise YadrenoAdminError(
                         "Hub returned invalid JSON",
                         kind="protocol",
                     ) from exc
                 if not isinstance(data, dict):
+                    web_diagnostics.failure_reason('non_object_json')
                     raise YadrenoAdminError(
                         "Hub returned a non-object JSON response",
                         kind="protocol",
                     )
+                web_diagnostics.response_received(response.status, data)
                 _hub_endpoint_selector.mark_success(endpoint)
                 return response.status, _rewrite_hub_viewer_url(
                     data,
                     endpoint=endpoint,
                 )
         except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
+            if not isinstance(e, YadrenoAdminError):
+                web_diagnostics.failure_reason('timeout' if isinstance(e, asyncio.TimeoutError) else 'connection_error')
+                if not read_only and _is_definitely_pre_request_failure(e):
+                    web_diagnostics.update(admission='not_sent')
             last_error = e
             if not _can_repeat_hub_request(e, read_only=read_only):
                 if isinstance(e, YadrenoAdminError):
@@ -1143,7 +1155,7 @@ async def _request_json(
                 urlsplit(endpoint).netloc,
                 attempt,
                 max_attempts,
-                e,
+                type(e).__name__ if web_diagnostics.current() is not None else e,
             )
             await asyncio.sleep(delay)
 
@@ -1168,6 +1180,7 @@ def _incompatible_broadcast_hub(detail: str) -> YadrenoAdminError:
 
 def _incompatible_customization_hub(detail: str) -> YadrenoAdminError:
     """Build a stable error when /yaa cannot prove its specialized contract."""
+    web_diagnostics.failure_reason('customization_contract_mismatch', detail)
     return YadrenoAdminError(
         f"incompatible customization hub: {detail}",
         user_message=(
@@ -1218,6 +1231,7 @@ def _raise_for_capability_status(data: dict[str, Any]) -> None:
     """Stop a new task when the authenticated hub reports maintenance."""
     if data.get("status") != "maintenance":
         return
+    web_diagnostics.failure_reason('hub_maintenance')
     response_text = data.get("response_text")
     if not isinstance(response_text, str) or not response_text.strip():
         response_text = HUB_MAINTENANCE_FALLBACK_MESSAGE
@@ -1340,6 +1354,7 @@ async def _negotiate_runtime_context_support(
 def _require_knowledge_version_support(capabilities: set[str]) -> None:
     """Never silently route a versioned request through an older Hub."""
     if KNOWLEDGE_VERSION_CAPABILITY not in capabilities:
+        web_diagnostics.failure_reason('knowledge_version_capability_missing')
         raise YadrenoAdminError(
             "Hub lacks knowledge_version_v1",
             user_message="Hub не поддерживает выбор версии БЗ. Обратитесь к администратору Hub для обновления.",
@@ -1368,13 +1383,16 @@ def _raise_for_hub_rejection(data: dict[str, Any], operation: str) -> None:
     status = data.get("status")
     if status == "accepted":
         return
+    web_diagnostics.failure_reason('hub_rejection')
     if not isinstance(status, str) or not status:
+        web_diagnostics.failure_reason('invalid_admission_status')
         raise YadrenoAdminError(
             f"Hub returned an invalid {operation} status",
             kind="protocol",
         )
     response_text = data.get("response_text")
     if not isinstance(response_text, str) or not response_text.strip():
+        web_diagnostics.failure_reason('rejection_message_missing')
         raise YadrenoAdminError(
             f"Hub rejected {operation} without response_text (status={status})",
             kind="protocol",
@@ -1395,6 +1413,7 @@ def _accepted_request_id(data: dict[str, Any], operation: str) -> int:
         or not isinstance(request_id, int)
         or request_id <= 0
     ):
+        web_diagnostics.failure_reason('accepted_request_id_invalid')
         raise YadrenoAdminError(
             f"Hub accepted {operation} without a valid request_id",
             kind="protocol",
@@ -1421,6 +1440,7 @@ async def _request_multipart(
 
     for attempt, endpoint in enumerate(endpoints, start=1):
         handles = []
+        web_diagnostics.update(stage='prepare_upload')
         try:
             form = aiohttp.FormData()
             for key, value in fields.items():
@@ -1435,13 +1455,17 @@ async def _request_multipart(
                     filename=upload.filename,
                     content_type=upload.content_type or "application/octet-stream",
                 )
+            web_diagnostics.request_started('POST', path, endpoint, attempt, api_key)
             async with session.post(
                 f"{endpoint}{path}",
                 headers=headers,
                 data=form,
             ) as response:
+                web_diagnostics.response_received(response.status)
                 if response.status >= 400:
-                    await response.text()
+                    body = await response.text()
+                    web_diagnostics.response_received(response.status, body)
+                    web_diagnostics.failure_reason('hub_http_error')
                     raise YadrenoAdminError(
                         f"Hub returned HTTP {response.status}",
                         status_code=response.status,
@@ -1449,21 +1473,28 @@ async def _request_multipart(
                 try:
                     data = await response.json()
                 except json.JSONDecodeError as exc:
+                    web_diagnostics.failure_reason('invalid_json')
                     raise YadrenoAdminError(
                         "Hub returned invalid JSON",
                         kind="protocol",
                     ) from exc
                 if not isinstance(data, dict):
+                    web_diagnostics.failure_reason('non_object_json')
                     raise YadrenoAdminError(
                         "Hub returned a non-object JSON response",
                         kind="protocol",
                     )
+                web_diagnostics.response_received(response.status, data)
                 _hub_endpoint_selector.mark_success(endpoint)
                 return response.status, _rewrite_hub_viewer_url(
                     data,
                     endpoint=endpoint,
                 )
         except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
+            if not isinstance(e, YadrenoAdminError):
+                web_diagnostics.failure_reason('timeout' if isinstance(e, asyncio.TimeoutError) else 'connection_error')
+                if _is_definitely_pre_request_failure(e):
+                    web_diagnostics.update(admission='not_sent')
             last_error = e
             if not _can_repeat_hub_request(e, read_only=False):
                 if isinstance(e, YadrenoAdminError):
@@ -1480,7 +1511,7 @@ async def _request_multipart(
                 urlsplit(endpoint).netloc,
                 attempt,
                 max_attempts,
-                e,
+                type(e).__name__ if web_diagnostics.current() is not None else e,
             )
             await asyncio.sleep(delay)
         finally:
@@ -2203,6 +2234,7 @@ async def _poll_until_final(
                     _remember_tool_runtime(runtime)
                 try:
                     if tool_started_here:
+                        web_diagnostics.update(stage='execute_tool')
                         if is_yadreno_admin_customization_topic(topic_id) and web_binding is not None:
                             tool_result = await _run_tool_call(
                                 event, topic_id=topic_id, telegram_id=telegram_id,
@@ -2299,6 +2331,7 @@ async def run_dialog(
     The Hub admits one active request per topic and rejects overlapping turns.
     Local polling ownership is acquired only after acceptance.
     """
+    web_diagnostics.update(stage='runtime_context')
     key = _lane_key(telegram_id, topic_id)
     runtime_context_factory = (
         None if is_yadreno_admin_broadcast_topic(topic_id)
@@ -2338,6 +2371,7 @@ async def run_dialog(
                 telegram_id, topic_id, runtime_context, page_binding,
                 bot_identity=await load_broadcast_bot_identity(),
             )
+        web_diagnostics.update(stage='runtime_context')
         server_ip = await _get_server_ip(session)
         core_changes_allowed = _core_policy_for_skill(effective_skill_id)
         agent_runtime_context = _build_runtime_context_or_error(runtime_context_factory)
@@ -2388,6 +2422,7 @@ async def run_dialog(
         _raise_for_hub_rejection(process_data, "process request")
 
         request_id = _accepted_request_id(process_data, "process request")
+        web_diagnostics.update(stage='bind_request', request_id=request_id, admission='accepted')
         if web_binding is not None:
             _bind_web_request(telegram_id, topic_id, request_id, web_binding, api_key)
         async with satellite_lane_controller.cycle(key, request_id) as cycle:
@@ -2443,6 +2478,7 @@ async def run_dialog_with_uploads(
             **({"accepted_callback": accepted_callback} if accepted_callback else {}),
         )
 
+    web_diagnostics.update(stage='runtime_context')
     key = _lane_key(telegram_id, topic_id)
     runtime_context_factory = (
         None if is_yadreno_admin_broadcast_topic(topic_id)
@@ -2482,6 +2518,7 @@ async def run_dialog_with_uploads(
                 telegram_id, topic_id, runtime_context, page_binding,
                 bot_identity=await load_broadcast_bot_identity(),
             )
+        web_diagnostics.update(stage='runtime_context')
         server_ip = await _get_server_ip(session)
         core_changes_allowed = _core_policy_for_skill(effective_skill_id)
         agent_runtime_context = _build_runtime_context_or_error(runtime_context_factory)
@@ -2561,6 +2598,7 @@ async def run_dialog_with_uploads(
         _raise_for_hub_rejection(upload_data, "upload request")
 
         request_id = _accepted_request_id(upload_data, "upload request")
+        web_diagnostics.update(stage='bind_request', request_id=request_id, admission='accepted')
         if web_binding is not None:
             _bind_web_request(telegram_id, topic_id, request_id, web_binding, api_key)
         async with satellite_lane_controller.cycle(key, request_id) as cycle:

@@ -18,15 +18,23 @@ class WebPlatformError(RuntimeError):
     pass
 
 
-def failure(error, *, operation, root=None):
+class CompilerEnvironmentError(WebPlatformError):
+    """A known compiler prerequisite failure with a safe, administrator-facing cause."""
+
+
+def failure(error, *, operation, root=None, log=True):
     """Return a bounded diagnostic, never a stack trace or a suggestion to repair core."""
     reference = uuid.uuid4().hex[:16]
-    logger.error('Web operation %s failed; diagnostic=%s', operation, reference, exc_info=error)
+    if log:
+        from bot.services import yadreno_admin_web_diagnostics as diagnostics
+        reference = diagnostics.report_recoverable(error) or reference
+        if diagnostics.current() is None:
+            logger.error('Web operation %s failed; diagnostic=%s', operation, reference, exc_info=error)
     if isinstance(error, BlockingIOError):
         error = WebSourceError('web_busy', 'Another source or publication operation is still running.',
                                next_action='Wait for that operation to finish, then retry the same call.')
     source = isinstance(error, WebSourceError)
-    message = str(error) if source else 'The Web platform could not complete this operation.'
+    message = str(error) if source or isinstance(error, CompilerEnvironmentError) else 'The Web platform could not complete this operation.'
     if root is not None:
         message = message.replace(str(root), '<installation>')
     normalized = message.replace('\\', '/')

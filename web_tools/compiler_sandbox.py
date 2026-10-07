@@ -206,10 +206,13 @@ class _CompilerSandbox:
             config.chmod(0o644)
         properties = self._properties(timeout)
         command = [self.commands['systemd-run'], '--system', '--quiet', '--wait', '--pipe',
-                   '--no-ask-password', '--expand-environment=no', '--slice=system.slice',
+                   '--no-ask-password', '--slice=system.slice',
                    '--unit=' + self.unit, '--description=Yadreno UI compiler']
         command += ['--property=' + name + '=' + value for name, value in properties.items()]
-        command += ['--', '/usr/bin/env', '-i', *[name + '=' + value for name, value in environment.items()], *args]
+        # systemd 249 expands command arguments too. Its documented $$ escape
+        # preserves literal values without the switch introduced in systemd 254.
+        arguments = ['/usr/bin/env', '-i', *[name + '=' + value for name, value in environment.items()], *args]
+        command += ['--', *[argument.replace('$', '$$') for argument in arguments]]
         process = None
         buffers = [bytearray(), bytearray()]
         try:

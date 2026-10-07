@@ -121,6 +121,11 @@ class System:
         except (OSError, ValueError):
             raise SetupError('https_unavailable', 'Адрес недоступен или HTTPS-сертификат не прошёл проверку.', stage='https', exit_code=4) from None
 
+    def verify_uploads(self, origin):
+        import asyncio
+        from web_tools.setup_uploads import verify_uploads
+        asyncio.run(verify_uploads(origin))
+
     def can_bind(self, host, port):
         family = socket.AF_INET6 if ':' in host else socket.AF_INET
         with socket.socket(family, socket.SOCK_STREAM) as listener:

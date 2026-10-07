@@ -10,6 +10,7 @@ from aiohttp import web
 from core import auth
 from core.context import bind_account_context
 from core.results import CoreError
+from bot.services import yadreno_admin_web_diagnostics as editor_diagnostics
 
 logger = logging.getLogger(__name__)
 SESSION_COOKIE = '__Host-yadreno_session'
@@ -61,6 +62,10 @@ def _error_status(error: CoreError) -> int:
 async def security_middleware(request: web.Request, handler):
     from database.connection import request_connection_scope
     with request_connection_scope():
+        operation = editor_diagnostics.route_operation(request.path)
+        if operation is not None:
+            with editor_diagnostics.scope(operation):
+                return await _security_response(request, handler)
         return await _security_response(request, handler)
 
 
@@ -99,6 +104,7 @@ async def _security_response(request: web.Request, handler):
             if request.method not in ('GET', 'HEAD', 'OPTIONS'):
                 auth.verify_csrf(session, request.headers.get('X-CSRF-Token'))
             with bind_account_context(auth.session_context(session)):
+                editor_diagnostics.update(stage='validation')
                 await validate_request(request)
                 response = await handler(request)
         else:
@@ -106,18 +112,25 @@ async def _security_response(request: web.Request, handler):
             response = await handler(request)
         validate_response(request, response)
     except CoreError as exc:
+        editor_diagnostics.report(exc)
         response = web.json_response(exc.as_dict(), status=_error_status(exc))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        response = web.json_response(CoreError('invalid_request').as_dict(), status=400)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        error = CoreError('invalid_request')
+        editor_diagnostics.report(exc, error)
+        response = web.json_response(error.as_dict(), status=400)
     except web.HTTPException as exc:
         code = {404: 'route_not_found', 405: 'method_not_allowed', 413: 'request_too_large'}.get(exc.status, 'invalid_request')
-        response = web.json_response(CoreError(code).as_dict(), status=exc.status)
+        error = CoreError(code)
+        editor_diagnostics.report(exc, error)
+        response = web.json_response(error.as_dict(), status=exc.status)
         if exc.headers.get('Allow'):
             response.headers['Allow'] = exc.headers['Allow']
     except Exception as exc:
         # Never include request bodies, full URLs, phones, initData or tokens.
-        logger.error('Web API failed type=%s', type(exc).__name__)
-        response = web.json_response(CoreError('internal_error', retryable=True).as_dict(), status=500)
+        error = CoreError('internal_error', retryable=True)
+        if editor_diagnostics.report(exc, error) is None:
+            logger.error('Web API failed type=%s', type(exc).__name__)
+        response = web.json_response(error.as_dict(), status=500)
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'no-referrer'

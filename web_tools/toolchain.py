@@ -22,6 +22,8 @@ import uuid
 from pathlib import Path
 
 from web_tools.editor_files import checked_directory, checked_info, read_regular
+from web_tools.compiler_rootfs import prerequisites
+from web_tools.errors import CompilerEnvironmentError
 from web_tools.paths import PROJECT_ROOT, atomic_write, canonical, local_path, publication_lock
 
 PIN = 'web_tools/toolchain.json'
@@ -67,6 +69,12 @@ def _ready(value, *, linked=True):
         raise ValueError('compiler Node is not executable')
     npm = local_path(kit, 'node/lib/node_modules/npm/bin/npm-cli.js')
     checked_info(npm.lstat())
+    if npm.stat().st_mode & 0o005 != 0o005:
+        raise ValueError('compiler npm must be executable inside the isolated mount')
+    for directory in (npm.parent, npm.parent.parent):
+        checked_directory(directory)
+        if directory.stat().st_mode & 0o005 != 0o005:
+            raise ValueError('compiler npm directories must be readable inside the isolated mount')
     modules = local_path(kit, 'dependencies/node_modules')
     checked_directory(modules)
     if modules.stat().st_mode & 0o005 != 0o005:
@@ -105,9 +113,13 @@ def describe(root=PROJECT_ROOT):
         result = {'ready': False, 'node_version': value['identity']['node_version'],
                   'dependency_lock': value['identity']['lock_sha256'], 'code': 'not_prepared'}
         try:
+            prerequisites()
+        except CompilerEnvironmentError as error:
+            return {**result, 'code': 'unavailable', 'reason': str(error)}
+        try:
             _ready(value)
         except (OSError, ValueError, TypeError, KeyError):
-            return result
+            return {**result, 'reason': 'The release-pinned compiler inputs are not prepared or do not match this release.'}
         return {**result, 'ready': True, 'code': 'ready'}
     except (OSError, ValueError, TypeError, KeyError):
         return {'ready': False, 'code': 'unavailable'}
@@ -177,6 +189,12 @@ def _extract(archive, destination, prefix):
             raise ValueError('Node archive link leaves its tree')
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
         target.symlink_to(link)
+    # Only this freshly extracted, checksum-verified tree is normalized. The
+    # enclosing kit stays private; npm's read-only bind must work with umask 077
+    # too (managed updater units use it). Never chmod a dependency symlink.
+    for directory, _, _ in os.walk(destination, followlinks=False):
+        if Path(directory) != destination:
+            Path(directory).chmod(0o755)
 
 
 def _environment(value, stage):
@@ -270,6 +288,17 @@ def _preparation_lock(base):
 
 
 def prepare(root=PROJECT_ROOT, *, offline=False):
+    prerequisites()
+    inputs = _prepare_inputs(root, offline=offline)
+    return {**describe(root), 'changed': inputs['changed']}
+
+
+def _prepare_inputs(root, *, offline=False):
+    """Prepare pinned inputs for the editor or the trusted release container.
+
+    This internal operation makes no claim about server/compiler readiness.
+    The installed editor always enters through prepare() and its prerequisites.
+    """
     value = layout(root)
     base = local_path(value['root'], CACHE, directory=True)
     checked_directory(base, private=True)
@@ -303,7 +332,8 @@ def prepare(root=PROJECT_ROOT, *, offline=False):
                     shutil.rmtree(stage)
         changed = _attach(value) or changed
         _ready(value)
-    return {**describe(root), 'changed': changed}
+    return {'node_version': value['identity']['node_version'],
+            'dependency_lock': value['identity']['lock_sha256'], 'changed': changed}
 
 
 async def prepare_after_start(root=PROJECT_ROOT):
@@ -322,7 +352,9 @@ async def prepare_after_start(root=PROJECT_ROOT):
             stderr=subprocess.DEVNULL, start_new_session=True)
         result = await asyncio.wait_for(process.wait(), timeout=660)
         if result:
-            logging.getLogger(__name__).warning('Optional Web compiler remains unavailable after startup preparation')
+            logging.getLogger(__name__).warning(
+                'Optional Web compiler remains unavailable after startup preparation: %s',
+                describe(root).get('reason', 'compiler preparation failed'))
     except (OSError, ValueError, asyncio.TimeoutError):
         logging.getLogger(__name__).warning('Optional Web compiler preparation did not finish; runtime remains active')
     finally:
@@ -343,11 +375,14 @@ def main():
     args = parser.parse_args()
     try:
         result = prepare(args.root, offline=args.offline) if args.action == 'prepare' else describe(args.root)
+    except CompilerEnvironmentError as error:
+        print(json.dumps({'ready': False, 'code': 'unavailable', 'reason': str(error)}))
+        return 1
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError, tarfile.TarError):
         print(json.dumps({'ready': False, 'code': 'preparation_failed'}))
         return 1
     print(json.dumps(result))
-    return 0
+    return 1 if args.action == 'prepare' and not result['ready'] else 0
 
 
 if __name__ == '__main__':

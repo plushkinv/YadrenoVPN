@@ -179,11 +179,13 @@ def _verify_ready(system, origin, signed, trust, *, nginx_configuration=None):
     while True:
         try:
             verify_endpoint(system, origin, signed, trust, nginx_configuration=nginx_configuration)
-            return
+            break
         except SetupError as exc:
             if exc.code not in {'https_unavailable', 'nginx_configuration_not_applied'} or time.monotonic() >= deadline:
                 raise
             time.sleep(1)
+    # Upload admission is checked once, outside the bounded Nginx reload wait.
+    system.verify_uploads(origin)
 
 
 def _reload_nginx(system):

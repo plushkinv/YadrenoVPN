@@ -16,6 +16,7 @@ from pathlib import Path
 
 from web_tools.build import custom_inventory_fingerprint
 from web_tools.editor_files import checked_directory, read_regular, scan_sources
+from web_tools.errors import CompilerEnvironmentError
 from web_tools.package import MAX_BYTES, MAX_FILES, digest
 from web_tools.paths import atomic_write, local_path
 
@@ -27,19 +28,28 @@ NPM = '/toolchain/bin/npm'
 def prerequisites():
     """Fail closed before creating a sandbox on unsupported installations."""
     if sys.platform != 'linux' or os.geteuid() != 0:
-        raise ValueError('isolated UI compilation requires the root systemd installation')
+        raise CompilerEnvironmentError('UI compilation requires a root-managed Linux systemd installation.')
     commands = {name: shutil.which(name, path=HOST_ENV['PATH'])
                 for name in ('systemd-run', 'systemctl', 'mount', 'umount', 'ldd', 'env')}
     if not all(commands.values()) or not Path('/run/systemd/system').is_dir():
-        raise ValueError('isolated UI compilation requires systemd and the local toolchain utilities')
-    version = subprocess.run([commands['systemd-run'], '--version'], env=HOST_ENV,
-                             capture_output=True, text=True, check=True, timeout=10).stdout
+        raise CompilerEnvironmentError('UI compilation requires running systemd and the systemd-run, systemctl, mount, umount, ldd and env utilities.')
+    try:
+        version = subprocess.run([commands['systemd-run'], '--version'], env=HOST_ENV,
+                                 capture_output=True, text=True, check=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        raise CompilerEnvironmentError('The installed systemd version could not be checked.') from None
     match = re.match(r'systemd (\d+)', version)
-    if not match or int(match[1]) < 255:
-        raise ValueError('isolated UI compilation requires systemd 255 or newer')
+    if not match:
+        raise CompilerEnvironmentError('The installed systemd version could not be recognized.')
+    if int(match[1]) < 249:
+        raise CompilerEnvironmentError(f'UI compilation requires systemd 249 or newer; installed version: {int(match[1])}.')
     controllers = Path('/sys/fs/cgroup/cgroup.controllers')
-    if not controllers.is_file() or not {'cpu', 'memory', 'pids'} <= set(controllers.read_text().split()):
-        raise ValueError('isolated UI compilation requires CPU, memory and PID cgroup v2 controllers')
+    try:
+        available = set(controllers.read_text().split())
+    except OSError:
+        available = set()
+    if not {'cpu', 'memory', 'pids'} <= available:
+        raise CompilerEnvironmentError('UI compilation requires CPU, memory and PID cgroup v2 controllers.')
     return commands
 
 

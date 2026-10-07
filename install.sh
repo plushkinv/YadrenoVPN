@@ -263,7 +263,7 @@ setup_web_toolchain() {
     if [ -f "$INSTALL_DIR/web_tools/toolchain.py" ]; then
         print_header "Подготовка инструментов веб-редактора"
         if (cd "$INSTALL_DIR" && "$VENV_DIR/bin/python" -m web_tools.toolchain prepare); then
-            print_ok "Инструменты веб-редактора подготовлены"
+            print_ok "Инструменты веб-редактора подготовлены, требования к окружению проверены"
         else
             print_warn "Инструменты веб-редактора пока недоступны. Бот и сайт продолжают работать; подготовка повторится при обновлении."
         fi

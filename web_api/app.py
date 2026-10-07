@@ -13,7 +13,15 @@ SETTINGS_KEY = web.AppKey('web_settings', WebSettings)
 @web.middleware
 async def activation_middleware(request: web.Request, handler):
     if request.path != '/health' and not is_active():
-        return web.json_response({'code': 'temporarily_unavailable', 'details': {}, 'retryable': True}, status=503)
+        from bot.services import yadreno_admin_web_diagnostics as diagnostics
+        from core.results import CoreError
+        error = CoreError('temporarily_unavailable', retryable=True)
+        operation = diagnostics.route_operation(request.path)
+        if operation is not None:
+            with diagnostics.scope(operation):
+                diagnostics.update(stage='runtime')
+                diagnostics.report(error)
+        return web.json_response(error.as_dict(), status=503)
     return await handler(request)
 
 
