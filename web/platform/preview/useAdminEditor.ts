@@ -16,7 +16,7 @@ interface EditorState {
 export interface CandidatePreview {
   task_id: string; candidate: { build_id: string; customization_version: string };
   viewed: PreviewContext; preview_url: string; published: boolean;
-  pages: { id: string; title: string | null }[];
+  pages: { id: string; title?: string | null; preview_parameter?: string }[];
 }
 type Turn = { kind: 'message' } | { kind: 'apply'; candidate: CandidatePreview };
 const prefix = '/admin/ui/editor', maxFiles = 5;

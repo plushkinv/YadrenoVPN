@@ -13,7 +13,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "types": ["vite/client"],
-    "paths": { "@ui/*": ["./src/*"], "react": ["./node_modules/@types/react"], "react/*": ["./node_modules/@types/react/*"], "react-dom/*": ["./node_modules/@types/react-dom/*"], "lucide-react": ["./node_modules/lucide-react"], "qrcode.react": ["./node_modules/qrcode.react"] }
+    "paths": { "@application/*": ["./src/*"], "@ui/context": ["./platform/runtime/context.tsx"], "@ui/client": ["./platform/api/client.ts"], "@ui/contracts": ["./platform/api/contracts.ts"], "@ui/environment": ["./platform/runtime/environment.ts"], "@ui/storage": ["./platform/runtime/application-storage.ts"], "@ui/*": ["./src/*"], "react": ["./node_modules/@types/react"], "react/*": ["./node_modules/@types/react/*"], "react-dom/*": ["./node_modules/@types/react-dom/*"], "lucide-react": ["./node_modules/lucide-react"], "qrcode.react": ["./node_modules/qrcode.react"] }
   },
-  "include": ["src", "../tests/web_core_ui/*.tsx", "../tests/web_core_ui/fixtures.ts"]
+  "include": ["src", "platform"]
 }

@@ -48,7 +48,8 @@ async def dispatch(job):
             continue
         if registry.module_state(key[1], settlement=True) != 'available' or job['event_name'] not in policy['events']:
             raise LookupError('shared event subscriber unavailable')
-        payload = job['payload']
+        from bot.utils.extension_background import resolve_background_accounts
+        payload = resolve_background_accounts(job['payload'])
         user = db.get_user_by_id(payload['user_id'])
         if not user:
             raise LookupError('event account unavailable')

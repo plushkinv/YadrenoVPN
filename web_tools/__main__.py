@@ -96,7 +96,9 @@ def main():
                         result = activate(runtime, content, trust)
                 else:
                     from web_tools.preview import preview
-                    preview(stage, trust, args.port)
+                    from web_tools.platform_assets import install_platform
+                    install_platform(args.root, runtime)
+                    preview(stage, trust, args.port, runtime=runtime)
                     return 0
         print(json.dumps(result, ensure_ascii=False))
         return 0

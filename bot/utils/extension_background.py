@@ -15,11 +15,24 @@ HANDLER_TIMEOUT_SECONDS = 12
 _RETRY_SECONDS = (60, 300, 900, 3600, 21600, 86400)
 
 
+def resolve_background_accounts(context):
+    """Resolve saved account references at delivery; keep the stored snapshot intact."""
+    from database import requests as db
+    context = deepcopy(context)
+    for field in ('user_id', 'payer_id'):
+        original = context.get(field)
+        if type(original) is int and original > 0:
+            context[field] = db.resolve_account_id(original)
+            if field == 'user_id' and context[field] != original:
+                context['telegram_id'] = db.get_user_by_id(context[field])['telegram_id']
+    return context
+
+
 async def invoke_background_handler(handler, context: dict[str, Any], *, bot=None):
     """Detach input and bind the application bot for sync and async handlers."""
     from bot.utils.custom_extensions import _extension_bot_context
 
-    context = deepcopy(context)
+    context = resolve_background_accounts(context)
     with _extension_bot_context(bot):
         if inspect.iscoroutinefunction(handler):
             result = handler(context)

@@ -7,4 +7,5 @@ const modules = import.meta.glob<Record<string, ComponentType>>('../pages/**/*.t
 export const basePages: PageDefinition[] = declarations.pages.map(page => ({
   id: page.id, title: page.title ?? t[page.title_key as keyof typeof t], component: modules[page.file.replace('src/', '../')][page.export],
   ...(page.public ? { public: true } : {}), ...(page.feature ? { feature: page.feature } : {}),
+  ...('module_id' in page ? { module_id: String(page.module_id) } : {}),
 }));

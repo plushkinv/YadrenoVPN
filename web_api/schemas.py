@@ -46,7 +46,8 @@ SCHEMAS = {
                   'retryable': B, 'operation_id': S}, ['code', 'details', 'retryable']),
     'AuthSettings': obj({'phone_format': S, 'verification_available': B, 'verification_required': B,
                          'verification_method': nullable({'type': 'string', 'enum': ['ucaller', 'smsaero_mobile', 'smsaero_sms']}),
-                         'password_recovery_available': B, 'unverified_phone_warning_required': B}),
+                         'password_recovery_available': B, 'unverified_phone_warning_required': B,
+                         'telegram_login_available': B}),
     'PhoneVerification': obj({'challenge_id': S,
         'method': {'type': 'string', 'enum': ['ucaller', 'smsaero_mobile', 'smsaero_sms']},
         'state': {'type': 'string', 'enum': ['code_required', 'waiting', 'confirmed', 'failed', 'unknown', 'verified', 'expired']},
@@ -166,8 +167,7 @@ UI_MANIFEST_FIELDS = {'product': S, 'product_version': S, 'base_build_id': S, 'b
 UI_REQUIREMENTS = obj({'frontend_api': UI_API_RANGE, 'modules': array(obj({'id': S, 'version': S,
     'api_version': I, 'core_api': UI_API_RANGE, 'frontend_api': UI_API_RANGE, 'environment_contract': I}))})
 route('GET', 'ui/manifest', obj({'manifest': {'anyOf': [
-    obj({**UI_MANIFEST_FIELDS, 'format_version': {'type': 'integer', 'enum': [1]}}),
-    obj({**UI_MANIFEST_FIELDS, 'format_version': {'type': 'integer', 'enum': [2]}, 'requirements': UI_REQUIREMENTS}),
+    obj({**UI_MANIFEST_FIELDS, 'format_version': {'type': 'integer', 'enum': [3]}, 'requirements': UI_REQUIREMENTS}),
 ]}, 'signature': S}), anonymous=True)
 route('GET', 'ui/packages/{content_hash}', {'type': 'string', 'format': 'binary'}, anonymous=True)
 route('GET', 'admin/ui/preview', ref('UiPreview'))
@@ -175,7 +175,7 @@ route('POST', 'admin/ui/preset', ref('UiSettings'), obj({'preset': text_bound(32
 route('GET', 'admin/ui/editor', ref('EditorState'))
 route('POST', 'admin/ui/editor/preview', obj({'task_id': S, 'candidate': ref('EditorCandidate'),
     'viewed': ref('EditorViewed'), 'preview_url': S, 'published': B,
-    'pages': array(obj({'id': S, 'title': nullable(S)}))}), obj())
+    'pages': array(obj({'id': S, 'title': nullable(S), 'preview_parameter': S}, required=['id']))}), obj())
 route('POST', 'admin/ui/editor/turns', obj({'status': {'type': 'string', 'enum': ['accepted']},
     'task_id': S, 'request_id': EDITOR_REQUEST_ID}), obj({'message': text_bound(8192), 'viewed': ref('EditorViewed')}))
 route('POST', 'admin/ui/editor/uploads', obj({'status': {'type': 'string', 'enum': ['accepted']},
@@ -197,6 +197,8 @@ route('POST', 'auth/register', ref('Session'), obj({'phone': text_bound(64), 'pa
     'proof': nullable(text_bound(128)), 'referral_code': nullable(text_bound(128))}, ['phone', 'password']), anonymous=True)
 route('POST', 'auth/login', ref('Session'), obj({'phone': text_bound(64), 'password': text_bound(128)}), anonymous=True)
 route('POST', 'auth/telegram', ref('Session'), obj({'init_data': text_bound(8192)}), anonymous=True)
+route('POST', 'auth/telegram/web/start', obj({'client_id': ID, 'nonce': S, 'expires_at': I}), obj(), anonymous=True)
+route('POST', 'auth/telegram/web/finish', ref('Session'), obj({'id_token': text_bound(16384)}), anonymous=True)
 route('POST', 'auth/logout', obj({'logged_out': B}), obj())
 route('GET', 'auth/session', ref('Session'))
 route('POST', 'account/credentials', ref('Session'), obj({'phone': text_bound(64), 'password': text_bound(128),
@@ -210,8 +212,9 @@ route('POST', 'auth/password/reset', obj({'password_reset': B}),
     obj({'phone': text_bound(64), 'password': text_bound(128), 'proof': text_bound(128)}), anonymous=True)
 route('POST', 'account/telegram/link', obj({'token': S, 'telegram_url': S, 'expires_at': I}), obj())
 route('POST', 'account/telegram/link/status', obj({'state': S, 'expires_at': I, 'telegram_id': NI,
-    'username': NS, 'first_name': NS, 'last_name': NS}), obj({'token': text_bound(64)}))
-route('POST', 'account/telegram/link/finish', obj({'account_id': I, 'telegram_id': I, 'pending_renames': I}),
+    'username': NS, 'first_name': NS, 'last_name': NS, 'account_id': I, 'target_account_id': I,
+    'phone': NS, 'merge': B}), obj({'token': text_bound(64)}))
+route('POST', 'account/telegram/link/finish', obj({'account_id': I, 'telegram_id': I, 'pending_renames': I, 'session': ref('Session')}),
     obj({'token': text_bound(64), 'telegram_id': ID}))
 route('GET', 'me', ref('Profile'))
 route('GET', 'catalog', ref('Catalog'), query={'subscription_id': ID})

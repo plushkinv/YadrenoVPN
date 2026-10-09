@@ -56,7 +56,8 @@ def create_account_credentials(
                 raise CoreError('phone_in_use')
             if user_id is not None:
                 session = _session_with_conn(conn, session_hash, now)
-                if not session or session['user_id'] != user_id or session['source'] != 'mini_app':
+                if (not session or session['user_id'] != user_id
+                        or session['authentication_method'] != 'telegram' or not session['telegram_id']):
                     raise CoreError('authentication_required')
                 if session['authenticated_at'] < now - 300:
                     raise CoreError('reauthentication_required')
@@ -131,7 +132,7 @@ def reset_account_password(*, phone: str, password_hash: str, proof_hash: str, n
 
 def create_account_session(
     *, user_id: int, source: str, expected_version: int, token_hash: str,
-    csrf_hash: str, now: int, expires_at: int,
+    csrf_hash: str, now: int, expires_at: int, authentication_method: str = 'password',
 ) -> dict:
     with get_db() as conn:
         conn.execute('BEGIN IMMEDIATE')
@@ -139,14 +140,14 @@ def create_account_session(
             'SELECT u.*, COALESCE(c.version, 0) AS credential_version FROM users u '
             'LEFT JOIN account_credentials c ON c.user_id = u.id WHERE u.id = ?', (user_id,),
         ).fetchone()
-        if row is None or row['is_banned']:
+        if row is None or row['is_banned'] or row['merged_into_user_id'] is not None:
             raise CoreError('authentication_failed')
         if row['credential_version'] != expected_version:
             raise CoreError('credentials_changed')
         conn.execute(
             'INSERT INTO account_sessions(token_hash, csrf_hash, user_id, source, credential_version, '
-            'created_at, authenticated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            (token_hash, csrf_hash, user_id, source, expected_version, now, now, expires_at),
+            'created_at, authenticated_at, expires_at, authentication_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (token_hash, csrf_hash, user_id, source, expected_version, now, now, expires_at, authentication_method),
         )
         return dict(row)
 
@@ -156,7 +157,8 @@ def _session_with_conn(conn, token_hash, now):
         'SELECT s.*, u.telegram_id FROM account_sessions s JOIN users u ON u.id = s.user_id '
         'LEFT JOIN account_credentials c ON c.user_id = s.user_id '
         'WHERE s.token_hash = ? AND s.expires_at > ? AND s.revoked_at IS NULL '
-        'AND u.is_banned = 0 AND s.credential_version = COALESCE(c.version, 0)', (token_hash, now),
+        'AND u.is_banned = 0 AND u.merged_into_user_id IS NULL '
+        'AND s.credential_version = COALESCE(c.version, 0)', (token_hash, now),
     ).fetchone()
 
 

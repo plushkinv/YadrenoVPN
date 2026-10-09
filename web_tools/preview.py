@@ -10,10 +10,15 @@ from web_tools.paths import canonical, local_path
 from web_tools.package import verify_package
 
 
-def preview(stage, trust, port=5176):
+def preview(stage, trust, port=5176, *, runtime):
+    from web_api.ui_platform import descriptor, html as render_html
+    from web_tools.platform_assets import platform_resource
     signed, files = verify_package(local_path(stage, 'package.zip').read_bytes(), trust)
     manifest = signed['manifest']
     base = '/ui/versions/' + manifest['build_id'] + '/'
+    application = descriptor(runtime, signed, files, mode='preview')
+    frame = render_html(runtime, application, frame=True)
+    system_base = '/ui/platform/' + application['platform_version'] + '/'
     # No installation credentials, accounts or network mutations are available.
     message = {'type': 'yadreno.preview', 'installation': {
         'settings': {'title': 'Локальный просмотр', 'logo': None, 'preset': 'clear', 'theme': 'light', 'sync_interval_seconds': 300},
@@ -32,6 +37,14 @@ def preview(stage, trust, port=5176):
             path = unquote(urlsplit(self.path).path)
             if path == '/':
                 content, mime = html, 'text/html'
+            elif path == base + 'preview.html':
+                content, mime = frame, 'text/html'
+            elif path.startswith(system_base) and not path.endswith('.html'):
+                try:
+                    name = path[len(system_base):]
+                    content, mime = platform_resource(runtime, application['platform_version'], name), mimetypes.guess_type(name)[0] or 'application/octet-stream'
+                except (ValueError, KeyError, OSError):
+                    self.send_error(404); return
             elif path.startswith(base) and path[len(base):] in files:
                 name = path[len(base):]
                 content, mime = files[name], mimetypes.guess_type(name)[0] or 'application/octet-stream'

@@ -91,6 +91,8 @@ def schedule_extension_task(
             extension_id=extension_id, idempotency_key=idempotency_key,
             operation='schedule_task', target_user_id=user_id, amount=None,
             reason='extension_task', request_fingerprint=fingerprint, _conn=conn,
+            request_payload={'handler_name': name, 'delay_seconds': delay_seconds, 'run_at': run_at,
+                             'telegram_id': telegram_id, 'payload': payload},
         )
         if not claimed.get('claimed'):
             return {'task_id': None, 'run_at': None, **claimed, **(claimed.get('metadata') or {})}

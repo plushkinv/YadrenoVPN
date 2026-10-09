@@ -1,5 +1,6 @@
 """Durable coordination between local bindings and panel identity renames."""
 import json
+import re
 from datetime import datetime, timezone
 
 from core.results import CoreError
@@ -89,19 +90,24 @@ def _enqueue_telegram_panel_renames(conn, user_id: int, now: int) -> int:
     user = conn.execute('SELECT id, telegram_id, username FROM users WHERE id = ?', (user_id,)).fetchone()
     if user['telegram_id'] is None:
         return 0
-    prefix = f'site_{user_id}_'
     new_prefix = get_panel_email_prefix(dict(user))
     keys = conn.execute('SELECT id, server_id, panel_email, sub_id FROM vpn_keys WHERE user_id = ? '
                         'AND server_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM panel_identity_renames r '
                         "WHERE r.key_id = vpn_keys.id AND r.state != 'done')", (user_id,)).fetchall()
     count = 0
     for key in keys:
-        if not str(key['panel_email'] or '').startswith(prefix):
+        match = re.match(r'^site_[0-9]+_', str(key['panel_email'] or ''))
+        if not match:
             continue
+        new_email = new_prefix + key['panel_email'][match.end():]
+        if conn.execute('SELECT 1 FROM vpn_keys WHERE id!=? AND LOWER(panel_email)=LOWER(?) '
+                        'UNION ALL SELECT 1 FROM panel_identity_renames WHERE key_id!=? AND state!=? AND LOWER(new_email)=LOWER(?)',
+                        (key['id'], new_email, key['id'], 'done', new_email)).fetchone():
+            new_email += '_' + str(key['id'])
         conn.execute('INSERT INTO panel_identity_renames(key_id, user_id, server_id, old_email, '
                      'new_email, sub_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
                      (key['id'], user_id, key['server_id'], key['panel_email'],
-                      new_prefix + key['panel_email'][len(prefix):], key['sub_id'], now))
+                      new_email, key['sub_id'], now))
         count += 1
     return count
 
@@ -125,7 +131,7 @@ def finish_panel_identity_rename(operation_id: int, now: int) -> None:
                          (row['key_id'],))
         conn.execute("UPDATE panel_identity_renames SET state = 'done', completed_at = ?, error_code = NULL, snapshot_json = NULL "
                      'WHERE id = ?', (now, operation_id))
-        if row['new_email'].startswith(f"site_{row['user_id']}_"):
+        if re.match(r'^site_[0-9]+_', row['new_email']):
             _enqueue_telegram_panel_renames(conn, row['user_id'], now)
 
 

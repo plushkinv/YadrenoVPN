@@ -69,7 +69,7 @@ def publication(root):
         raise SetupError('ui_not_ready', 'Сначала установите готовую совместимую сборку интерфейса; Node для базовой сборки не нужен.') from None
 
 
-def verify_endpoint(system, origin, signed, trust, *, package=True, nginx_configuration=None):
+def verify_endpoint(system, origin, signed, trust, *, runtime, package=True, nginx_configuration=None):
     try:
         required = {'nginx_configuration': nginx_configuration} if nginx_configuration is not None else {}
         remote = json.loads(system.fetch(origin + '/api/v1/ui/manifest', **required))
@@ -77,9 +77,15 @@ def verify_endpoint(system, origin, signed, trust, *, package=True, nginx_config
             raise ValueError('wrong signed publication')
         manifest = signed['manifest']
         build = manifest['build_id']
+        from web_api.ui_platform import descriptor, html
+        application = descriptor(runtime, signed)
+        expected = html(runtime, application)
         for path in ('/', '/ui/versions/' + build + '/index.html'):
-            if digest(system.fetch(origin + path)) != manifest['files']['index.html']['sha256']:
-                raise ValueError('wrong immutable application entry')
+            if system.fetch(origin + path) != expected:
+                raise ValueError('wrong system shell or application descriptor')
+        entry = application['entry'].removeprefix(application['asset_base'])
+        if digest(system.fetch(origin + application['entry'])) != manifest['files'][entry]['sha256']:
+            raise ValueError('wrong immutable application entry')
         bootstrap = json.loads(system.fetch(origin + '/api/v1/bootstrap'))
         if bootstrap.get('api_version') != 1:
             raise ValueError('wrong API bootstrap')
@@ -220,7 +226,7 @@ def preflight(root, options, system, store):
         if busy and saved.get('web_enabled') == '1' and saved_port == port and saved.get('web_listen_host', '127.0.0.1') in {None, options.backend_bind}:
             try:
                 host = '[' + options.backend_bind + ']' if ':' in options.backend_bind else options.backend_bind
-                verify_endpoint(system, f'http://{host}:{port}', signed, trust, package=False)
+                verify_endpoint(system, f'http://{host}:{port}', signed, trust, runtime=Path(root) / 'web_runtime', package=False)
                 own = True
             except SetupError:
                 pass

@@ -2,7 +2,7 @@
 from aiohttp import web
 
 from core import account_links
-from web_api.auth import SESSION_KEY, _body, _text
+from web_api.auth import SESSION_KEY, _body, _text, _session_response
 
 
 async def start(request):
@@ -16,8 +16,10 @@ async def status(request):
 
 async def finish(request):
     body = await _body(request)
-    return web.json_response(account_links.finish_link(
-        request[SESSION_KEY], _text(body, 'token', max_length=64), body.get('telegram_id')))
+    result = await account_links.finish_link(
+        request[SESSION_KEY], _text(body, 'token', max_length=64), body.get('telegram_id'))
+    session = result['session']
+    return _session_response(session, payload={**result, 'session': {key: value for key, value in session.items() if key != 'token'}})
 
 
 def add_routes(app):

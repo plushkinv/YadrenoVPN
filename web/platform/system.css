@@ -1,0 +1,28 @@
+@import '@fontsource-variable/manrope/index.css';
+@import './themes/tokens.css';
+@import './admin.css';
+body { margin: 0; }
+.system-ui { color: var(--text); background: var(--canvas); font: 500 1rem/1.5 var(--font); }
+.system-ui *, .system-ui *::before, .system-ui *::after { box-sizing: border-box; }
+.system-ui button, .system-ui input, .system-ui textarea, .system-ui select { font: inherit; color: inherit; }
+.system-ui button { cursor: pointer; }
+.system-ui button:disabled { opacity: .5; cursor: default; }
+.system-ui :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.system-ui p { margin: 0; }
+.system-ui .button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; min-width: 48px; padding: 12px 16px; border: 1px solid transparent; border-radius: var(--button-radius); font-weight: 750; line-height: 1.4; }
+.system-ui .button--primary { background: var(--accent); color: var(--on-accent); }
+.system-ui .button--secondary { background: var(--surface-soft); color: var(--text); border-color: var(--line); }
+.system-ui .button--quiet { background: transparent; color: var(--muted); }
+.system-ui .form-field { display: grid; gap: 8px; font-weight: 650; }
+.system-ui .form-field select { width: 100%; min-width: 0; min-height: 48px; padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.system-ui .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.system-ui .rich-content { white-space: pre-wrap; }
+.system-ui .rich-content a { color: inherit; text-decoration: underline; }
+.system-frame-shell { height: 100dvh; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
+.system-application { min-height: 0; position: relative; }
+.system-application > iframe { width: 100%; height: 100%; display: block; border: 0; }
+.system-frame-shell > .admin-review-slot { position: relative; pointer-events: auto; padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px)); }
+.system-loading, .system-failure { padding: 24px; }
+.system-failure { background: var(--surface, white); color: var(--text, #162a23); }
+.system-frame-shell .system-application > .system-ui:has(.system-failure) { position: absolute; inset: 0; z-index: 1; }
+@media (prefers-reduced-motion: reduce) { .system-ui *, .system-ui *::before, .system-ui *::after { animation: none !important; transition: none !important; } }

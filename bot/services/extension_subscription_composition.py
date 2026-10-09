@@ -69,6 +69,7 @@ async def apply_extension_subscription_operation(
         amount=amount,
         reason=reason,
         request_fingerprint=fingerprint,
+        request_payload=payload,
     )
     if not claimed.get("claimed"):
         return _replayed_result(claimed)

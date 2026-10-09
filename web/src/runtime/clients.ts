@@ -1,0 +1,16 @@
+import type { ClientView } from '../model';
+export const clients: (ClientView & { install: string; scheme?: (url: string) => string })[] = [
+  { id: 'happ', name: 'Happ', platforms: 'Android, iOS, Windows, macOS, Linux, Android TV, Apple TV', description: 'Для телефонов, компьютеров и телевизоров. На сайте Happ выберите версию для своего устройства.', install: 'https://www.happ.su/main/ru', scheme: url => 'happ://add/' + url },
+  { id: 'incy', name: 'INCY', platforms: 'Android, iOS, Windows, macOS, Linux, Android TV, Apple TV', description: 'Для телефонов, компьютеров и телевизоров. Сборки для Windows и Linux, а также DMG для macOS пока предварительные; версия macOS доступна и в App Store.', install: 'https://incy.cc/', scheme: url => 'incy://import/' + url },
+  { id: 'v2raytun', name: 'v2RayTun', platforms: 'Android, iOS, Windows, macOS', description: 'Для телефона и компьютера. Ссылки на магазины и установочные файлы собраны на сайте v2RayTun.', install: 'https://v2raytun.com/', scheme: url => 'v2raytun://import/' + url },
+  { id: 'hiddify', name: 'Hiddify', platforms: 'Android, iOS, Windows, macOS, Linux', description: 'Клиент с открытым исходным кодом для телефона и компьютера. Выберите свою систему на странице загрузки.', install: 'https://hiddify.com/app/', scheme: url => 'hiddify://import/' + url },
+  { id: 'v2rayng', name: 'v2rayNG', platforms: 'Android', description: 'Клиент для Android. APK для установки доступен на странице последнего релиза разработчика.', install: 'https://github.com/2dust/v2rayNG/releases/latest', scheme: url => 'v2rayng://install-config?url=' + encodeURIComponent(url) },
+  { id: 'v2rayn', name: 'v2rayN', platforms: 'Windows, macOS, Linux', description: 'Клиент для компьютера. После установки подписку нужно добавить вручную по скопированной ссылке.', install: 'https://github.com/2dust/v2rayN/releases/latest' },
+  { id: 'streisand', name: 'Streisand', platforms: 'iOS, macOS', description: 'Клиент для устройств Apple. Устанавливается из App Store.', install: 'https://apps.apple.com/app/streisand/id6450534064', scheme: url => 'streisand://import/' + url },
+  { id: 'shadowrocket', name: 'Shadowrocket', platforms: 'iOS, macOS, Apple TV', description: 'Платный клиент для устройств Apple. Покупка и установка — через App Store.', install: 'https://apps.apple.com/app/shadowrocket/id932747118', scheme: url => 'sub://' + btoa(new URL(url).href) },
+  { id: 'exclave', name: 'Exclave', platforms: 'Android', description: 'Клиент для Android. Установочный APK доступен в релизах разработчика на GitHub.', install: 'https://github.com/ExclaveNetwork/Exclave/releases', scheme: url => 'exclave://subscription?url=' + encodeURIComponent(url) },
+  { id: 'v2box', name: 'V2Box', platforms: 'Android, iOS, macOS', description: 'Для Android и устройств Apple. Выберите магазин своего устройства.', install: 'https://apps.apple.com/app/v2box-v2ray-client/id6446814690', installLinks: [
+    { label: 'Google Play · Android', url: 'https://play.google.com/store/apps/details?id=dev.hexasoftware.v2box' },
+    { label: 'App Store · iOS, macOS', url: 'https://apps.apple.com/app/v2box-v2ray-client/id6446814690' },
+  ], scheme: url => 'v2box://install-sub?url=' + encodeURIComponent(url) },
+];

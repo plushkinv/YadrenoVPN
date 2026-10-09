@@ -19,7 +19,7 @@ h3 { font-size: 1.0625rem; }
 dl, dd, ul, ol { margin: 0; padding: 0; }
 svg { vertical-align: middle; }
 .app { min-height: 100dvh; font: 500 1rem/1.5 var(--font); color: var(--text); background: var(--canvas); overflow-wrap: anywhere; }
-.app :focus { scroll-margin-top: calc(var(--review-height, 0px) + 20px); scroll-margin-bottom: calc(var(--navigation-height, 56px) + 20px); }
+.app :focus { scroll-margin-top: calc(20px); scroll-margin-bottom: calc(var(--navigation-height, 56px) + 20px); }
 .muted { color: var(--muted); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .wide { width: 100%; }

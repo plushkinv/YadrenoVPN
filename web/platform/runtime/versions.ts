@@ -1,4 +1,4 @@
-import { customization } from './registry';
+import { customization } from '../config';
 
 /** Poll only alongside subscription refresh; an unchanged ETag fetches no assets. */
 export function observeUiVersion(available: () => void) {
@@ -8,11 +8,12 @@ export function observeUiVersion(available: () => void) {
     busy = true;
     try {
       const response = await fetch('/api/v1/ui/manifest', { headers: etag ? { 'If-None-Match': etag } : {}, credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      if (active && response.headers.get('X-UI-Platform') && response.headers.get('X-UI-Platform') !== customization.platform_version) available();
       if (response.status === 304 || !response.ok) return;
       const { manifest } = await response.json();
       if (!active || manifest?.instance_id !== customization.instance_id) return;
       etag = response.headers.get('ETag');
-      if (manifest.build_id !== customization.build_version) available();
+      if (manifest.build_id !== customization.build_version || response.headers.get('X-UI-Platform') !== customization.platform_version) available();
     } catch { /* Keep the working shell when metadata is unavailable. */ }
     finally { busy = false; }
   };

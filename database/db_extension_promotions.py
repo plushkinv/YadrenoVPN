@@ -155,7 +155,7 @@ def apply_extension_promo_operation(
         claimed = claim_extension_core_operation(
             extension_id=extension_id, idempotency_key=idempotency_key, operation=operation,
             target_user_id=user_id, amount=None, reason='extension_promotion',
-            request_fingerprint=fingerprint, _conn=conn,
+            request_fingerprint=fingerprint, request_payload=values, _conn=conn,
         )
         if not claimed.get('claimed'):
             return {**claimed, **(claimed.get('metadata') or {})}

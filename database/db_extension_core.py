@@ -66,6 +66,7 @@ def claim_extension_core_operation(
     amount: int | None,
     reason: str | None,
     request_fingerprint: str,
+    request_payload: dict | None = None,
     _conn=None,
 ) -> dict[str, Any]:
     """
@@ -117,13 +118,22 @@ def claim_extension_core_operation(
                 'status': 'failed',
                 'metadata': {'reason': 'operation_claim_failed'},
             }
+        comparison_target, comparison_fingerprint = user_id, fingerprint
+        if existing['target_user_id'] is not None and user_id is not None:
+            from .db_account_merge import resolve_account_id
+            if (existing['target_user_id'] != user_id
+                    and resolve_account_id(existing['target_user_id'], _conn=conn) == user_id):
+                comparison_target = existing['target_user_id']
+                comparison_fingerprint = build_extension_core_request_fingerprint(
+                    operation=op, target_user_id=comparison_target, amount=value,
+                    reason=reason_text, payload=request_payload)
         if not _request_matches(
             existing,
             operation=op,
-            target_user_id=user_id,
+            target_user_id=comparison_target,
             amount=value,
             reason=reason_text,
-            request_fingerprint=fingerprint,
+            request_fingerprint=comparison_fingerprint,
         ):
             return {
                 'ok': False,

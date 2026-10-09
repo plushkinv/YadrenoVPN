@@ -2,6 +2,7 @@
 
 
 def web_diagnostics(application=None):
+    from core.telegram_web_auth import login_settings
     from core.phone_verification_settings import admin_verification_settings
     from core.extensions.registry import inspect_modules
     from runtime.readiness import is_active
@@ -18,6 +19,7 @@ def web_diagnostics(application=None):
             'enabled': enabled, 'public_origin': origin, 'error': error,
             'listener_running': application.web_server is not None if application else None,
             'verification': admin_verification_settings(),
+            'telegram_login': login_settings(),
             'modules': inspect_modules(), 'ui': ui_publication_status(), 'ui_release': release_status()}
 
 

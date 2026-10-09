@@ -472,7 +472,8 @@ def _resolve_user_id(*, user_id: int | None, telegram_id: int | None) -> int:
     if user_id is not None and telegram_id is not None:
         raise ValueError('передайте только user_id или только telegram_id')
     if user_id is not None:
-        return _normalize_positive_int(user_id, 'user_id')
+        from database.requests import resolve_account_id
+        return resolve_account_id(_normalize_positive_int(user_id, 'user_id'))
     if telegram_id is None:
         raise ValueError('нужно передать user_id или telegram_id')
     telegram_id = _normalize_positive_int(telegram_id, 'telegram_id')
@@ -592,7 +593,8 @@ def _resolve_new_mutation_target(
     if user_id is not None and telegram_id is not None:
         raise ValueError('pass only user_id or telegram_id')
     if user_id is not None:
-        return _normalize_positive_int(user_id, 'user_id')
+        from database.requests import resolve_account_id
+        return resolve_account_id(_normalize_positive_int(user_id, 'user_id'))
     if telegram_id is None:
         if not default_to_current:
             raise ValueError('user_id or telegram_id is required')
@@ -602,7 +604,8 @@ def _resolve_new_mutation_target(
 
         account_id = _get_current_extension_account_id()
         if account_id is not None:
-            return account_id
+            from database.requests import resolve_account_id
+            return resolve_account_id(account_id)
         telegram_id = _get_current_extension_telegram_id()
         if telegram_id is None:
             raise RuntimeError('operation requires an extension runtime with a current user')

@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from .connection import get_db
+from .db_account_merge import resolve_account_id
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ def has_balance_operation_reference(
 ) -> bool:
     """Checks whether an idempotent balance side effect was already recorded."""
     with get_db() as conn:
+        user_id = resolve_account_id(user_id, _conn=conn)
         create_business_operation_tables(conn)
         row = conn.execute(
             """
@@ -136,6 +138,7 @@ def create_business_operation_tables(conn: sqlite3.Connection) -> None:
 def get_first_active_key_for_user(user_id: int) -> dict[str, Any] | None:
     """Returns the user's first active key for domain accrual days."""
     with get_db() as conn:
+        user_id = resolve_account_id(user_id, _conn=conn)
         cursor = conn.execute(
             """
             SELECT *
@@ -168,6 +171,7 @@ def apply_key_days_operation_once(
     normalized_reference_type = _text(reference_type, 'reference_type')
     normalized_reference_id = _text(reference_id, 'reference_id')
     with get_db() as conn:
+        normalized_user_id = resolve_account_id(normalized_user_id, _conn=conn)
         create_business_operation_tables(conn)
         existing = conn.execute(
             """
@@ -315,6 +319,7 @@ def apply_key_days_operation_once(
 def has_key_operation(user_id: int, operation_type: str) -> bool:
     """Read durable history without using it as a current ownership registry."""
     with get_db() as conn:
+        user_id = resolve_account_id(user_id, _conn=conn)
         return conn.execute('SELECT 1 FROM key_operation_log WHERE user_id = ? AND operation_type = ? LIMIT 1',
                             (user_id, operation_type)).fetchone() is not None
 
@@ -335,6 +340,7 @@ def record_key_operation(
 ) -> int:
     """Writes a visible business history of the key transaction."""
     with get_db() as conn:
+        user_id = resolve_account_id(user_id, _conn=conn)
         create_business_operation_tables(conn)
         cursor = conn.execute(
             """
@@ -420,6 +426,7 @@ def apply_balance_operation(
 
     with get_db() as conn:
         create_business_operation_tables(conn)
+        user_id = resolve_account_id(user_id, _conn=conn)
         if currency is None:
             try:
                 currency_row = conn.execute(

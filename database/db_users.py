@@ -236,7 +236,7 @@ def get_all_users_count() -> int:
         Number of users
     """
     with get_db() as conn:
-        cursor = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE is_banned = 0")
+        cursor = conn.execute("SELECT COUNT(*) as cnt FROM users WHERE merged_into_user_id IS NULL AND is_banned = 0")
         row = cursor.fetchone()
         return row['cnt'] if row else 0
 
@@ -259,16 +259,16 @@ def get_users_stats() -> Dict[str, int]:
             return row['cnt'] if row else 0
 
         return {
-            'total': count("SELECT COUNT(*) as cnt FROM users WHERE is_banned = 0"),
+            'total': count("SELECT COUNT(*) as cnt FROM users WHERE merged_into_user_id IS NULL AND is_banned = 0"),
             'active': count("""
                 SELECT COUNT(DISTINCT u.id) as cnt FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                   AND (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
             """),
             'inactive': count("""
                 SELECT COUNT(*) as cnt FROM users u
-                WHERE u.is_banned = 0
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys
                     WHERE expires_at > datetime('now') OR expires_at IS NULL
@@ -276,13 +276,13 @@ def get_users_stats() -> Dict[str, int]:
             """),
             'never_paid': count("""
                 SELECT COUNT(*) as cnt FROM users u
-                WHERE u.is_banned = 0
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
             """),
             'expired': count("""
                 SELECT COUNT(DISTINCT u.id) as cnt FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND vk.expires_at <= datetime('now')
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys
@@ -291,7 +291,7 @@ def get_users_stats() -> Dict[str, int]:
             """),
             'bot_blocked': count("""
                 SELECT COUNT(*) as cnt FROM users
-                WHERE is_banned = 0 AND is_bot_blocked = 1
+                WHERE merged_into_user_id IS NULL AND is_banned = 0 AND is_bot_blocked = 1
             """),
         }
 
@@ -311,25 +311,25 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
     with get_db() as conn:
         # Basic query with key data
         if filter_type == 'all':
-            base_query = "SELECT * FROM users WHERE is_banned = 0"
-            count_query = "SELECT COUNT(*) as cnt FROM users WHERE is_banned = 0"
+            base_query = "SELECT * FROM users WHERE merged_into_user_id IS NULL AND is_banned = 0"
+            count_query = "SELECT COUNT(*) as cnt FROM users WHERE merged_into_user_id IS NULL AND is_banned = 0"
         elif filter_type == 'active':
             base_query = """
                 SELECT DISTINCT u.* FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                   AND (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
             """
             count_query = """
                 SELECT COUNT(DISTINCT u.id) as cnt FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                   AND (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
             """
         elif filter_type == 'inactive':
             base_query = """
                 SELECT u.* FROM users u
-                WHERE u.is_banned = 0 
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys 
                     WHERE expires_at > datetime('now') OR expires_at IS NULL
@@ -337,7 +337,7 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
             """
             count_query = """
                 SELECT COUNT(*) as cnt FROM users u
-                WHERE u.is_banned = 0 
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys 
                     WHERE expires_at > datetime('now') OR expires_at IS NULL
@@ -346,19 +346,19 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
         elif filter_type == 'never_paid':
             base_query = """
                 SELECT u.* FROM users u
-                WHERE u.is_banned = 0 
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
             """
             count_query = """
                 SELECT COUNT(*) as cnt FROM users u
-                WHERE u.is_banned = 0 
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
             """
         elif filter_type == 'expired':
             base_query = """
                 SELECT DISTINCT u.* FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0 
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND vk.expires_at <= datetime('now')
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys 
@@ -368,7 +368,7 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
             count_query = """
                 SELECT COUNT(DISTINCT u.id) as cnt FROM users u
                 JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.is_banned = 0 
+                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
                 AND vk.expires_at <= datetime('now')
                 AND u.id NOT IN (
                     SELECT DISTINCT user_id FROM vpn_keys 
@@ -378,11 +378,11 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
         elif filter_type == 'bot_blocked':
             base_query = """
                 SELECT * FROM users
-                WHERE is_banned = 0 AND is_bot_blocked = 1
+                WHERE merged_into_user_id IS NULL AND is_banned = 0 AND is_bot_blocked = 1
             """
             count_query = """
                 SELECT COUNT(*) as cnt FROM users
-                WHERE is_banned = 0 AND is_bot_blocked = 1
+                WHERE merged_into_user_id IS NULL AND is_banned = 0 AND is_bot_blocked = 1
             """
         else:
             return [], 0
@@ -400,6 +400,8 @@ def get_all_users_paginated(offset: int = 0, limit: int = 20,
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     """Gets the user by internal ID."""
     with get_db() as conn:
+        from .db_account_merge import resolve_account_id
+        user_id = resolve_account_id(user_id, _conn=conn)
         cursor = conn.execute(
             "SELECT * FROM users WHERE id = ?",
             (user_id,)
@@ -530,7 +532,7 @@ def get_new_users_count_today() -> int:
     with get_db() as conn:
         cursor = conn.execute("""
             SELECT COUNT(*) as cnt FROM users 
-            WHERE created_at >= datetime('now', '-1 day')
+            WHERE merged_into_user_id IS NULL AND created_at >= datetime('now', '-1 day')
         """)
         row = cursor.fetchone()
         return row['cnt'] if row else 0

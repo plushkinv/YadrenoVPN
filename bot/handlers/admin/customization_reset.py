@@ -18,6 +18,7 @@ from bot.keyboards.admin_settings import (
 from bot.services.customization_reset import (
     CUSTOM_RESET_CONFIRMATION_PHRASE,
     PRESERVED_DATA_LABELS,
+    CustomizationResetError,
     CustomizationResetReport,
     run_customization_reset_for_bot,
 )
@@ -58,19 +59,22 @@ def _format_backup_paths(report: CustomizationResetReport) -> list[str]:
 
 def _format_custom_reset_report(report: CustomizationResetReport) -> str:
     title = "🧹 <b>Сброс кастомизации</b>"
-    mode = "Предпросмотр" if report.dry_run else "Выполнено"
+    mode = "Остановлен" if report.error else "Предпросмотр" if report.dry_run else "Выполнено"
     lines = [
         title,
         "",
         f"<b>Режим:</b> {mode}",
         "",
-        "Будет очищен только кастомизационный слой. Рабочие пользователи, ключи, серверы, тарифы, оплаты и бизнес-история сохраняются.",
+        "Сброс затрагивает кастомизацию Telegram и Web/Mini App. Рабочие пользователи, ключи, серверы, тарифы, оплаты и бизнес-история сохраняются.",
         "",
         "<b>Сохраняется:</b>",
     ]
     lines.extend(f"• <code>{escape_html(label)}</code>" for label in PRESERVED_DATA_LABELS)
     lines.append("")
     lines.extend(_format_action_block("База данных", report.db_actions))
+    if report.web_actions:
+        lines.append("")
+        lines.extend(_format_action_block("Web/Mini App", report.web_actions))
     if report.file_actions:
         lines.append("")
         lines.extend(_format_action_block("Файлы", report.file_actions))
@@ -81,9 +85,13 @@ def _format_custom_reset_report(report: CustomizationResetReport) -> str:
     if backup_lines:
         lines.append("")
         lines.extend(backup_lines)
+    if report.error:
+        lines.extend(["", f"<b>Ошибка:</b> <code>{escape_html(report.error)}</code>",
+                      "Выше показаны завершённые этапы. Этап с ошибкой мог выполниться частично."])
     if report.dry_run:
         lines.extend([
             "",
+            "Перед применением будут созданы резервные копии БД, расширений и установленного Web.",
             "Чтобы применить сброс, нажмите кнопку ниже. После этого потребуется контрольная фраза.",
         ])
     return "\n".join(lines)
@@ -136,7 +144,8 @@ async def ask_custom_reset_phrase(callback: CallbackQuery, state: FSMContext):
         callback.message,
         (
             "🧹 <b>Подтверждение сброса кастомизации</b>\n\n"
-            "Это действие очистит кастомные тексты, страницы, маршруты, файлы и данные расширений, но сохранит пользователей, ключи, серверы, тарифы и оплаты.\n\n"
+            "Это действие очистит кастомные тексты, страницы, маршруты, файлы и данные расширений. Web/Mini App вернётся к базовому дизайну установленной версии: опубликованные и неопубликованные правки, пресет и начальная тема будут сброшены.\n\n"
+            "Перед сбросом будут созданы резервные копии. Пользователи, ключи, серверы, тарифы, оплаты, подключение сайта, домен и HTTPS сохранятся.\n\n"
             "Для применения отправьте фразу:\n"
             f"<code>{escape_html(CUSTOM_RESET_CONFIRMATION_PHRASE)}</code>"
         ),
@@ -208,7 +217,8 @@ async def apply_custom_reset(message: Message, state: FSMContext):
             await state.clear()
             await safe_edit_or_send(
                 progress,
-                f"⚠️ <b>Сброс кастомизации не выполнен</b>\n\n<code>{escape_html(str(exc))}</code>",
+                (_format_custom_reset_report(exc.report) if isinstance(exc, CustomizationResetError)
+                 else f"⚠️ <b>Сброс кастомизации прерван</b>\n\n<code>{escape_html(str(exc))}</code>"),
                 reply_markup=custom_reset_done_kb(),
             )
             return

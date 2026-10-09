@@ -22,6 +22,16 @@ class UserUITextDefinition:
 
 
 USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
+    UserUITextDefinition('account.merge.balance_reason', 'Перенос баланса при объединении аккаунтов',
+                         'plain', 'Balance history description of an account transfer.'),
+    UserUITextDefinition(
+        'account.link.merge_prompt',
+        '🔗 <b>Объединение аккаунтов</b>\n\nОсновным станет ваш Telegram-аккаунт №%target_account_id%. '
+        'В него будут перенесены баланс, подписки и телефон %phone%. '
+        'Телефон и пароль переносимого аккаунта заменят прежние данные входа. '
+        'Подтвердите объединение, затем завершите его в исходной вкладке сайта.',
+        'html', 'Confirm transfer into the existing Telegram owner.',
+        frozenset({'target_account_id', 'phone'})),
     UserUITextDefinition(
         'account.link.prompt',
         '🔗 <b>Привязка Telegram</b>\n\nПодтвердите привязку к аккаунту №%account_id%. '
@@ -45,9 +55,9 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
         'html', 'An expired, consumed or invalid account link.'),
     UserUITextDefinition(
         'account.link.conflict',
-        '🔗 <b>Не удалось привязать Telegram</b>\n\nTelegram уже связан с другим аккаунтом. '
-        'Аккаунты и подписки не объединены.',
-        'html', 'Linking cannot transfer an existing Telegram account or its property.'),
+        '🔗 <b>Не удалось привязать Telegram</b>\n\nДанные привязки изменились. '
+        'Начните привязку заново на сайте. Аккаунты не изменены.',
+        'html', 'The link no longer matches the confirmed accounts.'),
     UserUITextDefinition(
         'account.link.unavailable',
         '🔗 <b>Привязка временно недоступна</b>\n\nПопробуйте ещё раз позднее.',
@@ -340,8 +350,8 @@ USER_UI_TEXT_CATALOG = {
 if len(USER_UI_TEXT_CATALOG) != len(USER_UI_TEXT_DEFINITIONS):
     raise RuntimeError("Duplicate text_key in USER_UI_TEXT_DEFINITIONS")
 
-if len(USER_UI_TEXT_CATALOG) != 48:
-    raise RuntimeError("The core user UI text catalog must contain exactly 48 entries")
+if len(USER_UI_TEXT_CATALOG) != 50:
+    raise RuntimeError("The core user UI text catalog must contain exactly 50 entries")
 
 
 __all__ = [

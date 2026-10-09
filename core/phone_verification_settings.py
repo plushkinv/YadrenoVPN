@@ -58,11 +58,13 @@ def verification_settings() -> dict:
 
 
 def public_auth_settings() -> dict:
+    from core.telegram_web_auth import login_settings
     settings = verification_settings()
     return {'phone_format': 'E.164', 'verification_available': settings['available'],
             'verification_required': settings['available'], 'verification_method': settings['method'],
             'password_recovery_available': settings['available'],
-            'unverified_phone_warning_required': not settings['available']}
+            'unverified_phone_warning_required': not settings['available'],
+            'telegram_login_available': login_settings()['available']}
 
 
 def set_verification_option(name: str, value) -> None:

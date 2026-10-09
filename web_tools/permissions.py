@@ -78,6 +78,13 @@ def check_release_paths(root):
 
     tree(custom)
     custom_invalid = bool(issues)
+    # System resources update even when a dirty application tree is preserved.
+    inspect(root)
+    inspect(runtime)
+    tree(root / 'web/platform')
+    tree(runtime / 'platform')
+    inspect(root / 'web/prebuilt/base-ui.zip')
+    inspect(runtime / 'platform-current.json')
     legacy = False
     if custom.exists() and not custom_invalid:
         try:
@@ -107,7 +114,7 @@ def check_release_paths(root):
         inspect(web)
         tree(web / 'src')
         tree(web / 'public')
-        for name in ('index.html', 'preview.html', 'manifest.json'):
+        for name in ('manifest.json',):
             inspect(web / name)
     if install_base:
         inspect(root)

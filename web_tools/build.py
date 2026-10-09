@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from urllib.parse import quote
 
 from web_tools.package import create_package, verify_package, signing_identity, digest
 from web_tools.paths import CUSTOM_SOURCE_IGNORED, atomic_write, canonical, local_path
@@ -37,7 +36,7 @@ def source_version(root, *, include_commit=True):
     names = []
     # Validate directories before walking them and every input before reading
     # any content. rglob/is_file alone can follow an escaped source symlink.
-    for source_name in ('src', 'public'):
+    for source_name in ('src', 'public', 'platform'):
         sources = local_path(root, 'web/' + source_name)
         if sources.exists():
             if not sources.is_dir():
@@ -46,7 +45,7 @@ def source_version(root, *, include_commit=True):
                 for name in subdirs:
                     local_path(root, (Path(directory) / name).relative_to(root).as_posix(), hidden=True)
                 names.extend(Path(directory) / name for name in files)
-    names.extend(web / item for item in ('package.json', 'package-lock.json', 'vite.app.config.ts', 'customization.mjs', 'index.html', 'preview.html', 'manifest.json'))
+    names.extend(web / item for item in ('package.json', 'package-lock.json', 'vite.app.config.ts', 'vite.platform.config.ts', 'customization.mjs', 'manifest.json'))
     names.extend(web.glob('tsconfig*.json'))
     names.extend(root / 'web_tools' / item for item in ('service_worker.js', 'compatibility.json', 'toolchain.json'))
     inputs = []
@@ -166,12 +165,16 @@ def compile_files(root, runtime, custom, stage, *, build_id, instance_id, toolch
     paths = json.loads((web / 'tsconfig.json').read_bytes())['compilerOptions']['paths']
     paths = {key: [str((web / value).resolve()) for value in values] for key, values in paths.items()}
     paths['@ui/*'] = [str(custom / 'src' / '*')]
+    for alias, name in {'context': 'runtime/context.tsx', 'client': 'api/client.ts', 'contracts': 'api/contracts.ts',
+                        'environment': 'runtime/environment.ts', 'storage': 'runtime/application-storage.ts'}.items():
+        paths['@ui/' + alias] = [str(web / 'platform' / name)]
+    paths['@application/*'] = [str(custom / 'src' / '*')]
     # Stock web/ also contains Node-only build configs, outside its UI source tree.
     typecheck_root = custom / 'src' if custom == web else custom
     tsconfig = {'extends': str(web / 'tsconfig.json'),
                 'compilerOptions': {'paths': paths, 'types': [], 'typeRoots': [str(web / 'node_modules/@types')]},
                 'include': [str(web / 'node_modules/vite/client.d.ts'),
-                            str(typecheck_root / '**' / '*.tsx'), str(typecheck_root / '**' / '*.ts')]}
+                            str(web / 'platform/app-entry.tsx'), str(typecheck_root / '**' / '*.tsx'), str(typecheck_root / '**' / '*.ts')]}
     atomic_write(stage / 'tsconfig.json', canonical(tsconfig))
     with (stage / 'build.log').open('wb') as log:
         try:
@@ -186,15 +189,6 @@ def compile_files(root, runtime, custom, stage, *, build_id, instance_id, toolch
                 raise WebPlatformError('The installed compiler exhausted its memory limit.') from exc
             raise WebSourceError('web_build_failed', f'Working project did not compile.\n{detail}') from exc
     return customization
-
-
-def write_service_worker(root, files, *, build_id, instance_id):
-    base = '/ui/versions/' + build_id + '/'
-    assets = sorted(base + quote(p.relative_to(files).as_posix(), safe='/')
-                    for p in files.rglob('*') if p.is_file() and p != files / 'sw.js')
-    worker = (root / 'web_tools/service_worker.js').read_text(encoding='utf-8')
-    worker = worker.replace('__CACHE_NAME__', json.dumps('yadreno.shell.' + instance_id + '.' + build_id)).replace('__ASSET_URLS__', json.dumps(assets)).replace('__INDEX_URL__', json.dumps(base + 'index.html'))
-    atomic_write(files / 'sw.js', worker.encode())
 
 
 def build(root, runtime, custom, *, product_version=None, toolchain=None, compiler=None):
@@ -213,7 +207,6 @@ def build(root, runtime, custom, *, product_version=None, toolchain=None, compil
     customization = compile_source(root, runtime, custom, stage, build_id=build_id,
                                    instance_id=identity['instance_id'], toolchain=toolchain,
                                    customization_version='base' if unchanged(root, scan_sources(custom)) else None)
-    write_service_worker(root, stage / 'files', build_id=build_id, instance_id=identity['instance_id'])
     if source_version(root)[0] != base_hash or custom_source_fingerprint(custom) != source_fingerprint:
         raise ValueError('UI sources changed during compilation; rebuild before publication')
     with publication_lock(runtime):

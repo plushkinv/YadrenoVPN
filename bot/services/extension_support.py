@@ -144,6 +144,7 @@ async def _set_extension_support_ticket_status_locked(
         amount=None,
         reason=None,
         request_fingerprint=fingerprint,
+        request_payload={"thread_id": thread_id, "ticket_status": status},
     )
     if claimed.get("status") == "idempotency_conflict":
         return _public_status_result(claimed)
@@ -267,6 +268,7 @@ async def _create_extension_support_ticket_locked(
         amount=None,
         reason=None,
         request_fingerprint=fingerprint,
+        request_payload={'text_html': text_html},
     )
     if claimed.get('status') == 'idempotency_conflict':
         return _public_ticket_result(claimed)

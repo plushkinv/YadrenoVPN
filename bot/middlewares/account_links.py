@@ -34,7 +34,9 @@ class AccountLinkMiddleware(BaseMiddleware):
                 raise CoreError('link_invalid')
             result = telegram_action(token, sender.model_dump(), bot_id=data['bot'].id, action=action)
             if action == 'inspect':
-                text = render_ui_text('account.link.prompt', account_id=result['account_id'])
+                text = (render_ui_text('account.link.merge_prompt', target_account_id=result['target_account_id'],
+                                       phone=result['phone'] or '') if result['merge'] else
+                        render_ui_text('account.link.prompt', account_id=result['account_id']))
                 keyboard = account_link_confirmation_kb(token)
             else:
                 text = render_ui_text('account.link.confirmed' if action == 'confirm' else 'account.link.cancelled')

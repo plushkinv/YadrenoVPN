@@ -190,8 +190,8 @@ def snapshot_sources(root, custom, work):
     for name, content in stock.items():
         atomic_write(web / 'src' / name, content, mode=0o644)
     for directory, names in (
-        ('web', ['package.json', 'package-lock.json', 'vite.app.config.ts', 'customization.mjs',
-                 'index.html', 'preview.html', 'manifest.json', *[p.name for p in (root / 'web').glob('tsconfig*.json')]]),
+        ('web', ['package.json', 'package-lock.json', 'vite.app.config.ts', 'vite.platform.config.ts', 'customization.mjs',
+                 'manifest.json', *[p.name for p in (root / 'web').glob('tsconfig*.json')]]),
         ('web_tools', ['service_worker.js', 'compatibility.json', 'toolchain.json']),
     ):
         for name in names:
@@ -201,6 +201,9 @@ def snapshot_sources(root, custom, work):
     if (root / 'web/public').exists():
         for name, content in scan_sources(root / 'web/public').items():
             atomic_write(web / 'public' / name, content, mode=0o644)
+    if (root / 'web/platform').exists():
+        for name, content in scan_sources(root / 'web/platform').items():
+            atomic_write(web / 'platform' / name, content, mode=0o644)
     copied_custom = work / 'custom_web'
     if custom.exists():
         copied_custom.mkdir(mode=0o700)

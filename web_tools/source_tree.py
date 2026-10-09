@@ -26,7 +26,7 @@ def template(root):
     """Only frontend inputs are copied; dependencies and compiler stay outside."""
     web = Path(root) / 'web'
     files = {'src/' + name: data for name, data in scan_sources(web / 'src').items()}
-    for name in ('index.html', 'preview.html', 'manifest.json'):
+    for name in ('manifest.json',):
         files[name] = read_regular(web, name)
     public = web / 'public'
     if public.exists():
@@ -153,6 +153,10 @@ def _recover_template(runtime, folder):
     if not marker.exists():
         return
     transaction = json.loads(read_regular(runtime, marker.name))
+    if transaction.get('operation') == 'custom_reset':
+        from web_tools.customization_reset import recover_reset
+        recover_reset(runtime, folder, transaction)
+        return
     state = json.loads(read_regular(runtime, STATE))
     if state.get('template') != transaction['after']:
         before = read_archive(read_regular(runtime, 'template-update.zip'))

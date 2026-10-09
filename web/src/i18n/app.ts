@@ -18,6 +18,8 @@ export const appText = {
   requestVerification: 'Подтвердить телефон', requestCall: 'Получить звонок', repeatVerification: 'Запросить ещё раз',
   checkVerification: 'Проверить подтверждение',
   resetDone: 'Пароль обновлён. Войдите с новым паролем.', saved: 'Сохранено', account: 'Аккаунт',
+  telegramLogin: 'Войти через Telegram',
+  mergeWarning: 'Аккаунты будут объединены. Телефон и пароль переносимого аккаунта заменят прежние данные входа в Telegram-аккаунт.',
   telegramLink: 'Привязать Telegram', telegramLinked: 'Telegram привязан', openTelegram: 'Открыть Telegram',
   linkCaption: 'Подтвердите привязку в боте, затем вернитесь сюда и завершите её.', linkCheck: 'Проверить подтверждение',
   linkFinish: 'Завершить привязку', linkWaiting: 'Ожидаем подтверждения в Telegram',
@@ -54,14 +56,14 @@ export const appText = {
   updated: 'Обновлено', refresh: 'Обновить', sessionExpired: 'Войдите снова, чтобы обновить данные аккаунта.',
   unavailable: 'Кабинет временно недоступен. Это не определяет состояние вашего VPN.',
   requestFailed: 'Не удалось выполнить действие. Попробуйте снова.', notFound: 'Страница не найдена',
-  adminPreview: 'Администратор · просмотр', preview: 'Настроить просмотр', previewData: 'Сценарий просмотра · без реальных операций',
-  previewDenied: 'Просмотр доступен администратору через Telegram Mini App.', page: 'Страница', scenario: 'Сценарий',
-  previewOnly: 'Это просмотр. Действие не отправлено в рабочий аккаунт.', previewClose: 'Вернуться в кабинет',
+  previewOnly: 'Это просмотр. Действие не отправлено в рабочий аккаунт.',
 };
 
 const errors: Record<string, string> = {
   authentication_required: appText.sessionExpired, authentication_failed: 'Неверный телефон или пароль.',
-  telegram_authentication_failed: 'Не удалось подтвердить Telegram-вход. Откройте Mini App заново.',
+  telegram_authentication_failed: 'Не удалось подтвердить Telegram-вход. Начните вход заново.',
+  telegram_login_unavailable: 'Вход через Telegram временно недоступен. Можно войти по телефону и паролю.',
+  telegram_login_popup_blocked: 'Разрешите всплывающее окно для входа через Telegram и повторите попытку.',
   phone_invalid: 'Введите телефон с + и кодом страны.', password_invalid: 'Пароль должен содержать от 8 до 128 символов.',
   phone_in_use: 'Этот телефон уже используется другим аккаунтом.',
   verification_unavailable: 'Подтверждение телефона сейчас недоступно.',

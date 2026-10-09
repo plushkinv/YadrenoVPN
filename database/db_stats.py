@@ -96,7 +96,7 @@ def _broadcast_recipient_query_parts(
 ) -> tuple[list[str], tuple[object, ...]]:
     selected = normalize_broadcast_filters(filters)
     conditions = [
-        'u.is_banned = 0',
+        'u.is_banned = 0', 'u.merged_into_user_id IS NULL',
         'u.is_bot_blocked = 0',
         'u.telegram_id IS NOT NULL',
     ]
@@ -241,7 +241,7 @@ def get_expiring_keys(days: int) -> List[Dict[str, Any]]:
             LEFT JOIN servers s ON vk.server_id = s.id
             LEFT JOIN tariffs t ON vk.tariff_id = t.id
             LEFT JOIN key_entitlements ke ON ke.key_id = vk.id
-            WHERE u.is_banned = 0
+            WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
             AND u.is_bot_blocked = 0
             AND u.telegram_id IS NOT NULL
             AND vk.expires_at IS NOT NULL

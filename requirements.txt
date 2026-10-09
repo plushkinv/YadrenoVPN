@@ -5,3 +5,4 @@ pillow
 argon2-cffi>=25.1.0,<26
 phonenumbers>=9.0.39,<10
 cryptography>=49,<51
+PyJWT>=2.10.1,<3

@@ -9,6 +9,7 @@ from typing import Iterable
 
 from database import connection as db_connection
 from database import migrations
+from database.web_ui_defaults import WEB_UI_DEFAULTS
 
 STOCK_CUSTOM_PAGE_KEYS = {"custom_profile"}
 STOCK_PAGE_ROUTES = {
@@ -94,6 +95,8 @@ def _customization_default_settings() -> dict[str, str | None]:
         "custom_payment_webhooks_port": "8088",
         "custom_payment_webhooks_path_prefix": "/custom-payment-webhook",
         "yadreno_admin_core_changes_enabled": "0",
+        "web_ui_preset": WEB_UI_DEFAULTS["preset"],
+        "web_ui_theme": WEB_UI_DEFAULTS["theme"],
     }
 
 

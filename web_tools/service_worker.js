@@ -1,13 +1,25 @@
-// Generated constants contain only signed, public shell asset names.
-const CACHE = __CACHE_NAME__;
-const ASSETS = __ASSET_URLS__;
-const INDEX = __INDEX_URL__;
-const allowed = new Set(ASSETS.map(path => new URL(path, self.location.origin).href));
+// Platform and application resources have independent cache identities.
+const PLATFORM = __PLATFORM_CACHE__;
+const APPLICATION = __APPLICATION_CACHE__;
+const SHELL = __SHELL_CACHE__;
+const FRAME = __FRAME_URL__;
+const SYSTEM_ASSETS = __SYSTEM_ASSETS__;
+const APPLICATION_ASSETS = __APPLICATION_ASSETS__;
+const allowed = new Map([...SYSTEM_ASSETS.map(path => [new URL(path, self.location.origin).href, PLATFORM]),
+  ...APPLICATION_ASSETS.map(path => [new URL(path, self.location.origin).href, APPLICATION])]);
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
-    const cache = await caches.open(CACHE);
-    try { await cache.addAll(ASSETS.map(url => new Request(url, { credentials: 'omit', cache: 'reload' }))); }
-    catch (error) { await caches.delete(CACHE); throw error; }
+    for (const [name, assets] of [[PLATFORM, SYSTEM_ASSETS], [APPLICATION, APPLICATION_ASSETS]]) {
+      const cache = await caches.open(name);
+      await cache.addAll(assets.map(url => new Request(url, { credentials: 'omit', cache: 'reload' })));
+    }
+    const shell = await fetch('/', { credentials: 'omit', cache: 'reload' });
+    if (!shell.ok) throw new Error('System shell unavailable');
+    const cache = await caches.open(SHELL);
+    await cache.put('/', shell);
+    const frame = await fetch(FRAME, { credentials: 'omit', cache: 'reload' });
+    if (!frame.ok) throw new Error('Application frame unavailable');
+    await cache.put(FRAME, frame);
   })());
 });
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
@@ -22,11 +34,16 @@ self.addEventListener('fetch', event => {
   if (request.mode === 'navigate' && (url.pathname === '/' || /^\/orders\/[A-Za-z0-9_.:-]+$/.test(url.pathname))) {
     event.respondWith((async () => {
       try { const response = await fetch(request); if (response.ok) return response; } catch {}
-      return await (await caches.open(CACHE)).match(INDEX) ?? Response.error();
+      return await (await caches.open(SHELL)).match('/') ?? Response.error();
+    })());
+  } else if (url.pathname + url.search === FRAME) {
+    event.respondWith((async () => {
+      try { const response = await fetch(request); if (response.ok) return response; } catch {}
+      return await (await caches.open(SHELL)).match(FRAME) ?? Response.error();
     })());
   } else if (allowed.has(request.url)) {
     event.respondWith((async () => {
-      const cache = await caches.open(CACHE);
+      const cache = await caches.open(allowed.get(request.url));
       return await cache.match(request.url) ?? fetch(request);
     })());
   }

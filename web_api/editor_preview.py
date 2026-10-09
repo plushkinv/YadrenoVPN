@@ -88,7 +88,8 @@ class EditorPreviews:
                 raise ValueError('candidate preview inventory unavailable')
             if folder == 'publications/' and proof['custom_fingerprint'] != revision:
                 raise StaleRevision('Working files changed after restoration; the restored preview is no longer current.')
-            pages = [{'id': page['id'], 'title': page.get('title')} for page in proof['inventory']['pages']]
+            from web_tools.application import read_application
+            pages = read_application(bundle[2])['pages']
             published = read_pointer(binding.project_root / 'web_runtime')['current'] == bundle[0]['build_id']
             return request_id, binding.task_id, viewed, bundle, pages, published
 
@@ -143,7 +144,14 @@ class EditorPreviews:
             if (candidate['revision'] != grant.revision or candidate['build_id'] != grant.build_id
                     or candidate['package_sha256'] != grant.package_sha256):
                 raise ValueError('preview candidate changed')
-            content = files[name]
+            if name == 'preview.html':
+                from web_api.ui_publications import RUNTIME_KEY
+                from web_api.ui_platform import descriptor, html
+                application = descriptor(request.app[RUNTIME_KEY], bundle[1], files,
+                                         prefix=PREFIX + handle + '/', mode='preview')
+                content = html(request.app[RUNTIME_KEY], application, frame=True)
+            else:
+                content = files[name]
             current = db.get_account_session(grant.session_hash, int(time.time()))
             if current is None or authorize(current) != api_key:
                 raise ValueError('preview authority changed')

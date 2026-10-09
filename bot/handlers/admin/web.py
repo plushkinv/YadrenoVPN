@@ -38,6 +38,9 @@ async def _screen(callback, state):
             f'Интерфейс: {ui}\n'
             f'Подтверждение телефона: {verification_status}\n'
             f'Способ: {service}\n\n'
+            f"Вход через Telegram: {'включён' if result['telegram_login']['enabled'] else 'выключен'}\n"
+            'Для Telegram-входа откройте Mini App @BotFather → ваш бот → Login Widget '
+            'и добавьте адрес сайта в Allowed URLs.\n\n'
             'Подключение домена и HTTPS выполняется через установщик.\n'
             'Без настроенного подтверждения регистрация доступна без проверки номера, '
             'а восстановление пароля по телефону недоступно.')
@@ -75,5 +78,19 @@ async def switch_web(callback, state):
     except Exception:
         await callback.answer('Не удалось переключить веб. Проверьте подключение и состояние сервиса.', show_alert=True)
         return
+    await _screen(callback, state)
+    await callback.answer('Настройка применена')
+
+
+@router.callback_query(F.data.startswith('admin_web_telegram:'))
+async def switch_telegram_login(callback, state):
+    if not await _allowed(callback):
+        return
+    value = callback.data.rsplit(':', 1)[-1]
+    if value not in ('0', '1'):
+        await callback.answer()
+        return
+    from database.requests import set_setting
+    set_setting('web_telegram_login_enabled', value)
     await _screen(callback, state)
     await callback.answer('Настройка применена')

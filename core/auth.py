@@ -43,13 +43,15 @@ def _limit(kind: str, ip: str, phone: str | None = None, *, now: int | None = No
         raise CoreError('rate_limited', retryable=True)
 
 
-def create_session(user_id: int, source: str, version: int, *, now: int | None = None) -> dict:
+def create_session(user_id: int, source: str, version: int, *, now: int | None = None,
+                   authentication_method: str | None = None) -> dict:
     require_active()
     now = int(time.time()) if now is None else now
     token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     user = db.create_account_session(user_id=user_id, source=source, expected_version=version,
                                      token_hash=secret_hash(token), csrf_hash=secret_hash(csrf),
-                                     now=now, expires_at=now + SESSION_SECONDS)
+                                     now=now, expires_at=now + SESSION_SECONDS,
+                                     authentication_method=authentication_method or ('telegram' if source == 'mini_app' else 'password'))
     return {'token': token, 'csrf': csrf, 'expires_at': now + SESSION_SECONDS,
             'account_id': user['id'], 'telegram_id': user['telegram_id'], 'source': source}
 

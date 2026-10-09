@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import io
 import re
+import os
+import subprocess
 import uuid
 import zipfile
 from pathlib import Path
 
-from web_tools.build import admin_directory, compile_files, source_version, write_service_worker
+from web_tools.build import admin_directory, compile_files, source_version, require_toolchain
 from web_tools.compatibility import bounds, check_requirements, current_capabilities, release_capabilities, verification_versions
 from web_tools.package import MAX_BYTES, MAX_FILES, _asset_name, _json, create_package, digest, file_inventory, signing_identity, verify_package
 from web_tools.paths import atomic_write, canonical, local_path, relative_name
@@ -24,9 +26,10 @@ BUNDLE_PATH = 'web/prebuilt/base-ui.zip'
 MANIFEST = 'distribution.json'
 BUILD_MARKER = '__YADRENO_BASE_BUILD_V1__'
 INSTANCE_MARKER = '__YADRENO_BASE_INSTANCE_V1__'
+PLATFORM_MARKER = '__YADRENO_PLATFORM_V1__'
 TEXT_ASSETS = {'.html', '.js', '.css', '.json', '.svg'}
 FIELDS = {'format_version', 'product', 'product_version', 'base_build_id', 'template_version',
-          'core_api', 'environment_contract', 'requirements', 'content_hash', 'files'}
+          'core_api', 'environment_contract', 'requirements', 'content_hash', 'files', 'platform_version'}
 
 
 def _capabilities(root):
@@ -41,7 +44,7 @@ def read_distribution(content, capabilities=None):
         raise ValueError('base UI distribution exceeds resource limits')
     capabilities = release_capabilities(capabilities) if capabilities is not None else current_capabilities()
     versions = verification_versions(capabilities)
-    if 2 not in versions['supported_formats']:
+    if 3 not in versions['supported_formats']:
         raise ValueError('this release cannot install the prepared base UI format')
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
@@ -57,7 +60,7 @@ def read_distribution(content, capabilities=None):
                     raise ValueError('base UI archive requires unencrypted regular files')
             manifest = _json(archive.read(MANIFEST))
             if (not isinstance(manifest, dict) or set(manifest) != FIELDS
-                    or type(manifest['format_version']) is not int or manifest['format_version'] != 1
+                    or type(manifest['format_version']) is not int or manifest['format_version'] != 2
                     or manifest['product'] != 'yadreno-vpn'
                     or type(manifest['template_version']) is not int or manifest['template_version'] != 1
                     or type(manifest['environment_contract']) is not int
@@ -67,6 +70,8 @@ def read_distribution(content, capabilities=None):
                     or not isinstance(manifest['base_build_id'], str)
                     or not re.fullmatch(r'[a-f0-9]{64}', manifest['base_build_id'])):
                 raise ValueError('invalid/incompatible base UI distribution manifest')
+            if not isinstance(manifest['platform_version'], str) or not re.fullmatch(r'[a-f0-9]{64}', manifest['platform_version']):
+                raise ValueError('invalid platform version')
             bounds(manifest['core_api'], versions['api_version'], 'base UI core API')
             check_requirements(manifest['requirements'], **{key: value for key, value in versions.items()
                                                            if key != 'supported_formats'})
@@ -74,7 +79,7 @@ def read_distribution(content, capabilities=None):
                 raise ValueError('base UI distribution must not contain installation modules')
             inventory = manifest['files']
             if (not isinstance(inventory, dict) or not 1 <= len(inventory) <= MAX_FILES
-                    or not {'index.html', 'preview.html'}.issubset(inventory)
+                    or not {'application/application.json', 'platform/index.html', 'platform/frame.html'}.issubset(inventory)
                     or 'sw.js' in inventory or MANIFEST in inventory
                     or set(names) != set(inventory) | {MANIFEST}
                     or digest(canonical(inventory)) != manifest['content_hash']):
@@ -83,6 +88,8 @@ def read_distribution(content, capabilities=None):
             markers = set()
             for name, info in inventory.items():
                 _asset_name(name)
+                if not name.startswith(('application/', 'platform/')):
+                    raise ValueError('invalid distribution resource owner')
                 if (not isinstance(info, dict) or set(info) != {'sha256', 'size'}
                         or type(info['size']) is not int or info['size'] < 0
                         or not isinstance(info['sha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', info['sha256'])):
@@ -90,13 +97,15 @@ def read_distribution(content, capabilities=None):
                 data = archive.read(name)
                 if len(data) != info['size'] or digest(data) != info['sha256']:
                     raise ValueError('corrupted base UI asset: ' + name)
-                found = set(re.findall(rb'__YADRENO_BASE_[A-Z0-9_]+__', data))
+                found = set(re.findall(rb'__YADRENO_(?:BASE_|PLATFORM_)[A-Z0-9_]+__', data))
                 if found and Path(name).suffix not in TEXT_ASSETS:
                     raise ValueError('base UI template markers require a text asset')
                 markers.update(found)
                 files[name] = data
-            if markers != {BUILD_MARKER.encode(), INSTANCE_MARKER.encode()}:
+            if markers != {BUILD_MARKER.encode(), INSTANCE_MARKER.encode(), PLATFORM_MARKER.encode()}:
                 raise ValueError('base UI distribution is missing or has unknown template markers')
+            from web_tools.application import read_application
+            read_application({name.removeprefix('application/'): data for name, data in files.items() if name.startswith('application/')})
             return manifest, files
     except (zipfile.BadZipFile, KeyError, UnicodeError) as exc:
         raise ValueError('invalid/incomplete base UI archive') from exc
@@ -127,12 +136,21 @@ def build_base(root, runtime):
         raise ValueError('base UI compilation unexpectedly loaded customization')
     if source_version(root)[0] != base_hash:
         raise ValueError('frontend sources changed during base UI compilation')
-    inventory = file_inventory(stage / 'files')
-    manifest = {'format_version': 1, 'product': 'yadreno-vpn', 'product_version': product_version,
+    from web_tools.platform_assets import platform_version
+    platform_id = platform_version(root)
+    compile_platform(root, stage)
+    files = {'application/' + name: local_path(stage / 'files', name).read_bytes() for name in file_inventory(stage / 'files')}
+    files.update({'platform/' + name: local_path(stage / 'platform', name).read_bytes()
+                  for name in file_inventory(stage / 'platform', required=('index.html', 'frame.html'))})
+    inventory = {name: {'sha256': digest(data), 'size': len(data)} for name, data in sorted(files.items())}
+    if source_version(root)[0] != base_hash or platform_version(root) != platform_id:
+        raise ValueError('platform sources changed during compilation')
+    manifest = {'format_version': 2, 'product': 'yadreno-vpn', 'product_version': product_version,
         'base_build_id': base_hash, 'template_version': 1, 'core_api': {'min': 1, 'max': 1},
+        'platform_version': platform_id,
         'environment_contract': 1, 'requirements': {'frontend_api': {'min': 1, 'max': 1}, 'modules': []},
         'content_hash': digest(canonical(inventory)), 'files': inventory}
-    content = _archive(manifest, {name: local_path(stage / 'files', name).read_bytes() for name in inventory})
+    content = _archive(manifest, files)
     read_distribution(content, capabilities)
     destination = local_path(root, BUNDLE_PATH)
     admin_directory(destination.parent)
@@ -161,11 +179,13 @@ def install_base(root, runtime):
     substitutions = ((BUILD_MARKER.encode(), build_id.encode()),
                      (INSTANCE_MARKER.encode(), identity['instance_id'].encode()))
     for name, data in files.items():
+        if not name.startswith('application/'):
+            continue
+        name = name.removeprefix('application/')
         if Path(name).suffix in TEXT_ASSETS:
             for before, after in substitutions:
                 data = data.replace(before, after)
         atomic_write(local_path(stage / 'files', name), data)
-    write_service_worker(root, stage / 'files', build_id=build_id, instance_id=identity['instance_id'])
     with publication_lock(runtime):
         signed, content = create_package(stage / 'files', key=key, identity=identity,
             product_version=manifest['product_version'], base_build_id=base_hash, build_id=build_id,
@@ -179,3 +199,22 @@ def install_base(root, runtime):
     return {'build_id': build_id, 'stage': str(stage), 'content_hash': signed['manifest']['content_hash'],
             'customization_version': 'base', 'activated': False, 'requires_node': False,
             'ownership': {'pages': [], 'components': [], 'navigation': 'base'}}
+
+
+def compile_platform(root, stage):
+    """Release-only build. Custom compilation never ships the system interface."""
+    node, npm = require_toolchain(root)
+    web = root / 'web'
+    config = {'extends': str(web / 'tsconfig.json'), 'compilerOptions': {'types': []},
+              'include': [str(web / 'node_modules/vite/client.d.ts'), str(web / 'platform/**/*.ts'), str(web / 'platform/**/*.tsx')],
+              'exclude': [str(web / 'platform/app-entry.tsx')]}
+    atomic_write(stage / 'platform-tsconfig.json', canonical(config))
+    env = {**os.environ, 'YADRENO_PLATFORM_OUT': str(stage / 'platform'),
+           'YADRENO_PLATFORM_BASE': '/ui/platform/' + PLATFORM_MARKER + '/',
+           'NODE_OPTIONS': '--max-old-space-size=512'}
+    env['PATH'] = str(Path(node).parent) + os.pathsep + env.get('PATH', os.defpath)
+    with (stage / 'platform-build.log').open('wb') as log:
+        for args in (['tsc', '--project', str(stage / 'platform-tsconfig.json')],
+                     ['vite', 'build', '--config', 'vite.platform.config.ts']):
+            subprocess.run([npm, 'exec', '--no', '--', *args], cwd=web, env=env,
+                           check=True, stdout=log, stderr=log, timeout=180)

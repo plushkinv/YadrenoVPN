@@ -7,7 +7,7 @@ from bot.utils.action_origin_context import normalize_completion_handler_name
 from bot.utils.extension_background import invoke_background_handler
 from database.db_extensions import normalize_extension_id
 
-CORE_EVENT_NAMES = ('payment.completed', 'trial.activated', 'key.delivered', 'key.expired', 'user.registered')
+CORE_EVENT_NAMES = ('payment.completed', 'trial.activated', 'key.delivered', 'key.expired', 'user.registered', 'user.merged')
 EXTENSION_EVENT_HANDLERS: dict[str, dict[str, Any]] = {}
 
 

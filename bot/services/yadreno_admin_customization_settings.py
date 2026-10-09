@@ -17,6 +17,7 @@ _TEXT_KEYS = (
     'referral_purchase_notification_text',
 )
 _INTEGER_LIMITS = {
+    'web_telegram_login_enabled': 1,
     'referral_attribution_window_hours': REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX,
     'expired_key_panel_cleanup_delay_days': EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
 }

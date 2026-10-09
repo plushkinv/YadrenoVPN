@@ -32,8 +32,10 @@ async def manifest(request):
     signed = current_manifest(request.app[RUNTIME_KEY])
     etag = '"' + digest(canonical(signed)) + '"'
     if request.headers.get('If-None-Match') == etag:
-        return web.Response(status=304, headers={'ETag': etag})
-    return web.json_response(signed, headers={'ETag': etag})
+        from web_tools.platform_assets import current_platform
+        return web.Response(status=304, headers={'ETag': etag, 'X-UI-Platform': current_platform(request.app[RUNTIME_KEY])['version']})
+    from web_tools.platform_assets import current_platform
+    return web.json_response(signed, headers={'ETag': etag, 'X-UI-Platform': current_platform(request.app[RUNTIME_KEY])['version']})
 
 
 async def package(request):
@@ -67,12 +69,19 @@ async def asset(request):
     try:
         if build_id:
             signed = json.loads(manifest_path(runtime, build_id).read_bytes())
+            verify_manifest(signed, json.loads(local_path(runtime, 'identity.json').read_bytes()))
         else:
             signed = current_manifest(runtime)
             build_id = signed['manifest']['build_id']
             if request.path.startswith('/ui/assets/'):
                 name = 'assets/' + name
-        name = name or ('sw.js' if request.path == '/sw.js' else 'index.html')
+        name = name or 'index.html'
+        if name in {'index.html', 'preview.html', 'frame.html'}:
+            from web_api.ui_platform import descriptor, html, html_headers
+            frame = name != 'index.html'
+            application = descriptor(runtime, signed, mode=('preview' if name == 'preview.html' else 'live') if frame else None,
+                                     platform_version=request.query.get('platform') if frame else None)
+            return web.Response(body=html(runtime, application, frame=frame), headers=html_headers(frame=frame))
         if name not in signed['manifest']['files']:
             raise ValueError('unknown asset')
         path = local_path(runtime, 'publications/' + build_id + '/files/' + name)
@@ -80,16 +89,12 @@ async def asset(request):
             raise ValueError('missing asset')
     except (OSError, ValueError, KeyError, TypeError, CoreError):
         raise web.HTTPNotFound() from None
-    preview = name == 'preview.html'
     headers = {'Content-Type': mimetypes.guess_type(name)[0] or 'application/octet-stream',
         'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
         'Cache-Control': 'no-cache' if name.endswith('.html') or name == 'sw.js' else 'public, max-age=31536000, immutable',
         'Access-Control-Allow-Origin': '*'}
     if name.endswith('.html'):
-        headers['Content-Security-Policy'] = ("default-src 'none'; script-src 'self'" + ('' if preview else ' https://telegram.org')
-            + "; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src "
-            + ("'none'" if preview else "'self'; media-src blob:") + "; frame-src 'self'; worker-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"
-            + ('' if preview else ' https://web.telegram.org'))
+        headers['Content-Security-Policy'] = "default-src 'none'; sandbox"
     if name == 'sw.js':
         headers['Service-Worker-Allowed'] = '/'
     return web.FileResponse(path, headers=headers)
@@ -97,11 +102,16 @@ async def asset(request):
 
 def add_routes(app, runtime=None):
     app[RUNTIME_KEY] = Path(runtime) if runtime is not None else PROJECT_ROOT / 'web_runtime'
+    from web_tools.platform_assets import install_platform
+    from web_api.ui_platform import system_asset, service_worker
+    root = app[RUNTIME_KEY].parent
+    install_platform(root if (root / 'web/prebuilt/base-ui.zip').is_file() else PROJECT_ROOT, app[RUNTIME_KEY])
     app.router.add_get('/api/v1/ui/manifest', manifest)
     app.router.add_get('/api/v1/ui/packages/{content_hash}', package)
     app.router.add_get('/', asset)
     app.router.add_get('/orders/{order_id}', asset)
-    app.router.add_get('/sw.js', asset)
+    app.router.add_get('/sw.js', service_worker)
+    app.router.add_get('/ui/platform/{version}/{name:.*}', system_asset)
     app.router.add_get('/ui/assets/{name:.*}', asset)
     app.router.add_get('/ui/bot-avatar/{content_hash}.jpg', bot_avatar)
     app.router.add_get('/ui/versions/{build_id}/{name:.*}', asset)

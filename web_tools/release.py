@@ -83,6 +83,8 @@ def _upgrade_locked(root, plan_path):
         raise ValueError('target compatibility changed after preflight')
     if plan['pointer'] != read_pointer(runtime):
         raise ValueError('UI publication changed after release preflight; repeat the update')
+    from web_tools.platform_assets import install_platform
+    install_platform(root, runtime)
     from web_tools.source_tree import ensure, unchanged, update_template, archive_bytes, inventory, template
     from web_tools.editor_files import scan_sources
     folder = ensure(root)
@@ -132,6 +134,8 @@ def ensure_base(root=PROJECT_ROOT):
     from web_tools.source_tree import ensure, unchanged
     root = Path(root)
     runtime = local_path(root, 'web_runtime', directory=True)
+    from web_tools.platform_assets import install_platform
+    install_platform(root, runtime)
     ensure(root)
     before = read_pointer(runtime)
     if before['current']:

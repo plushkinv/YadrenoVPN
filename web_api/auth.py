@@ -15,6 +15,7 @@ from bot.services import yadreno_admin_web_diagnostics as editor_diagnostics
 logger = logging.getLogger(__name__)
 SESSION_COOKIE = '__Host-yadreno_session'
 CSRF_COOKIE = '__Host-yadreno_csrf'
+TELEGRAM_LOGIN_COOKIE = '__Host-yadreno_telegram_login'
 SESSION_KEY = getattr(web, 'RequestKey', web.AppKey)('account_session', dict)
 
 
@@ -92,6 +93,7 @@ async def _security_response(request: web.Request, handler):
             '/api/v1/bootstrap', '/api/v1/openapi.json', '/api/v1/ui/settings', '/api/v1/ui/manifest',
             '/api/v1/auth/settings', '/api/v1/auth/register', '/api/v1/auth/login',
             '/api/v1/auth/telegram', '/api/v1/auth/verification/request', '/api/v1/auth/verification/status',
+            '/api/v1/auth/telegram/web/start', '/api/v1/auth/telegram/web/finish',
             '/api/v1/auth/verification/verify', '/api/v1/auth/password/reset',
             '/api/v1/client-import/resolve',
         }
@@ -153,8 +155,8 @@ def _text(body, key, *, optional=False, max_length=8192):
     return value
 
 
-def _session_response(result):
-    response = web.json_response({key: value for key, value in result.items() if key != 'token'})
+def _session_response(result, *, payload=None):
+    response = web.json_response(payload if payload is not None else {key: value for key, value in result.items() if key != 'token'})
     for name, value, http_only in ((SESSION_COOKIE, result['token'], True), (CSRF_COOKIE, result['csrf'], False)):
         response.set_cookie(name, value, max_age=auth.SESSION_SECONDS, httponly=http_only,
                             secure=True, samesite='Lax', path='/')
@@ -197,6 +199,25 @@ async def logout(request):
     return response
 
 
+async def telegram_web_start(request):
+    from core import telegram_web_auth
+    result, browser = telegram_web_auth.start(ip=client_ip(request))
+    response = web.json_response(result)
+    response.set_cookie(TELEGRAM_LOGIN_COOKIE, browser, max_age=300, httponly=True,
+                        secure=True, samesite='Lax', path='/')
+    return response
+
+
+async def telegram_web_finish(request):
+    from core import telegram_web_auth
+    body = await _body(request)
+    result = await telegram_web_auth.finish(id_token=_text(body, 'id_token', max_length=16384),
+        browser=request.cookies.get(TELEGRAM_LOGIN_COOKIE), ip=client_ip(request))
+    response = _session_response(result)
+    response.del_cookie(TELEGRAM_LOGIN_COOKIE, path='/', secure=True, samesite='Lax')
+    return response
+
+
 async def session_info(request):
     session = request[SESSION_KEY]
     return web.json_response({'account_id': session['user_id'], 'telegram_id': session['telegram_id'],
@@ -226,6 +247,8 @@ def add_routes(app: web.Application) -> None:
     for path, handler, method in (
         ('auth/settings', settings, 'GET'), ('auth/register', register, 'POST'),
         ('auth/login', login, 'POST'), ('auth/telegram', telegram, 'POST'),
+        ('auth/telegram/web/start', telegram_web_start, 'POST'),
+        ('auth/telegram/web/finish', telegram_web_finish, 'POST'),
         ('auth/logout', logout, 'POST'), ('auth/session', session_info, 'GET'),
         ('account/credentials', credentials, 'POST'), ('auth/password/reset', password_reset, 'POST'),
     ):

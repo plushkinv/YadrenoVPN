@@ -103,6 +103,7 @@ async def _fulfill_payment_intent_unlocked(
         if not initial_order:
             raise RuntimeError('Payment order disappeared during fulfillment')
         await _debit_internal_balance_once(initial_order)
+        intent = load_payment_intent(intent.order_id)
         purpose_result = await _apply_purpose(intent)
         if not purpose_result.get('ok'):
             raise RuntimeError(str(purpose_result.get('reason') or 'purpose fulfillment failed'))
@@ -129,11 +130,13 @@ async def _fulfill_payment_intent_unlocked(
         if paid_amount > 0:
             if process_referrals:
                 await _apply_referrals_once(order, bot=bot)
+            order = find_order_by_order_id(intent.order_id)
             await _issue_coupon_once(order)
 
         from core.extensions.events import subscribers_for_order
 
         from core.extensions.rewards import apply_order_rewards
+        order = find_order_by_order_id(intent.order_id)
         await apply_order_rewards(order)
 
         if not complete_payment_fulfillment(

@@ -714,6 +714,13 @@ def is_payment_effect_completed(order_id: str, effect_name: str) -> bool:
         return row is not None
 
 
+def get_payment_referral_effect(order_id: str, level: int) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute('SELECT * FROM payment_referral_effects WHERE order_id=? AND level=?',
+                            (order_id, level)).fetchone()
+        return dict(row) if row else None
+
+
 def record_payment_referral_stat_once(
     order_id: str,
     *,
@@ -729,6 +736,9 @@ def record_payment_referral_stat_once(
     reward = max(0, int(reward_minor if reward_minor is not None else reward_cents or 0))
     currency = str(reward_currency or 'RUB').upper()
     with get_db() as conn:
+        from .db_account_merge import resolve_account_id
+        referrer_id = resolve_account_id(referrer_id, _conn=conn)
+        payer_id = resolve_account_id(payer_id, _conn=conn)
         cursor = conn.execute(
             """
             INSERT OR IGNORE INTO payment_referral_effects (
@@ -1148,6 +1158,7 @@ __all__ = [
     'mark_payment_provider_confirmed',
     'prepare_failed_payment_fulfillment_retry',
     'record_payment_referral_stat_once',
+    'get_payment_referral_effect',
     'recover_interrupted_payment_fulfillment',
     'update_payment_intent_purpose_data',
     'update_payment_intent_quote',

@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import secrets
 import time
+from contextlib import AsyncExitStack
 
 from core.auth import secret_hash
 from core.results import CoreError
@@ -64,9 +65,23 @@ def link_status(session: dict, token: str) -> dict:
                                       bot_id=installation_bot_id(), now=int(time.time()))
 
 
-def finish_link(session: dict, token: str, telegram_id: int) -> dict:
+async def finish_link(session: dict, token: str, telegram_id: int) -> dict:
     require_active()
     if type(telegram_id) is not int or telegram_id <= 0:
         raise CoreError('invalid_request')
-    return db.finish_account_link(token_hash=token_hash(token), session_hash=session['token_hash'],
-                                   bot_id=installation_bot_id(), telegram_id=telegram_id, now=int(time.time()))
+    status = link_status(session, token)
+    owners = sorted({session['user_id'], status['target_account_id']})
+    from core.key_operations import recover_key_operations
+    await recover_key_operations(user_ids=owners)
+    from bot.services.user_locks import user_locks
+    from bot.utils.extension_event_registry import event_subscribers
+    from core.auth import create_session
+    async with AsyncExitStack() as stack:
+        for owner in owners:
+            await stack.enter_async_context(user_locks[owner])
+        result = db.finish_account_link(token_hash=token_hash(token), session_hash=session['token_hash'],
+            bot_id=installation_bot_id(), telegram_id=telegram_id, now=int(time.time()),
+            expected_target_id=status['target_account_id'], subscribers=event_subscribers('user.merged'))
+        credentials = db.get_account_credentials(result['account_id'])
+        result['session'] = create_session(result['account_id'], 'site', credentials['version'] if credentials else 0)
+        return result

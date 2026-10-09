@@ -25,7 +25,7 @@ def manifest_path(runtime, build_id):
 
 
 def activate(runtime, content, trust, *, api_version=1, environment_version=1, frontend_version=1,
-             module_api_version=1, supported_formats=(1, 2), expected_pointer=None):
+             module_api_version=1, supported_formats=(3,), expected_pointer=None):
     signed, files = verify_package(content, trust, api_version=api_version, environment_version=environment_version,
                                   frontend_version=frontend_version, module_api_version=module_api_version,
                                   supported_formats=supported_formats)

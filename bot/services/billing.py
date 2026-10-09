@@ -1209,6 +1209,11 @@ async def process_referral_reward(
         raise ValueError('Payment Intent order_id is required')
     
     for level_num in (1, 2, 3):
+        from database.requests import get_payment_referral_effect
+        completed = get_payment_referral_effect(payment_order_id, level_num)
+        if completed is not None:
+            current_user_id = completed['referrer_id']
+            continue
         referrer_id = get_user_referrer(current_user_id)
         if not referrer_id:
             break

@@ -4,37 +4,37 @@ import { ArrowLeft, Check, Settings } from 'lucide-react';
 import { Button } from '../components/Ui';
 import { Field } from '../components/Forms';
 import type { UiSettings } from '../api/contracts';
+import { ApiError } from '../api/client';
 import { useApp } from '../runtime/context';
-import { registeredPages as basePages, customization } from '../runtime/registry';
+import { customization } from '../config';
+const basePages = customization.pages;
 import { appText as t, errorText } from '../i18n/app';
 import { scenarios, type InstallationPreview, type PreviewContext } from './contracts';
-import declarations from '../runtime/view-registry.json';
+
 import { AdminEditor, EditorIcon } from './AdminEditor';
 import { useAdminEditor, type CandidatePreview } from './useAdminEditor';
 
-function previewRoute(page: string) {
-  const parameter = declarations.pages.find(item => item.id === page)?.preview_parameter;
+function previewRoute(page: string, pages: { id: string; preview_parameter?: string }[] = basePages) {
+  const parameter = pages.find(item => item.id === page)?.preview_parameter;
   return page + (parameter ? '/' + parameter : '');
 }
 
 type Panel = 'cabinet' | 'preview' | 'editor' | 'settings';
 type PublishedManifest = { manifest: { build_id: string; customization_version: string } };
 
-export function AdminPreview({ onSettingsSaved }: { onSettingsSaved: (value: UiSettings) => void }) {
+export function AdminPreview({ configuration: initial, onSettingsSaved }: { configuration: InstallationPreview; onSettingsSaved: (value: UiSettings) => void }) {
   const { api, session, environment, settings } = useApp();
-  const [configuration, setConfiguration] = useState<InstallationPreview>();
+  const [configuration, setConfiguration] = useState<InstallationPreview | undefined>(initial);
   const recheck = useRef<() => void>(() => {});
-  const verified = environment.kind === 'telegram' && session?.source === 'mini_app';
+  const verified = environment.kind === 'telegram' && session?.source === 'mini_app' || session?.source === 'offline';
   useEffect(() => {
     let active = true;
-    setConfiguration(undefined);
     const check = async () => {
       if (!verified) return;
       try { const value = await api.request<InstallationPreview>('/admin/ui/preview'); if (active) setConfiguration(value); }
-      catch { if (active) setConfiguration(undefined); }
+      catch (error) { if (active && error instanceof ApiError && [401, 403].includes(error.status)) setConfiguration(undefined); }
     };
     recheck.current = () => { void check(); };
-    void check();
     const visible = () => { if (document.visibilityState === 'visible') void check(); };
     const timer = window.setInterval(visible, settings.sync_interval_seconds * 1000);
     document.addEventListener('visibilitychange', visible);
@@ -68,7 +68,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
   function selectDemo(update: Partial<PreviewContext>) { recheck(); select(update); }
   function showCandidate(value: CandidatePreview) {
     const exists = value.pages.some(page => page.id === viewed.current.route.split('/')[0]);
-    const nextRoute = exists ? viewed.current.route : previewRoute(value.pages.find(page => page.id === 'home')?.id ?? value.pages[0]?.id ?? 'home');
+    const nextRoute = exists ? viewed.current.route : previewRoute(value.pages.find(page => page.id === 'home')?.id ?? value.pages[0]?.id ?? 'home', value.pages);
     select({ route: nextRoute, ui_version: value.candidate.build_id, customization_version: value.candidate.customization_version });
     setCandidate(value);
     setViewError('');
@@ -152,7 +152,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
       const { manifest } = await api.request<PublishedManifest>('/ui/manifest');
       select({ ui_version: manifest.build_id, customization_version: manifest.customization_version });
       setCandidate(undefined); editor.clearPreview();
-      setPublishedPreview(`/ui/versions/${manifest.build_id}/preview.html`);
+      setPublishedPreview(`/ui/versions/${manifest.build_id}/preview.html?platform=${customization.platform_version}`);
       if (announce) setViewNotice('Открыта текущая опубликованная версия. Рабочие изменения и ваше сообщение сохранены.');
     } catch (reason) { setViewError(errorText(reason)); }
     finally { setPending(false); }
@@ -171,7 +171,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     <dialog ref={dialog} className="admin-preview-dialog" onCancel={event => { event.preventDefault(); close(); }} aria-label="Просмотр интерфейса">
       {previewStarted.current &&
         <div className="admin-preview-page" inert={panel === 'settings'}>
-          <iframe ref={frame} src={candidate?.preview_url ?? publishedPreview ?? customization.asset_base + 'preview.html'} sandbox="allow-scripts" title={t.preview} referrerPolicy="no-referrer" />
+          <iframe ref={frame} src={candidate?.preview_url ?? publishedPreview ?? customization.asset_base + 'preview.html?platform=' + customization.platform_version} sandbox="allow-scripts" title={t.preview} referrerPolicy="no-referrer" />
         </div>}
       {open && <>
         {panel === 'settings' ? <div className="admin-settings-backdrop">
@@ -181,7 +181,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
               <strong>Настройки просмотра</strong>
             </header>
             <fieldset disabled={pending} className="admin-preview-fields">
-              <Field label={t.page}><select value={visibleContext.route.split('/')[0]} onChange={e => selectDemo({ route: previewRoute(e.target.value) })}>{(candidate?.pages ?? basePages).map(page => <option value={page.id} key={page.id}>{page.title ?? basePages.find(base => base.id === page.id)?.title ?? page.id}</option>)}</select></Field>
+              <Field label={t.page}><select value={visibleContext.route.split('/')[0]} onChange={e => selectDemo({ route: previewRoute(e.target.value, candidate?.pages ?? basePages) })}>{(candidate?.pages ?? basePages).map(page => <option value={page.id} key={page.id}>{page.title ?? basePages.find(base => base.id === page.id)?.title ?? page.id}</option>)}</select></Field>
               <Field label={t.scenario}><select value={visibleContext.scenario} onChange={e => selectDemo({ scenario: e.target.value as PreviewContext['scenario'] })}>{Object.entries(scenarios).map(([id, title]) => <option value={id} key={id}>{title}</option>)}</select></Field>
               {customDesign ? <p className="admin-custom-design">Свой дизайн</p> : customDesign === false && <Field label={t.appearance}><select value={visibleContext.preset} onChange={e => { setError(''); selectDemo({ preset: e.target.value as PreviewContext['preset'] }); }}><option value="clear">Universal / Clear</option><option value="signal">Signal / Dark</option><option value="friendly">Friendly / Brand</option></select></Field>}
               <Field label="Тема просмотра"><select value={visibleContext.theme} onChange={e => selectDemo({ theme: e.target.value as PreviewContext['theme'] })}><option value="light">{t.light}</option><option value="dark">{t.dark}</option></select></Field>

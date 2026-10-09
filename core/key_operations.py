@@ -126,9 +126,9 @@ async def mutate_key(account, action, inputs, idempotency_key, *, _policy_checke
                     raise CoreError('key_operation_pending', retryable=True, operation_id=operation['id']) from None
 
 
-async def recover_key_operations(limit=25):
+async def recover_key_operations(limit=25, *, user_ids=None):
     outcomes = {'completed': 0, 'pending': 0}
-    for operation in db.get_pending_account_key_operations(limit):
+    for operation in db.get_pending_account_key_operations(limit, user_ids=user_ids):
         db.mark_key_operation_attempt(operation['id'])
         user = db.get_user_by_id(operation['user_id'])
         if not user:

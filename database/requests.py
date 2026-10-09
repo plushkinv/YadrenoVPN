@@ -7,8 +7,10 @@ Direct SQL is prohibited in handlers - use functions from this module.
 
 from database.db_users import *
 from database.db_account_auth import *
+from database.db_telegram_login import *
 from database.db_auth_challenges import *
 from database.db_account_links import *
+from database.db_account_merge import *
 from database.db_panel_identity import *
 from database.db_order_terms import *
 from database.db_payment_offers import *

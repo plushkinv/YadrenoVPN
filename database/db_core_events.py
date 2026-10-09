@@ -55,6 +55,7 @@ def record_core_event_with_conn(
     subscribers=(), trial: dict[str, Any] | None = None,
     expired_key: dict[str, Any] | None = None,
     registered_user_id: int | None = None,
+    merged_accounts: dict[str, int] | None = None,
 ) -> str:
     """Capture the operation and relevant user facts inside its write transaction."""
     existing = conn.execute(
@@ -63,7 +64,12 @@ def record_core_event_with_conn(
     ).fetchone()
     if existing:
         return str(existing['event_id'])
-    if event_name == 'user.registered':
+    if event_name == 'user.merged':
+        if not merged_accounts or any(value is not None for value in (order_id, trial, expired_key, registered_user_id)):
+            raise ValueError('merge event requires source and target accounts')
+        payment = None
+        user_id = merged_accounts['target_account_id']
+    elif event_name == 'user.registered':
         if registered_user_id is None or any(value is not None for value in (order_id, trial, expired_key)):
             raise ValueError('registration event requires a user without a payment or key')
         payment = None
@@ -105,6 +111,8 @@ def record_core_event_with_conn(
     }
     if trial is not None:
         payload['trial'] = trial
+    if merged_accounts is not None:
+        payload['merge'] = dict(merged_accounts)
     if expired_key is not None:
         payload['key'] = {
             'id': expired_key['id'],

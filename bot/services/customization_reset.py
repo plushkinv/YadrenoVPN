@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,7 @@ PRESERVED_DATA_LABELS = (
     "support dialogs",
     "balance/key operation history",
     "payment provider credentials",
+    "Web connection/domain/HTTPS/installation identity",
 )
 
 
@@ -40,7 +42,18 @@ class CustomizationResetReport:
     backup_paths: list[Path] = field(default_factory=list)
     db_actions: list[str] = field(default_factory=list)
     file_actions: list[str] = field(default_factory=list)
+    web_actions: list[str] = field(default_factory=list)
     runtime_actions: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+class CustomizationResetError(RuntimeError):
+    """Keep completed phases and backup locations when a later phase fails."""
+
+    def __init__(self, report: CustomizationResetReport, stage: str, cause: Exception):
+        report.error = f"{stage}: {cause}"
+        self.report = report
+        super().__init__(report.error)
 
 
 def _resolve_inside(path: Path, root: Path) -> Path:
@@ -131,8 +144,6 @@ def reset_customization_files(
     _assert_tree_inside(custom_extensions_dir, root)
 
     if create_backup and not dry_run:
-        from web_tools.paths import backup_local
-        backup_local(backups_root / (_timestamp() + '__web'), root)
         backup = _create_custom_extensions_backup(custom_extensions_dir, backups_root)
         if backup is not None:
             backups.append(backup)
@@ -198,31 +209,51 @@ def run_customization_reset(
     backups_root = _resolve_inside(_coerce_path(backup_dir, root / "backup", root), root)
 
     report = CustomizationResetReport(dry_run=dry_run)
+    stage = "Подготовка сброса"
+    try:
+        from web_tools.customization_reset import prepare_reset, preview_reset
 
-    if create_backup and not dry_run:
-        if not skip_db:
-            report.backup_paths.append(_create_database_backup(db, backups_root))
+        custom_extensions_dir = root / "custom_extensions"
         if not skip_files:
-            custom_extensions_dir = _resolve_inside(root / "custom_extensions", root)
-            if custom_extensions_dir.exists() and custom_extensions_dir.is_dir():
+            custom_extensions_dir = _resolve_inside(custom_extensions_dir, root)
+            if custom_extensions_dir.is_dir():
                 _assert_tree_inside(custom_extensions_dir, root)
-            file_backup = _create_custom_extensions_backup(custom_extensions_dir, backups_root)
-            if file_backup is not None:
-                report.backup_paths.append(file_backup)
+        context = prepare_reset(root) if not dry_run and not skip_files else nullcontext(None)
+        with context as web_reset:
+            stage = "Резервное копирование"
+            if create_backup and not dry_run:
+                if not skip_db:
+                    report.backup_paths.append(_create_database_backup(db, backups_root))
+                if not skip_files:
+                    file_backup = _create_custom_extensions_backup(custom_extensions_dir, backups_root)
+                    if file_backup is not None:
+                        report.backup_paths.append(file_backup)
+                    if web_reset is not None:
+                        from web_tools.paths import BACKUP_ARCHIVE, backup_local
 
-    if not skip_db:
-        report.db_actions = reset_customization_database(db, dry_run=dry_run)
+                        destination = backups_root / f"{_timestamp()}__custom_reset__web"
+                        backup_local(destination, root)
+                        report.backup_paths.append(destination / BACKUP_ARCHIVE)
 
-    if not skip_files:
-        report.file_actions, _ = reset_customization_files(
-            root,
-            backups_root,
-            dry_run=dry_run,
-            create_backup=False,
-        )
+            stage = "Восстановление Web"
+            if not skip_files:
+                report.web_actions = web_reset.apply() if web_reset is not None else preview_reset(root)
 
-    if reset_runtime and not dry_run:
-        report.runtime_actions.extend(reset_customization_runtime())
+        stage = "Сброс БД"
+        if not skip_db:
+            report.db_actions = reset_customization_database(db, dry_run=dry_run)
+
+        stage = "Очистка расширений"
+        if not skip_files:
+            report.file_actions, _ = reset_customization_files(
+                root, backups_root, dry_run=dry_run, create_backup=False,
+            )
+
+        stage = "Обновление runtime"
+        if reset_runtime and not dry_run:
+            report.runtime_actions.extend(reset_customization_runtime())
+    except Exception as exc:
+        raise CustomizationResetError(report, stage, exc) from exc
 
     return report
 
@@ -236,24 +267,34 @@ async def run_customization_reset_for_bot(
     backup_dir: str | Path | None = None,
 ) -> CustomizationResetReport:
     """Runs reset for Telegram flow and refreshes commands after apply."""
-    report = await asyncio.to_thread(
-        run_customization_reset,
-        dry_run=dry_run,
-        project_root=project_root,
-        db_path=db_path,
-        backup_dir=backup_dir,
-        create_backup=True,
-        reset_runtime=False,
-    )
+    failure = None
+    try:
+        report = await asyncio.to_thread(
+            run_customization_reset,
+            dry_run=dry_run,
+            project_root=project_root,
+            db_path=db_path,
+            backup_dir=backup_dir,
+            create_backup=True,
+            reset_runtime=False,
+        )
+    except CustomizationResetError as exc:
+        if dry_run or not exc.report.db_actions:
+            raise
+        # Database changes already committed; refresh the live view even on partial reset.
+        failure, report = exc, exc.report
 
     if dry_run:
         return report
 
-    report.runtime_actions.extend(reset_customization_runtime())
-    from bot.utils.user_ui_texts import reload_user_ui_text_cache
+    try:
+        report.runtime_actions.extend(reset_customization_runtime())
+        from bot.utils.user_ui_texts import reload_user_ui_text_cache
 
-    loaded = reload_user_ui_text_cache()
-    report.runtime_actions.append(f"user UI text cache reloaded: {loaded} entries")
+        loaded = reload_user_ui_text_cache()
+        report.runtime_actions.append(f"user UI text cache reloaded: {loaded} entries")
+    except Exception as exc:
+        raise CustomizationResetError(report, "Обновление runtime", exc) from exc
     if bot is not None:
         try:
             from bot.services.bot_commands import sync_bot_commands
@@ -263,13 +304,18 @@ async def run_customization_reset_for_bot(
         except Exception as exc:
             logger.exception("Failed to synchronize Telegram command menu after customization reset")
             report.runtime_actions.append(f"Telegram command menu sync failed: {exc}")
+    if failure is not None:
+        raise failure
     return report
 
 
 def format_report_for_cli(report: CustomizationResetReport, project_root: str | Path | None = None) -> str:
     """Formats a reset report for console output."""
     root = Path(project_root).resolve() if project_root is not None else PROJECT_ROOT.resolve()
-    lines = [f"Customization reset: {'DRY RUN' if report.dry_run else 'APPLIED'}"]
+    mode = 'STOPPED' if report.error else 'DRY RUN' if report.dry_run else 'APPLIED'
+    lines = [f"Customization reset: {mode}"]
+    if report.error:
+        lines.extend([report.error, "Completed phases follow; the failed phase may have partially applied."])
     if report.backup_paths:
         lines.append("")
         lines.append("Backups:")
@@ -282,6 +328,9 @@ def format_report_for_cli(report: CustomizationResetReport, project_root: str | 
         lines.append("")
         lines.append("Files:")
         lines.extend(f"  - {action}" for action in report.file_actions)
+    if report.web_actions:
+        lines.extend(["", "Web:"])
+        lines.extend(f"  - {action}" for action in report.web_actions)
     if report.runtime_actions:
         lines.append("")
         lines.append("Runtime:")
@@ -295,6 +344,7 @@ def format_report_for_cli(report: CustomizationResetReport, project_root: str | 
 __all__ = [
     "CUSTOM_RESET_CONFIRMATION_PHRASE",
     "CustomizationResetReport",
+    "CustomizationResetError",
     "PRESERVED_DATA_LABELS",
     "format_report_for_cli",
     "reset_customization_files",

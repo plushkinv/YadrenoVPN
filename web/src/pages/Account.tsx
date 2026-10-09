@@ -10,7 +10,7 @@ import { usePhoneVerification, VerificationFields } from '../components/PhoneVer
 
 export function Authentication() {
   const back = useBack();
-  const { api, authenticated, bootstrap, route, navigate } = useApp();
+  const { launch, api, authenticated, bootstrap, route, navigate, loginWithTelegram } = useApp();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [current, setCurrent] = useState('');
@@ -34,7 +34,7 @@ export function Authentication() {
       if (proof) body.proof = proof;
       if (mode === 'credentials' && current) body.current_password = current;
       if (mode === 'register') {
-        const ref = new URLSearchParams(location.search).get('ref');
+        const ref = launch.ref;
         if (ref) body.referral_code = ref;
       }
       try {
@@ -56,6 +56,8 @@ export function Authentication() {
   }
   if (done) return <section className="panel"><p role="status">{t.resetDone}</p><Button onClick={() => navigate('login')}>{t.login}</Button></section>;
   return <><PageHeading title={title} back={mode === 'login' ? undefined : back} /><section className="panel form-panel">
+    {mode === 'login' && bootstrap.auth.telegram_login_available && <Button disabled={action.busy}
+      aria-busy={action.busy} onClick={() => action.run(loginWithTelegram)}>{t.telegramLogin}</Button>}
     {bootstrap.auth.unverified_phone_warning_required && mode !== 'login' && <p className="notice">{t.noRecovery}</p>}
     <Form onSubmit={submit} busy={action.busy || verification.busy}
       submitDisabled={needsVerification && !proof && verification.submitDisabled}
@@ -99,7 +101,8 @@ export function TelegramLink() {
     const value = stored<Link | null>(savedKey, null);
     return value && value.expires_at * 1000 > Date.now() ? value : undefined;
   });
-  const [status, setStatus] = useState<{ state: string; telegram_id: number | null; first_name?: string }>();
+  const [status, setStatus] = useState<{ state: string; telegram_id: number | null; first_name?: string;
+    merge: boolean; target_account_id: number; phone: string | null }>();
   const runLink = (operation: () => Promise<void>) => action.run(async () => {
     try { await operation(); }
     catch (error) {
@@ -113,7 +116,9 @@ export function TelegramLink() {
     <p>{t.linkCaption}</p>{!link ? <Button disabled={action.busy} onClick={() => action.run(async () => { const value = await api.request<Link>('/account/telegram/link', 'POST'); remember(savedKey, value); setLink(value); })}>{t.continue}</Button> : <div className="action-list">
       <Button onClick={() => environment.openLink(link.telegram_url)}>{t.openTelegram}</Button>
       <Button tone="secondary" disabled={action.busy} onClick={() => runLink(async () => setStatus(await api.request('/account/telegram/link/status', 'POST', { token: link.token })))}>{t.linkCheck}</Button>
-      {status?.telegram_id && status.state === 'confirmed' ? <><p>{status.first_name || String(status.telegram_id)}</p><Button disabled={action.busy} onClick={() => runLink(async () => {
+      {status?.telegram_id && status.state === 'confirmed' ? <><p>{status.first_name || String(status.telegram_id)}</p>
+      {status.merge && <p className="notice">{t.mergeWarning} {t.account}: {status.target_account_id}. {t.phone}: {status.phone}.</p>}
+      <Button disabled={action.busy} onClick={() => runLink(async () => {
         await api.request('/account/telegram/link/finish', 'POST', { token: link.token, telegram_id: status.telegram_id }); remember(savedKey, null); refresh(); navigate('account');
       })}>{t.linkFinish}</Button></> : status && <p role="status">{t.linkWaiting}</p>}
     </div>}<Failure error={action.error} />

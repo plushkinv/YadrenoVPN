@@ -42,6 +42,7 @@ _POST_V113_USER_UI_TEXT_KEYS = frozenset({
     'account.link.conflict', 'account.link.unavailable',
 })
 _POST_V120_USER_UI_TEXT_KEYS = frozenset({'format.time_left'})
+_POST_V126_USER_UI_TEXT_KEYS = frozenset({'account.link.merge_prompt', 'account.merge.balance_reason'})
 _POST_V105_CORE_PAGE_KEYS = frozenset({
     'key_devices',
     'key_replace_server_unavailable',
@@ -52,7 +53,7 @@ _BASELINE_USER_UI_TEXT_DEFINITIONS_V97 = tuple(
     definition
     for definition in USER_UI_TEXT_DEFINITIONS
     if definition.text_key not in (
-        _POST_V97_USER_UI_TEXT_KEYS | _POST_V113_USER_UI_TEXT_KEYS | _POST_V120_USER_UI_TEXT_KEYS
+        _POST_V97_USER_UI_TEXT_KEYS | _POST_V113_USER_UI_TEXT_KEYS | _POST_V120_USER_UI_TEXT_KEYS | _POST_V126_USER_UI_TEXT_KEYS
     )
 )
 _USER_UI_TEXT_DEFINITIONS_V108 = tuple(
@@ -72,7 +73,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 126
+LATEST_VERSION = 127
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -4114,6 +4115,28 @@ def migration_126(conn: sqlite3.Connection) -> None:
         conn.execute(f'DROP TABLE IF EXISTS {table}')
 
 
+def migration_127(conn: sqlite3.Connection) -> None:
+    """Add opt-in Telegram website login and explicit merged-account ownership."""
+    additions = {
+        'users': {'merged_into_user_id': 'INTEGER REFERENCES users(id)'},
+        'account_sessions': {'authentication_method': "TEXT NOT NULL DEFAULT 'password'"},
+        'account_link_requests': {'target_user_id': 'INTEGER REFERENCES users(id)',
+                                  'target_credential_version': 'INTEGER'},
+    }
+    for table, fields in additions.items():
+        columns = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+        for name, declaration in fields.items():
+            if name not in columns:
+                conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {declaration}')
+    conn.execute("UPDATE account_sessions SET authentication_method='telegram' WHERE source='mini_app'")
+    conn.execute('''CREATE TABLE IF NOT EXISTS telegram_login_challenges (
+        browser_hash TEXT PRIMARY KEY, nonce_hash TEXT NOT NULL, expires_at INTEGER NOT NULL
+    )''')
+    conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('web_telegram_login_enabled','0')")
+    update_user_ui_text_defaults((item for item in USER_UI_TEXT_DEFINITIONS
+                                 if item.text_key in _POST_V126_USER_UI_TEXT_KEYS | {'account.link.conflict'}), conn=conn)
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -4143,6 +4166,7 @@ MIGRATIONS = {
     124: migration_124,
     125: migration_125,
     126: migration_126,
+    127: migration_127,
 }
 
 

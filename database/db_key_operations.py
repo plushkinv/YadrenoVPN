@@ -90,12 +90,13 @@ def rename_account_key(user_id, key_id, name):
         return conn.execute('UPDATE vpn_keys SET custom_name=? WHERE id=? AND user_id=?', (name, key_id, user_id)).rowcount > 0
 
 
-def get_pending_account_key_operations(limit=25):
+def get_pending_account_key_operations(limit=25, *, user_ids=None):
     from .db_modules import _operation
     with get_db() as conn:
+        owner_filter = '' if user_ids is None else ' AND user_id IN (' + ','.join('?' for _ in user_ids) + ')'
         return [_operation(row) for row in conn.execute("SELECT * FROM account_operations WHERE kind IN ('key.replace','key.configure','key.delete','key.device_delete') "
-                "AND result_json IS NULL ORDER BY COALESCE(json_extract(request_json,'$.recovery_at'),0),created_at,id LIMIT ?",
-                (min(100, max(1, int(limit))),))]
+                'AND result_json IS NULL' + owner_filter + " ORDER BY COALESCE(json_extract(request_json,'$.recovery_at'),0),created_at,id LIMIT ?",
+                (*(() if user_ids is None else user_ids), min(100, max(1, int(limit)))))]
 
 
 def mark_key_operation_attempt(operation_id):

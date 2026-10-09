@@ -71,7 +71,7 @@ def _asset_name(name):
     return name
 
 
-def file_inventory(folder):
+def file_inventory(folder, *, required=('application.json',)):
     folder = Path(folder)
     files = {}
     total = 0
@@ -89,19 +89,20 @@ def file_inventory(folder):
                 rb'-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----|\bBOT_TOKEN\s*[:=]|\bTELEGRAM_API_URL\s*[:=]', content):
             raise ValueError('possible installation secret in UI output')
         files[relative] = {'sha256': digest(content), 'size': len(content)}
-    if not {'index.html', 'preview.html'}.issubset(files):
+    if not set(required).issubset(files):
         raise ValueError('UI package is missing application entries')
     return files
 
 
 def create_package(folder, *, key, identity, product_version, base_build_id, build_id, customization_version, requirements=None, core_api=None):
     files = file_inventory(folder)
-    manifest = {'format_version': 1, 'product': 'yadreno-vpn', 'product_version': product_version,
+    from web_tools.application import read_application
+    read_application({name: local_path(folder, name).read_bytes() for name in files})
+    manifest = {'format_version': 3, 'product': 'yadreno-vpn', 'product_version': product_version,
         'base_build_id': base_build_id, 'build_id': build_id, 'instance_id': identity['instance_id'],
         'core_api': bounds({'min': 1, 'max': 1} if core_api is None else core_api, 1, 'core API'), 'environment_contract': 1, 'customization_version': customization_version,
         'key_id': identity['key_id'], 'content_hash': digest(canonical(files)), 'files': files}
-    if requirements is not None:
-        manifest.update(format_version=2, requirements=check_requirements(requirements))
+    manifest['requirements'] = check_requirements(requirements or {'frontend_api': {'min': 1, 'max': 1}, 'modules': []})
     signed = {'manifest': manifest, 'signature': base64.b64encode(key.sign(canonical(manifest))).decode()}
     output = io.BytesIO()
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
@@ -112,7 +113,7 @@ def create_package(folder, *, key, identity, product_version, base_build_id, bui
 
 
 def verify_manifest(signed, trust, *, api_version=1, environment_version=1, frontend_version=1,
-                    module_api_version=1, supported_formats=(1, 2)):
+                    module_api_version=1, supported_formats=(3,)):
     """Trust is installed independently; a downloaded key is never a trust root."""
     if (not isinstance(trust, dict) or set(trust) != {'instance_id', 'key_id', 'public_key'}
             or any(not isinstance(value, str) or not 1 <= len(value) <= 128 for value in trust.values())):
@@ -120,7 +121,7 @@ def verify_manifest(signed, trust, *, api_version=1, environment_version=1, fron
     if not isinstance(signed, dict) or set(signed) != {'manifest', 'signature'}:
         raise ValueError('invalid signed manifest envelope')
     value = signed['manifest']
-    expected = MANIFEST_FIELDS | ({'requirements'} if isinstance(value, dict) and value.get('format_version') == 2 else set())
+    expected = MANIFEST_FIELDS | ({'requirements'} if isinstance(value, dict) and value.get('format_version') in {2, 3} else set())
     if not isinstance(value, dict) or set(value) != expected:
         raise ValueError('invalid manifest fields')
     try:
@@ -130,7 +131,7 @@ def verify_manifest(signed, trust, *, api_version=1, environment_version=1, fron
         Ed25519PublicKey.from_public_bytes(public).verify(base64.b64decode(signed['signature'], validate=True), canonical(value))
     except (InvalidSignature, KeyError, TypeError) as exc:
         raise ValueError('invalid UI signature/trust') from exc
-    if (type(value['format_version']) is not int or value['format_version'] not in {1, 2}
+    if (type(value['format_version']) is not int or value['format_version'] not in {1, 2, 3}
             or value['format_version'] not in supported_formats or value['product'] != 'yadreno-vpn'
             or type(value['environment_contract']) is not int or value['environment_contract'] != environment_version):
         raise ValueError('incompatible UI format/product/environment')
@@ -138,7 +139,7 @@ def verify_manifest(signed, trust, *, api_version=1, environment_version=1, fron
     if (not isinstance(bounds, dict) or set(bounds) != {'min', 'max'} or any(type(v) is not int for v in bounds.values())
             or not 1 <= bounds['min'] <= api_version <= bounds['max']):
         raise ValueError('incompatible core API range')
-    if value['format_version'] == 2:
+    if value['format_version'] in {2, 3}:
         check_requirements(value['requirements'], api_version=api_version, frontend_version=frontend_version,
                            environment_version=environment_version, module_api_version=module_api_version)
     elif frontend_version != 1 or module_api_version != 1:
@@ -155,7 +156,8 @@ def verify_manifest(signed, trust, *, api_version=1, environment_version=1, fron
         if not isinstance(info, dict) or set(info) != {'sha256', 'size'} or type(info['size']) is not int or info['size'] < 0 or not isinstance(info['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', info['sha256']):
             raise ValueError('invalid UI asset description')
         size += info['size']
-    if size > MAX_BYTES or not {'index.html', 'preview.html'}.issubset(files) or digest(canonical(files)) != value['content_hash']:
+    required = {'application.json'} if value['format_version'] == 3 else {'index.html', 'preview.html'}
+    if size > MAX_BYTES or not required.issubset(files) or digest(canonical(files)) != value['content_hash']:
         raise ValueError('invalid UI content inventory/hash')
     return value
 
@@ -183,6 +185,9 @@ def verify_package(content, trust, **versions):
                 if len(data) != info['size'] or digest(data) != info['sha256']:
                     raise ValueError('corrupted UI asset: ' + name)
                 files[name] = data
+            if manifest['format_version'] == 3:
+                from web_tools.application import read_application
+                read_application(files)
             return signed, files
     except (zipfile.BadZipFile, KeyError, UnicodeError) as exc:
         raise ValueError('invalid/incomplete UI archive') from exc

@@ -174,11 +174,11 @@ def _managed_configuration(root, options, paths, facts, instance):
     return text.replace(placeholder, header), fingerprint
 
 
-def _verify_ready(system, origin, signed, trust, *, nginx_configuration=None):
+def _verify_ready(system, origin, signed, trust, *, runtime, nginx_configuration=None):
     deadline = time.monotonic() + 60
     while True:
         try:
-            verify_endpoint(system, origin, signed, trust, nginx_configuration=nginx_configuration)
+            verify_endpoint(system, origin, signed, trust, runtime=runtime, nginx_configuration=nginx_configuration)
             break
         except SetupError as exc:
             if exc.code not in {'https_unavailable', 'nginx_configuration_not_applied'} or time.monotonic() >= deadline:
@@ -263,7 +263,7 @@ def apply(root, checked, system, store):
             and verify_owned_file(system, paths['nginx'], trust['instance_id']).is_file()
             and verify_owned_file(system, paths['nginx'], trust['instance_id']).read_text() == marker(trust['instance_id']) + configuration)
         if same_options and same_settings and same_system and system.active(SERVICE):
-            _verify_ready(system, options.public_url, signed, trust, nginx_configuration=fingerprint)
+            _verify_ready(system, options.public_url, signed, trust, runtime=Path(root) / 'web_runtime', nginx_configuration=fingerprint)
             button = store.enable_button()
             return result(options, ok=button['code'] == 'ready', code='ready' if button['code'] == 'ready' else 'web_button_unavailable',
                 stage='complete', changed=button['changed'], button=button, publication={'instance_id': trust['instance_id'],
@@ -274,7 +274,7 @@ def apply(root, checked, system, store):
             _managed(root, options, system, trust, paths, facts, configuration)
         store.configure(options)
         system.run(['systemctl', 'restart', SERVICE], timeout=90)
-        _verify_ready(system, options.public_url, signed, trust, nginx_configuration=fingerprint)
+        _verify_ready(system, options.public_url, signed, trust, runtime=Path(root) / 'web_runtime', nginx_configuration=fingerprint)
         journal['phase'] = 'verified'
         atomic_write(_journal_path(root), canonical(journal))
         button = _finish(root, journal, store)
