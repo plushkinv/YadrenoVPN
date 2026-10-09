@@ -4,7 +4,7 @@ import { errorText } from '../i18n/app';
 export type EditorAction = 'submit' | 'apply' | 'state' | 'cancel' | 'resume' | 'new-chat';
 const messages: Record<EditorAction, string> = {
   submit: 'Ошибка при отправке запроса', state: 'Ошибка при обновлении состояния запроса',
-  apply: 'Не удалось отправить команду применения',
+  apply: 'Не удалось применить черновик',
   cancel: 'Ошибка при отмене запроса', resume: 'Ошибка при возобновлении запроса',
   'new-chat': 'Ошибка при создании нового чата',
 };
@@ -18,6 +18,8 @@ export function editorError(value: unknown, action: EditorAction): string {
     message += '. Подключите кастомизатор в настройках Yadreno Admin.';
   } else if (details.reason === 'ui_publication_changed' || details.reason === 'ui_source_changed') {
     message += '. Интерфейс изменился после открытия. Откройте актуальную версию и повторите запрос.';
+  } else if (action === 'apply' && details.reason === 'editor_candidate_unavailable') {
+    message += '. Предпросмотр недоступен или устарел. Обновите состояние и проверьте показанный вариант.';
   } else if (value instanceof ApiError && ['authentication_required', 'reauthentication_required', 'access_denied', 'offline'].includes(value.code)) {
     message += '. ' + errorText(value);
   }

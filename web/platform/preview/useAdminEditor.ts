@@ -18,9 +18,9 @@ export interface CandidatePreview {
   viewed: PreviewContext; preview_url: string; published: boolean;
   pages: { id: string; title?: string | null; preview_parameter?: string }[];
 }
+interface AppliedCandidate { current_build_id: string; changed: boolean }
 type Turn = { kind: 'message' } | { kind: 'apply'; candidate: CandidatePreview };
 const prefix = '/admin/ui/editor', maxFiles = 5;
-const applyMessage = 'Примени именно показанный проверенный вариант интерфейса без дополнительных изменений. Если он устарел или недоступен, сообщи причину; не меняй и не пересобирай его автоматически.';
 
 export function useAdminEditor({ viewed, onCandidate, onNewChat, polling, visible, contextPending = false }: {
   viewed: PreviewContext; onCandidate: (value: CandidatePreview) => void;
@@ -129,19 +129,23 @@ export function useAdminEditor({ viewed, onCandidate, onNewChat, polling, visibl
           setNotice('Предпросмотр обновлён. Проверьте показанный вариант перед применением.'); return;
         }
         if (checked.published) { setUncertain(false); setNotice('Этот вариант уже применён.'); return; }
+        const result = await api.request<AppliedCandidate>(prefix + '/apply', 'POST', {
+          task_id: checked.task_id, build_id: checked.candidate.build_id,
+        });
+        if (alive.current) receiveCandidate({ ...checked, published: result.current_build_id === checked.candidate.build_id });
+        return;
       }
       admitting = true;
-      const text = turn.kind === 'apply' ? applyMessage : message;
-      if (turn.kind === 'message' && (voice.clip || files.length)) {
-        const body = new FormData(); body.set('message', text); body.set('viewed', JSON.stringify(viewed));
+      if (voice.clip || files.length) {
+        const body = new FormData(); body.set('message', message); body.set('viewed', JSON.stringify(viewed));
         files.forEach(file => body.append('files', file));
         if (voice.clip) body.set('voice', voice.clip.file);
         await api.request(prefix + '/uploads', 'POST', body);
-      } else await api.request(prefix + '/turns', 'POST', { message: text, viewed });
+      } else await api.request(prefix + '/turns', 'POST', { message, viewed });
       if (!alive.current) return;
-      if (turn.kind === 'message') { setMessage(''); voice.clear(); setFiles([]); }
+      setMessage(''); voice.clear(); setFiles([]);
       setUncertain(false); setCheckedUncertain(false); setCandidate(undefined);
-      setState(undefined); setReady(false); setNotice('Запрос принят.');
+      setState(undefined); setReady(false);
       await refreshState();
     } catch (reason) {
       if (alive.current) {

@@ -176,6 +176,8 @@ route('GET', 'admin/ui/editor', ref('EditorState'))
 route('POST', 'admin/ui/editor/preview', obj({'task_id': S, 'candidate': ref('EditorCandidate'),
     'viewed': ref('EditorViewed'), 'preview_url': S, 'published': B,
     'pages': array(obj({'id': S, 'title': nullable(S), 'preview_parameter': S}, required=['id']))}), obj())
+route('POST', 'admin/ui/editor/apply', obj({'current_build_id': S, 'changed': B}),
+    obj({'task_id': text_bound(32), 'build_id': text_bound(32)}))
 route('POST', 'admin/ui/editor/turns', obj({'status': {'type': 'string', 'enum': ['accepted']},
     'task_id': S, 'request_id': EDITOR_REQUEST_ID}), obj({'message': text_bound(8192), 'viewed': ref('EditorViewed')}))
 route('POST', 'admin/ui/editor/uploads', obj({'status': {'type': 'string', 'enum': ['accepted']},

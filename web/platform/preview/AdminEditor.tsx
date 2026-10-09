@@ -9,9 +9,9 @@ export function EditorIcon({ label, children, className = '', ...props }: Button
 }
 
 export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pageTitle = 'Главная', preview = true,
-  onCollapse, onExit, viewNotice, onOpenPublished, loadingPublished, recoveryError }: {
+  onCollapse, onExit, onTogglePreview, viewNotice, onOpenPublished, loadingPublished, recoveryError }: {
   editor: AdminEditorController; expanded: boolean; onActivate: () => void; onAttach: () => void; tools: ReactNode;
-  pageTitle?: string; preview?: boolean; onCollapse?: () => void; onExit?: () => void; viewNotice?: string;
+  pageTitle?: string; preview?: boolean; onCollapse?: () => void; onExit?: () => void; onTogglePreview: () => void; viewNotice?: string;
   onOpenPublished?: () => void; loadingPublished?: boolean; recoveryError?: string;
 }) {
   const input = useRef<HTMLTextAreaElement>(null), menu = useRef<HTMLDivElement>(null), menuButton = useRef<HTMLButtonElement>(null);
@@ -21,7 +21,11 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
   const voice = editor.voice, recording = voice.phase === 'recording', requesting = voice.phase === 'requesting';
   useLayoutEffect(() => {
     const element = header.current!;
-    const measure = () => element.parentElement?.style.setProperty('--admin-editor-header-height', `${element.getBoundingClientRect().height}px`);
+    const measure = () => {
+      const height = `${element.getBoundingClientRect().height}px`;
+      element.parentElement?.style.setProperty('--admin-editor-header-height', height);
+      element.closest<HTMLDialogElement>('.admin-preview-dialog')?.style.setProperty('--admin-editor-header-height', height);
+    };
     const observer = new ResizeObserver(measure); observer.observe(element); measure();
     return () => observer.disconnect();
   }, []);
@@ -38,14 +42,20 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
     return () => document.removeEventListener('pointerdown', outside);
   }, [menuOpen]);
   const closeMenu = () => { setMenuOpen(false); menuButton.current?.focus(); };
-  const status = preview ? <span className="admin-editor-version">Предпросмотр{editor.candidate && <>
-    <span aria-hidden="true"> · </span>{editor.candidate.published
+  const status = preview && editor.candidate && <span className="admin-editor-candidate"><span aria-hidden="true">·</span>{editor.candidate.published
       ? <span className="admin-editor-applied"><Check aria-hidden="true" />Применено</span>
-      : <span className="admin-editor-draft">Черновик</span>}</>}</span> : <span className="admin-editor-version">Открыть предпросмотр</span>;
+      : <span className="admin-editor-draft">Черновик</span>}</span>;
   return <section className={'admin-editor' + (expanded ? ' admin-editor--expanded' : '')} aria-label="Редактор страницы">
     <header ref={header} className="admin-editor-header">
-      {expanded ? <div className="admin-editor-heading"><strong title={`Редактор · ${pageTitle}`}>Редактор · {pageTitle}</strong>{status}</div>
-        : <button type="button" className="admin-editor-open" onClick={onActivate} aria-label="Открыть редактор"><strong>Редактор · {pageTitle}</strong>{status}</button>}
+      <div className="admin-editor-heading">
+        {expanded ? <strong className="admin-editor-page" title={`Редактор · ${pageTitle}`}>Редактор · {pageTitle}</strong>
+          : <button type="button" className="admin-editor-open admin-editor-page" onClick={onActivate} aria-label="Открыть редактор" title={`Редактор · ${pageTitle}`}>Редактор · {pageTitle}</button>}
+        <div className="admin-editor-version">
+          <button type="button" className="admin-preview-toggle" role="switch" aria-checked={preview} aria-label="Предпросмотр" disabled={loadingPublished} onClick={onTogglePreview}>
+            Предпросмотр<span className="admin-preview-switch" aria-hidden="true"><span /></span>
+          </button>{status}
+        </div>
+      </div>
       {tools}
       <EditorIcon label={expanded ? 'Свернуть редактор' : 'Развернуть редактор'} onClick={expanded ? onCollapse : onActivate}>
         {expanded ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
@@ -111,7 +121,7 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
               <button ref={menuButton} type="button" className="button button--quiet admin-icon" aria-label="Действия редактора"
                 aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><MoreHorizontal aria-hidden="true" /></button>
               <span className="admin-editor-spacer" />
-              <EditorIcon type="submit" label="Отправить" className="admin-editor-send" disabled={!editor.canSubmit}><ArrowUp aria-hidden="true" /></EditorIcon>
+              <Button type="submit" aria-label="Отправить" title="Отправить" className="admin-icon admin-editor-send" disabled={!editor.canSubmit}><ArrowUp aria-hidden="true" /></Button>
             </div>
           </div>
         </>}

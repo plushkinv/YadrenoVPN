@@ -1,6 +1,6 @@
 ﻿import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { ArrowLeft, Check, Settings } from 'lucide-react';
+import { Check, ChevronDown, Settings } from 'lucide-react';
 import { Button } from '../components/Ui';
 import { Field } from '../components/Forms';
 import type { UiSettings } from '../api/contracts';
@@ -76,7 +76,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
   }
   const editor = useAdminEditor({ viewed: visibleContext, onCandidate: showCandidate, onNewChat: () => openPublished(false),
     polling: open, visible: panel === 'editor', contextPending: pending || Boolean(viewError) });
-  function activate(next: 'editor' | 'settings') {
+  function activate(next: 'preview' | 'editor' | 'settings') {
     if (closing.current) return;
     recheck();
     previewStarted.current = true;
@@ -87,7 +87,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     if (pending) return;
     closing.current = true;
     select({ preset: settings.preset }); setPanel('cabinet'); setError('');
-    requestAnimationFrame(() => { launch.current?.querySelector<HTMLButtonElement>('[aria-label="Настройки просмотра"]')?.focus({ preventScroll: true }); closing.current = false; });
+    requestAnimationFrame(() => { launch.current?.querySelector<HTMLButtonElement>('[role="switch"]')?.focus({ preventScroll: true }); closing.current = false; });
   }
   useLayoutEffect(() => {
     if (!open) { dialog.current?.close(); return; }
@@ -142,7 +142,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
         onSettingsSaved(value);
       }
       closing.current = true; setPanel('cabinet');
-      requestAnimationFrame(() => { launch.current?.querySelector<HTMLButtonElement>('[aria-label="Настройки просмотра"]')?.focus({ preventScroll: true }); closing.current = false; });
+      requestAnimationFrame(() => { launch.current?.querySelector<HTMLButtonElement>('[role="switch"]')?.focus({ preventScroll: true }); closing.current = false; });
     } catch (reason) { setError(errorText(reason)); }
     finally { setPending(false); }
   }
@@ -157,12 +157,12 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     } catch (reason) { setViewError(errorText(reason)); }
     finally { setPending(false); }
   }
-  const pageId = visibleContext.route.split('/')[0];
+  const pageId = (open ? visibleContext.route : route).split('/')[0];
   const pageTitle = (candidate?.pages ?? basePages).find(page => page.id === pageId)?.title ?? basePages.find(page => page.id === pageId)?.title ?? pageId;
   const gear = <EditorIcon label="Настройки просмотра" onClick={() => activate('settings')}><Settings aria-hidden="true" /></EditorIcon>;
   const composer = (expanded: boolean) => <AdminEditor editor={editor} expanded={expanded} onActivate={() => activate('editor')}
     onAttach={() => { fileInput.current?.click(); activate('editor'); }} tools={gear} pageTitle={pageTitle} preview={open}
-    onCollapse={() => setPanel('preview')} onExit={close} viewNotice={viewNotice}
+    onCollapse={() => setPanel('preview')} onExit={close} onTogglePreview={() => open ? close() : activate('preview')} viewNotice={viewNotice}
     onOpenPublished={() => void openPublished()} loadingPublished={pending} recoveryError={viewError} />;
   return <>
     <input ref={fileInput} type="file" multiple hidden aria-label="Файлы для кастомизатора"
@@ -177,8 +177,8 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
         {panel === 'settings' ? <div className="admin-settings-backdrop">
           <section className="admin-settings" aria-label="Настройки просмотра">
             <header className="admin-settings-header">
-              <EditorIcon label="Вернуться к редактору" disabled={pending} onClick={() => activate('editor')}><ArrowLeft aria-hidden="true" /></EditorIcon>
               <strong>Настройки просмотра</strong>
+              <EditorIcon label="Свернуть настройки" disabled={pending} onClick={() => setPanel('preview')}><ChevronDown aria-hidden="true" /></EditorIcon>
             </header>
             <fieldset disabled={pending} className="admin-preview-fields">
               <Field label={t.page}><select value={visibleContext.route.split('/')[0]} onChange={e => selectDemo({ route: previewRoute(e.target.value, candidate?.pages ?? basePages) })}>{(candidate?.pages ?? basePages).map(page => <option value={page.id} key={page.id}>{page.title ?? basePages.find(base => base.id === page.id)?.title ?? page.id}</option>)}</select></Field>
@@ -189,7 +189,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
             <p className="admin-settings-hint">Страница, состояние и тема меняют только предпросмотр.</p>
             {error && <p role="alert">{error}</p>}
             <footer className="admin-settings-actions">
-              <Button tone="quiet" disabled={pending} onClick={close}>Отменить и выйти</Button>
+              <Button tone="secondary" className="admin-settings-cancel" disabled={pending} onClick={close}>Отменить и выйти</Button>
               <Button disabled={pending || customDesign === undefined} onClick={() => void save()}><Check aria-hidden="true" />
                 {!customDesign && visibleContext.preset !== settings.preset ? 'Сохранить оформление' : 'Готово'}
               </Button>

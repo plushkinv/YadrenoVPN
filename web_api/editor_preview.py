@@ -22,7 +22,7 @@ from bot.services import yadreno_admin_web_diagnostics as diagnostics
 from core import auth
 from core.results import CoreError
 from database import requests as db
-from web_api.auth import SESSION_COOKIE, SESSION_KEY
+from web_api.auth import SESSION_COOKIE, SESSION_KEY, _body
 from web_tools.paths import local_path, source_provenance
 from web_tools.publication import read_pointer
 from web_tools import editor_publication
@@ -32,6 +32,13 @@ from web_tools.package import digest, verify_package
 from web_tools.release import publication
 
 PREFIX = '/ui/editor-preview/'
+
+
+def _current_session(session, api_key):
+    current = db.get_account_session(session['token_hash'], int(time.time()))
+    if current is None or authorize(current) != api_key:
+        raise CoreError('access_denied')
+    return current
 
 
 @dataclass(frozen=True)
@@ -55,7 +62,7 @@ class EditorPreviews:
 
     def _candidate(self, api_key, request_id=None):
         # Browsers request several chunks/fonts concurrently. Serialize these
-        # bounded reads before the workspace's nonblocking interprocess lock.
+        # bounded reads and application before the workspace's nonblocking lock.
         # The worker owns this lock even if its HTTP awaiter is cancelled.
         with self._read_lock:
             if request_id is None:
@@ -104,9 +111,7 @@ class EditorPreviews:
             raise CoreError('conflict', details={**diagnostic, 'reason': 'editor_candidate_unavailable',
                 'message': diagnostic['error'] + ' ' + diagnostic['next_action']}) from error
         # A logout/key/rights change during validation cannot issue a usable handle.
-        current = db.get_account_session(session['token_hash'], int(time.time()))
-        if current is None or authorize(current) != api_key:
-            raise CoreError('access_denied')
+        current = _current_session(session, api_key)
         viewed.update(ui_version=candidate['build_id'], customization_version=candidate['customization_version'])
         grant = PreviewGrant(session['token_hash'], current['expires_at'], request_id,
                              task_id, candidate['revision'], candidate['build_id'], candidate['package_sha256'])
@@ -120,6 +125,35 @@ class EditorPreviews:
             self.handles[handle] = grant
         return {'task_id': task_id, 'candidate': candidate, 'viewed': viewed,
                 'preview_url': PREFIX + handle + '/preview.html', 'pages': pages, 'published': published}
+
+    async def apply(self, session, *, task_id, build_id):
+        """Publish the displayed candidate locally, without Hub admission or a build."""
+        api_key = authorize(session)
+
+        def publish():
+            with self._read_lock:
+                request_id, binding = self.dialog._binding(api_key)
+                if binding is None or binding.task_id != task_id:
+                    raise CoreError('conflict', details={'reason': 'ui_publication_changed'})
+                diagnostics.update(stage='publish', request_id=request_id, task_id=task_id)
+                workspace = binding.workspace(api_key)
+                context = binding.runtime_context(api_key)['web_editor']
+
+                def current_authority():
+                    _current_session(session, api_key)
+                    binding.authority(api_key)
+
+                current_authority()
+                return editor_publication.apply(workspace, build_id=build_id,
+                    base_build_id=context['publication']['build_id'], authorize=current_authority)
+
+        try:
+            result = await asyncio.to_thread(publish)
+        except (ValueError, OSError, RuntimeError) as error:
+            from web_tools.errors import failure
+            diagnostic = failure(error, operation='web.publish', log=False)
+            raise CoreError('conflict', details={**diagnostic, 'reason': 'editor_candidate_unavailable'}) from error
+        return {'current_build_id': result['current_build_id'], 'changed': result['changed']}
 
     async def asset(self, request):
         handle, name = request.match_info['handle'], request.match_info['name']
@@ -182,7 +216,13 @@ async def open_preview(request):
     return web.json_response(await request.app[PREVIEWS_KEY].open(request[SESSION_KEY]))
 
 
+async def apply_preview(request):
+    body = await _body(request)
+    return web.json_response(await request.app[PREVIEWS_KEY].apply(request[SESSION_KEY], **body))
+
+
 def add_routes(app, dialog):
     previews = app[PREVIEWS_KEY] = EditorPreviews(dialog)
     app.router.add_post('/api/v1/admin/ui/editor/preview', open_preview)
+    app.router.add_post('/api/v1/admin/ui/editor/apply', apply_preview)
     app.router.add_get(PREFIX + '{handle}/{name:.*}', previews.asset)

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parents[2]
 _current: ContextVar[EditorDiagnostic | None] = ContextVar('web_editor_diagnostic', default=None)
 _ROUTES = {'': 'state', '/turns': 'turns', '/uploads': 'uploads', '/resume': 'resume',
-           '/cancel': 'cancel', '/new-chat': 'new-chat', '/preview': 'preview'}
+           '/cancel': 'cancel', '/new-chat': 'new-chat', '/preview': 'preview', '/apply': 'apply'}
 _STAGES = {'capabilities': 'capabilities', 'process': 'admission', 'upload': 'admission',
            'upload_batch': 'admission', 'poll': 'poll', 'status': 'status', 'latest': 'latest',
            'tool_result': 'tool_result', 'new_chat': 'new_chat', 'cancel': 'cancel'}
