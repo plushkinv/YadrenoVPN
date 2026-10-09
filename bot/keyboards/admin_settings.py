@@ -53,9 +53,9 @@ def extensions_diagnostics_kb(
     ))
     builder.row(*state_pair_buttons(
         core_edit_blocked,
-        'Запрет включён',
+        'Запрещено',
         'admin_extensions_core_guard_set:1',
-        'Запрет выключен',
+        'Разрешено',
         'admin_extensions_core_guard_set:0',
     ))
     for button in setting_buttons or []:

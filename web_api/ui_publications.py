@@ -88,7 +88,7 @@ async def asset(request):
     if name.endswith('.html'):
         headers['Content-Security-Policy'] = ("default-src 'none'; script-src 'self'" + ('' if preview else ' https://telegram.org')
             + "; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src "
-            + ("'none'" if preview else "'self'") + "; frame-src 'self'; worker-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"
+            + ("'none'" if preview else "'self'; media-src blob:") + "; frame-src 'self'; worker-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"
             + ('' if preview else ' https://web.telegram.org'))
     if name == 'sw.js':
         headers['Service-Worker-Allowed'] = '/'

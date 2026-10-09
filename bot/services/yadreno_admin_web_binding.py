@@ -123,7 +123,8 @@ class WebEditorBinding:
 
     def authority(self, api_key: str) -> dict:
         """Recheck the private admission identity without acquiring a workspace lock."""
-        checked_directory(self.store, private=True)
+        # Legacy shared parents may be 0755; private data stays inside 0700 tasks.
+        checked_directory(self.store)
         checked_directory(self.task_root, private=True)
         value = json.loads(read_regular(self.task_root, 'binding.json', maximum=_MAX_BINDING_BYTES))
         if (not isinstance(value, dict) or set(value) - {'previous_request_id'} != {
@@ -174,7 +175,7 @@ class WebEditorBinding:
     def for_request(cls, project_root: Path, request_id: int, api_key: str) -> WebEditorBinding:
         """Recover only locally admitted coordinates under the same installation key."""
         project = checked_directory(project_root)
-        store = checked_directory(local_path(project, 'web_runtime/editor_tasks'), private=True)
+        store = checked_directory(local_path(project, 'web_runtime/editor_tasks'))
         value = json.loads(read_regular(store, _request_name(request_id), maximum=4096))
         if (not isinstance(value, dict) or set(value) != {'task_id', 'api_key_hash'}
                 or value['api_key_hash'] != _key_hash(api_key)):

@@ -1,9 +1,10 @@
 import { ApiError } from '../api/client';
 import { errorText } from '../i18n/app';
 
-export type EditorAction = 'submit' | 'state' | 'cancel' | 'resume' | 'new-chat';
+export type EditorAction = 'submit' | 'apply' | 'state' | 'cancel' | 'resume' | 'new-chat';
 const messages: Record<EditorAction, string> = {
   submit: 'Ошибка при отправке запроса', state: 'Ошибка при обновлении состояния запроса',
+  apply: 'Не удалось отправить команду применения',
   cancel: 'Ошибка при отмене запроса', resume: 'Ошибка при возобновлении запроса',
   'new-chat': 'Ошибка при создании нового чата',
 };
@@ -23,6 +24,18 @@ export function editorError(value: unknown, action: EditorAction): string {
   // Older servers may return Hub prose in details.message. It is not an error classification.
   if (typeof details.diagnostic_id === 'string' && /^[a-f0-9]{16}$/.test(details.diagnostic_id)) {
     message += '\nКод ошибки: ' + details.diagnostic_id;
+  }
+  return message;
+}
+
+export function previewError(value: unknown): string {
+  let message = 'Не удалось обновить предпросмотр. Применение не подтверждено.';
+  if (value instanceof ApiError) {
+    if (value.details.code === 'web_candidate_missing') message = 'Новый предпросмотр не подготовлен. Можно попросить агента подготовить вариант без применения.';
+    else if (value.details.code === 'web_candidate_expired' || value.status === 409)
+      message = 'Предпросмотр недоступен или устарел. Обновите состояние; при необходимости попросите агента подготовить новый вариант.';
+    const id = value.details.diagnostic_id;
+    if (typeof id === 'string' && /^[a-f0-9]{16}$/.test(id)) message += '\nКод ошибки: ' + id;
   }
   return message;
 }

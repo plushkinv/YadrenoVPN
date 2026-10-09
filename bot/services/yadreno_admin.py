@@ -102,6 +102,7 @@ RUNTIME_CONTEXT_CAPABILITY = "runtime_context_v1"
 KNOWLEDGE_VERSION_CAPABILITY = "knowledge_version_v1"
 CUSTOMIZATION_TOOLS_CAPABILITY = "customization_tools_v2"
 CUSTOMIZATION_TOOLS_V3_CAPABILITY = "customization_tools_v3"
+FILE_EDITS_CAPABILITY = "file_edits_v1"
 YADRENO_ADMIN_TELEGRAM_HTML_TASK_FORMAT = "telegram_html"
 SATELLITE_PROTOCOL_VERSION = "v1"
 SATELLITE_CAPABILITIES: tuple[str, ...] = (
@@ -254,11 +255,14 @@ def _capabilities_for_skill(
     runtime_context_supported: bool = False,
     customization_tools_supported: bool = False,
     customization_tools_v3_supported: bool = False,
+    file_edits_supported: bool = False,
 ) -> list[str]:
-    """Advertise optional capabilities only inside their isolated skills."""
+    """Advertise confirmed optional capabilities; keep broadcast tools isolated."""
     capabilities = [*SATELLITE_CAPABILITIES, KNOWLEDGE_VERSION_CAPABILITY]
     if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
         capabilities.append(BROADCAST_EDITOR_CAPABILITY)
+    elif file_edits_supported:
+        capabilities.append(FILE_EDITS_CAPABILITY)
     if runtime_context_supported:
         capabilities.append(RUNTIME_CONTEXT_CAPABILITY)
         if (
@@ -1577,29 +1581,26 @@ async def _execute_shell(
 
 
 async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
-    """Write a concrete file or apply one fully validated context-edit batch."""
-    from bot.services.yadreno_admin_file_edits import edit_files, invalid_edits
+    """Create or replace one complete file; fragment edits use their own tool."""
     from web_tools.errors import WebSourceError, failure
     from web_tools.paths import atomic_write, publication_lock
 
     def write():
         # All regular writers use the same source lock as builds/restoration.
         with publication_lock(PROJECT_ROOT / 'web_runtime/source-lock'):
-            if 'edits' in args:
-                if set(args) != {'edits'}:
-                    fields = ', '.join(f'arguments.{key}' for key in args if key != 'edits')
-                    raise invalid_edits(f'arguments.edits cannot be combined with {fields}; '
-                                        'use only edits or only path plus content.')
-                return edit_files(args['edits'], _resolve_tool_path)
-            raw_path = str(args.get('path', '')).strip()
+            if not isinstance(args, dict) or set(args) != {'path', 'content'}:
+                raise WebSourceError('file_write_invalid', 'Expected only arguments.path and arguments.content. No files were changed.',
+                                     next_action='Use satellite_write_file with path and full content. '
+                                                 'Use satellite_edit_files with edits for fragment changes.')
+            raw_path = args.get('path', '')
             content = args.get('content', '')
-            if not raw_path or not isinstance(content, str):
-                reason = ('arguments.path must be a nonempty file path.' if not raw_path else
+            if not isinstance(raw_path, str) or not raw_path.strip() or not isinstance(content, str):
+                reason = ('arguments.path must be a nonempty file path.' if not isinstance(raw_path, str) or not raw_path.strip() else
                           'arguments.content must be a string containing the complete file contents.')
                 raise WebSourceError('file_write_invalid', reason + ' No files were changed.',
                                      next_action='Correct the indicated argument and retry. Use '
                                                  '{"path":"file.txt","content":"complete file text"}; '
-                                                 'content replaces the entire file. Use edits for fragment changes.')
+                                                 'content replaces the entire file. Use satellite_edit_files for fragments.')
             path = _resolve_tool_path(raw_path)
             previous = path.read_bytes() if path.is_file() else None
             atomic_write(path, content.encode('utf-8'), mode=path.stat().st_mode & 0o777 if path.is_file() else 0o600)
@@ -1608,11 +1609,35 @@ async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
 
     try:
         result = await asyncio.to_thread(write)
-        message = json.dumps(result, ensure_ascii=False) if 'edits' in args else f"File {result['file']} written successfully."
+        message = f"File {result['file']} written successfully."
         return {'result': message, 'error': None}
     except (OSError, ValueError, RuntimeError, UnicodeError) as error:
         result = failure(error, operation='file.write', root=PROJECT_ROOT)
         return {'result': '', 'error': json.dumps(result, ensure_ascii=False)}
+
+
+async def _edit_files(args: dict[str, Any]) -> dict[str, Optional[str]]:
+    """Apply one validated batch under the existing source publication lock."""
+    from bot.services.yadreno_admin_file_edits import edit_files, invalid_edits
+    from web_tools.errors import failure
+    from web_tools.paths import publication_lock
+
+    def edit() -> dict[str, Any]:
+        if not isinstance(args, dict):
+            raise invalid_edits('arguments must be an object containing edits.')
+        extra = set(args) - {'edits'}
+        if extra:
+            raise invalid_edits('Unsupported field(s): ' + ', '.join('arguments.' + key for key in sorted(extra)) + '.')
+        if 'edits' not in args:
+            raise invalid_edits('Missing required field: arguments.edits.')
+        with publication_lock(PROJECT_ROOT / 'web_runtime/source-lock'):
+            return edit_files(args['edits'], _resolve_tool_path)
+
+    try:
+        result = await asyncio.to_thread(edit)
+        return {'result': json.dumps(result, ensure_ascii=False), 'error': None}
+    except (OSError, ValueError, RuntimeError, UnicodeError) as error:
+        return {'result': '', 'error': json.dumps(failure(error, operation='file.edit', root=PROJECT_ROOT), ensure_ascii=False)}
 
 
 async def _run_script(
@@ -1859,6 +1884,8 @@ def _log_tool_audit(event: dict[str, Any], tool_result: dict[str, Any]) -> None:
 
     if tool == "satellite_write_file":
         details = f" path={args.get('path') or ''}"
+    elif tool == "satellite_edit_files":
+        details = f" edit_count={len(args.get('edits', [])) if isinstance(args.get('edits'), list) else 0}"
     elif tool == "satellite_run_script":
         details = f" tmp_dir={TMP_DIR}"
     elif tool == "satellite_sql" and isinstance(audit, dict):
@@ -1905,7 +1932,7 @@ def _core_guard_integrity_error_for_tool(
 ) -> Optional[str]:
     if not _core_guard_enabled(topic_id):
         return None
-    if tool == "satellite_write_file":
+    if tool in {"satellite_write_file", "satellite_edit_files"}:
         edits = args.get('edits')
         paths = [item.get('path') for item in edits if isinstance(item, dict)] if isinstance(edits, list) else [args.get('path')]
         for raw_path in paths:
@@ -2007,6 +2034,8 @@ async def _run_tool_call(
             return await _execute_shell(args, runtime=runtime)
         if tool == "satellite_write_file":
             return await _write_file(args)
+        if tool == "satellite_edit_files":
+            return await _edit_files(args)
         if tool == "satellite_run_script":
             return await _run_script(args, runtime=runtime)
         if tool == "satellite_sql":
@@ -2398,6 +2427,7 @@ async def run_dialog(
                 customization_tools_v3_supported=(
                     CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities
                 ),
+                file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
             ),
         }
         if runtime_context_supported:
@@ -2558,6 +2588,7 @@ async def run_dialog_with_uploads(
                 customization_tools_v3_supported=(
                     CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities
                 ),
+                file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
             )),
         }
         if runtime_context_supported:

@@ -388,8 +388,8 @@ def _format_extensions_diagnostics(diagnostics: dict, *, core_edit_blocked: bool
         f"<b>Файлы:</b> {len(files)} всего, {candidates} к загрузке, {invalid} с ошибкой имени, {ignored} приватных",
         f"<b>Итог:</b> {len(loaded)} загружено, {len(failed)} с ошибками",
         "",
-        "<b>Запрет редактирования ядра:</b> "
-        + ('🟢 включён' if core_edit_blocked else '⚪ выключен'),
+        "<b>Редактирование ядра:</b> "
+        + ('🟢 запрещено' if core_edit_blocked else '⚪ разрешено'),
     ]
     return "\n".join(lines)
 

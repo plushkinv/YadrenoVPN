@@ -1,6 +1,7 @@
 ﻿import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { Check, MessageSquareText, Settings, X } from 'lucide-react';
+import { ArrowLeft, Check, Settings } from 'lucide-react';
+import { Button } from '../components/Ui';
 import { Field } from '../components/Forms';
 import type { UiSettings } from '../api/contracts';
 import { useApp } from '../runtime/context';
@@ -17,7 +18,7 @@ function previewRoute(page: string) {
 }
 
 type Panel = 'cabinet' | 'preview' | 'editor' | 'settings';
-type PublishedManifest = { manifest: { customization_version: string } };
+type PublishedManifest = { manifest: { build_id: string; customization_version: string } };
 
 export function AdminPreview({ onSettingsSaved }: { onSettingsSaved: (value: UiSettings) => void }) {
   const { api, session, environment, settings } = useApp();
@@ -50,6 +51,8 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
   const [customDesign, setCustomDesign] = useState<boolean>();
   const [candidate, setCandidate] = useState<CandidatePreview>();
   const [viewNotice, setViewNotice] = useState('');
+  const [viewError, setViewError] = useState('');
+  const [publishedPreview, setPublishedPreview] = useState<string>();
   const [context, setContext] = useState<PreviewContext>({ contract_version: 1, route: previewRoute(route), scenario: 'active',
     preset: settings.preset, theme, ui_version: customization.build_version, customization_version: customization.version });
   const viewed = useRef(context);
@@ -68,9 +71,11 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     const nextRoute = exists ? viewed.current.route : previewRoute(value.pages.find(page => page.id === 'home')?.id ?? value.pages[0]?.id ?? 'home');
     select({ route: nextRoute, ui_version: value.candidate.build_id, customization_version: value.candidate.customization_version });
     setCandidate(value);
+    setViewError('');
     setViewNotice(exists ? '' : 'Выбранной страницы больше нет в этой версии. Открыта доступная страница.');
   }
-  const editor = useAdminEditor({ viewed: visibleContext, onCandidate: showCandidate, polling: open, visible: panel === 'editor' });
+  const editor = useAdminEditor({ viewed: visibleContext, onCandidate: showCandidate, onNewChat: () => openPublished(false),
+    polling: open, visible: panel === 'editor', contextPending: pending || Boolean(viewError) });
   function activate(next: 'editor' | 'settings') {
     if (closing.current) return;
     recheck();
@@ -141,9 +146,24 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     } catch (reason) { setError(errorText(reason)); }
     finally { setPending(false); }
   }
-  const gear = <EditorIcon label="Настройки просмотра" onClick={() => activate('settings')}><Settings /></EditorIcon>;
+  async function openPublished(announce = true) {
+    setPending(true); setViewError(''); setViewNotice('');
+    try {
+      const { manifest } = await api.request<PublishedManifest>('/ui/manifest');
+      select({ ui_version: manifest.build_id, customization_version: manifest.customization_version });
+      setCandidate(undefined); editor.clearPreview();
+      setPublishedPreview(`/ui/versions/${manifest.build_id}/preview.html`);
+      if (announce) setViewNotice('Открыта текущая опубликованная версия. Рабочие изменения и ваше сообщение сохранены.');
+    } catch (reason) { setViewError(errorText(reason)); }
+    finally { setPending(false); }
+  }
+  const pageId = visibleContext.route.split('/')[0];
+  const pageTitle = (candidate?.pages ?? basePages).find(page => page.id === pageId)?.title ?? basePages.find(page => page.id === pageId)?.title ?? pageId;
+  const gear = <EditorIcon label="Настройки просмотра" onClick={() => activate('settings')}><Settings aria-hidden="true" /></EditorIcon>;
   const composer = (expanded: boolean) => <AdminEditor editor={editor} expanded={expanded} onActivate={() => activate('editor')}
-    onAttach={() => { fileInput.current?.click(); activate('editor'); }} tools={<>{gear}{open && <EditorIcon label="Выйти из просмотра" onClick={close}><X /></EditorIcon>}</>} />;
+    onAttach={() => { fileInput.current?.click(); activate('editor'); }} tools={gear} pageTitle={pageTitle} preview={open}
+    onCollapse={() => setPanel('preview')} onExit={close} viewNotice={viewNotice}
+    onOpenPublished={() => void openPublished()} loadingPublished={pending} recoveryError={viewError} />;
   return <>
     <input ref={fileInput} type="file" multiple hidden aria-label="Файлы для кастомизатора"
       onChange={event => { editor.selectFiles(event.target.files); event.target.value = ''; }} />
@@ -151,16 +171,14 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     <dialog ref={dialog} className="admin-preview-dialog" onCancel={event => { event.preventDefault(); close(); }} aria-label="Просмотр интерфейса">
       {previewStarted.current &&
         <div className="admin-preview-page" inert={panel === 'settings'}>
-          <iframe ref={frame} src={candidate?.preview_url ?? customization.asset_base + 'preview.html'} sandbox="allow-scripts" title={t.preview} referrerPolicy="no-referrer" />
-          <span className="admin-preview-badge">{candidate && !candidate.published ? 'Демо · Черновик' : 'Демо'}</span>
+          <iframe ref={frame} src={candidate?.preview_url ?? publishedPreview ?? customization.asset_base + 'preview.html'} sandbox="allow-scripts" title={t.preview} referrerPolicy="no-referrer" />
         </div>}
       {open && <>
         {panel === 'settings' ? <div className="admin-settings-backdrop">
           <section className="admin-settings" aria-label="Настройки просмотра">
-            <header className="admin-settings-header"><strong>Настройки</strong>
-              <EditorIcon label="Вернуться к редактору" disabled={pending} onClick={() => activate('editor')}><MessageSquareText /></EditorIcon>
-              <EditorIcon label="Отменить и закрыть" className="admin-icon--cancel" disabled={pending} onClick={close}><X /></EditorIcon>
-              <EditorIcon label="Сохранить дизайн" className="admin-icon--save" disabled={pending || customDesign === undefined} onClick={() => void save()}><Check /></EditorIcon>
+            <header className="admin-settings-header">
+              <EditorIcon label="Вернуться к редактору" disabled={pending} onClick={() => activate('editor')}><ArrowLeft aria-hidden="true" /></EditorIcon>
+              <strong>Настройки просмотра</strong>
             </header>
             <fieldset disabled={pending} className="admin-preview-fields">
               <Field label={t.page}><select value={visibleContext.route.split('/')[0]} onChange={e => selectDemo({ route: previewRoute(e.target.value) })}>{(candidate?.pages ?? basePages).map(page => <option value={page.id} key={page.id}>{page.title ?? basePages.find(base => base.id === page.id)?.title ?? page.id}</option>)}</select></Field>
@@ -168,9 +186,16 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
               {customDesign ? <p className="admin-custom-design">Свой дизайн</p> : customDesign === false && <Field label={t.appearance}><select value={visibleContext.preset} onChange={e => { setError(''); selectDemo({ preset: e.target.value as PreviewContext['preset'] }); }}><option value="clear">Universal / Clear</option><option value="signal">Signal / Dark</option><option value="friendly">Friendly / Brand</option></select></Field>}
               <Field label="Тема просмотра"><select value={visibleContext.theme} onChange={e => selectDemo({ theme: e.target.value as PreviewContext['theme'] })}><option value="light">{t.light}</option><option value="dark">{t.dark}</option></select></Field>
             </fieldset>
+            <p className="admin-settings-hint">Страница, состояние и тема меняют только предпросмотр.</p>
             {error && <p role="alert">{error}</p>}
+            <footer className="admin-settings-actions">
+              <Button tone="quiet" disabled={pending} onClick={close}>Отменить и выйти</Button>
+              <Button disabled={pending || customDesign === undefined} onClick={() => void save()}><Check aria-hidden="true" />
+                {!customDesign && visibleContext.preset !== settings.preset ? 'Сохранить оформление' : 'Готово'}
+              </Button>
+            </footer>
           </section>
-        </div> : <div className="admin-preview-overlay">{composer(panel === 'editor')}{viewNotice && panel === 'editor' && <p role="status">{viewNotice}</p>}</div>}
+        </div> : <div className="admin-preview-overlay">{composer(panel === 'editor')}</div>}
       </>}
     </dialog>
   </>;

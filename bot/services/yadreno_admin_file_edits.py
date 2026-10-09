@@ -1,4 +1,4 @@
-"""Context replacements for the existing file writer, validated as one batch."""
+"""Context replacements for satellite_edit_files, validated as one batch."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +11,7 @@ def invalid_edits(message: str) -> WebSourceError:
     """Explain a rejected batch without repeating file contents or writing files."""
     return WebSourceError(
         'file_edits_invalid', message + ' No files were changed.',
-        next_action='Correct the indicated argument and retry the batch. Put path inside each edits item; '
+        next_action='Correct the indicated argument and retry satellite_edit_files. Put path inside each edits item; '
                     'omit top-level path/content. Example shape (illustrative values): '
                     '{"edits":[{"path":"file.txt","old_text":"before","new_text":"after"}]}',
     )
@@ -38,13 +38,15 @@ def edit_files(edits, resolve):
         for key in fields:
             if not isinstance(edit[key], str):
                 raise invalid_edits(f'{address}.{key} must be a string.')
+        if not edit['path'].strip():
+            raise invalid_edits(f'{address}.path must not be blank.')
         if not edit['old_text']:
             raise invalid_edits(f'{address}.old_text must contain at least 1 character; received 0.')
         path = Path(resolve(edit['path']))
         if path not in original:
             if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
                 raise WebSourceError('file_missing', f'Edit {index + 1} requires an existing regular file.', file=edit['path'],
-                                     next_action='Read the file first. Use path plus content to create a new file.')
+                                     next_action='Read the file first. Use satellite_write_file(path, content) to create a new file.')
             original[path] = path.read_bytes()
             try:
                 updated[path] = original[path].decode('utf-8')

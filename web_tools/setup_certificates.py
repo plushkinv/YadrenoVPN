@@ -9,6 +9,7 @@ from web_tools.setup_options import SetupError
 from web_tools.setup_paths import renewal_profile
 
 STANDALONE = re.compile(r'authenticator\s*=\s*standalone|--(?:standalone|alpn)\b|Le_Webroot=["\']?(?:no|standalone|alpn)["\']?(?:\s|$)')
+ACME_BASE64_HOOKS = {'Le_PreHook', 'Le_PostHook', 'Le_RenewHook', 'Le_ReloadCmd'}
 
 
 def deploy_hook(system):
@@ -39,14 +40,19 @@ def renewal_timer(system):
 
 
 def _unknown_hooks(text, safe):
-    for _, raw in re.findall(r'^\s*(Le_(?:PreHook|PostHook|RenewHook|DeployHook|ReloadCmd)|(?:pre|post|deploy|renew)_hook)\s*=\s*(.*)$', text, re.M):
+    for name, raw in re.findall(r'^\s*(Le_(?:PreHook|PostHook|RenewHook|DeployHook|ReloadCmd)|(?:pre|post|deploy|renew)_hook)\s*=\s*(.*)$', text, re.M):
         value = raw.strip().strip("'\"")
+        if value in safe:
+            continue
         prefix, suffix = '__ACME_BASE64__START_', '__ACME_BASE64__END_'
         if value.startswith(prefix) and value.endswith(suffix):
-            try:
-                value = base64.b64decode(value[len(prefix):-len(suffix)], validate=True).decode('utf-8')
-            except (ValueError, UnicodeError):
-                return True
+            value = value[len(prefix):-len(suffix)]
+        elif name not in ACME_BASE64_HOOKS:
+            return True
+        try:
+            value = base64.b64decode(value, validate=True).decode('utf-8')
+        except (ValueError, UnicodeError):
+            return True
         if value not in safe:
             return True
     return False
@@ -69,13 +75,20 @@ def inspect_renewals(system):
                 continue
             text = '\n'.join(line for line in path.read_text(errors='replace').splitlines() if not line.lstrip().startswith('#'))
             hooks = _unknown_hooks(text, safe)
-            if not STANDALONE.search(text) and not hooks:
+            standalone = STANDALONE.search(text)
+            if not standalone and not hooks:
                 continue
             relative = '/' + path.relative_to(system.filesystem).as_posix()
-            reason = 'не распознаны дополнительные команды продления' if hooks else 'продление самостоятельно занимает публичный порт'
-            port = 443 if re.search(r'--alpn\b|Le_Webroot=["\']alpn', text) else 80
+            port = None
+            reasons = []
+            if standalone:
+                port = 443 if re.search(r'--alpn\b|Le_Webroot=["\']alpn', text) else 80
+                reasons.append(f'продление самостоятельно занимает публичный TCP-порт {port}')
+            if hooks:
+                reasons.append('не распознаны дополнительные команды продления')
+            reason = '; '.join(reasons)
             issues.append(SetupError('renewal_conflict',
-                f'Настройка продления {relative}: {reason}. Требуется проверить совместимость с Nginx на TCP-порту {port}.',
+                f'Настройка продления {relative}: {reason}. Требуется проверить совместимость с Nginx.',
                 details={'file': relative.lstrip('/'), 'port': port}))
     return issues
 
