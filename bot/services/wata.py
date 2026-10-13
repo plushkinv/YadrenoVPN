@@ -83,6 +83,11 @@ async def check_wata_invoice(order_id: str) -> str:
     from bot.services.payment_intents import load_payment_intent
 
     async with wata_order_lock(order_id):
+        from database.requests import get_payment_check_status, record_payment_provider_check
+
+        known = get_payment_check_status(order_id)
+        if known is not None:
+            return record_payment_provider_check(order_id, known)
         order, claimed = claim_wata_payment_check(
             order_id, now=time.time(), interval=WATA_CHECK_INTERVAL_SECONDS,
         )

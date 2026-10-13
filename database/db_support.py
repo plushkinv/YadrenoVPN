@@ -365,7 +365,7 @@ def get_support_ticket_history(
             SELECT
                 id, sender_type, sender_telegram_id,
                 text_html, media_type, media_file_id,
-                origin_type, origin_extension_id, created_at
+                origin_type, origin_extension_id, created_at, uploaded_file_id
             FROM support_messages
             WHERE thread_id = ? {before_sql}
             ORDER BY id DESC

@@ -79,7 +79,7 @@ def expire_unprepared_payment_offers(*, limit: int = 100) -> int:
                             'AND a.result_json IS NULL AND NOT EXISTS(SELECT 1 FROM payment_provider_orders o WHERE o.order_id=p.order_id) '
                             'LIMIT ?', (int(time.time()), min(100, max(1, int(limit))))).fetchall()
         for row in rows:
-            conn.execute("UPDATE payments SET status='canceled' WHERE order_id=?", (row['order_id'],))
+            conn.execute("UPDATE payments SET status='canceled', cancellation_source='local' WHERE order_id=?", (row['order_id'],))
             conn.execute("UPDATE promo_redemptions SET status='canceled' WHERE order_id=? AND status='reserved'", (row['order_id'],))
             conn.execute("UPDATE account_operations SET result_json=? WHERE order_id=? AND kind='payment'",
                          (_json({'error': 'quote_expired'}), row['order_id']))

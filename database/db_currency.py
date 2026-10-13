@@ -189,7 +189,10 @@ def preview_base_currency_switch(
             FROM payments
             WHERE intent_version = 1
               AND status = 'pending'
-              AND provider_confirmed_at IS NOT NULL
+              AND (provider_confirmed_at IS NOT NULL OR EXISTS (
+                  SELECT 1 FROM payment_provider_orders po
+                  WHERE po.order_id=payments.order_id AND po.status='succeeded'
+              ))
             """
         ).fetchone()
         cancelable = conn.execute(
@@ -199,6 +202,8 @@ def preview_base_currency_switch(
             WHERE intent_version = 1
               AND status = 'pending'
               AND provider_confirmed_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM payment_provider_orders po
+                              WHERE po.order_id=payments.order_id AND po.status='succeeded')
             """
         ).fetchone()
     balance_total = sum(int(row['personal_balance'] or 0) for row in balance_rows)
@@ -257,11 +262,18 @@ def execute_base_currency_switch_record(
             FROM payments
             WHERE intent_version = 1
               AND status = 'pending'
-              AND provider_confirmed_at IS NOT NULL
+              AND (provider_confirmed_at IS NOT NULL OR EXISTS (
+                  SELECT 1 FROM payment_provider_orders po
+                  WHERE po.order_id=payments.order_id AND po.status='succeeded'
+              ))
             """
         ).fetchone()[0])
         if blocking:
             raise RuntimeError('Confirmed payments must be fulfilled before switching currency')
+
+        # Earlier provider cancellations must not revive pre-conversion balance terms.
+        conn.execute("UPDATE payments SET cancellation_source='local' "
+                     "WHERE intent_version=1 AND status='canceled' AND cancellation_source='provider'")
 
         cancel_rows = conn.execute(
             """
@@ -276,7 +288,7 @@ def execute_base_currency_switch_record(
         if canceled_order_ids:
             placeholders = ','.join('?' for _ in canceled_order_ids)
             conn.execute(
-                f"UPDATE payments SET status = 'canceled' WHERE order_id IN ({placeholders})",
+                f"UPDATE payments SET status = 'canceled', cancellation_source = 'local' WHERE order_id IN ({placeholders})",
                 canceled_order_ids,
             )
             conn.execute(

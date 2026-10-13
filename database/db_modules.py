@@ -9,6 +9,7 @@ from .connection import get_db
 __all__ = ['get_core_module_manifests', 'save_core_module_manifest',
            'get_module_operation', 'begin_module_operation', 'finish_module_operation']
 __all__ += ['get_payment_module_reward', 'save_payment_module_reward']
+__all__ += ['get_module_operation_status', 'record_module_operation_error', 'cleanup_module_operations']
 
 
 def get_payment_module_reward(order_id, effect):
@@ -49,7 +50,7 @@ def _operation(row):
     value = dict(row)
     value['request'] = json.loads(value.pop('request_json'))
     raw = value.pop('result_json')
-    value['completed'] = raw is not None
+    value['completed'] = value.get('completed_at') is not None or raw is not None
     value['result'] = json.loads(raw) if raw is not None else None
     return value
 
@@ -81,5 +82,43 @@ def begin_module_operation(user_id, kind, idempotency_key, fingerprint, request)
 
 def finish_module_operation(user_id, operation_id, result):
     with get_db() as conn:
-        conn.execute('UPDATE account_operations SET result_json=? WHERE id=? AND user_id=? AND result_json IS NULL',
-                     (json.dumps(result, allow_nan=False, sort_keys=True), operation_id, user_id))
+        conn.execute('UPDATE account_operations SET result_json=?,completed_at=?,last_error_code=NULL '
+                     'WHERE id=? AND user_id=? AND completed_at IS NULL AND result_json IS NULL',
+                     (json.dumps(result, allow_nan=False, sort_keys=True), int(time.time()), operation_id, user_id))
+
+
+def get_module_operation_status(user_id, module_id, operation_id):
+    with get_db() as conn:
+        row = conn.execute('SELECT * FROM account_operations WHERE id=? AND user_id=?',
+                           (operation_id, user_id)).fetchone()
+        return _operation(row) if row and row['kind'].startswith('module.' + module_id + '.') else None
+
+
+def record_module_operation_error(user_id, operation_id, code):
+    with get_db() as conn:
+        conn.execute('UPDATE account_operations SET last_error_code=? WHERE id=? AND user_id=? '
+                     'AND completed_at IS NULL', (code, operation_id, user_id))
+
+
+def cleanup_module_operations(reads=(), *, now=None, limit=500):
+    """Delete attested reads and expired completed module receipts in one batch."""
+    now = int(time.time()) if now is None else now
+    limit = max(1, min(500, limit))
+    removed = 0
+    with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        for module_id, name, version in reads:
+            ids = [row['id'] for row in conn.execute(
+                "SELECT id FROM account_operations WHERE kind=? AND purged_at IS NULL "
+                "AND completed_at IS NOT NULL "
+                "AND json_valid(request_json) AND json_extract(request_json,'$.version')=? LIMIT ?",
+                ('module.' + module_id + '.' + name, version, limit - removed))]
+            conn.executemany('DELETE FROM account_operations WHERE id=?', ((value,) for value in ids))
+            removed += len(ids)
+            if removed >= limit:
+                break
+        ids = [row['id'] for row in conn.execute(
+            "SELECT id FROM account_operations WHERE kind GLOB 'module.*' AND completed_at<=? "
+            "ORDER BY completed_at,id LIMIT ?", (now - 30 * 86400, limit - removed))]
+        conn.executemany('DELETE FROM account_operations WHERE id=?', ((value,) for value in ids))
+    return removed + len(ids)

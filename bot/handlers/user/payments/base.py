@@ -89,7 +89,7 @@ async def handle_payment_deeplink(
             await _show_deeplink_status('payment_order_unavailable')
             return True
         try:
-            status = await check_provider_invoice(intent)
+            status = await check_provider_invoice(intent, allow_canceled_recheck=True)
         except Exception as error:
             logger.warning('Intent deep-link check failed order=%s: %s', order_id, error)
             if provider == 'wata':

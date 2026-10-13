@@ -3,12 +3,20 @@ import { ApiError, type Api } from './client';
 export class HttpApi implements Api {
   private csrf = document.cookie.split('; ').find(value => value.startsWith('__Host-yadreno_csrf=')) ?? '';
   async request<T>(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown, idempotencyKey?: string): Promise<T> {
+    return this.perform<T>(path, method, body, idempotencyKey);
+  }
+  async download(path: string): Promise<Blob> { return this.perform<Blob>(path, 'GET', undefined, undefined, true); }
+  private async perform<T>(path: string, method: 'GET' | 'POST', body?: unknown, idempotencyKey?: string, binary = false): Promise<T> {
     if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\') || path.includes('#')) throw new ApiError('invalid_request');
     const headers: Record<string, string> = { Accept: 'application/json' };
+    let expectedCookie = this.csrf;
     const currentCookie = () => document.cookie.split('; ').find(value => value.startsWith('__Host-yadreno_csrf=')) ?? '';
     const checkIdentity = () => {
       const cookie = currentCookie();
-      if (cookie !== this.csrf) { this.csrf = cookie; window.dispatchEvent(new Event('account-changed')); throw new ApiError('authentication_required'); }
+      if (cookie !== expectedCookie) {
+        if (cookie !== this.csrf) { this.csrf = cookie; window.dispatchEvent(new Event('account-changed')); }
+        throw new ApiError('authentication_required');
+      }
     };
     checkIdentity();
     if (method === 'GET' && !navigator.onLine) throw new ApiError('network_unavailable', true);
@@ -19,19 +27,21 @@ export class HttpApi implements Api {
       if (csrf) headers['X-CSRF-Token'] = decodeURIComponent(csrf.slice(csrf.indexOf('=') + 1));
       if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
     }
-    let response: Response;
+    let response: Response, value: unknown;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), body instanceof FormData || binary ? 120000 : 15000);
     try {
       response = await fetch('/api/v1' + path, { method, headers, credentials: 'same-origin', cache: 'no-store',
         signal: controller.signal,
         body: method === 'POST' ? body instanceof FormData ? body : JSON.stringify(body ?? {}) : undefined });
-    } catch { throw new ApiError('network_unavailable', true); }
+      if (method === 'POST' && ['/auth/login', '/auth/register', '/auth/telegram', '/auth/telegram/web/finish', '/account/telegram/link/finish', '/account/credentials', '/auth/logout', '/auth/password/reset'].includes(path))
+        expectedCookie = this.csrf = currentCookie();
+      else checkIdentity();
+      try { value = binary && response.ok ? await response.blob() : await response.json(); }
+      catch { throw new ApiError('invalid_response', true, response.status); }
+      checkIdentity();
+    } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError('network_unavailable', true); }
     finally { clearTimeout(timeout); }
-    if (method === 'POST' && ['/auth/login', '/auth/register', '/auth/telegram', '/auth/telegram/web/finish', '/account/telegram/link/finish', '/account/credentials', '/auth/logout', '/auth/password/reset'].includes(path)) this.csrf = currentCookie();
-    else checkIdentity();
-    let value: unknown;
-    try { value = await response.json(); } catch { throw new ApiError('invalid_response', true, response.status); }
     if (!response.ok) {
       const error = value as { code?: string; retryable?: boolean; details?: Record<string, unknown>; operation_id?: string };
       if (response.status === 401 && ['authentication_required', 'reauthentication_required'].includes(error.code ?? '')) window.dispatchEvent(new Event('account-expired'));

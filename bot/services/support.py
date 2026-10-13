@@ -258,11 +258,20 @@ async def send_generated_user_message_to_admins(
         card_message_id = delivery.get("card_message_id")
         try:
             if not copy_message_id:
-                delivered = await send_media_or_text(
-                    bot,
-                    chat_id=admin_id,
-                    text=text_html,
-                )
+                from database import requests as db
+                uploaded = db.get_support_uploaded_file(support_message_id)
+                if uploaded:
+                    from aiogram.types import BufferedInputFile
+                    from core.uploads import read_record
+                    from bot.utils.text import prepare_telegram_text
+                    document = uploaded['telegram_file_id'] or BufferedInputFile(
+                        read_record(uploaded), filename=uploaded['filename'])
+                    delivered = await bot.send_document(chat_id=admin_id, document=document,
+                        caption=prepare_telegram_text(text_html, has_media=True) or None, parse_mode='HTML')
+                    telegram_file_id = delivered.document.file_id
+                    db.set_module_upload_telegram_file(uploaded['id'], telegram_file_id)
+                else:
+                    delivered = await send_media_or_text(bot, chat_id=admin_id, text=text_html)
                 copy_message_id = getattr(delivered, "message_id", None)
                 delivery = save_support_admin_notification_delivery(
                     int(thread["id"]),

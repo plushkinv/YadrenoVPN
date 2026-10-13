@@ -301,8 +301,13 @@ def cancel_pending_order(order_id: str) -> bool:
         cursor = conn.execute(
             """
             UPDATE payments
-            SET status = 'canceled'
+            SET status = 'canceled', cancellation_source = 'provider'
             WHERE order_id = ? AND status = 'pending' AND intent_version = 1
+              AND provider_confirmed_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM payment_provider_orders po
+                  WHERE po.order_id = payments.order_id AND po.status = 'succeeded'
+              )
             """,
             (str(order_id),),
         )

@@ -60,7 +60,13 @@ def schedule_payment_auto_check(
             INSERT INTO payment_auto_checks (
                 order_id, provider_id, state, next_check_at, last_error, updated_at
             )
-            VALUES (?, ?, 'active', datetime('now', ?), NULL, CURRENT_TIMESTAMP)
+            SELECT ?, ?, 'active', datetime('now', ?), NULL, CURRENT_TIMESTAMP
+            WHERE EXISTS (
+                SELECT 1 FROM payments p WHERE p.order_id = ? AND p.status = 'pending'
+                  AND p.provider_confirmed_at IS NULL
+            ) AND NOT EXISTS (
+                SELECT 1 FROM payment_provider_orders po WHERE po.order_id = ? AND po.status <> 'pending'
+            )
             ON CONFLICT(order_id) DO UPDATE SET
                 provider_id = excluded.provider_id,
                 state = 'active',
@@ -71,8 +77,9 @@ def schedule_payment_auto_check(
                 completion_attempts = 0,
                 last_error = NULL,
                 updated_at = CURRENT_TIMESTAMP
+            WHERE payment_auto_checks.state NOT IN ('canceled', 'completed', 'provider_succeeded', 'completion_failed')
             """,
-            (str(order_id), str(provider_id), modifier),
+            (str(order_id), str(provider_id), modifier, str(order_id), str(order_id)),
         )
         return cursor.rowcount > 0
 
@@ -101,10 +108,8 @@ def get_due_payment_auto_checks(limit: int = 10) -> list[dict[str, Any]]:
             FROM payment_auto_checks pac
             JOIN payments p ON p.order_id = pac.order_id
             WHERE p.intent_version = 1
-              AND (
-                    (p.status = 'pending' AND pac.state IN ('active', 'provider_succeeded'))
-                 OR (p.status = 'paid' AND pac.state = 'provider_succeeded')
-              )
+              AND p.status IN ('pending', 'paid')
+              AND pac.state IN ('active', 'provider_succeeded')
               AND pac.next_check_at IS NOT NULL
               AND pac.next_check_at <= CURRENT_TIMESTAMP
             ORDER BY

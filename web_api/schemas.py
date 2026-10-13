@@ -256,7 +256,25 @@ route('POST', 'referrals/attribute', obj({'attributed': B}), obj({'code': text_b
 route('GET', 'help', ref('Help'))
 route('POST', 'modules/{module_id}/operations/{name}', obj({'operation_id': S, 'result': {}}),
     {'type': 'object', 'additionalProperties': True}, idempotent=True)
+ROUTES[-1]['description'] = (
+    'Completed commands replay the saved result for 30 days after completion; changed inputs conflict. '
+    'Maintenance then deletes the entire receipt. Reusing its key after deletion starts a new command. '
+    'Pending commands retain their identity. Long-lived financial effects require their own stable business key; '
+    'an HTTP operation_id is not a permanent purchase identity. The SDK never retries commands automatically.')
 route('GET', 'modules/{module_id}/support/attachments/{message_id}', {'type': 'string', 'format': 'binary'})
+route('POST', 'modules/{module_id}/files', obj({'file_id': S, 'filename': S, 'content_type': S,
+    'size': I, 'persistent': B, 'expires_at': nullable(I)}), obj({'file': {'type': 'string', 'format': 'binary'}}),
+    media_type='multipart/form-data')
+route('GET', 'modules/{module_id}/files/{file_id}', {'type': 'string', 'format': 'binary'})
+route('GET', 'modules/{module_id}/queries/{name}', obj({'result': {}}))
+ROUTES[-1]['query'] = {'inputs': text_bound(65536)}
+route('GET', 'modules/{module_id}/operations/{operation_id}', obj({
+    'operation_id': S, 'state': {'type': 'string', 'enum': ['pending', 'completed', 'result_expired']},
+    'result': {}, 'error_code': nullable(S)}))
+ROUTES[-1]['description'] = (
+    'Read status without running the handler. A deleted receipt returns 404 operation_not_found; '
+    'absence does not prove that the action was never executed. Legacy result_expired records remain readable '
+    'until cleanup; new completed receipts are deleted in full after 30 days.')
 for entry in ROUTES:
     entry['pattern'] = re.compile(re.sub(r'\{[^}]+\}', '[^/]+', entry['path']) + r'\Z')
 
@@ -315,7 +333,7 @@ async def validate_request(request):
         if set(request.query) - set(entry['query']) or any(len(request.query.getall(key)) != 1 for key in request.query):
             raise ValueError('query')
         for key, value in request.query.items():
-            validate(int(value), entry['query'][key], key)
+            validate(int(value) if entry['query'][key].get('type') == 'integer' else value, entry['query'][key], key)
         if entry['idempotent'] and not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request.headers.get('Idempotency-Key', '')):
             raise ValueError('Idempotency-Key')
         if entry['input'] is not None and entry['media_type'] == 'application/json':
@@ -334,7 +352,24 @@ def validate_response(request, response):
 
 
 def openapi_document():
+    from copy import deepcopy
     paths = {}
+    components = deepcopy(SCHEMAS)
+    def model_schema(policy, field, module_id, name):
+        schema = policy[field + '_schema']
+        if policy.get('schema_format') != 'pydantic':
+            return schema
+        identity = f'module_{module_id}_{name}_{field}'
+        prefix = '#/components/schemas/' + identity
+        def relocate(value):
+            if isinstance(value, list):
+                return [relocate(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            return {key: prefix + item[1:] if key == '$ref' and isinstance(item, str) and item.startswith('#/')
+                    else relocate(item) for key, item in value.items()}
+        components[identity] = relocate(schema)
+        return ref(identity)
     for entry in ROUTES:
         parameters = [{'name': name, 'in': 'path', 'required': True, 'schema': text_bound(128)}
                       for name in re.findall(r'\{([^}]+)\}', entry['path'])]
@@ -353,24 +388,47 @@ def openapi_document():
                 **{str(code): {'description': description, 'content': {'application/json': {'schema': ref('Error')}}}
                    for code, description in ((400, 'Domain rejection'), (401, 'Authentication required'), (403, 'Origin, CSRF or access denied'),
                        (404, 'Resource unavailable to this account'), (405, 'Method not allowed'),
-                       (409, 'Conflict or unavailable action'), (413, 'Request body too large'), (422, 'Invalid input'),
+                       (409, 'Conflict or unavailable action'), (410, 'Result or temporary file no longer retained'),
+                       (413, 'Request body too large'), (422, 'Invalid input'),
                        (429, 'Rate limited'), (500, 'Internal failure'), (503, 'Retryable operation or unavailable service'))}}}
+        if 'description' in entry:
+            operation['description'] = entry['description']
         if entry['input'] is not None:
             operation['requestBody'] = {'required': True, 'content': {entry['media_type']: {'schema': entry['input']}}}
         paths.setdefault(entry['path'], {})[entry['method'].lower()] = operation
     from core.extensions.registry import POLICIES
     for (kind, module_id, name), policy in POLICIES.items():
+        if kind == 'webhook':
+            paths[policy['path']] = {'post': {'operationId': f'webhook_{module_id}_{name}', 'security': [],
+                'description': 'Integration verifier checks raw bytes and headers. ACK follows an atomic event/task commit. '
+                               'User identity comes from a saved server reference, never a body user_id.',
+                'requestBody': {'required': True, 'content': {'application/octet-stream': {'schema': {'type': 'string', 'format': 'binary'}}}},
+                'responses': {'200': {'description': 'Durably accepted or duplicate event'},
+                              '403': {'description': 'Signature rejected'}, '503': {'description': 'Not accepted; retry delivery'}}}}
         if kind == 'user_operation':
+            input_schema = model_schema(policy, 'input', module_id, name)
+            result_schema = model_schema(policy, 'result', module_id, name)
+            if policy.get('operation_kind') == 'query':
+                base_responses = paths['/api/v1/modules/{module_id}/queries/{name}']['get']['responses']
+                paths[f'/api/v1/modules/{module_id}/queries/{name}'] = {'get': {
+                    **paths['/api/v1/modules/{module_id}/queries/{name}']['get'],
+                    'operationId': f'query_{module_id}_{name}',
+                    'parameters': [{'name': 'inputs', 'in': 'query', 'required': False,
+                                    'content': {'application/json': {'schema': input_schema}}}],
+                    'responses': {**base_responses, '200': {'description': 'Read-only module result', 'content': {'application/json': {
+                        'schema': obj({'result': result_schema})}}}}}}
+                continue
             # Public declarations only: no handlers, settings, policy inputs or secrets.
             paths[f'/api/v1/modules/{module_id}/operations/{name}'] = {'post': {
                 **paths['/api/v1/modules/{module_id}/operations/{name}']['post'],
                 'operationId': f'module_{module_id}_{name}',
                 'parameters': [value for value in paths['/api/v1/modules/{module_id}/operations/{name}']['post']['parameters'] if value['in'] != 'path'],
-                'requestBody': {'required': True, 'content': {'application/json': {'schema': policy['input_schema']}}},
-                'responses': {'200': {'description': 'Schema-validated module result', 'content': {'application/json': {
-                    'schema': obj({'operation_id': S, 'result': policy['result_schema']})}}}}}}
+                'requestBody': {'required': True, 'content': {'application/json': {'schema': input_schema}}},
+                'responses': {**paths['/api/v1/modules/{module_id}/operations/{name}']['post']['responses'],
+                    '200': {'description': 'Schema-validated module result', 'content': {'application/json': {
+                    'schema': obj({'operation_id': S, 'result': result_schema})}}}}}}
     return {'openapi': '3.1.0', 'info': {'title': 'YadrenoVPN Account API', 'version': '1.0.0'},
-        'servers': [{'url': '/'}], 'paths': paths, 'components': {'schemas': SCHEMAS,
+        'servers': [{'url': '/'}], 'paths': paths, 'components': {'schemas': components,
         'securitySchemes': {'SessionCookie': {'type': 'apiKey', 'in': 'cookie', 'name': '__Host-yadreno_session'}}}}
 
 

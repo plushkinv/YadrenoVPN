@@ -26,15 +26,23 @@ async def download(request):
     except ValueError:
         raise CoreError('invalid_request') from None
     record = attachment(account(request), request.match_info['module_id'], message_id)
+    if not record['media_file_id'] and record.get('uploaded_file_id'):
+        from core.uploads import read_record
+        from database import requests as db
+        row = db.get_module_upload(record['uploaded_file_id'], account(request).account_id)
+        if row is None:
+            raise CoreError('support_not_found')
+        return web.Response(body=read_record(row), content_type='application/octet-stream', headers={
+            'Content-Disposition': f'attachment; filename="support-{message_id}.bin"'})
     bot = get_bot()
     if bot is None:
         raise CoreError('attachment_unavailable', retryable=True)
     try:
         await asyncio.wait_for(_downloads.acquire(), 0.1)
-    except TimeoutError:
+    except asyncio.TimeoutError:
         raise CoreError('attachment_unavailable', retryable=True) from None
     try:
-        async with asyncio.timeout(15):
+        async def fetch():
             file = await bot.get_file(record['media_file_id'])
             if (file.file_size or 0) > _max_bytes:
                 raise CoreError('attachment_too_large')
@@ -42,7 +50,8 @@ async def download(request):
                 raise CoreError('attachment_unavailable', retryable=True)
             with _LimitedBuffer() as buffer:
                 await bot.download_file(file.file_path, destination=buffer, timeout=10)
-                body = buffer.getvalue()
+                return buffer.getvalue()
+        body = await asyncio.wait_for(fetch(), 15)
     except CoreError:
         raise
     except Exception:

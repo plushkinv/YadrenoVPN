@@ -6,6 +6,7 @@ import datetime
 from typing import Optional, List, Dict, Any, Tuple
 from .connection import get_db
 from .db_settings import REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX
+from .user_filters import USER_FILTER_KEYS, UserFilterError, user_filter_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ __all__ = [
     'mark_trial_used',
     'get_all_users_count',
     'get_users_stats',
+    'get_admin_users_stats',
     'get_all_users_paginated',
     'get_user_by_id',
     'get_user_by_telegram_id',
@@ -295,107 +297,39 @@ def get_users_stats() -> Dict[str, int]:
             """),
         }
 
-def get_all_users_paginated(offset: int = 0, limit: int = 20, 
-                             filter_type: str = 'all') -> tuple[List[Dict[str, Any]], int]:
-    """
-    Gets a list of users with pagination and filtering.
-    
-    Args:
-        offset: Offset for pagination
-        limit: Number per page (default 20)
-        filter_type: Filter type (all, active, inactive, never_paid, expired)
-    
-    Returns:
-        Tuple (list of users, total number)
-    """
+def get_admin_users_stats() -> Dict[str, int]:
+    """Count directory categories, including bans, without changing monitoring."""
     with get_db() as conn:
-        # Basic query with key data
-        if filter_type == 'all':
-            base_query = "SELECT * FROM users WHERE merged_into_user_id IS NULL AND is_banned = 0"
-            count_query = "SELECT COUNT(*) as cnt FROM users WHERE merged_into_user_id IS NULL AND is_banned = 0"
-        elif filter_type == 'active':
-            base_query = """
-                SELECT DISTINCT u.* FROM users u
-                JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
-                  AND (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
-            """
-            count_query = """
-                SELECT COUNT(DISTINCT u.id) as cnt FROM users u
-                JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
-                  AND (vk.expires_at > datetime('now') OR vk.expires_at IS NULL)
-            """
-        elif filter_type == 'inactive':
-            base_query = """
-                SELECT u.* FROM users u
-                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
-                AND u.id NOT IN (
-                    SELECT DISTINCT user_id FROM vpn_keys 
-                    WHERE expires_at > datetime('now') OR expires_at IS NULL
-                )
-            """
-            count_query = """
-                SELECT COUNT(*) as cnt FROM users u
-                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
-                AND u.id NOT IN (
-                    SELECT DISTINCT user_id FROM vpn_keys 
-                    WHERE expires_at > datetime('now') OR expires_at IS NULL
-                )
-            """
-        elif filter_type == 'never_paid':
-            base_query = """
-                SELECT u.* FROM users u
-                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
-                AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
-            """
-            count_query = """
-                SELECT COUNT(*) as cnt FROM users u
-                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
-                AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
-            """
-        elif filter_type == 'expired':
-            base_query = """
-                SELECT DISTINCT u.* FROM users u
-                JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
-                AND vk.expires_at <= datetime('now')
-                AND u.id NOT IN (
-                    SELECT DISTINCT user_id FROM vpn_keys 
-                    WHERE expires_at > datetime('now') OR expires_at IS NULL
-                )
-            """
-            count_query = """
-                SELECT COUNT(DISTINCT u.id) as cnt FROM users u
-                JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE u.merged_into_user_id IS NULL AND u.is_banned = 0
-                AND vk.expires_at <= datetime('now')
-                AND u.id NOT IN (
-                    SELECT DISTINCT user_id FROM vpn_keys 
-                    WHERE expires_at > datetime('now') OR expires_at IS NULL
-                )
-            """
-        elif filter_type == 'bot_blocked':
-            base_query = """
-                SELECT * FROM users
-                WHERE merged_into_user_id IS NULL AND is_banned = 0 AND is_bot_blocked = 1
-            """
-            count_query = """
-                SELECT COUNT(*) as cnt FROM users
-                WHERE merged_into_user_id IS NULL AND is_banned = 0 AND is_bot_blocked = 1
-            """
-        else:
-            return [], 0
-        
-        # We get the total quantity
-        cursor = conn.execute(count_query)
-        total = cursor.fetchone()['cnt']
-        
-        # We get the page
-        cursor = conn.execute(f"{base_query} ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
-        users = [dict(row) for row in cursor.fetchall()]
-        
-        return users, total
+        stats = {}
+        for key in ('total', *USER_FILTER_KEYS):
+            conditions = user_filter_conditions(() if key == 'total' else (key,))
+            row = conn.execute(
+                'SELECT COUNT(*) AS cnt FROM users u WHERE ' + ' AND '.join(conditions)
+            ).fetchone()
+            stats[key] = row['cnt']
+        return stats
+
+
+def get_all_users_paginated(offset: int = 0, limit: int = 20,
+                            filter_type: object = 'all') -> tuple[List[Dict[str, Any]], int]:
+    """Read a directory page and count matching every selected condition.
+
+    ``filter_type`` accepts a collection or a legacy scalar. Empty/``all``
+    includes banned accounts; merged service identities never appear.
+    """
+    try:
+        where = ' AND '.join(user_filter_conditions(filter_type))
+    except UserFilterError:
+        return [], 0
+    with get_db() as conn:
+        total = conn.execute(
+            'SELECT COUNT(*) AS cnt FROM users u WHERE ' + where
+        ).fetchone()['cnt']
+        rows = conn.execute(
+            'SELECT u.* FROM users u WHERE ' + where + ' ORDER BY u.id DESC LIMIT ? OFFSET ?',
+            (limit, offset),
+        ).fetchall()
+        return [dict(row) for row in rows], total
 
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     """Gets the user by internal ID."""

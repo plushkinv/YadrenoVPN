@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Mapping
 from typing import Any, Optional
@@ -9,6 +10,7 @@ from typing import Any, Optional
 from .connection import get_db
 
 _ALLOWED_PROVIDER_ORDER_STATUSES = {'pending', 'succeeded', 'canceled'}
+logger = logging.getLogger(__name__)
 
 
 def create_payment_provider_support_tables(conn: sqlite3.Connection) -> None:
@@ -97,6 +99,11 @@ def save_payment_provider_order(
                 charge_amount = excluded.charge_amount,
                 charge_currency = excluded.charge_currency,
                 updated_at = CURRENT_TIMESTAMP
+            WHERE excluded.status = 'succeeded' OR (
+                payment_provider_orders.status <> 'succeeded'
+                AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.order_id = excluded.order_id
+                                AND (p.status = 'paid' OR p.provider_confirmed_at IS NOT NULL))
+            )
             """,
             (
                 order_id,
@@ -218,9 +225,8 @@ def get_retryable_confirmed_payment_provider_orders(limit: int = 10) -> list[dic
             JOIN payments p ON p.order_id = ppo.order_id
             WHERE p.intent_version = 1
               AND p.status = 'pending'
-              AND p.provider_confirmed_at IS NOT NULL
-              AND ppo.status = 'succeeded'
-              AND p.fulfillment_status IN ('provider_succeeded', 'failed', 'processing')
+              AND (p.provider_confirmed_at IS NOT NULL OR ppo.status = 'succeeded')
+              AND p.fulfillment_status IN ('pending', 'provider_succeeded', 'failed', 'processing')
             ORDER BY ppo.updated_at ASC, ppo.id ASC
             LIMIT ?
             """,
@@ -251,17 +257,74 @@ def update_payment_provider_order_status(
                 metadata_json = COALESCE(?, metadata_json),
                 updated_at = CURRENT_TIMESTAMP
             WHERE order_id = ?
-              AND (provider_id <> 'wata' OR status <> 'succeeded' OR ? = 'succeeded')
+              AND (? = 'succeeded' OR (
+                  status <> 'succeeded'
+                  AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.order_id = payment_provider_orders.order_id
+                                  AND (p.status = 'paid' OR p.provider_confirmed_at IS NOT NULL))
+              ))
             """,
             (normalized_status, provider_payment_id, payment_url, metadata_json, order_id, normalized_status),
         )
         if normalized_status == 'succeeded':
             _mark_provider_confirmed(conn, order_id)
+        elif cursor.rowcount == 0:
+            logger.info('Provider status preserved order=%s incoming=%s', order_id, normalized_status)
         return cursor.rowcount > 0
+
+
+def get_payment_check_status(order_id: str, *, allow_canceled_recheck: bool = False) -> str | None:
+    """Return a local answer, or None when a provider request is still permitted."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT p.status, p.cancellation_source, p.provider_confirmed_at, po.status AS provider_status
+               FROM payments p LEFT JOIN payment_provider_orders po ON po.order_id = p.order_id
+               WHERE p.order_id = ? AND p.intent_version = 1""", (str(order_id),),
+        ).fetchone()
+        if row is None:
+            raise ValueError('Payment intent not found')
+        if row['status'] == 'paid':
+            return 'succeeded'
+        if row['status'] == 'canceled' and row['cancellation_source'] != 'provider':
+            return 'canceled'
+        if row['provider_confirmed_at'] is not None or row['provider_status'] == 'succeeded':
+            return 'succeeded'
+        if not allow_canceled_recheck and (row['status'] == 'canceled' or row['provider_status'] == 'canceled'):
+            return 'canceled'
+        return None
+
+
+def record_payment_provider_check(order_id: str, status: str, **values: Any) -> str:
+    """Accept verified evidence, then return the state that survived competing results."""
+    from .db_payments import cancel_pending_order
+
+    status = _normalize_status(status)
+    update_payment_provider_order_status(order_id, status, **values)
+    if status == 'canceled':
+        cancel_pending_order(order_id)
+    return get_payment_check_status(order_id, allow_canceled_recheck=True) or status
 
 
 def _mark_provider_confirmed(conn: sqlite3.Connection, order_id: str) -> None:
     """Record settlement in the same transaction as the provider evidence."""
+    restored = conn.execute(
+        """UPDATE payments SET status = 'pending'
+           WHERE order_id = ? AND intent_version = 1
+             AND status = 'canceled' AND cancellation_source = 'provider'""", (order_id,),
+    ).rowcount
+    if restored:
+        # The invoice price is already paid. Reuse only its own released redemption,
+        # even if the code has since expired or been used by a different order.
+        conn.execute(
+            """UPDATE promo_redemptions SET status = 'reserved'
+               WHERE id = (
+                   SELECT pr.id FROM promo_redemptions pr JOIN payments p ON p.order_id = pr.order_id
+                   WHERE p.order_id = ? AND pr.promo_code_id = p.promo_code_id AND pr.user_id = p.user_id
+                   ORDER BY pr.id DESC LIMIT 1
+               ) AND status = 'canceled'
+               AND NOT EXISTS (SELECT 1 FROM promo_redemptions active
+                               WHERE active.order_id = ? AND active.status <> 'canceled')""",
+            (order_id, order_id),
+        )
     conn.execute(
         """
         UPDATE payments
@@ -307,9 +370,11 @@ __all__ = [
     'create_payment_provider_support_tables',
     'find_payment_provider_order_by_external_id',
     'get_payment_provider_order',
+    'get_payment_check_status',
     'get_open_payment_provider_orders',
     'get_retryable_confirmed_payment_provider_orders',
     'list_pending_payment_provider_orders',
     'save_payment_provider_order',
+    'record_payment_provider_check',
     'update_payment_provider_order_status',
 ]

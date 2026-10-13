@@ -60,7 +60,8 @@ def merge_account_with_conn(conn, source_id: int, target_id: int, now: int, *, s
 
     # These records have stable identities independent of their account owner.
     for table in ('vpn_keys', 'payments', 'support_threads', 'promo_link_visits', 'promo_redemptions',
-                  'semantic_action_contexts', 'payment_offers', 'extension_scheduled_tasks', 'panel_identity_renames'):
+                  'semantic_action_contexts', 'payment_offers', 'extension_scheduled_tasks', 'panel_identity_renames',
+                  'module_uploads', 'module_webhook_bindings'):
         _move(conn, table, ('user_id',), source_id, target_id)
     _move(conn, 'promo_codes', ('issued_to_user_id',), source_id, target_id)
     _move(conn, 'payment_referral_effects', ('referrer_id', 'payer_id'), source_id, target_id)

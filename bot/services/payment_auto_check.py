@@ -12,6 +12,8 @@ from database.requests import (
     get_due_payment_auto_checks,
     get_payment_auto_check,
     get_payment_provider_order,
+    get_payment_check_status,
+    record_payment_provider_check,
     get_retryable_confirmed_payment_intents,
     record_payment_auto_check_attempt,
     record_payment_completion_attempt,
@@ -112,15 +114,25 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
     order_id = str(row.get('order_id') or '')
     if not order_id:
         return 'errors'
+    current = get_payment_auto_check(order_id)
+    if current:
+        row = {**row, **current}
+        if current['state'] not in {'active', 'provider_succeeded'}:
+            return current['state'] if current['state'] in {'completed', 'canceled', 'exhausted'} else 'errors'
+    known = get_payment_check_status(order_id)
+    if known == 'succeeded':
+        record_payment_provider_check(order_id, 'succeeded')
+        update_payment_auto_check(order_id, state='provider_succeeded', next_delay_seconds=0, expected_state='active')
+        return await _complete_confirmed_queue_row(bot, get_payment_auto_check(order_id) or row)
+    if known == 'canceled':
+        cancel_pending_order(order_id)
+        update_payment_auto_check(order_id, state='canceled', expected_state='active')
+        return 'canceled'
     if row.get('state') == 'provider_succeeded':
         return await _complete_confirmed_queue_row(bot, row)
 
     is_wata = row.get('provider_id') == 'wata'
     if is_wata:
-        provider = get_payment_provider_order(order_id) or {}
-        if provider.get('status') == 'succeeded':
-            update_payment_auto_check(order_id, state='provider_succeeded', next_delay_seconds=0, expected_state='active')
-            return await _complete_confirmed_queue_row(bot, get_payment_auto_check(order_id) or row)
         if not _wata_within_window(row):
             update_payment_auto_check(order_id, state='exhausted', expected_state='active')
             return 'exhausted'
@@ -218,9 +230,6 @@ async def _process_due_row(bot: Any, row: Mapping[str, Any]) -> str:
         return await _complete_confirmed_queue_row(bot, current)
 
     if status == 'canceled':
-        from database.requests import update_payment_provider_order_status
-
-        update_payment_provider_order_status(order_id, 'canceled')
         cancel_pending_order(order_id)
         update_payment_auto_check(
             order_id,

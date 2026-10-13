@@ -1,5 +1,6 @@
 aiogram>=3.29.1,<4
 aiohttp
+pydantic>=2.4.1,<3
 qrcode
 pillow
 argon2-cffi>=25.1.0,<26

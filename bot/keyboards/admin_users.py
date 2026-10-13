@@ -3,8 +3,11 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
 
 from .admin_misc import back_button, home_button, cancel_button
+from bot.services.admin_user_filters import (
+    USER_FILTER_LABELS, available_user_filters, visible_user_filters,
+)
 
-USERS_FILTERS = {'all': '👤 Все', 'active': '✅ Активные', 'inactive': '❌ Неактивные', 'never_paid': '🆕 Новые', 'expired': '🚫 Истёкшие', 'bot_blocked': '📵 Бот заблокирован'}
+USERS_FILTERS = USER_FILTER_LABELS
 
 def users_menu_kb(stats: Dict[str, int]) -> InlineKeyboardMarkup:
     """
@@ -56,7 +59,7 @@ def _user_list_button_text(user: Dict[str, Any]) -> str:
     return f'{text[:63].rstrip()}…'
 
 
-def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, current_filter: str='all') -> InlineKeyboardMarkup:
+def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, current_filter: object='all', *, web_enabled: bool=False) -> InlineKeyboardMarkup:
     """
     User list keyboard with pagination and filters.
     
@@ -64,15 +67,25 @@ def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, curr
         users: List of users on the current page
         page: Current page number (starting from 0)
         total_pages: Total number of pages
-        current_filter: Current filter
+        current_filter: Selected conditions, or a legacy single filter
+        web_enabled: Whether to display Telegram and website login filters
     """
     builder = InlineKeyboardBuilder()
-    filter_buttons = []
-    for (filter_key, filter_name) in USERS_FILTERS.items():
-        text = f'🔹{filter_name}' if filter_key == current_filter else filter_name
-        filter_buttons.append(InlineKeyboardButton(text=text, callback_data=f'admin_users_filter:{filter_key}'))
-    builder.row(*filter_buttons[:3])
-    builder.row(*filter_buttons[3:])
+    if page == 0:
+        selected = visible_user_filters(current_filter, web_enabled)
+        filter_buttons = [
+            InlineKeyboardButton(
+                text=f"{'🟢' if key in selected else '⚪'} {USERS_FILTERS[key]}",
+                callback_data=f'admin_users_filter:{key}',
+            )
+            for key in available_user_filters(web_enabled)
+        ]
+        for index in range(0, len(filter_buttons), 2):
+            builder.row(*filter_buttons[index:index + 2])
+    else:
+        builder.row(InlineKeyboardButton(
+            text='🔎 Изменить фильтр', callback_data='admin_users_reset_filters',
+        ))
     for user in users:
         telegram_id = user.get('telegram_id')
         text = _user_list_button_text(user)

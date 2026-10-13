@@ -38,22 +38,26 @@ def register_eligibility_policy(name, handler, *, priority=0, required=True):
     _register('eligibility', name, handler, priority=priority, required=required)
 
 
-def register_user_operation(name, handler, *, input_schema, result_schema):
+def register_user_operation(name, handler, *, kind='command', input_schema=None, result_schema=None,
+                            input_model=None, result_model=None, legacy_read_versions=()):
     import re
-    from copy import deepcopy
-    from core.schemas import validate_schema
+    from .models import declaration
     from bot.utils.custom_extensions import _bind_extension_callable
     from . import registry
     if not isinstance(name, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', name):
         raise ValueError('invalid operation name')
-    validate_schema(input_schema)
-    validate_schema(result_schema)
-    if input_schema['type'] != 'object':
-        raise ValueError('operation inputs must be a closed object')
+    if kind not in ('query', 'command'):
+        raise ValueError('kind must be query or command')
+    if (not isinstance(legacy_read_versions, (tuple, list))
+            or any(not isinstance(v, str) or not re.fullmatch(r'\d+\.\d+\.\d+', v) for v in legacy_read_versions)
+            or legacy_read_versions and kind != 'query'):
+        raise ValueError('legacy_read_versions requires a query and explicit module versions')
+    contract = declaration(input_schema=input_schema, result_schema=result_schema,
+                           input_model=input_model, result_model=result_model)
     owner = _owner('register_user_operation')
     registry.register_policy('user_operation', owner, name,
                               _bind_extension_callable(handler, invocation_kind='module_operation'),
-                              input_schema=deepcopy(input_schema), result_schema=deepcopy(result_schema))
+                              operation_kind=kind, legacy_read_versions=tuple(legacy_read_versions), **contract)
 
 
 def register_reward_policy(name, handler, *, purposes=('key_purchase', 'key_renewal'), priority=0, required=True):
@@ -65,6 +69,22 @@ def register_reward_policy(name, handler, *, purposes=('key_purchase', 'key_rene
 def register_event_handler(name, handler, *, events, priority=0):
     from bot.utils.extension_event_registry import CORE_EVENT_NAMES
     _subscriber('event', name, handler, events, CORE_EVENT_NAMES, priority)
+
+
+def register_webhook(name, handler, *, verifier):
+    import re
+    from bot.utils.custom_extensions import _bind_extension_callable, register_task_handler
+    from . import registry, webhooks
+    if not isinstance(name, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', name) or not callable(verifier):
+        raise ValueError('a webhook name and callable verifier are required')
+    owner = _owner('register_webhook')
+    registry.register_policy('webhook', owner, name,
+        _bind_extension_callable(handler, invocation_kind='task_handler'),
+        verifier=_bind_extension_callable(verifier, invocation_kind='policy'),
+        path=f'/webhooks/modules/{owner}/{name}')
+    async def deliver(context):
+        return await webhooks.dispatch(owner, name, context)
+    register_task_handler(webhooks.task_name(name), deliver)
 
 
 def register_lifecycle_hook(name, handler, *, events, priority=0):
@@ -118,3 +138,4 @@ __all__ = ['API_VERSION', 'register_module', 'register_action_policy', 'register
            'register_storage_schema', 'get_storage', 'get_core_facade']
 __all__ += ['register_user_operation']
 __all__ += ['register_reward_policy', 'register_event_handler', 'register_lifecycle_hook']
+__all__ += ['register_webhook']

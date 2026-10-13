@@ -17,7 +17,18 @@ export function applicationContext(runtime: ApplicationRuntime, state: RuntimeSt
   const fire = (method: Parameters<typeof call>[0], args: unknown[] = []) => { void call(method, args).catch(() => {}); };
   return {
     ...state,
-    api: { request: <T>(path: string, method = 'GET', body?: unknown, key?: string) => call('api', [path, method, body, key]) as Promise<T> },
+    api: {
+      request: <T>(path: string, method = 'GET', body?: unknown, key?: string): Promise<T> => {
+        if (body instanceof FormData) {
+          const file = body.get('file');
+          if (method !== 'POST' || !(file instanceof File) || [...body.keys()].length !== 1)
+            return Promise.reject(new ApiError('invalid_request'));
+          return call('upload', [path, file, file.name]) as Promise<T>;
+        }
+        return call('api', [path, method, body, key]) as Promise<T>;
+      },
+      download: path => call('download', [path]) as Promise<Blob>,
+    },
     environment: { ...state.environment, native: runtime.native,
       copy: value => call('copy', [value]) as Promise<boolean>, share: url => call('share', [url]) as Promise<boolean>,
       openLink: url => fire('openLink', [url]), importSubscription: (client, url, importUrl) => call('importSubscription', [client, url, importUrl]) as Promise<boolean>,

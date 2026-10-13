@@ -230,12 +230,16 @@ def cancel_unconfirmed_payment_for_method_change(
         cursor = conn.execute(
             """
             UPDATE payments
-            SET status = 'canceled'
+            SET status = 'canceled', cancellation_source = 'local'
             WHERE order_id = ?
               AND user_id = ?
-              AND status = 'pending'
+              AND (status = 'pending' OR (status = 'canceled' AND cancellation_source = 'provider'))
               AND intent_version = 1
               AND provider_confirmed_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM payment_provider_orders po
+                  WHERE po.order_id = payments.order_id AND po.status = 'succeeded'
+              )
               AND NOT EXISTS (
                   SELECT 1 FROM payment_provider_orders po
                   WHERE po.order_id = payments.order_id AND po.provider_id = 'wata'
@@ -577,20 +581,14 @@ def get_retryable_confirmed_payment_intents(
             FROM payments p
             LEFT JOIN payment_provider_orders ppo ON ppo.order_id = p.order_id
             WHERE p.intent_version = 1
-              AND p.provider_confirmed_at IS NOT NULL
-              AND ((p.status = 'pending' AND p.fulfillment_status IN ('provider_succeeded', 'failed', 'processing'))
+              AND (p.provider_confirmed_at IS NOT NULL OR ppo.status = 'succeeded')
+              AND ((p.status = 'pending' AND p.fulfillment_status IN ('pending', 'provider_succeeded', 'failed', 'processing'))
                    OR (p.status = 'paid' AND EXISTS (
                        SELECT 1 FROM key_entitlements ke JOIN vpn_keys k ON k.id=ke.key_id
                        WHERE ke.order_id=p.order_id AND NOT EXISTS (
                            SELECT 1 FROM payment_effects e WHERE e.order_id=p.order_id
                            AND e.effect_name='panel_access' AND e.status='completed'))))
-              AND (
-                    ppo.status = 'succeeded'
-                    OR (
-                        ppo.id IS NULL
-                        AND p.payment_type IN ('promo_free', 'balance')
-                    )
-              )
+              AND (ppo.id IS NOT NULL OR p.payment_type IN ('promo_free', 'balance'))
               AND NOT EXISTS (
                     SELECT 1
                     FROM payment_auto_checks pac

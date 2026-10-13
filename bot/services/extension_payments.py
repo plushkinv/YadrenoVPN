@@ -22,7 +22,7 @@ def _result(order_id: str, *, reason: str, **values: Any) -> dict[str, Any]:
 
 
 async def recheck_extension_payment(
-    *, extension_id: str, order_id: str, bot: Any = None,
+    *, extension_id: str, order_id: str, bot: Any = None, allow_canceled_recheck: bool = False,
 ) -> dict[str, Any]:
     """Resolve authority from the live provider and terms from the persisted order."""
     from runtime.readiness import require_active
@@ -66,7 +66,9 @@ async def recheck_extension_payment(
             order_id, reason='payment_processing', provider_status=status,
             payment_completed=paid, retryable=True,
         )
-    if order.get('status') not in {'pending', 'paid'}:
+    if order.get('status') not in {'pending', 'paid'} and not (
+        allow_canceled_recheck and order.get('status') == 'canceled' and order.get('cancellation_source') == 'provider'
+    ):
         return _result(order_id, reason='payment_canceled', ok=True, provider_status=status)
 
     intent = load_payment_intent(order_id)
@@ -76,7 +78,7 @@ async def recheck_extension_payment(
         status = 'succeeded'
     elif status != 'succeeded':
         try:
-            status = await check_provider_invoice(intent)
+            status = await check_provider_invoice(intent, allow_canceled_recheck=allow_canceled_recheck)
         except Exception as error:
             logger.warning(
                 'Extension payment check failed extension=%s order=%s type=%s',

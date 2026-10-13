@@ -7,3 +7,4 @@ export { money, date, subscriptionView } from './runtime/format';
 export type { Environment, NativeBridge, ConnectionState } from './runtime/environment';
 export type { Subscription, Order, Session } from './api/contracts';
 export const uiContractVersion = 1;
+export { moduleApi, mutationKey, ApiError, type ModuleFile, type ModuleCommandStatus } from '@ui/client';

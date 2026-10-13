@@ -667,6 +667,7 @@ do_hard_reset() {
         -e backup/ \
         -e config.py \
         -e custom_extensions/ \
+        -e user_files/ \
         -e custom_web/ \
         -e web_runtime/ \
         -e database/vpn_bot.db \

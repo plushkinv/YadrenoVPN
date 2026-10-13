@@ -48,6 +48,8 @@ def create_app(settings: WebSettings | None = None, *, ui_runtime=None) -> web.A
     add_payment_routes(app)
     from web_api.modules import add_routes as add_module_routes
     add_module_routes(app)
+    from web_api.module_webhooks import add_routes as add_webhook_routes
+    add_webhook_routes(app)
     from web_api.user import add_routes as add_user_routes
     add_user_routes(app)
     from web_api.client_import import add_routes as add_client_import_routes

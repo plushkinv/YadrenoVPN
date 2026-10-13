@@ -20,7 +20,7 @@ from database.requests import (
     get_user_vpn_keys,
     get_active_servers,
     get_all_servers,
-    get_users_stats
+    get_admin_users_stats
 )
 from bot.services.vpn_api import get_client_from_server_data
 from bot.services.panel_sync_coordinator import regular_panel_operation
@@ -104,7 +104,7 @@ async def on_key_delete_confirm(callback: CallbackQuery):
             return
 
     # Fallback - user menu
-    stats = get_users_stats()
+    stats = get_admin_users_stats()
     await safe_edit_or_send(
         callback.message,
         "👥 <b>Управление пользователями</b>",

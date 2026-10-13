@@ -128,7 +128,7 @@ export function useAdminEditor({ viewed, onCandidate, onNewChat, polling, visibl
           lastTurn.current = { kind: 'apply', candidate: checked };
           setNotice('Предпросмотр обновлён. Проверьте показанный вариант перед применением.'); return;
         }
-        if (checked.published) { setUncertain(false); setNotice('Этот вариант уже применён.'); return; }
+        if (checked.published) { setUncertain(false); return; }
         const result = await api.request<AppliedCandidate>(prefix + '/apply', 'POST', {
           task_id: checked.task_id, build_id: checked.candidate.build_id,
         });
@@ -158,10 +158,10 @@ export function useAdminEditor({ viewed, onCandidate, onNewChat, polling, visibl
     if (!ready || operation.current || capturing || action === 'new-chat' && (active || uncertain)) return;
     operation.current = true; setBusy(true); setActionError(''); setFailedControl(undefined); setNotice(''); generation.current++;
     try {
-      const result = await api.request<{ response_text?: string }>(prefix + '/' + action, 'POST');
+      await api.request(prefix + '/' + action, 'POST');
       if (!alive.current) return;
       if (action === 'new-chat') { candidateRequest.current = undefined; setCandidate(undefined); }
-      setNotice(result.response_text ?? ''); await refreshState();
+      await refreshState();
       if (action === 'new-chat' && alive.current) await newChatCallback.current?.();
     } catch (reason) { if (alive.current) { setActionError(editorError(reason, action)); setFailedControl(action); } }
     finally { operation.current = false; if (alive.current) setBusy(false); }

@@ -7,6 +7,13 @@ export class AccountApi implements Api {
   private generation = 0;
   constructor(private transport: Api) {}
   setAccount(id: number | null) { this.generation++; this.accountId = id; }
+  async download(path: string): Promise<Blob> {
+    const generation = this.generation;
+    if (!this.transport.download) throw new ApiError('feature_unavailable');
+    const value = await this.transport.download(path);
+    if (generation !== this.generation) throw new ApiError('authentication_required');
+    return value;
+  }
   async request<T>(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown, key?: string): Promise<T> {
     const owner = this.accountId, generation = this.generation;
     const firstPage = path === '/subscriptions' || path === '/subscriptions?limit=50&offset=0';

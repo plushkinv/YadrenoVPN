@@ -11,6 +11,8 @@ from typing import Any, Mapping
 from database.requests import (
     find_order_by_order_id,
     get_payment_provider_order,
+    get_payment_check_status,
+    record_payment_provider_check,
     get_setting,
     is_cardlink_configured,
     is_cards_configured,
@@ -26,7 +28,7 @@ from database.requests import (
     update_payment_provider_order_status,
 )
 
-from bot.services.payment_intents import PaymentIntent, PaymentQuote
+from bot.services.payment_intents import PaymentIntent, PaymentQuote, load_payment_intent
 
 
 @dataclass(frozen=True)
@@ -439,8 +441,39 @@ async def _create_provider_invoice_bound(
     )
 
 
-async def check_provider_invoice(intent: PaymentIntent) -> str:
+def can_check_provider_invoice(order_id: str) -> bool:
+    """Expose the existing check action only for a live, queryable invoice."""
+    provider = get_payment_provider_order(order_id)
+    if not provider or provider['provider_id'] in {'crypto', 'stars', 'cards'}:
+        return False
+    adapter = get_payment_provider_adapter(provider['provider_id'])
+    try:
+        return bool(adapter and get_payment_check_status(order_id, allow_canceled_recheck=True) is None)
+    except ValueError:
+        return False
+
+
+async def check_provider_invoice(intent: PaymentIntent, *, allow_canceled_recheck: bool = False) -> str:
     """Checks one persisted provider order through its registered adapter."""
+    from bot.services.payment_api import PaymentCheckResolved, payment_check_scope
+
+    def read_status():
+        return get_payment_check_status(intent.order_id, allow_canceled_recheck=allow_canceled_recheck)
+
+    with payment_check_scope(read_status):
+        try:
+            return await _check_provider_invoice(intent, allow_canceled_recheck=allow_canceled_recheck)
+        except PaymentCheckResolved as resolved:
+            return record_payment_provider_check(intent.order_id, resolved.status)
+
+
+async def _check_provider_invoice(intent: PaymentIntent, *, allow_canceled_recheck: bool) -> str:
+    intent = load_payment_intent(intent.order_id)
+    if intent is None:
+        raise ValueError('Payment intent not found')
+    known = get_payment_check_status(intent.order_id, allow_canceled_recheck=allow_canceled_recheck)
+    if known is not None:
+        return record_payment_provider_check(intent.order_id, known)
     provider_order = get_payment_provider_order(intent.order_id)
     if not provider_order:
         raise ValueError('Provider order does not exist')
@@ -477,8 +510,9 @@ async def check_provider_invoice(intent: PaymentIntent) -> str:
         result = await check_custom_payment_order(
             provider_id,
             order,
+            allow_canceled_recheck=allow_canceled_recheck,
         )
-        status = _normalize_status(result.get('status'))
+        return _normalize_status(result.get('status'))
     elif adapter.provider_id == 'cryptobot':
         from bot.services.cryptobot import (
             check_cryptobot_invoice,
@@ -486,6 +520,9 @@ async def check_provider_invoice(intent: PaymentIntent) -> str:
         )
 
         async with cryptobot_lifecycle_lock():
+            known = get_payment_check_status(intent.order_id, allow_canceled_recheck=allow_canceled_recheck)
+            if known is not None:
+                return record_payment_provider_check(intent.order_id, known)
             if not external_id:
                 raise ValueError('Crypto Pay invoice id is missing')
             raw_expected_amount = provider_order.get('charge_amount')
@@ -521,20 +558,18 @@ async def check_provider_invoice(intent: PaymentIntent) -> str:
             status = checked.status
             metadata_update = stored_metadata
             metadata_update.update(dict(checked.metadata))
-            update_payment_provider_order_status(
+            return record_payment_provider_check(
                 intent.order_id,
                 status,
                 metadata=metadata_update,
             )
-            return status
     else:
         status = await _check_builtin_status(adapter, external_id, intent.order_id)
-    update_payment_provider_order_status(
+    return record_payment_provider_check(
         intent.order_id,
         status,
         metadata=metadata_update,
     )
-    return status
 
 
 async def _create_builtin_link_invoice(
@@ -699,6 +734,7 @@ __all__ = [
     'PaymentProviderAdapter',
     'ProviderInvoice',
     'check_provider_invoice',
+    'can_check_provider_invoice',
     'create_provider_invoice',
     'get_payment_provider_adapter',
     'has_available_custom_payment_method',

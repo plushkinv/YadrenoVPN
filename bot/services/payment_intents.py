@@ -96,6 +96,7 @@ class PaymentIntent:
     rate_snapshot: Mapping[str, Any] = field(default_factory=dict)
     provider_confirmed_at: str | None = None
     origin_context: ActionOriginContext | None = None
+    cancellation_source: str | None = None
 
     @property
     def nominal_amount_cents(self) -> int:
@@ -409,6 +410,7 @@ def load_payment_intent(order_id: str) -> PaymentIntent | None:
             else None
         ),
         origin_context=normalize_stored_origin_context(row.get('origin_context')),
+        cancellation_source=row.get('cancellation_source'),
     )
 
 
@@ -430,7 +432,9 @@ def restart_payment_intent_for_method_change(
     if (
         current is None
         or current.user_id != int(user_id)
-        or current.status != 'pending'
+        or (current.status != 'pending' and not (
+            current.status == 'canceled' and current.cancellation_source == 'provider'
+        ))
         or current.provider_confirmed_at is not None
     ):
         return None

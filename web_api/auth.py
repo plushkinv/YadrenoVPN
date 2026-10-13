@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import re
 
 from aiohttp import web
 
@@ -35,6 +36,8 @@ def client_ip(request: web.Request) -> str:
 
 
 def _error_status(error: CoreError) -> int:
+    if error.code in ('module_result_expired', 'file_expired'):
+        return 410
     if error.code in ('invalid_request', 'phone_invalid', 'password_invalid', 'promo_invalid'):
         return 422
     if error.code in ('temporarily_unavailable', 'authentication_busy'):
@@ -52,7 +55,8 @@ def _error_status(error: CoreError) -> int:
         return 503
     if error.code.endswith('_not_found'):
         return 404
-    if error.code in ('idempotency_conflict', 'quote_changed', 'quote_expired', 'order_already_paid',
+    if error.code in ('idempotency_conflict', 'webhook_reference_conflict', 'file_path_in_use',
+                      'quote_changed', 'quote_expired', 'order_already_paid',
                       'order_unavailable', 'balance_insufficient', 'payment_method_unavailable',
                       'action_unavailable', 'tariff_unavailable', 'quote_unavailable', 'support_closed', 'attachment_too_large'):
         return 409
@@ -78,7 +82,8 @@ async def _security_response(request: web.Request, handler):
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
             if request.headers.get('Origin') != request.app[SETTINGS_KEY].public_origin:
                 raise CoreError('origin_invalid')
-            expected_type = ('multipart/form-data' if request.path == '/api/v1/admin/ui/editor/uploads'
+            expected_type = ('multipart/form-data' if (request.path == '/api/v1/admin/ui/editor/uploads'
+                             or re.fullmatch(r'/api/v1/modules/[^/]+/files', request.path))
                              else 'application/json')
             if request.content_type != expected_type:
                 raise CoreError('invalid_request')

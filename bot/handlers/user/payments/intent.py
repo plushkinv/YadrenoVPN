@@ -524,7 +524,7 @@ async def payment_intent_check_handler(callback: CallbackQuery, state: FSMContex
     if not intent:
         return
     try:
-        status = await check_provider_invoice(intent)
+        status = await check_provider_invoice(intent, allow_canceled_recheck=True)
     except Exception as error:
         logger.warning('Manual intent check failed order=%s: %s', intent.order_id, error)
         if intent.payment_type == 'wata':

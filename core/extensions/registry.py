@@ -81,15 +81,32 @@ def module_state(module_id, *, settlement=False, seen=None):
     return 'available'
 
 
+def _execution_contract(module_id):
+    return {'query': 'GET; no receipt; Core and storage are read-only',
+            'command': 'POST; explicit stable Idempotency-Key; no automatic SDK retries',
+            'result_retention_days': 30, 'retention_action': 'delete_completed_receipt',
+            'replay_after_cleanup': 'new_operation', 'missing_status_code': 'operation_not_found',
+            'legacy_expired_result_code': 'module_result_expired',
+            'status_path': f'/api/v1/modules/{module_id}/operations/{{operation_id}}',
+            'webhook': 'signature verification; durable event and task before ACK; server-bound account'}
+
+
 def inspect_modules():
     active = [{**module, 'required_modules': list(module['required_modules']), 'state': module_state(module_id),
              'policies': [{'kind': key[0], 'name': key[2], 'priority': policy['priority'],
                            'required': policy['required'], 'actions': list(policy.get('actions', ())),
                            'eligibility': policy.get('eligibility'), 'events': list(policy.get('events', ())),
-                           **{field: deepcopy(policy[field]) for field in ('input_schema', 'result_schema') if field in policy}}
-                          for key, policy in sorted(POLICIES.items()) if key[1] == module_id]}
+                           **{field: deepcopy(policy[field]) for field in (
+                               'input_schema', 'result_schema', 'operation_kind', 'schema_format',
+                               'legacy_read_versions', 'path') if field in policy}}
+                          for key, policy in sorted(POLICIES.items()) if key[1] == module_id],
+             'files': {'upload_path': f'/api/v1/modules/{module_id}/files', 'max_bytes': 20 * 1024 * 1024,
+                       'temporary_retention_days': 7, 'persistent_directory': f'user_files/{module_id}/',
+                       'included_in_backups': False},
+             'execution': _execution_contract(module_id)}
             for module_id, module in sorted(MODULES.items())]
-    return sorted(active + [{**deepcopy(value), 'state': 'unavailable'} for key, value in MANIFESTS.items() if key not in MODULES],
+    return sorted(active + [{**deepcopy(value), 'state': 'unavailable', 'execution': _execution_contract(key)}
+                           for key, value in MANIFESTS.items() if key not in MODULES],
                   key=lambda item: item['module_id'])
 
 

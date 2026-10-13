@@ -5,6 +5,8 @@ import asyncio
 import logging
 import time
 import math
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from collections.abc import Awaitable, Callable
@@ -20,6 +22,25 @@ PAYMENT_API_MAX_ATTEMPTS = 3
 PAYMENT_API_RETRY_DELAYS_SECONDS = (1, 2)
 
 T = TypeVar('T')
+_check_status_reader: ContextVar[Callable[[], str | None] | None] = ContextVar('payment_check_status_reader', default=None)
+
+
+class PaymentCheckResolved(Exception):
+    """Stop a request/retry when another path has already resolved this check."""
+
+    def __init__(self, status: str):
+        self.status = status
+        super().__init__(status)
+
+
+@contextmanager
+def payment_check_scope(read_status: Callable[[], str | None]):
+    """Apply the caller's persisted-state rule at each transport attempt."""
+    token = _check_status_reader.set(read_status)
+    try:
+        yield
+    finally:
+        _check_status_reader.reset(token)
 
 
 class PaymentApiError(RuntimeError):
@@ -108,6 +129,11 @@ async def run_payment_api_operation(
     last_error: BaseException | None = None
 
     for attempt in range(1, attempts_allowed + 1):
+        read_status = _check_status_reader.get()
+        if read_status is not None:
+            known = read_status()
+            if known is not None:
+                raise PaymentCheckResolved(known)
         attempt_started = time.monotonic()
         try:
             result = await asyncio.wait_for(

@@ -240,6 +240,11 @@ def enrich_page_placeholder_context_sync(
     async wrapper `enrich_page_placeholder_context()`.
     """
     enriched: dict[str, Any] = _normalize_context(context)
+    if page_key == 'payment_canceled' and 'payment_can_check' not in enriched:
+        from bot.services.payment_provider_adapters import can_check_provider_invoice
+
+        order_id = _context_text(enriched, 'order_id')
+        enriched['payment_can_check'] = bool(order_id and can_check_provider_invoice(order_id))
     placeholders = _collect_page_placeholder_names(page_data)
     explicit = _normalize_placeholders(text_replacements)
 

@@ -324,7 +324,7 @@ def _validate_persistent_git_ignores(project_root: Path) -> None:
         raise UpdateRollbackError("Git exclusions must not be symbolic links")
     exclude.parent.mkdir(parents=True, exist_ok=True)
     previous = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    additions = [name for name in ("/custom_web/", "/web_runtime/") if name not in previous.splitlines()]
+    additions = [name for name in ("/custom_web/", "/web_runtime/", "/user_files/") if name not in previous.splitlines()]
     if additions:
         with exclude.open("a", encoding="utf-8") as stream:
             stream.write("\n" + "\n".join(additions) + "\n")
@@ -335,6 +335,7 @@ def _validate_persistent_git_ignores(project_root: Path) -> None:
         "database/vpn_bot.db-wal",
         "database/vpn_bot.db-shm",
         "custom_extensions/",
+        "user_files/",
         "custom_web/",
         "web_runtime/",
         "logs/",
@@ -1772,6 +1773,8 @@ def _apply_git_target(
                 "config.py",
                 "-e",
                 "custom_extensions/",
+                "-e",
+                "user_files/",
                 "-e",
                 "custom_web/",
                 "-e",

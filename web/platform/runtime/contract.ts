@@ -8,7 +8,7 @@ export interface ApplicationStorage {
   get<T>(key: string, fallback: T): T;
   set(key: string, value: unknown): void;
 }
-export type RuntimeMethod = 'api' | 'navigate' | 'back' | 'refresh' | 'authenticated' | 'logout' | 'setTheme'
+export type RuntimeMethod = 'api' | 'upload' | 'download' | 'navigate' | 'back' | 'refresh' | 'authenticated' | 'logout' | 'setTheme'
   | 'storage.set' | 'copy' | 'share' | 'openLink' | 'importSubscription' | 'payment' | 'update' | 'reload' | 'loginWithTelegram';
 export type RuntimeState = Pick<AppContextValue, 'session' | 'bootstrap' | 'settings' | 'route' | 'param' | 'revision' | 'preset' | 'theme' | 'preview' | 'section' | 'launch' | 'status'> & {
   environment: { kind: AppContextValue['environment']['kind']; initialTheme?: 'light' | 'dark' };

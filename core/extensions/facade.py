@@ -5,13 +5,24 @@ from core.context import get_account_context
 def _actor():
     actor = get_account_context()
     if actor is None:
-        raise RuntimeError('a bound account operation is required')
+        from bot.utils.custom_extensions import _get_current_extension_account_id, _get_current_extension_telegram_id
+        from core.context import AccountContext
+        from database import requests as db
+        user_id, telegram_id = _get_current_extension_account_id(), _get_current_extension_telegram_id()
+        user = db.get_user_by_id(user_id) if user_id else (db.get_user_by_telegram_id(telegram_id) if telegram_id else None)
+        if user is None:
+            raise RuntimeError('a bound account operation is required')
+        actor = AccountContext(user['id'], user.get('telegram_id'), 'telegram' if telegram_id else 'system')
     return actor
 
 
 class SharedCoreFacade:
     def __init__(self, module_id):
         self._module_id = module_id
+
+    def bind_webhook_reference(self, name, reference):
+        from .webhooks import bind_reference
+        return bind_reference(_actor(), self._module_id, name, reference)
 
     def get_current_user(self):
         from bot.services.extension_user_snapshot import build_extension_account_snapshot
@@ -73,14 +84,26 @@ class SharedCoreFacade:
         from core.support import history
         return history(_actor(), self._module_id, thread_id, limit=limit, before_message_id=before_message_id)
 
-    async def create_support_thread(self, *, text, idempotency_key):
+    def get_uploaded_file(self, file_id):
+        from core.uploads import describe, record
+        return describe(record(_actor(), self._module_id, file_id))
+
+    def read_uploaded_file(self, file_id):
+        from core.uploads import read
+        return read(_actor(), self._module_id, file_id)
+
+    def save_uploaded_file(self, file_id, path):
+        from core.uploads import save
+        return save(_actor(), self._module_id, file_id, path)
+
+    async def create_support_thread(self, *, text='', file_id=None, idempotency_key):
         from bot.utils.extension_core import _ensure_new_mutation_allowed
         from core.support import write_message
         _ensure_new_mutation_allowed('create_support_thread')
-        return await write_message(_actor(), self._module_id, text, idempotency_key)
+        return await write_message(_actor(), self._module_id, text, idempotency_key, file_id=file_id)
 
-    async def reply_support_thread(self, thread_id, *, text, idempotency_key):
+    async def reply_support_thread(self, thread_id, *, text='', file_id=None, idempotency_key):
         from bot.utils.extension_core import _ensure_new_mutation_allowed
         from core.support import write_message
         _ensure_new_mutation_allowed('reply_support_thread')
-        return await write_message(_actor(), self._module_id, text, idempotency_key, thread_id=thread_id)
+        return await write_message(_actor(), self._module_id, text, idempotency_key, thread_id=thread_id, file_id=file_id)

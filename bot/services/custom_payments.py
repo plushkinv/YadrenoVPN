@@ -10,17 +10,19 @@ from bot.utils.payment_provider_registry import (
     handle_payment_webhook,
 )
 from database.requests import (
-    cancel_pending_order,
     find_order_by_order_id,
     find_payment_provider_order_by_external_id,
     get_payment_auto_check,
     get_payment_provider_order,
+    get_payment_check_status,
+    record_payment_provider_check,
     update_payment_auto_check,
-    update_payment_provider_order_status,
 )
 
 
-async def check_custom_payment_order(provider_id: str, order: Mapping[str, Any]) -> dict[str, Any]:
+async def check_custom_payment_order(
+    provider_id: str, order: Mapping[str, Any], *, allow_canceled_recheck: bool = False,
+) -> dict[str, Any]:
     """Checks the external status of a custom payment and updates the provider-order."""
     if int(order.get('intent_version') or 0) != 1:
         raise ValueError('custom payment checks require Payment Intent v1')
@@ -34,6 +36,10 @@ async def check_custom_payment_order(provider_id: str, order: Mapping[str, Any])
     provider_order = get_payment_provider_order(str(order.get('order_id') or ''))
     if not provider_order or provider_order.get('provider_id') != provider.provider_id:
         raise ValueError('payment provider order не найден')
+
+    known = get_payment_check_status(str(order['order_id']), allow_canceled_recheck=allow_canceled_recheck)
+    if known is not None:
+        return _save_custom_payment_status(str(order['order_id']), {'status': known})
 
     charge_currency = str(order.get('charge_currency') or provider.currency)
     from bot.services.money import parse_major_to_minor
@@ -76,16 +82,13 @@ async def check_custom_payment_order(provider_id: str, order: Mapping[str, Any])
 
 def _save_custom_payment_status(order_id: str, result: Mapping[str, Any]) -> dict[str, Any]:
     """A late pending/canceled check must not erase a committed confirmation."""
-    current = get_payment_provider_order(order_id)
-    if (current or {}).get('status') == 'succeeded' and result['status'] != 'succeeded':
-        return {**result, 'status': 'succeeded'}
-    update_payment_provider_order_status(
+    status = record_payment_provider_check(
         order_id, result['status'],
         provider_payment_id=result.get('provider_payment_id'),
         payment_url=result.get('payment_url'),
         metadata=result.get('metadata'),
     )
-    return dict(result)
+    return {**result, 'status': status}
 
 
 def _wake_payment_completion(order_id: str) -> None:
@@ -176,9 +179,6 @@ async def process_custom_payment_webhook(
         completed = await complete_custom_payment_order(order_id, bot=bot, notify_user=True)
         response['completed'] = bool(completed.get('ok'))
         response['processed_now'] = bool(completed.get('processed_now'))
-    elif status == 'canceled':
-        cancel_pending_order(order_id)
-        update_payment_auto_check(order_id, state='canceled')
     return response
 
 

@@ -74,7 +74,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     setViewError('');
     setViewNotice(exists ? '' : 'Выбранной страницы больше нет в этой версии. Открыта доступная страница.');
   }
-  const editor = useAdminEditor({ viewed: visibleContext, onCandidate: showCandidate, onNewChat: () => openPublished(false),
+  const editor = useAdminEditor({ viewed: visibleContext, onCandidate: showCandidate, onNewChat: openPublished,
     polling: open, visible: panel === 'editor', contextPending: pending || Boolean(viewError) });
   function activate(next: 'preview' | 'editor' | 'settings') {
     if (closing.current) return;
@@ -146,14 +146,13 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     } catch (reason) { setError(errorText(reason)); }
     finally { setPending(false); }
   }
-  async function openPublished(announce = true) {
+  async function openPublished() {
     setPending(true); setViewError(''); setViewNotice('');
     try {
       const { manifest } = await api.request<PublishedManifest>('/ui/manifest');
       select({ ui_version: manifest.build_id, customization_version: manifest.customization_version });
       setCandidate(undefined); editor.clearPreview();
       setPublishedPreview(`/ui/versions/${manifest.build_id}/preview.html?platform=${customization.platform_version}`);
-      if (announce) setViewNotice('Открыта текущая опубликованная версия. Рабочие изменения и ваше сообщение сохранены.');
     } catch (reason) { setViewError(errorText(reason)); }
     finally { setPending(false); }
   }

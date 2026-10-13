@@ -35,6 +35,21 @@ export async function dispatch(value: AppContextValue, method: RuntimeMethod, ar
   if (!Array.isArray(args) || args.length > 4) throw new ApiError('invalid_request');
   const [first, second, third, fourth] = args;
   switch (method) {
+    case 'upload': {
+      const path = userPath(first);
+      if (!/^\/modules\/[a-z][a-z0-9_]{0,63}\/files$/.test(path) || !(second instanceof Blob)
+          || second.size > 20 * 1024 * 1024) throw new ApiError('invalid_request');
+      const body = new FormData();
+      body.append('file', second, text(third));
+      return value.api.request(path, 'POST', body);
+    }
+    case 'download': {
+      const path = userPath(first);
+      if (!/^\/modules\/[a-z][a-z0-9_]{0,63}\/(files\/[a-f0-9]{32}|support\/attachments\/[0-9]+)$/.test(path))
+        throw new ApiError('access_denied');
+      if (!value.api.download) throw new ApiError('feature_unavailable');
+      return value.api.download(path);
+    }
     case 'api': {
       if (!['GET', 'POST'].includes(String(second))) throw new ApiError('invalid_request');
       const result = await value.api.request(userPath(first), second as 'GET' | 'POST', third, fourth === undefined ? undefined : text(fourth));

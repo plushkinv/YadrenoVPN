@@ -27,7 +27,7 @@ export function receiveRuntime(port: MessagePort, initial: RuntimeState) {
   const runtime = new RuntimeStore(initial, (method: RuntimeMethod, args: unknown[]) => new Promise((resolve, reject) => {
     if (!active) { reject(new ApiError('network_unavailable', true)); return; }
     const id = ++counter;
-    const timer = setTimeout(() => { pending.delete(id); reject(new ApiError('network_unavailable', true)); }, method === 'payment' ? 300000 : 30000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new ApiError('network_unavailable', true)); }, method === 'payment' ? 300000 : ['upload', 'download'].includes(method) ? 150000 : 30000);
     pending.set(id, { resolve, reject, timer });
     port.postMessage({ type: 'call', id, method, args });
   }));

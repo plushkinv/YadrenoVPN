@@ -60,6 +60,11 @@ export const appText = {
 };
 
 const errors: Record<string, string> = {
+  module_result_expired: 'Результат больше не хранится. Действие уже выполнено и повторно не запускается.',
+  module_operation_pending: 'Результат действия пока неизвестен. Обновите состояние; повтор использует прежний запрос.',
+  module_unavailable: 'Модуль временно недоступен.', invalid_request: 'Проверьте введённые данные.',
+  file_expired: 'Временный файл больше не хранится. Загрузите его заново.',
+  file_not_found: 'Файл не найден или недоступен этому аккаунту.', request_too_large: 'Превышен допустимый размер запроса или вложения.',
   authentication_required: appText.sessionExpired, authentication_failed: 'Неверный телефон или пароль.',
   telegram_authentication_failed: 'Не удалось подтвердить Telegram-вход. Начните вход заново.',
   telegram_login_unavailable: 'Вход через Telegram временно недоступен. Можно войти по телефону и паролю.',

@@ -852,6 +852,11 @@ async def run_daily_tasks(bot: Bot) -> None:
         bot: Bot instance
     """
     logger.info("🕐 Планировщик ежедневных задач запущен")
+    try:
+        from core.extensions.operations import cleanup_operation_receipts
+        await cleanup_operation_receipts()
+    except Exception as error:
+        logger.warning('Startup module receipt cleanup failed: %s', type(error).__name__)
     
     while True:
         try:
@@ -870,6 +875,11 @@ async def run_daily_tasks(bot: Bot) -> None:
             await asyncio.sleep(seconds_to_wait)
 
             # File retention must not depend on Telegram/network availability.
+            try:
+                from core.extensions.operations import cleanup_operation_receipts
+                await cleanup_operation_receipts()
+            except Exception as error:
+                logger.warning('Module receipt cleanup failed: %s', type(error).__name__)
             try:
                 from pathlib import Path
                 from bot.services.temporary_files import cleanup_temporary_files

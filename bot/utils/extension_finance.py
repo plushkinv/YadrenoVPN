@@ -115,7 +115,7 @@ class ExtensionFinanceAPI:
     async def recheck_payment(self, order_id: str) -> dict[str, Any]:
         """Check an owned provider's existing order and attempt core completion."""
         from bot.utils.custom_extensions import (
-            _get_current_extension_bot, _require_current_extension,
+            _get_current_extension_bot, _get_current_extension_invocation_kind, _require_current_extension,
         )
         from bot.utils.extension_core import _ensure_new_mutation_allowed
         from bot.services.extension_payments import recheck_extension_payment
@@ -130,6 +130,9 @@ class ExtensionFinanceAPI:
             extension_id=extension_id,
             order_id=order_id.strip(),
             bot=_get_current_extension_bot(),
+            allow_canceled_recheck=_get_current_extension_invocation_kind() in {
+                'callback', 'command', 'input_handler', 'module_operation',
+            },
         )
 
     def list_user_payments(

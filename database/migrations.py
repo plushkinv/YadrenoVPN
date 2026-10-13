@@ -73,7 +73,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 127
+LATEST_VERSION = 130
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -4137,6 +4137,69 @@ def migration_127(conn: sqlite3.Connection) -> None:
                                  if item.text_key in _POST_V126_USER_UI_TEXT_KEYS | {'account.link.conflict'}), conn=conn)
 
 
+def migration_128(conn: sqlite3.Connection) -> None:
+    """Keep cancellation provenance without guessing historical payment outcomes."""
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(payments)')}
+    if 'cancellation_source' not in columns:
+        conn.execute("ALTER TABLE payments ADD COLUMN cancellation_source TEXT "
+                     "CHECK (cancellation_source IN ('provider', 'local'))")
+    buttons = [
+        {'id': 'btn_intent_check', 'label': '✅ Я оплатил', 'row': 0, 'col': 0,
+         'action_type': 'system', 'action_value': None},
+        {'id': 'btn_intent_methods', 'label': '🔄 Сменить способ', 'row': 1, 'col': 0,
+         'action_type': 'system', 'action_value': None},
+        {'id': 'btn_intent_cancel', 'label': '⬅️ Назад', 'row': 2, 'col': 0,
+         'action_type': 'system', 'action_value': None},
+        {'id': 'btn_back_main', 'label': '🈴 На главную', 'row': 3, 'col': 0,
+         'action_type': 'internal', 'action_value': 'cmd_back_main'},
+    ]
+    for button in buttons:
+        button.update(color='secondary', is_hidden=False)
+    conn.execute("UPDATE pages SET buttons_default=? WHERE page_key='payment_canceled'",
+                 (json.dumps(buttons, ensure_ascii=False),))
+
+
+def migration_129(conn: sqlite3.Connection) -> None:
+    """Add module receipt retention, private uploads and durable webhook intake."""
+    for table, additions in {
+        'account_operations': {'completed_at': 'INTEGER', 'purged_at': 'INTEGER', 'last_error_code': 'TEXT'},
+        'support_messages': {'uploaded_file_id': 'TEXT'},
+    }.items():
+        columns = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+        for name, declaration in additions.items():
+            if name not in columns:
+                conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {declaration}')
+    conn.execute("UPDATE account_operations SET completed_at=CAST(strftime('%s','now') AS INTEGER) "
+                 "WHERE kind GLOB 'module.*' AND result_json IS NOT NULL AND completed_at IS NULL")
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_module_receipt_cleanup '
+                 'ON account_operations(completed_at) WHERE purged_at IS NULL')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_module_receipt_kind '
+                 'ON account_operations(kind) WHERE completed_at IS NOT NULL AND purged_at IS NULL')
+    conn.execute('''CREATE TABLE IF NOT EXISTS module_uploads (
+        id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), module_id TEXT NOT NULL,
+        filename TEXT NOT NULL, content_type TEXT NOT NULL, size INTEGER NOT NULL,
+        relative_path TEXT NOT NULL UNIQUE, persistent INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL, telegram_file_id TEXT
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS module_webhooks (
+        id TEXT PRIMARY KEY, module_id TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL, event_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL, payload_json TEXT, task_id TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        UNIQUE(module_id,name,event_id)
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS module_webhook_bindings (
+        module_id TEXT NOT NULL, name TEXT NOT NULL, reference TEXT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY(module_id,name,reference)
+    )''')
+
+
+def migration_130(conn: sqlite3.Connection) -> None:
+    """Index full expiry of completed module receipts, including legacy tombstones."""
+    conn.execute('DROP INDEX IF EXISTS idx_module_receipt_cleanup')
+    conn.execute("CREATE INDEX idx_module_receipt_cleanup ON account_operations(completed_at,id) "
+                 "WHERE kind GLOB 'module.*' AND completed_at IS NOT NULL")
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -4167,6 +4230,9 @@ MIGRATIONS = {
     125: migration_125,
     126: migration_126,
     127: migration_127,
+    128: migration_128,
+    129: migration_129,
+    130: migration_130,
 }
 
 

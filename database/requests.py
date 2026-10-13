@@ -50,6 +50,8 @@ from database.db_user_ui_texts import *
 from database.db_trial import *
 from database.db_subscription_composition import *
 from database.db_modules import *
+from database.db_module_uploads import *
+from database.db_module_webhooks import *
 from database.db_key_operations import *
 from database.db_account_actions import *
 from database.db_account_reads import *

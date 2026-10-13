@@ -136,12 +136,12 @@ async def check_order(account, order_id):
     async with _order_lock(order_id):
         intent = owned_order(account, order_id)
         confirmed = intent.provider_confirmed_at is not None or intent.status == 'paid'
-        if intent.status == 'pending' and not confirmed:
+        if (intent.status == 'pending' or (intent.status == 'canceled' and intent.cancellation_source == 'provider')) and not confirmed:
             if not db.get_payment_provider_order(order_id):
                 return order_status(account, order_id)
             try:
                 with bind_account_context(account):
-                    confirmed = await check_provider_invoice(intent) == 'succeeded'
+                    confirmed = await check_provider_invoice(intent, allow_canceled_recheck=True) == 'succeeded'
             except PaymentApiRateLimitError:
                 if intent.payment_type == 'wata':
                     return order_status(account, order_id)
@@ -161,7 +161,7 @@ async def cancel_order(account, order_id):
         provider = db.get_payment_provider_order(order_id)
         if intent.provider_confirmed_at or intent.status == 'paid' or (provider and provider['status'] == 'succeeded'):
             raise CoreError('order_already_paid')
-        if intent.status != 'canceled':
+        if intent.status != 'canceled' or intent.cancellation_source == 'provider':
             # Existing cancellation service performs supported remote cancellation first.
             from bot.services.payment_provider_cancellation import cancel_payment_intent_safely
             result = await cancel_payment_intent_safely(order_id, user_id=account.account_id)
