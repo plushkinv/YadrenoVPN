@@ -50,7 +50,11 @@ export function Runtime({ environment }: { environment: Environment }) {
   }, [api, reset]);
   useEffect(() => {
     let active = true;
-    setLoading(true); setError(undefined);
+    // Revalidate the session without unmounting an already open administrator
+    // editor. Identity/authority results below still replace or revoke it.
+    const retainEditor = Boolean(configuration && bootstrap && settings && session
+      && ['mini_app', 'offline'].includes(session.source));
+    setLoading(!retainEditor); setError(undefined);
     (async () => {
       let identity: Session | null = null;
       let launch: { digest: string; account_id: number } | undefined;

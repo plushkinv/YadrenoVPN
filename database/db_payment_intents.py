@@ -409,8 +409,12 @@ def confirm_internal_payment_intent_settlement(
                         ? = 'balance'
                         AND purpose <> 'balance_topup'
                         AND ? > 0
-                        AND COALESCE(payable_amount_minor, 0) > 0
-                        AND ? >= COALESCE(payable_amount_minor, 0)
+                        AND (
+                            (COALESCE(payable_amount_minor, 0) > 0
+                             AND ? >= COALESCE(payable_amount_minor, 0))
+                            OR (payable_amount_minor = 0
+                                AND balance_deduct_minor = ?)
+                        )
                     )
               )
             """,
@@ -429,6 +433,7 @@ def confirm_internal_payment_intent_settlement(
                 balance_deduct,
                 normalized_type,
                 normalized_type,
+                balance_deduct,
                 balance_deduct,
                 balance_deduct,
             ),

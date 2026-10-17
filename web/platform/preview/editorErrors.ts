@@ -2,6 +2,14 @@ import { ApiError } from '../api/client';
 import { errorText } from '../i18n/app';
 
 export type EditorAction = 'submit' | 'apply' | 'state' | 'cancel' | 'resume' | 'new-chat';
+export function connectionError(value: unknown): boolean {
+  return value instanceof ApiError && (['offline', 'network_unavailable'].includes(value.code) || value.details.reason === 'transport');
+}
+
+export function missingCandidate(value: unknown): boolean {
+  return value instanceof ApiError && value.details.code === 'web_candidate_missing';
+}
+
 const messages: Record<EditorAction, string> = {
   submit: 'Ошибка при отправке запроса', state: 'Ошибка при обновлении состояния запроса',
   apply: 'Не удалось применить черновик',
@@ -19,7 +27,7 @@ export function editorError(value: unknown, action: EditorAction): string {
   } else if (details.reason === 'ui_publication_changed' || details.reason === 'ui_source_changed') {
     message += '. Интерфейс изменился после открытия. Откройте актуальную версию и повторите запрос.';
   } else if (action === 'apply' && details.reason === 'editor_candidate_unavailable') {
-    message += '. Предпросмотр недоступен или устарел. Обновите состояние и проверьте показанный вариант.';
+    message += '. Черновик недоступен или устарел. Обновите состояние и проверьте показанный вариант.';
   } else if (value instanceof ApiError && ['authentication_required', 'reauthentication_required', 'access_denied', 'offline'].includes(value.code)) {
     message += '. ' + errorText(value);
   }
@@ -31,11 +39,15 @@ export function editorError(value: unknown, action: EditorAction): string {
 }
 
 export function previewError(value: unknown): string {
-  let message = 'Не удалось обновить предпросмотр. Применение не подтверждено.';
+  let message = 'Не удалось проверить черновик. Применение недоступно.';
   if (value instanceof ApiError) {
-    if (value.details.code === 'web_candidate_missing') message = 'Новый предпросмотр не подготовлен. Можно попросить агента подготовить вариант без применения.';
-    else if (value.details.code === 'web_candidate_expired' || value.status === 409)
-      message = 'Предпросмотр недоступен или устарел. Обновите состояние; при необходимости попросите агента подготовить новый вариант.';
+    if (missingCandidate(value)) message = 'Черновик для применения недоступен. Попросите агента подготовить новый вариант.';
+    else if (value.details.code === 'web_candidate_expired')
+      message = 'Файлы этого черновика больше недоступны. Для применения нужен новый вариант.';
+    else if (value.details.code === 'web_source_changed')
+      message = 'Этот черновик устарел после изменений. Для применения нужен обновлённый вариант.';
+    else if (['authentication_required', 'reauthentication_required', 'access_denied'].includes(value.code))
+      message += ' ' + errorText(value);
     const id = value.details.diagnostic_id;
     if (typeof id === 'string' && /^[a-f0-9]{16}$/.test(id)) message += '\nКод ошибки: ' + id;
   }

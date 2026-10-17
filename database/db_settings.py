@@ -5,6 +5,7 @@ import secrets
 import string
 import datetime
 import re
+import hashlib
 from decimal import Decimal, InvalidOperation
 from typing import Optional, List, Dict, Any, Tuple
 from .connection import get_db
@@ -15,6 +16,7 @@ __all__ = [
     'get_setting',
     'set_setting',
     'delete_setting',
+    'claim_panel_auth_notification',
     'is_update_notifications_enabled',
     'DEVICE_LIMIT_MODE_SETTING',
     'DEVICE_LIMIT_MODE_IP',
@@ -179,6 +181,21 @@ def delete_setting(key: str) -> bool:
     """
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+        return cursor.rowcount > 0
+
+
+def claim_panel_auth_notification(panel_key: str, now: float) -> bool:
+    """Atomically reserve one hourly notice for a physical panel across restarts."""
+    key = 'panel_auth_notice:' + hashlib.sha256(panel_key.encode('utf-8')).hexdigest()
+    with get_db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            WHERE CAST(settings.value AS REAL) <= ?
+            """,
+            (key, str(now), now - 3600),
+        )
         return cursor.rowcount > 0
 
 

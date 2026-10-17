@@ -16,6 +16,7 @@ from bot.utils.admin_dialog import (
 from bot.utils.datetime_format import format_datetime_for_display
 from bot.utils.text import escape_html, safe_edit_or_send
 from bot.utils.panel_email import get_panel_email_prefix
+from bot.utils.panel_errors import admin_panel_error
 from bot.states.admin_states import AdminStates
 from bot.keyboards.admin import users_menu_kb, users_list_kb, user_view_kb, user_ban_confirm_kb, key_view_kb, add_key_group_kb, add_key_server_kb, add_key_step_kb, add_key_confirm_kb, users_input_cancel_kb, key_action_cancel_kb, key_action_back_kb, back_and_home_kb, home_only_kb
 from bot.services.vpn_api import (
@@ -322,7 +323,10 @@ async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
         await callback.answer('✅ Трафик успешно сброшен!', show_alert=True)
     except VPNAPIError as e:
         logger.error(f'Ошибка сброса трафика: {e}')
-        await callback.answer(f'❌ Ошибка: {e}', show_alert=True)
+        from database.requests import get_server_by_id
+        await callback.answer(
+            admin_panel_error(e, get_server_by_id(key['server_id'])), show_alert=True,
+        )
     except Exception as e:
         logger.error(f'Неожиданная ошибка при сбросе трафика: {e}')
         await callback.answer('❌ Ошибка при сбросе трафика', show_alert=True)
@@ -441,7 +445,9 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
             ),
         )
     except VPNAPIError as e:
-        await callback.answer(f'❌ Ошибка: {e}', show_alert=True)
+        logger.error('Ошибка выбора сервера для ключа: %s', e)
+        await callback.answer(admin_panel_error(e, server), show_alert=True)
+        return
     await callback.answer()
 
 @router.message(AdminStates.add_key_traffic, F.text, ~F.text.startswith('/'))
@@ -669,7 +675,7 @@ async def _confirm_add_key_locked(
             except Exception:
                 logger.exception('Could not clean failed admin key candidate email=%s', email)
         logger.error(f'Ошибка создания ключа: {e}')
-        await callback.answer(f'❌ Ошибка: {e}', show_alert=True)
+        await callback.answer(admin_panel_error(e, server), show_alert=True)
     except Exception as e:
         if panel_client is not None and key_id is None:
             try:

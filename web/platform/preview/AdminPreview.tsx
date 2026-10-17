@@ -13,6 +13,7 @@ import { scenarios, type InstallationPreview, type PreviewContext } from './cont
 
 import { AdminEditor, EditorIcon } from './AdminEditor';
 import { useAdminEditor, type CandidatePreview } from './useAdminEditor';
+import { connectionError } from './editorErrors';
 
 function previewRoute(page: string, pages: { id: string; preview_parameter?: string }[] = basePages) {
   const parameter = pages.find(item => item.id === page)?.preview_parameter;
@@ -52,6 +53,8 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
   const [candidate, setCandidate] = useState<CandidatePreview>();
   const [viewNotice, setViewNotice] = useState('');
   const [viewError, setViewError] = useState('');
+  const [viewConnectionLost, setViewConnectionLost] = useState(false);
+  const publishedRead = useRef<Promise<boolean> | undefined>(undefined);
   const [publishedPreview, setPublishedPreview] = useState<string>();
   const [context, setContext] = useState<PreviewContext>({ contract_version: 1, route: previewRoute(route), scenario: 'active',
     preset: settings.preset, theme, ui_version: customization.build_version, customization_version: customization.version });
@@ -74,8 +77,9 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     setViewError('');
     setViewNotice(exists ? '' : 'Выбранной страницы больше нет в этой версии. Открыта доступная страница.');
   }
-  const editor = useAdminEditor({ viewed: visibleContext, onCandidate: showCandidate, onNewChat: openPublished,
-    polling: open, visible: panel === 'editor', contextPending: pending || Boolean(viewError) });
+  const editor = useAdminEditor({ viewed: visibleContext, onCandidate: showCandidate, onNewChat: async () => { await openPublished(); },
+    recoverView: () => viewConnectionLost ? openPublished() : Promise.resolve(true),
+    polling: open, visible: panel === 'editor', contextPending: pending || viewConnectionLost || Boolean(viewError) });
   function activate(next: 'preview' | 'editor' | 'settings') {
     if (closing.current) return;
     recheck();
@@ -146,15 +150,26 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     } catch (reason) { setError(errorText(reason)); }
     finally { setPending(false); }
   }
-  async function openPublished() {
+  function openPublished(): Promise<boolean> {
+    if (publishedRead.current) return publishedRead.current;
     setPending(true); setViewError(''); setViewNotice('');
-    try {
-      const { manifest } = await api.request<PublishedManifest>('/ui/manifest');
-      select({ ui_version: manifest.build_id, customization_version: manifest.customization_version });
-      setCandidate(undefined); editor.clearPreview();
-      setPublishedPreview(`/ui/versions/${manifest.build_id}/preview.html?platform=${customization.platform_version}`);
-    } catch (reason) { setViewError(errorText(reason)); }
-    finally { setPending(false); }
+    const read = (async () => {
+      try {
+        const { manifest } = await api.request<PublishedManifest>('/ui/manifest');
+        select({ ui_version: manifest.build_id, customization_version: manifest.customization_version });
+        setCandidate(undefined); editor.clearPreview(); setViewConnectionLost(false);
+        setPublishedPreview(`/ui/versions/${manifest.build_id}/preview.html?platform=${customization.platform_version}`);
+        return true;
+      } catch (reason) {
+        const network = connectionError(reason);
+        setViewConnectionLost(network);
+        if (network) editor.reportConnectionFailure();
+        else setViewError(errorText(reason));
+        return !network;
+      }
+    })().finally(() => { publishedRead.current = undefined; setPending(false); });
+    publishedRead.current = read;
+    return read;
   }
   const pageId = (open ? visibleContext.route : route).split('/')[0];
   const pageTitle = (candidate?.pages ?? basePages).find(page => page.id === pageId)?.title ?? basePages.find(page => page.id === pageId)?.title ?? pageId;

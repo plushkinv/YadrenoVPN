@@ -25,6 +25,13 @@ export function Surface({ configuration, onSettingsSaved }: { configuration?: In
   useLayoutEffect(() => { runtime.current!.update(state); });
   const isolated = Boolean(configuration);
   useEffect(() => {
+    if (!isolated || !failure) return;
+    // Recover the failed application frame without recreating the editor.
+    const online = () => retry(count => count + 1);
+    window.addEventListener('online', online);
+    return () => window.removeEventListener('online', online);
+  }, [isolated, failure]);
+  useEffect(() => {
     let active = true, cleanup: (() => void) | undefined;
     const controller = new AbortController();
     setFailure(undefined);

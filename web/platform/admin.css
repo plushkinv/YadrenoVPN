@@ -24,10 +24,20 @@
 .admin-editor-applied svg { width: 14px; height: 14px; }
 .admin-editor .admin-icon, .admin-settings .admin-icon { flex: 0 0 48px; width: 48px; min-width: 48px; height: 48px; min-height: 48px; padding: 0; border-radius: 12px; }
 .admin-icon svg { width: 21px; height: 21px; }
+.admin-editor-connection { flex: 0 0 48px; }
+.system-ui .admin-connection-icon { display: flex; align-items: center; justify-content: center; color: var(--warning); background: transparent; border: 0; box-shadow: none; cursor: pointer; }
+.admin-connection-tooltip { position: absolute; z-index: 4; right: 12px; bottom: calc(100% + 8px); width: 280px; max-width: calc(100% - 24px); padding: 10px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 16px #0002; font-size: .875rem; overflow-wrap: anywhere; }
+.admin-editor--expanded .admin-connection-tooltip { top: var(--admin-editor-header-height, 64px); bottom: auto; }
 .admin-editor-content { padding-inline: 16px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
 .admin-editor-content p { margin-block: 8px; }
 .admin-editor-answer { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9375rem; }
 .admin-editor-answer .rich-content { padding-block: 8px; }
+.admin-editor-activity { display: flex; align-items: flex-start; gap: 8px; }
+.admin-editor-dots { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 3px; width: 24px; height: 24px; color: var(--muted); }
+.admin-editor-dots > span { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .4; animation: admin-editor-pulse 1.2s ease-in-out infinite; }
+.admin-editor-dots > span:nth-child(2) { animation-delay: .2s; }
+.admin-editor-dots > span:nth-child(3) { animation-delay: .4s; }
+@keyframes admin-editor-pulse { 0%, 60%, 100% { opacity: .4; } 30% { opacity: 1; } }
 .admin-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .admin-editor-actions .button { min-height: 48px; padding: 8px 12px; font-size: .8125rem; }
 .admin-editor-actions svg, .admin-editor-menu svg, .admin-voice-recording .button svg { width: 17px; height: 17px; }

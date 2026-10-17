@@ -16,6 +16,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 import aiohttp
 
 from config import RETRY_CONFIG
+from bot.services.panel_auth_notifications import (
+    panel_endpoint_key,
+    record_auth_success,
+    record_token_rejection,
+)
 
 from bot.utils.inbounds import (
     filter_visible_inbounds,
@@ -68,9 +73,7 @@ class XUIClient(BaseVPNClient):
         path = str(server.get("web_base_path") or "").strip("/")
         path = f"/{path}" if path else ""
         self.base_url = f"{self.protocol}://{self.host}:{self.port}{path}"
-        self._panel_auth_key = (
-            f"{self.protocol.casefold()}://{self.host.casefold()}:{self.port}{path}"
-        )
+        self._panel_auth_key = panel_endpoint_key(server)
 
         self.session: Optional[aiohttp.ClientSession] = None
         self.api_token: Optional[str] = str(server.get("api_token") or "") or None
@@ -487,14 +490,17 @@ class XUIClient(BaseVPNClient):
     async def _clear_token_if_current(self, rejected_token: str) -> None:
         if self.api_token != rejected_token:
             return
+        self._validated_token = None
+        self.is_authenticated = False
+        if not self._has_password_credentials():
+            record_token_rejection(self._panel_auth_key, self.server_id)
+            return
         if self._can_share_panel_auth():
             self._replace_matching_panel_tokens(rejected_token, None)
         else:
             self._persist_api_token(None)
         self.api_token = None
         self.server["api_token"] = None
-        self._validated_token = None
-        self.is_authenticated = False
 
     def _accept_validated_token(
         self,
@@ -517,6 +523,7 @@ class XUIClient(BaseVPNClient):
         self._validated_token = token
         self.is_authenticated = True
         self._panel_settings = None
+        record_auth_success(self._panel_auth_key, self.server_id)
 
     @staticmethod
     def _token_rows(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -685,6 +692,10 @@ class XUIClient(BaseVPNClient):
             if self.api_token and self.api_token != rejected_token:
                 return self.api_token
 
+            if not self._has_password_credentials():
+                await self._clear_token_if_current(rejected_token)
+                raise rejection
+
             reusable = self._load_reusable_panel_token()
             rejected_reusable: Optional[str] = None
             if reusable and reusable != rejected_token:
@@ -701,10 +712,6 @@ class XUIClient(BaseVPNClient):
                         replaced_token=rejected_token,
                     )
                     return reusable
-
-            if not self._has_password_credentials():
-                await self._clear_token_if_current(rejected_token)
-                raise rejection
 
             try:
                 candidate = await self._bootstrap_candidate_token()
@@ -795,6 +802,7 @@ class XUIClient(BaseVPNClient):
                     self._persist_panel_version(version)
                     self._validated_token = candidate
                     self.is_authenticated = True
+                    record_auth_success(self._panel_auth_key, self.server_id)
                     return True
 
             await self._bootstrap_or_reuse_token_locked()
@@ -867,13 +875,15 @@ class XUIClient(BaseVPNClient):
             self._log_failure(error)
             raise error
         try:
-            return await self._json_with_token(
+            result = await self._json_with_token(
                 method,
                 endpoint,
                 token=token,
                 data=data,
                 retry=retry,
             )
+            record_auth_success(self._panel_auth_key, self.server_id)
+            return result
         except PanelRequestError as exc:
             if exc.kind != PanelErrorKind.UNAUTHORIZED:
                 self._log_failure(exc)
@@ -884,13 +894,15 @@ class XUIClient(BaseVPNClient):
                 self._log_failure(recovery_error)
                 raise
             try:
-                return await self._json_with_token(
+                result = await self._json_with_token(
                     method,
                     endpoint,
                     token=replacement,
                     data=data,
                     retry=retry,
                 )
+                record_auth_success(self._panel_auth_key, self.server_id)
+                return result
             except PanelRequestError as replay_error:
                 if replay_error.kind == PanelErrorKind.UNAUTHORIZED:
                     await self._clear_token_if_current(replacement)
@@ -2214,6 +2226,7 @@ class XUIClient(BaseVPNClient):
             )
             self._log_failure(error)
             raise error
+        record_auth_success(self._panel_auth_key, self.server_id)
         return backup
 
     async def close(self) -> None:

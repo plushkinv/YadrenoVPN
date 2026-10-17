@@ -3,9 +3,14 @@ import { ArrowUp, Check, ChevronDown, ChevronUp, Expand, LogOut, Mic, MoreHorizo
 import { Button } from '../components/Ui';
 import type { AdminEditorController } from './useAdminEditor';
 import { VoiceMessage, VoiceWave, voiceTime } from './VoiceMessage';
+import { EditorConnection } from './EditorConnection';
 
 export function EditorIcon({ label, children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
   return <Button tone="quiet" className={'admin-icon ' + className} aria-label={label} title={label} {...props}>{children}</Button>;
+}
+
+function ActivityDots() {
+  return <span className="admin-editor-dots" aria-hidden="true"><span /><span /><span /></span>;
 }
 
 export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pageTitle = 'Главная', preview = true,
@@ -19,6 +24,9 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
   const [large, setLarge] = useState(false), [menuOpen, setMenuOpen] = useState(false);
   const focusPending = useRef(expanded);
   const voice = editor.voice, recording = voice.phase === 'recording', requesting = voice.phase === 'requesting';
+  const activity = editor.submission === 'sending' ? 'Отправляем запрос…'
+    : editor.active && !editor.latest?.final ? editor.latest?.progress?.content || 'Агент работает…'
+    : editor.submission === 'accepted' && !editor.latest?.final ? 'Агент работает…' : null;
   useLayoutEffect(() => {
     const element = header.current!;
     const measure = () => {
@@ -42,7 +50,7 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
     return () => document.removeEventListener('pointerdown', outside);
   }, [menuOpen]);
   const closeMenu = () => { setMenuOpen(false); menuButton.current?.focus(); };
-  const status = preview && editor.candidate && <span className="admin-editor-candidate"><span aria-hidden="true">·</span>{editor.candidate.published
+  const status = preview && editor.displayedCandidate && <span className="admin-editor-candidate"><span aria-hidden="true">·</span>{editor.displayedCandidate.published
       ? <span className="admin-editor-applied"><Check aria-hidden="true" />Применено</span>
       : <span className="admin-editor-draft">Черновик</span>}</span>;
   return <section className={'admin-editor' + (expanded ? ' admin-editor--expanded' : '')} aria-label="Редактор страницы">
@@ -56,6 +64,7 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
           </button>{status}
         </div>
       </div>
+      {editor.connectionLost && <EditorConnection />}
       {tools}
       <EditorIcon label={expanded ? 'Свернуть редактор' : 'Развернуть редактор'} onClick={expanded ? onCollapse : onActivate}>
         {expanded ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
@@ -64,11 +73,11 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
     {expanded && <>
       <div className="admin-editor-content">
         <div className="admin-editor-answer" aria-live="polite">
+          {activity && <p className="admin-editor-activity"><ActivityDots /><span>{activity}</span></p>}
           {editor.latest?.final ? editor.latest.final.content_html !== undefined
             ? <div className="rich-content" dangerouslySetInnerHTML={{ __html: editor.latest.final.content_html }} />
-            : <p>{editor.latest.final.content}</p> : editor.latest?.progress ? <p>{editor.latest.progress.content}</p> : null}
+            : <p>{editor.latest.final.content}</p> : !activity && editor.latest?.progress ? <p>{editor.latest.progress.content}</p> : null}
           {editor.active && <div className="admin-editor-task">
-            {!editor.latest?.progress && <p>Агент работает…</p>}
             <div className="admin-editor-actions">
               <Button tone="secondary" disabled={!editor.ready || editor.busy || recording || requesting} onClick={() => void editor.control('cancel')}>
                 <Square aria-hidden="true" />{editor.latest?.cancel_button_text ?? editor.latest?.progress?.cancel_button_text ?? 'Прервать задачу'}
@@ -83,7 +92,7 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
         {editor.canApply && <div className="admin-editor-apply"><Button onClick={() => void editor.apply()}>Применить</Button></div>}
         {(editor.actionError || editor.uncertain) && <div className="admin-editor-error" role="alert">
           {editor.actionError && <p>{editor.actionError}</p>}
-          {editor.uncertain && <p>Не удалось подтвердить, принят ли запрос. Проверьте его состояние. Повторная отправка может создать ещё одну задачу.</p>}
+          {editor.uncertain && <p role="status">Не удалось подтвердить отправку. Запрос мог быть принят. Проверьте статус перед повторной отправкой.</p>}
           <div className="admin-editor-actions">
             {editor.uncertain && <Button tone="secondary" disabled={editor.busy || editor.refreshing} onClick={() => void editor.refresh()}>Проверить статус</Button>}
             {editor.canRepeat && <Button tone="secondary" onClick={() => void editor.repeat()}>{editor.uncertain ? 'Отправить повторно' : 'Повторить'}</Button>}
@@ -114,6 +123,14 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
           <div className="admin-editor-input-well">
             <textarea ref={input} aria-label="Что изменить на этой странице?" placeholder="Что изменить?" value={editor.message}
               maxLength={8192} rows={large ? 5 : 2} onChange={event => editor.setMessage(event.target.value)}
+              onPaste={event => {
+                const files = Array.from(event.clipboardData.files);
+                if (!files.length) for (const item of Array.from(event.clipboardData.items)) {
+                  if (item.kind === 'file') { const file = item.getAsFile(); if (file) files.push(file); }
+                }
+                if (!files.length) return;
+                event.preventDefault(); editor.selectFiles(files);
+              }}
               disabled={!editor.ready || editor.busy || editor.active} />
             <div className="admin-editor-tools">
               <EditorIcon label="Прикрепить файлы" disabled={!editor.canAttach} onClick={onAttach}><Paperclip aria-hidden="true" /></EditorIcon>
@@ -121,6 +138,7 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
               <button ref={menuButton} type="button" className="button button--quiet admin-icon" aria-label="Действия редактора"
                 aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><MoreHorizontal aria-hidden="true" /></button>
               <span className="admin-editor-spacer" />
+              {activity && <ActivityDots />}
               <Button type="submit" aria-label="Отправить" title="Отправить" className="admin-icon admin-editor-send" disabled={!editor.canSubmit}><ArrowUp aria-hidden="true" /></Button>
             </div>
           </div>

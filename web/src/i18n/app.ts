@@ -38,6 +38,8 @@ export const appText = {
   buy: 'Купить подписку', renew: 'Продлить', trial: 'Попробовать бесплатно', trialTitle: 'Пробный доступ',
   tariff: 'Тариф', method: 'Способ оплаты', balanceUse: 'Использовать баланс', quote: 'Проверить стоимость',
   pay: 'Перейти к оплате', confirmOrder: 'Создать заказ', checkPayment: 'Проверить оплату',
+  payBalance: 'Оплатить с баланса', renewFree: 'Продлить бесплатно', purchaseFree: 'Получить бесплатно',
+  calculating: 'Рассчитываем…', preparingPayment: 'Готовим счёт…',
   cancelOrder: 'Отменить заказ', confirmCancel: 'Отменить неоплаченный заказ?',
   pendingPayment: 'Ожидаем оплату', paid: 'Оплата подтверждена', issuing: 'Оплачено, доступ готовится',
   paymentCompleting: 'Провайдер подтвердил оплату. Завершаем обработку.', operationFailed: 'Операцию не удалось завершить',

@@ -5,10 +5,18 @@ import { appText as t } from '../i18n/app';
 export function money(minor: number | null | undefined, currency: string): string {
   if (minor == null) return t.unknown;
   if (currency === 'XTR') return `${minor} ⭐`;
+  if (currency === 'USDT') return paymentMoney(String(minor / 100), currency);
   try {
     const digits = new Intl.NumberFormat('ru', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2;
     return new Intl.NumberFormat('ru', { style: 'currency', currency, minimumFractionDigits: 0 }).format(minor / 10 ** digits);
   } catch { return `${minor} ${currency}`; }
+}
+/** Format the provider's decimal amount without converting between currencies. */
+export function paymentMoney(amount: string, currency: string): string {
+  if (currency === 'XTR') return `${amount} ⭐`;
+  if (currency === 'USDT') return `${new Intl.NumberFormat('ru', { maximumFractionDigits: 2 }).format(Number(amount))} USDT`;
+  try { return new Intl.NumberFormat('ru', { style: 'currency', currency, minimumFractionDigits: 0 }).format(Number(amount)); }
+  catch { return `${amount} ${currency}`; }
 }
 export function date(value: string | number | null | undefined): string {
   if (value == null) return t.unknown;
