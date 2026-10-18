@@ -2,6 +2,8 @@ import { ApiError } from '../api/client';
 import type { ApplicationRuntime, RuntimeState } from './contract';
 import type { AppContextValue } from './context';
 
+const applicationBindings = new WeakMap<ApplicationRuntime, Pick<AppContextValue, 'api' | 'refresh'>>();
+
 /** The SDK exposes the same operations regardless of the rendering surface. */
 export function applicationContext(runtime: ApplicationRuntime, state: RuntimeState): AppContextValue {
   const call: ApplicationRuntime['call'] = async (method, args) => {
@@ -15,9 +17,10 @@ export function applicationContext(runtime: ApplicationRuntime, state: RuntimeSt
     }
   };
   const fire = (method: Parameters<typeof call>[0], args: unknown[] = []) => { void call(method, args).catch(() => {}); };
-  return {
-    ...state,
-    api: {
+  // Presentation snapshots must not restart resources or polling effects.
+  let bindings = applicationBindings.get(runtime);
+  if (!bindings) {
+    bindings = { refresh: () => fire('refresh'), api: {
       request: <T>(path: string, method = 'GET', body?: unknown, key?: string): Promise<T> => {
         if (body instanceof FormData) {
           const file = body.get('file');
@@ -28,7 +31,12 @@ export function applicationContext(runtime: ApplicationRuntime, state: RuntimeSt
         return call('api', [path, method, body, key]) as Promise<T>;
       },
       download: path => call('download', [path]) as Promise<Blob>,
-    },
+    } };
+    applicationBindings.set(runtime, bindings);
+  }
+  return {
+    ...state,
+    ...bindings,
     environment: { ...state.environment, native: runtime.native,
       copy: value => call('copy', [value]) as Promise<boolean>, share: url => call('share', [url]) as Promise<boolean>,
       openLink: url => fire('openLink', [url]), importSubscription: (client, url, importUrl) => call('importSubscription', [client, url, importUrl]) as Promise<boolean>,
@@ -39,7 +47,7 @@ export function applicationContext(runtime: ApplicationRuntime, state: RuntimeSt
       get: <T>(key: string, fallback: T): T => Object.hasOwn(state.storage, key) ? state.storage[key] as T : fallback,
       set: (key, value) => { state.storage[key] = value; fire('storage.set', [key, value]); },
     },
-    navigate: route => fire('navigate', [route]), back: () => fire('back'), refresh: () => fire('refresh'),
+    navigate: route => fire('navigate', [route]), back: () => fire('back'),
     authenticated: session => fire('authenticated', [session]), logout: () => call('logout', []) as Promise<void>,
     loginWithTelegram: () => call('loginWithTelegram', []) as Promise<void>,
     setTheme: theme => fire('setTheme', [theme]), update: () => call('update', []) as Promise<void>, reload: () => fire('reload'),

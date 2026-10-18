@@ -690,6 +690,7 @@ def get_custom_extensions_diagnostics(
         },
         'account_capabilities': {
             'contract_version': 2,
+            'methods': ['import_subscription'],
             'owner': 'user_id',
             'telegram_id': 'optional',
             'sources': ['telegram', 'mini_app', 'site', 'system'],

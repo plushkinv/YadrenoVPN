@@ -53,7 +53,7 @@ export function Surface({ configuration, onSettingsSaved }: { configuration?: In
   return <div className={isolated ? 'system-frame-shell system-ui' : undefined} data-preset={value.preset} data-theme={value.theme}>
     <div className="system-application">
       <div className="system-ui"><Failure error={failure} retry={() => retry(count => count + 1)} /></div>
-      {isolated ? <iframe key={attempt} ref={frame} src={customization.frame_url} sandbox="allow-scripts" title="Личный кабинет" referrerPolicy="no-referrer" /> : <div ref={element} />}
+      {isolated ? <iframe key={attempt} ref={frame} src={customization.frame_url} sandbox="allow-scripts allow-forms" title="Личный кабинет" referrerPolicy="no-referrer" /> : <div ref={element} />}
     </div>
     {configuration && <AppContext.Provider value={value}><div className="admin-review-slot"><AdminPreview configuration={configuration} onSettingsSaved={onSettingsSaved} /></div></AppContext.Provider>}
   </div>;

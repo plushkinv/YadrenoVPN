@@ -185,7 +185,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     <dialog ref={dialog} className="admin-preview-dialog" onCancel={event => { event.preventDefault(); close(); }} aria-label="Просмотр интерфейса">
       {previewStarted.current &&
         <div className="admin-preview-page" inert={panel === 'settings'}>
-          <iframe ref={frame} src={candidate?.preview_url ?? publishedPreview ?? customization.asset_base + 'preview.html?platform=' + customization.platform_version} sandbox="allow-scripts" title={t.preview} referrerPolicy="no-referrer" />
+          <iframe ref={frame} src={candidate?.preview_url ?? publishedPreview ?? customization.asset_base + 'preview.html?platform=' + customization.platform_version} sandbox="allow-scripts allow-forms" title={t.preview} referrerPolicy="no-referrer" />
         </div>}
       {open && <>
         {panel === 'settings' ? <div className="admin-settings-backdrop">

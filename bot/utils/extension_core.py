@@ -154,6 +154,14 @@ class ExtensionCoreAPI(ExtensionFinanceAPI):
 
         return list_subscription_key_summaries(owner_user_id=owner_user_id)
 
+    async def import_subscription(
+        self, subscription_url: str, group_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Use the shared own-account import contract from a Telegram extension."""
+        from core.extensions.facade import SharedCoreFacade
+
+        return await SharedCoreFacade(self.extension_id).import_subscription(subscription_url, group_id)
+
     def list_key_subscription_bindings(
         self,
         *,

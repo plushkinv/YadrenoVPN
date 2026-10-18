@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import type { Api } from '../api/client';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ApiError, type Api } from '../api/client';
 import type { Bootstrap, Session, UiSettings } from '../api/contracts';
 import type { Preset, Theme } from '../model';
 import type { Environment } from './environment';
@@ -35,16 +35,28 @@ export function useBack() {
 /** Discard late responses after navigation/account switch; never replay a mutation. */
 export function useResource<T>(path: string | null) {
   const { api, revision, session } = useApp();
-  const [state, setState] = useState<{ data?: T; error?: unknown; loading: boolean }>({ loading: true });
+  const resource = useMemo(() => ({ api, path, account: session?.account_id }), [api, path, session?.account_id]);
+  const [state, setState] = useState<{ resource: typeof resource; data?: T; error?: unknown; loading: boolean }>({ resource, loading: Boolean(path) });
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let active = true;
-    setState({ loading: Boolean(path) });
-    if (path) api.request<T>(path).then(data => { if (active) setState({ data, loading: false }); },
-      error => { if (active) setState({ error, loading: false }); });
+    setState(previous => {
+      const data = previous.resource === resource ? previous.data : undefined;
+      return { resource, data, loading: Boolean(resource.path) && data === undefined };
+    });
+    if (resource.path) resource.api.request<T>(resource.path).then(data => {
+      if (active) setState({ resource, data, loading: false });
+    }, error => {
+      if (!active) return;
+      const temporary = error instanceof ApiError && (['offline', 'network_unavailable'].includes(error.code) || error.status >= 500);
+      setState(previous => ({ resource, error, loading: false,
+        data: temporary && previous.resource === resource ? previous.data : undefined }));
+    });
     return () => { active = false; };
-  }, [path, api, revision, session?.account_id, retry]);
-  return { ...state, retry: () => setRetry(value => value + 1) };
+  }, [resource, revision, retry]);
+  // Hide the previous owner/path immediately, before the next effect starts.
+  const current = state.resource === resource ? state : { loading: Boolean(path), data: undefined, error: undefined };
+  return { data: current.data, error: current.error, loading: current.loading, retry: () => setRetry(value => value + 1) };
 }
 
 export function useAction() {

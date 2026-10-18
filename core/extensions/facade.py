@@ -32,6 +32,26 @@ class SharedCoreFacade:
         from bot.utils.extension_core import ExtensionCoreAPI
         return ExtensionCoreAPI(self._module_id).list_current_user_key_summaries()
 
+    async def import_subscription(self, subscription_url: str, group_id: int | None = None) -> dict:
+        """Link to the bound owner through the same operation as the stock HTTP API."""
+        from bot.utils.extension_core import _ensure_new_mutation_allowed, _normalize_positive_int
+        from core.results import CoreError
+        from core.subscription_import import import_subscription
+
+        _ensure_new_mutation_allowed('import_subscription')
+        actor = _actor()
+        if not isinstance(subscription_url, str):
+            raise TypeError('subscription_url must be a string')
+        if group_id is not None:
+            group_id = _normalize_positive_int(group_id, 'group_id')
+        try:
+            result = await import_subscription(actor, subscription_url, group_id)
+        except CoreError as error:
+            return {'ok': False, 'state': None, 'key_ids': [], 'groups': [],
+                    'error': {'code': error.code, 'retryable': error.retryable}}
+        return {'ok': True, 'state': result['state'], 'key_ids': result['key_ids'],
+                'groups': result['groups'], 'error': None}
+
     def preview_payment_price(self, *, purpose, tariff_id=None, key_id=None, nominal_amount_minor=None):
         from bot.services.payment_pricing import preview_payment_price
         return preview_payment_price(user_id=_actor().account_id, purpose=purpose, tariff_id=tariff_id,

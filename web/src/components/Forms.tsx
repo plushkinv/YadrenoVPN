@@ -23,5 +23,6 @@ export function Empty() { return <p className="muted">{t.empty}</p>; }
 export function Resource<T>({ state, children }: {
   state: { loading: boolean; error?: unknown; data?: T; retry: () => void }; children: (data: T) => ReactNode;
 }) {
-  return state.loading ? <Loading /> : state.error ? <Failure error={state.error} retry={state.retry} /> : state.data === undefined ? <Empty /> : <>{children(state.data)}</>;
+  if (state.data !== undefined) return <>{children(state.data)}<Failure error={state.error} retry={state.retry} /></>;
+  return state.loading ? <Loading /> : state.error ? <Failure error={state.error} retry={state.retry} /> : <Empty />;
 }

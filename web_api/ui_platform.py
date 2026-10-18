@@ -49,7 +49,7 @@ def html(runtime, application, *, frame=False):
 def html_headers(*, frame=False):
     policy = ("default-src 'none'; script-src 'self'" + ('' if frame else ' https://telegram.org https://oauth.telegram.org')
               + "; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src "
-              + ("'none'; frame-src 'none'; worker-src 'none'; sandbox allow-scripts" if frame else "'self'; media-src blob:; frame-src 'self'; worker-src 'self'")
+              + ("'none'; frame-src 'none'; worker-src 'none'; sandbox allow-scripts allow-forms" if frame else "'self'; media-src blob:; frame-src 'self'; worker-src 'self'")
               + "; form-action 'none'; base-uri 'none'; frame-ancestors 'self' https://web.telegram.org")
     return {'Content-Type': 'text/html', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
             'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': policy}

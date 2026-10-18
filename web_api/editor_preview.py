@@ -204,7 +204,7 @@ class EditorPreviews:
             headers['Content-Security-Policy'] = (
                 "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
                 "font-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; "
-                "worker-src 'none'; form-action 'none'; base-uri 'none'; sandbox allow-scripts; "
+                "worker-src 'none'; form-action 'none'; base-uri 'none'; sandbox allow-scripts allow-forms; "
                 "frame-ancestors 'self' https://web.telegram.org")
         return web.Response(body=content, headers=headers)
 

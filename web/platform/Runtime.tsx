@@ -50,11 +50,11 @@ export function Runtime({ environment }: { environment: Environment }) {
   }, [api, reset]);
   useEffect(() => {
     let active = true;
-    // Revalidate the session without unmounting an already open administrator
-    // editor. Identity/authority results below still replace or revoke it.
-    const retainEditor = Boolean(configuration && bootstrap && settings && session
-      && ['mini_app', 'offline'].includes(session.source));
-    setLoading(!retainEditor); setError(undefined);
+    // Revalidate without discarding an initialized account's forms or editor.
+    // Identity/authority results below still replace or revoke the surface.
+    const retainApplication = Boolean(bootstrap && settings && session
+      && session.expires_at * 1000 > Date.now() && !logoutPending());
+    setLoading(!retainApplication); setError(undefined);
     (async () => {
       let identity: Session | null = null;
       let launch: { digest: string; account_id: number } | undefined;
@@ -87,6 +87,7 @@ export function Runtime({ environment }: { environment: Environment }) {
       if (!active) return;
       setConfiguration(configuration);
       bindSession(identity); setBootstrap(initial); setSettings(presentation);
+      if (retainApplication && identity?.account_id === session?.account_id) refresh();
       remember('offline-admin', configuration ? { account: identity!.account_id, configuration } : null);
       if (launch) remember('miniapp-launch', launch);
       const appearance = stored<{ theme: Theme } | null>(`${identity?.account_id}.appearance`, null);
@@ -110,7 +111,7 @@ export function Runtime({ environment }: { environment: Environment }) {
       setError(failure);
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [api, environment, attempt, bindSession]);
+  }, [api, environment, attempt, bindSession, refresh]);
   useEffect(() => {
     const network = () => { setOffline(!navigator.onLine); if (navigator.onLine) { setCachedAt(undefined); setAttempt(value => value + 1); } };
     const expired = () => { forgetAccounts(); api.setAccount(null); setSession(null); setConfiguration(undefined); setCachedAt(undefined); };
