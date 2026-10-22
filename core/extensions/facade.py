@@ -78,15 +78,43 @@ class SharedCoreFacade:
 
     async def create_quote(self, inputs):
         from bot.utils.extension_core import _ensure_new_mutation_allowed
-        from core.payment_offers import create_offer
+        from core.payment_offers import create_extension_offer
         _ensure_new_mutation_allowed('create_quote')
-        return await create_offer(_actor(), inputs)
+        return await create_extension_offer(_actor(), inputs)
 
     async def prepare_order(self, quote_id, idempotency_key):
         from bot.utils.extension_core import _ensure_new_mutation_allowed
         from core.payment_offers import create_order
         _ensure_new_mutation_allowed('prepare_order')
-        return await create_order(_actor(), quote_id, idempotency_key)
+        from core.extension_key_terms import require_lifecycle_lock_available
+        actor = _actor()
+        require_lifecycle_lock_available(actor)
+        return await create_order(actor, quote_id, idempotency_key)
+
+    async def start_order(self, order_id):
+        from bot.utils.extension_core import _ensure_new_mutation_allowed
+        from core.payments import start_order
+        _ensure_new_mutation_allowed('start_order')
+        from core.extension_key_terms import require_lifecycle_lock_available
+        actor = _actor()
+        require_lifecycle_lock_available(actor)
+        return await start_order(actor, order_id)
+
+    async def issue_key(self, *, tariff_id=None, custom_terms=None, server_id=None, reason, idempotency_key):
+        from bot.utils.extension_core import _ensure_new_mutation_allowed
+        from core.extension_keys import grant_key
+        _ensure_new_mutation_allowed('issue_key')
+        return await grant_key(_actor(), self._module_id, tariff_id=tariff_id, custom_terms=custom_terms,
+                               server_id=server_id, reason=reason, idempotency_key=idempotency_key)
+
+    async def renew_key(self, key_id, *, tariff_id=None, custom_terms=None, reason, idempotency_key):
+        from bot.utils.extension_core import _ensure_new_mutation_allowed
+        from core.extension_keys import grant_key
+        _ensure_new_mutation_allowed('renew_key')
+        from core.extension_key_terms import integer
+        integer(key_id, 'key_id', minimum=1, maximum=2**63 - 1)
+        return await grant_key(_actor(), self._module_id, key_id=key_id, tariff_id=tariff_id,
+                               custom_terms=custom_terms, reason=reason, idempotency_key=idempotency_key)
 
     def get_order_status(self, order_id):
         from core.payments import order_status

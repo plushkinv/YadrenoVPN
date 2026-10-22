@@ -43,7 +43,7 @@ export class PreviewApi implements Api {
       access_status: context.scenario === 'ready' ? 'ready' : 'pending', subscription_id: 1,
       base_currency: config.currency, nominal_amount_minor: tariff?.price_minor ?? 0,
       payable_amount_minor: tariff?.price_minor ?? 0, balance_deduct_minor: 0, payment_type: 'preview' };
-    else if (route === '/me') result = { account_id: -1, telegram_id: null, first_name: 'Аккаунт для просмотра', username: null,
+    else if (route === '/me') result = { account_id: -1, telegram_id: null, account_name: 'Ядрён батон 001', first_name: null, username: null,
       last_name: null, created_at: null, credentials: { present: true, phone: '+12125550123', phone_verified: false } };
     else if (route.endsWith('/devices')) result = { devices: empty ? [] : [{ id: 'preview-device', device_model: 'Устройство для просмотра', device_os: 'Android', last_seen: null }] };
     else if (route.endsWith('/host-candidates')) result = { hosts: empty ? [] : [2, 3].map(id => ({ id, custom_name: `Основная подписка ${id - 1}`, tariff_name: tariff?.name ?? null })) };

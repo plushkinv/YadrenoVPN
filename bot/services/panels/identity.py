@@ -5,37 +5,28 @@ import json
 from urllib.parse import quote, urlencode
 
 from core.results import CoreError
+from .base import PanelRejectedError
 
-_CREDENTIALS = ('id', 'password', 'auth', 'secret', 'privateKey', 'publicKey', 'preSharedKey')
-_TERMS = ('subId', 'expiryTime', 'totalGB', 'limitIp', 'limitHwid', 'enable', 'reset',
+_IDENTITY = ('id', 'uuid', 'password', 'auth', 'secret', 'privateKey', 'publicKey', 'preSharedKey', 'subId')
+_TERMS = ('expiryTime', 'totalGB', 'limitIp', 'limitHwid', 'enable', 'reset',
           'resetDay', 'resetMax', 'trafficReset', 'trafficResetDay')
 
 
-async def all_identity_inbounds(client) -> list[dict]:
-    """Read every physical placement, including ignored, disabled and other groups."""
-    response = await client._request('GET', '/panel/api/inbounds/list')
-    if not isinstance(response.get('obj'), list):
-        raise CoreError('panel_identity_invalid')
-    result = []
-    for inbound in response['obj']:
-        settings = inbound.get('settings')
-        if isinstance(settings, str):
-            settings = json.loads(settings)
-        if not isinstance(settings, dict) or not isinstance(settings.get('clients', []), list):
-            raise CoreError('panel_identity_invalid')
-        result.append({**inbound, 'settings': settings})
-    return result
-
-
-def _placements(inbounds, names):
-    names = {name.casefold() for name in names}
-    rows = []
-    for inbound in inbounds:
-        for entry in inbound['settings'].get('clients', []):
-            if str(entry.get('email') or '').casefold() in names:
-                rows.append({'inbound_id': int(inbound['id']), 'protocol': inbound['protocol'],
-                             'client': dict(entry)})
-    return rows
+def _snapshot_inbound_ids(snapshot):
+    """Read current snapshots and already persisted version-1 rename journals."""
+    try:
+        if snapshot.get('version') == 1:
+            values = [item['inbound_id'] for item in snapshot['placements']]
+        elif snapshot.get('version') == 2:
+            values = snapshot['inbound_ids']
+        else:
+            raise ValueError()
+        ids = {int(value) for value in values}
+        if not ids or len(ids) != len(values) or min(ids) <= 0:
+            raise ValueError()
+        return ids
+    except (KeyError, TypeError, ValueError):
+        raise CoreError('panel_identity_invalid') from None
 
 
 def _record_payload(record, email):
@@ -52,77 +43,103 @@ async def inspect_client_identity(client, email: str) -> dict:
     if not record:
         raise CoreError('panel_client_missing')
     canonical, attached = client._split_record(record)
-    placements = _placements(await all_identity_inbounds(client), {email})
-    if attached != {item['inbound_id'] for item in placements} or not placements:
+    if canonical.get('email') != email or not attached:
         raise CoreError('panel_identity_ambiguous')
-    return {'version': 1, 'record': canonical, 'placements': placements,
+    return {'version': 2, 'record': canonical, 'inbound_ids': sorted(attached),
             'sub_id': str(canonical.get('subId') or '')}
 
 
-def _verify_placements(expected, current, names):
-    before = {(item['inbound_id'], item['protocol']): item['client'] for item in expected['placements']}
-    after = {(item['inbound_id'], item['protocol']): item['client'] for item in current}
-    if len(after) != len(current) or before.keys() != after.keys():
+def _verify_identity(original, current):
+    if any(original.get(field) != current.get(field) for field in _IDENTITY):
         raise CoreError('panel_identity_changed')
-    for key, original in before.items():
-        observed = after[key]
-        if observed.get('email') not in names:
-            raise CoreError('panel_identity_changed')
-        for field in _CREDENTIALS + _TERMS:
-            if field == 'expiryTime' and 'expiry_time_ms' in expected:
-                if observed.get(field) in (original.get(field), expected['expiry_time_ms']):
-                    continue
-            if original.get(field) != observed.get(field):
-                raise CoreError('panel_identity_changed')
 
 
-async def rename_client_identity(client, old_email: str, new_email: str, expected_identity: dict) -> dict:
-    """Reconcile both names without replacing credentials or restoring stale traffic."""
-    if old_email == new_email or expected_identity.get('version') != 1:
-        raise CoreError('panel_identity_invalid')
+async def _current_identity(client, old_email, new_email, original):
     records = []
     for name in (old_email, new_email):
         record = await client._get_client_record(name)
         if record:
-            records.append((name, client._split_record(record)[0]))
+            canonical, attached = client._split_record(record)
+            if canonical.get('email') != name:
+                raise CoreError('panel_identity_changed')
+            records.append((name, canonical, attached))
     if len(records) != 1:
         raise CoreError('panel_identity_ambiguous')
-    canonical_name, record = records[0]
+    name, record, attached = records[0]
+    _verify_identity(original, record)
+    return name, record, attached
+
+
+async def _partial_rename_ids(client, old_email, new_email, expected_ids):
+    """Locate names only after Clients API rejects continuation of a rename."""
+    response = await client._request('GET', '/panel/api/inbounds/list')
+    if not isinstance(response.get('obj'), list):
+        raise CoreError('panel_identity_invalid')
+    ids = {old_email: set(), new_email: set()}
+    seen = set()
+    for inbound in response['obj']:
+        settings = inbound.get('settings')
+        if isinstance(settings, str):
+            settings = json.loads(settings)
+        if not isinstance(settings, dict) or not isinstance(settings.get('clients', []), list):
+            raise CoreError('panel_identity_invalid')
+        for entry in settings.get('clients', []):
+            name = entry.get('email')
+            if name not in ids:
+                continue
+            inbound_id = int(inbound['id'])
+            if inbound_id in seen:
+                raise CoreError('panel_identity_ambiguous')
+            seen.add(inbound_id)
+            ids[name].add(inbound_id)
+    if seen != expected_ids:
+        raise CoreError('panel_identity_changed')
+    return ids[old_email], ids[new_email]
+
+
+async def rename_client_identity(client, old_email: str, new_email: str, expected_identity: dict) -> dict:
+    """Confirm the canonical change; recover partial upstream writes by name only."""
+    if old_email == new_email:
+        raise CoreError('panel_identity_invalid')
+    inbound_ids = _snapshot_inbound_ids(expected_identity)
     original = expected_identity['record']
-    for field in ('id', 'uuid', 'password', 'auth', 'subId'):
-        if original.get(field) != record.get(field):
-            raise CoreError('panel_identity_changed')
-    placements = _placements(await all_identity_inbounds(client), {old_email, new_email})
-    _verify_placements(expected_identity, placements, {old_email, new_email})
-    old_ids = [item['inbound_id'] for item in placements if item['client']['email'] == old_email]
-    new_ids = [item['inbound_id'] for item in placements if item['client']['email'] == new_email]
+    canonical_name, record, attached = await _current_identity(client, old_email, new_email, original)
+    if canonical_name == old_email and attached != inbound_ids:
+        raise CoreError('panel_identity_changed')
 
-    async def update(source, target, ids):
+    async def update(source, target, current, ids):
         endpoint = '/panel/api/clients/update/' + quote(source, safe='')
-        if ids:
-            endpoint += '?' + urlencode({'inboundIds': ','.join(map(str, ids))})
-        payload = _record_payload(record, target)
+        endpoint += '?' + urlencode({'inboundIds': ','.join(map(str, sorted(ids)))})
+        desired = dict(current, email=target)
         if 'expiry_time_ms' in expected_identity:
-            payload['expiryTime'] = expected_identity['expiry_time_ms']
-        await client._request('POST', endpoint, data=payload, retry=False)
+            desired['expiryTime'] = expected_identity['expiry_time_ms']
+        await client._request('POST', endpoint, data=_record_payload(desired, target), retry=False)
+        return desired
 
-    if canonical_name == new_email and old_ids:
-        # Newer panels select by email. Restore only the changed placements,
-        # then retry forward. The durable snapshot owns both names throughout.
-        await update(new_email, old_email, new_ids or old_ids)
-        canonical_name = old_email
-        old_ids += new_ids
-    if canonical_name == old_email:
-        await update(old_email, new_email, old_ids)
-    elif 'expiry_time_ms' in expected_identity and (
-            record.get('expiryTime') != expected_identity['expiry_time_ms'] or
-            any(item['client'].get('expiryTime') != expected_identity['expiry_time_ms'] for item in placements)):
-        await update(new_email, new_email, new_ids)
+    try:
+        desired = await update(canonical_name, new_email, record, inbound_ids)
+    except PanelRejectedError:
+        if canonical_name != new_email:
+            raise
+        # A lost response may conceal a partially applied rename. Most repeats
+        # finish through Clients API alone. Older email-selected implementations
+        # need the changed subset restored before the full forward rename.
+        canonical_name, record, _ = await _current_identity(client, old_email, new_email, original)
+        if canonical_name != new_email:
+            raise CoreError('panel_identity_changed')
+        old_ids, new_ids = await _partial_rename_ids(client, old_email, new_email, inbound_ids)
+        if not old_ids:
+            raise
+        await update(new_email, old_email, record, new_ids or old_ids)
+        canonical_name, record, _ = await _current_identity(client, old_email, new_email, original)
+        if canonical_name != old_email:
+            raise CoreError('panel_identity_changed')
+        desired = await update(old_email, new_email, record, inbound_ids)
+
     verified = await inspect_client_identity(client, new_email)
-    _verify_placements(expected_identity, verified['placements'], {new_email})
-    if 'expiry_time_ms' in expected_identity and (
-            verified['record'].get('expiryTime') != expected_identity['expiry_time_ms'] or
-            any(item['client'].get('expiryTime') != expected_identity['expiry_time_ms'] for item in verified['placements'])):
+    _verify_identity(original, verified['record'])
+    if (set(verified['inbound_ids']) != inbound_ids or
+            any(desired.get(field) != verified['record'].get(field) for field in _TERMS)):
         raise CoreError('panel_identity_changed')
     if await client._get_client_record(old_email):
         raise CoreError('panel_identity_ambiguous')

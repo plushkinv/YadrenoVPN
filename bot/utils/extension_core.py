@@ -12,6 +12,33 @@ class ExtensionCoreAPI(ExtensionFinanceAPI):
     def __init__(self, extension_id: str):
         self.extension_id = extension_id
 
+    async def create_quote(self, inputs):
+        from core.extensions.facade import SharedCoreFacade
+        return await SharedCoreFacade(self.extension_id).create_quote(inputs)
+
+    async def prepare_order(self, quote_id, idempotency_key):
+        from core.extensions.facade import SharedCoreFacade
+        return await SharedCoreFacade(self.extension_id).prepare_order(quote_id, idempotency_key)
+
+    async def start_order(self, order_id):
+        from core.extensions.facade import SharedCoreFacade
+        return await SharedCoreFacade(self.extension_id).start_order(order_id)
+
+    def get_order_status(self, order_id):
+        from core.extensions.facade import SharedCoreFacade
+        return SharedCoreFacade(self.extension_id).get_order_status(order_id)
+
+    async def issue_key(self, *, tariff_id=None, custom_terms=None, server_id=None, reason, idempotency_key):
+        from core.extensions.facade import SharedCoreFacade
+        return await SharedCoreFacade(self.extension_id).issue_key(
+            tariff_id=tariff_id, custom_terms=custom_terms, server_id=server_id,
+            reason=reason, idempotency_key=idempotency_key)
+
+    async def renew_key(self, key_id, *, tariff_id=None, custom_terms=None, reason, idempotency_key):
+        from core.extensions.facade import SharedCoreFacade
+        return await SharedCoreFacade(self.extension_id).renew_key(
+            key_id, tariff_id=tariff_id, custom_terms=custom_terms, reason=reason, idempotency_key=idempotency_key)
+
     def get_current_user(self) -> dict[str, Any] | None:
         """Returns the safe user snapshot bound to the current extension call."""
         from bot.utils.custom_extensions import (

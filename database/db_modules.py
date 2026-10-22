@@ -2,6 +2,7 @@
 import json
 import secrets
 import time
+from contextlib import nullcontext
 
 from core.results import CoreError
 from .connection import get_db
@@ -61,9 +62,10 @@ def get_module_operation(user_id, kind, idempotency_key):
                                        (user_id, kind, idempotency_key)).fetchone())
 
 
-def begin_module_operation(user_id, kind, idempotency_key, fingerprint, request):
-    with get_db() as conn:
-        conn.execute('BEGIN IMMEDIATE')
+def begin_module_operation(user_id, kind, idempotency_key, fingerprint, request, *, _conn=None):
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
+        if _conn is None:
+            conn.execute('BEGIN IMMEDIATE')
         previous = conn.execute('SELECT * FROM account_operations WHERE user_id=? AND kind=? AND idempotency_key=?',
                                 (user_id, kind, idempotency_key)).fetchone()
         if previous:

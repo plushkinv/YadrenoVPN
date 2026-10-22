@@ -5,6 +5,7 @@ from typing import Any
 
 from core.web_ui import PRESENTATION_CONSTRAINTS, presentation_setting_contract, validate_setting
 from core.results import CoreError
+from database.account_names import parse_account_name_pool
 from database.requests import (
     EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
     REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX,
@@ -22,7 +23,7 @@ _INTEGER_LIMITS = {
     'expired_key_panel_cleanup_delay_days': EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
 }
 CUSTOM_SETTING_KEYS = (*_TEXT_KEYS, *_INTEGER_LIMITS,
-                       *('web_ui_' + name for name in PRESENTATION_CONSTRAINTS))
+                       *('web_ui_' + name for name in PRESENTATION_CONSTRAINTS), 'account_name_pool')
 MAX_SETTING_LENGTH = 50_000
 MAX_KEY_PREFIX_LENGTH = 30
 
@@ -39,6 +40,9 @@ def setting_contract(key: str) -> dict[str, Any]:
         return {'value_type': 'integer_string', 'normalization': 'decimal', 'constraints': constraints}
     if key == 'key_name_prefix':
         constraints.update(no_line_breaks=True, trimmed_max_length=MAX_KEY_PREFIX_LENGTH)
+    if key == 'account_name_pool':
+        constraints.update(json_type='array', min_items=3, item_type='string',
+                           item_non_blank=True, item_normalization='strip', unique_items=True)
     return {'value_type': 'string', 'normalization': 'strip' if key == 'key_name_prefix' else 'none',
             'constraints': constraints}
 
@@ -58,6 +62,8 @@ def validate_setting_value(key: str, value: Any) -> str:
         raise ValueError('setting value must not be empty')
     if len(value) > MAX_SETTING_LENGTH:
         raise ValueError('setting value is too large')
+    if key == 'account_name_pool':
+        parse_account_name_pool(value)
     if key == 'key_name_prefix':
         if '\n' in value or '\r' in value:
             raise ValueError('key_name_prefix must be a single line')

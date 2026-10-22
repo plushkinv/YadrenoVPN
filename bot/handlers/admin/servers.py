@@ -37,7 +37,7 @@ from bot.utils.admin_dialog import (
 )
 from bot.services.admin_monitoring import (
     build_servers_monitoring_text,
-    collect_admin_monitoring_snapshot,
+    AdminMonitoringRead,
 )
 from bot.services.vpn_api import (
     get_client_from_server_data,
@@ -68,6 +68,7 @@ from bot.keyboards.admin import (
 logger = logging.getLogger(__name__)
 
 from bot.utils.text import escape_html, get_message_text_for_storage, safe_edit_or_send
+from bot.utils.admin_monitoring_view import monitoring_turn, show_monitoring_screen
 
 router = Router()
 
@@ -79,21 +80,34 @@ router = Router()
 
 
 
-async def get_servers_list_text() -> str:
-    """Generates detailed monitoring of panels and nodes."""
-    snapshot = await collect_admin_monitoring_snapshot()
-    return build_servers_monitoring_text(snapshot)
+async def render_servers_list(message: Message, state: FSMContext, *, turn=None):
+    turn = turn or await monitoring_turn(state)
+    await show_monitoring_screen(
+        message, turn, AdminMonitoringRead(),
+        lambda snapshot: (build_servers_monitoring_text(snapshot), servers_list_kb(snapshot['records'])),
+        deliver=safe_edit_or_send,
+    )
 
 
 async def render_server_view(message: Message, server_id: int, state: FSMContext):
     """Renders the server browsing screen."""
-    server = get_server_by_id(server_id)
-
-    if not server:
+    turn = await monitoring_turn(state)
+    if not turn.current() or not get_server_by_id(server_id):
         return
-
     await state.set_state(AdminStates.server_view)
     await state.update_data(server_id=server_id)
+    await show_monitoring_screen(
+        message, turn, AdminMonitoringRead(server_id), build_server_view,
+        deliver=safe_edit_or_send,
+    )
+
+
+def build_server_view(snapshot):
+    """Format local server settings and the current opening's monitoring only."""
+    if not snapshot['records']:
+        return None
+    server = snapshot['records'][0]
+    server_id = server['id']
 
     status_emoji = "🟢" if server['is_active'] else "🔴"
     status_text = "Активен" if server['is_active'] else "Деактивирован"
@@ -130,10 +144,13 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
     ])
 
     if server['is_active']:
-        try:
-            client = get_client_from_server_data(server)
-            stats = await client.get_stats()
-
+        entry = snapshot['servers'][0]
+        if snapshot['loading']:
+            lines.append("   ⏳ Загружается")
+        elif entry['error'] == 'ошибка подключения':
+            lines.append("   ⚠️ Ошибка подключения")
+        else:
+            stats = entry['stats']
             if stats.get('online'):
                 traffic = format_traffic(stats.get('total_traffic_bytes', 0))
                 lines.append(f"   🔑 Онлайн: {stats.get('online_clients', 0)}")
@@ -143,9 +160,6 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
                     lines.append(f"   💻 CPU: {stats['cpu_percent']}%")
             else:
                 lines.append(f"   ⚠️ Сервер недоступен")
-        except Exception as e:
-            logger.warning(f"Ошибка статистики {server['name']}: {e}")
-            lines.append(f"   ⚠️ Ошибка подключения")
 
     # Groups—show if there is more than one group
     groups_count = get_groups_count()
@@ -159,9 +173,9 @@ async def render_server_view(message: Message, server_id: int, state: FSMContext
         groups_str = ", ".join(group_names) if group_names else "Основная"
         lines.append(f"\n📂 Тарифные группы: <code>{groups_str}</code>")
 
-    await safe_edit_or_send(message, 
+    return (
         "\n".join(lines),
-        reply_markup=server_view_kb(server_id, server['is_active'], groups_count > 1)
+        server_view_kb(server_id, server['is_active'], groups_count > 1),
     )
 
 
@@ -176,17 +190,14 @@ async def show_servers_list(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
+    turn = await monitoring_turn(state)
+    await callback.answer()
+    if not turn.current():
+        return
     await state.set_state(AdminStates.servers_list)
     await state.update_data(server_data={})  # Clearing temporary data
     
-    text = await get_servers_list_text()
-    servers = get_all_servers()
-    
-    await safe_edit_or_send(callback.message, 
-        text,
-        reply_markup=servers_list_kb(servers)
-    )
-    await callback.answer()
+    await render_servers_list(callback.message, state, turn=turn)
 
 
 @router.callback_query(F.data == "admin_servers_refresh")
@@ -198,17 +209,7 @@ async def refresh_servers_list(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer("🔄 Обновляю статистику...")
     
-    text = await get_servers_list_text()
-    servers = get_all_servers()
-    
-    try:
-        await safe_edit_or_send(callback.message, 
-            text,
-            reply_markup=servers_list_kb(servers)
-        )
-    except Exception:
-        # Ignore the error "message is not modified"
-        pass
+    await render_servers_list(callback.message, state)
 
 
 # ============================================================================
@@ -229,12 +230,9 @@ async def show_server_view(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Сервер не найден", show_alert=True)
         return
     
-    await state.set_state(AdminStates.server_view)
-    await state.update_data(server_id=server_id)
-    
+    await callback.answer()
     # Using helper for rendering
     await render_server_view(callback.message, server_id, state)
-    await callback.answer()
 
 
 # ============================================================================
@@ -1121,6 +1119,7 @@ async def edit_server_done(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
     
+    await callback.answer()
     data = await state.get_data()
     server_id = data.get('server_id')
     

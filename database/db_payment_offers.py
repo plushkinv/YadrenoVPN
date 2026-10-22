@@ -118,7 +118,19 @@ def begin_offered_order(user_id: int, offer_id: str, idempotency_key: str, *, de
         tariff_id, key_id = payload.get('tariff_id'), payload.get('key_id')
         if tariff_id:
             current = _get_tariff_by_id_with_conn(conn, tariff_id)
-            if (not current or dict(current) != quote['tariff'] or not _tariff_payment_target_allowed(
+            snapshot = {k: v for k, v in quote['tariff'].items() if k != 'provision_server_id'}
+            custom = quote.get('extension_offer') and snapshot.get('extension_custom_terms')
+            if custom:
+                if not current or current['system_type'] != 'admin_custom' or current['group_id'] != snapshot['group_id']:
+                    raise CoreError('quote_changed')
+                if key_id:
+                    key = conn.execute('SELECT k.user_id,COALESCE(json_extract(e.tariff_json,'
+                                       "'$.group_id'),t.group_id) AS group_id FROM vpn_keys k "
+                                       'JOIN tariffs t ON t.id=k.tariff_id LEFT JOIN key_entitlements e ON e.key_id=k.id '
+                                       'WHERE k.id=?', (key_id,)).fetchone()
+                    if not key or key['user_id'] != user_id or key['group_id'] != snapshot['group_id']:
+                        raise CoreError('tariff_unavailable')
+            elif (not current or dict(current) != snapshot or not _tariff_payment_target_allowed(
                     conn, user_id=user_id, tariff_id=tariff_id, vpn_key_id=key_id)):
                 raise CoreError('quote_changed')
         purpose_data = {key: payload[key] for key in ('tariff_id', 'key_id') if payload.get(key) is not None}
@@ -128,6 +140,7 @@ def begin_offered_order(user_id: int, offer_id: str, idempotency_key: str, *, de
             base_currency=quote['pricing']['base_currency'], description=description,
             success_target=success_target, cancel_target=cancel_target, tariff_id=tariff_id,
             vpn_key_id=key_id, period_days=quote['tariff'].get('duration_days'),
+            _tariff_snapshot=quote['tariff'],
         )
         operation_id = secrets.token_urlsafe(24)
         conn.execute('INSERT INTO account_operations(id,user_id,kind,idempotency_key,fingerprint,request_json,order_id,created_at) '

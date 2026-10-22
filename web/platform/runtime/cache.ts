@@ -24,6 +24,7 @@ export class AccountApi implements Api {
         snapshot(owner, 'subscriptions', result);
         window.dispatchEvent(new Event('subscriptions-synchronized'));
       }
+      if (owner != null) window.dispatchEvent(new Event('account-request-succeeded'));
       return result;
     } catch (error) {
       if (owner != null && generation === this.generation && method === 'GET' && error instanceof ApiError && (error.code === 'network_unavailable' || error.status >= 500)) {

@@ -25,6 +25,7 @@ def create_payment_intent_record(
     period_days: int | None = None,
     origin_context: Mapping[str, Any] | None = None,
     origin_context_token: str | None = None,
+    _tariff_snapshot: dict | None = None,
 ) -> tuple[int, str]:
     """Create one intent and its terms in the same SQLite transaction."""
     with get_db() as conn:
@@ -43,6 +44,7 @@ def create_payment_intent_record(
             period_days=period_days,
             origin_context=origin_context,
             origin_context_token=origin_context_token,
+            _tariff_snapshot=_tariff_snapshot,
         )
 
 
@@ -62,6 +64,7 @@ def _create_payment_intent_record_with_conn(
     period_days: int | None = None,
     origin_context: Mapping[str, Any] | None = None,
     origin_context_token: str | None = None,
+    _tariff_snapshot: dict | None = None,
 ) -> tuple[int, str]:
     """Creates an unquoted core payment intent and returns its id/order_id."""
     payload = _json_object(purpose_data)
@@ -153,7 +156,7 @@ def _create_payment_intent_record_with_conn(
         (order_id, payment_id),
     )
     from .db_order_terms import _save_order_terms_with_conn
-    _save_order_terms_with_conn(conn, order_id, tariff_id, currency)
+    _save_order_terms_with_conn(conn, order_id, tariff_id, currency, tariff_snapshot=_tariff_snapshot)
     if origin_context_token is not None:
         from .db_action_contexts import attach_semantic_action_context_order_with_conn
 
@@ -820,10 +823,13 @@ def fulfill_key_purchase_once(
             (int(tariff_id),),
         ).fetchone()
         owner = conn.execute("SELECT id FROM users WHERE id = ?", (int(user_id),)).fetchone()
+        from .db_key_plans import order_custom_tariff_with_conn, set_custom_key_overrides_with_conn
+        custom_tariff = order_custom_tariff_with_conn(conn, order_id, tariff_id)
         if (
             not tariff
             or not owner
-            or tariff['system_type'] is not None
+            or (tariff['system_type'] is not None and not (
+                tariff['system_type'] == 'admin_custom' and custom_tariff))
         ):
             return {'ok': False, 'reason': 'owner_or_tariff_not_found'}
 
@@ -837,6 +843,7 @@ def fulfill_key_purchase_once(
             int(traffic_limit_bytes),
         )
         from .db_order_terms import _save_entitlement_with_conn
+        set_custom_key_overrides_with_conn(conn, key_id, custom_tariff or {})
         _save_entitlement_with_conn(conn, order_id, key_id)
         payload = {'tariff_id': int(tariff_id), 'key_id': key_id}
         conn.execute(
@@ -900,56 +907,17 @@ def fulfill_key_renewal_once(
         ).fetchone()
         terms_row = conn.execute('SELECT tariff_json FROM payment_order_terms WHERE order_id=?', (order_id,)).fetchone()
         order = conn.execute('SELECT user_id,tariff_id,vpn_key_id FROM payments WHERE order_id=?', (order_id,)).fetchone()
-        if not key or not tariff or tariff['system_type'] is not None:
+        from .db_key_plans import order_custom_tariff_with_conn, apply_key_plan_with_conn
+        custom_tariff = order_custom_tariff_with_conn(conn, order_id, tariff_id)
+        if not key or not tariff or (tariff['system_type'] is not None and not (
+                tariff['system_type'] == 'admin_custom' and custom_tariff)):
             return {'ok': False, 'reason': 'owned_key_or_tariff_not_found'}
         if terms_row:
             if not order or (order['user_id'], order['tariff_id'], order['vpn_key_id']) != (user_id, tariff_id, key_id):
                 return {'ok': False, 'reason': 'order_target_changed'}
         elif key['tariff_group_id'] != tariff['group_id']:
             return {'ok': False, 'reason': 'owned_key_or_tariff_not_found'}
-        key = dict(key)
-        modifier = f"{int(days):+} days"
-        current_limit = int(key['traffic_limit'] or 0)
-        current_used = int(key['traffic_used'] or 0)
-        purchased_limit = max(0, int(traffic_limit_bytes or 0))
-        if purchased_limit <= 0:
-            new_limit = 0
-        elif current_limit <= 0:
-            new_limit = current_used + purchased_limit
-        else:
-            new_limit = current_limit + purchased_limit
-
-        cursor = conn.execute(
-            """
-            UPDATE vpn_keys
-            SET expires_at = CASE
-                    WHEN ? = 0 THEN NULL
-                    ELSE MAX(
-                        datetime('now'),
-                        datetime(
-                            CASE WHEN expires_at > datetime('now')
-                                THEN expires_at ELSE datetime('now') END,
-                            ?
-                        )
-                    )
-                END,
-                tariff_id = ?,
-                traffic_limit = ?,
-                traffic_limit_override = NULL,
-                max_ips_override = NULL,
-                traffic_notified_pct = 100
-            WHERE id = ? AND user_id = ?
-            """,
-            (
-                int(days),
-                modifier,
-                int(tariff_id),
-                new_limit,
-                int(key_id),
-                int(user_id),
-            ),
-        )
-        if cursor.rowcount <= 0:
+        if not apply_key_plan_with_conn(conn, dict(key), custom_tariff or dict(tariff), days, traffic_limit_bytes):
             return {'ok': False, 'reason': 'key_update_failed'}
         from .db_order_terms import _save_entitlement_with_conn
         _save_entitlement_with_conn(conn, order_id, key_id)

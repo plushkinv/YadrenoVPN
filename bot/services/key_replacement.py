@@ -94,7 +94,7 @@ async def replace_key(account, operation, key):
         if not await old_client.delete_client(progress['old']['email']):
             raise CoreError('panel_cleanup_pending', retryable=True)
     from bot.services.key_lifecycle import emit_key_lifecycle_event_safe
-    if progress['phase'] != 'completed':
+    if progress['phase'] != 'completed' and operation['kind'] == 'key.replace':
         await emit_key_lifecycle_event_safe('key_replaced', {
             'key_id': key_id, 'user_id': account.account_id, 'telegram_id': account.telegram_id,
             'old_key': progress['old_key'], 'new_key': current, 'old_server_id': progress['old']['server_id'],

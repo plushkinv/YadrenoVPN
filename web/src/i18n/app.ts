@@ -19,6 +19,7 @@ export const appText = {
   checkVerification: 'Проверить подтверждение',
   resetDone: 'Пароль обновлён. Войдите с новым паролем.', saved: 'Сохранено', account: 'Аккаунт',
   telegramLogin: 'Войти через Telegram',
+  accountPhone: 'Телефон', phoneMissing: 'Не указан', telegram: 'Telegram', telegramConnected: 'Привязан', telegramUnlinked: 'Не привязан',
   mergeWarning: 'Аккаунты будут объединены. Телефон и пароль переносимого аккаунта заменят прежние данные входа в Telegram-аккаунт.',
   telegramLink: 'Привязать Telegram', telegramLinked: 'Telegram привязан', openTelegram: 'Открыть Telegram',
   linkCaption: 'Подтвердите привязку в боте, затем вернитесь сюда и завершите её.', linkCheck: 'Проверить подтверждение',
@@ -41,6 +42,7 @@ export const appText = {
   payBalance: 'Оплатить с баланса', renewFree: 'Продлить бесплатно', purchaseFree: 'Получить бесплатно',
   calculating: 'Рассчитываем…', preparingPayment: 'Готовим счёт…',
   cancelOrder: 'Отменить заказ', confirmCancel: 'Отменить неоплаченный заказ?',
+  paymentCanceled: 'Оплата отменена', paymentCanceledCaption: 'Заказ отменён.', chooseTariff: 'Выбрать тариф',
   pendingPayment: 'Ожидаем оплату', paid: 'Оплата подтверждена', issuing: 'Оплачено, доступ готовится',
   paymentCompleting: 'Провайдер подтвердил оплату. Завершаем обработку.', operationFailed: 'Операцию не удалось завершить',
   ready: 'Доступ готов', refused: 'Оплата не завершена', charged: 'К оплате', fromBalance: 'С баланса',
@@ -71,7 +73,7 @@ const errors: Record<string, string> = {
   telegram_authentication_failed: 'Не удалось подтвердить Telegram-вход. Начните вход заново.',
   telegram_login_unavailable: 'Вход через Telegram временно недоступен. Можно войти по телефону и паролю.',
   telegram_login_popup_blocked: 'Разрешите всплывающее окно для входа через Telegram и повторите попытку.',
-  phone_invalid: 'Введите телефон с + и кодом страны.', password_invalid: 'Пароль должен содержать от 8 до 128 символов.',
+  phone_invalid: 'Введите телефон с + и кодом страны.', password_invalid: 'Пароль должен содержать от 6 до 128 символов.',
   phone_in_use: 'Этот телефон уже используется другим аккаунтом.',
   verification_unavailable: 'Подтверждение телефона сейчас недоступно.',
   verification_code_invalid: 'Код неверен или проверка уже завершена. Проверьте код либо запросите подтверждение заново.',
@@ -97,7 +99,8 @@ export function errorText(error: unknown): string {
   return errors[code] ?? appText.requestFailed;
 }
 
-export function paymentMethodName(id: string): string {
+export function paymentMethodName(id: string, label?: string): string {
+  if (label?.trim()) return label.trim();
   const names: Record<string, string> = { yookassa_qr: 'ЮКасса', crypto: 'USDT', cryptobot: 'Crypto Pay', stars: 'Telegram Stars',
     cards: 'Telegram Payments', wata: 'WATA', platega: 'Platega', cardlink: 'Cardlink', demo: 'Демонстрация', balance: 'Баланс', preview: 'Просмотр' };
   return names[id] ?? id;

@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 _IDEMPOTENCY_KEY_RE = re.compile(r'^[a-zA-Z0-9_.:-]{1,128}$')
 _REQUEST_FINGERPRINT_RE = re.compile(r'^[a-f0-9]{64}$')
 _ALLOWED_OPERATIONS = {
+    'issue_key',
+    'renew_key',
     'grant_days_to_first_active_key',
     'add_balance_bonus',
     'debit_balance',

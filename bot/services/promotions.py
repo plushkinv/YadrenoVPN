@@ -311,10 +311,11 @@ def prepare_order_pricing(
         from database.requests import (
             find_order_by_order_id,
             is_tariff_payment_target_allowed,
+            is_custom_payment_order_target,
         )
 
         order = find_order_by_order_id(order_id) or {}
-        if not is_tariff_payment_target_allowed(
+        if not is_custom_payment_order_target(order_id, int(user_id), tariff_id) and not is_tariff_payment_target_allowed(
             user_id=int(user_id),
             tariff_id=tariff_id,
             vpn_key_id=order.get('vpn_key_id'),

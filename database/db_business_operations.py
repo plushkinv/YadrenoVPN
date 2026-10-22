@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from contextlib import nullcontext
 from typing import Any
 
 from .connection import get_db
@@ -337,9 +338,10 @@ def record_key_operation(
     expires_before: str | None = None,
     expires_after: str | None = None,
     metadata: dict[str, Any] | None = None,
+    _conn=None,
 ) -> int:
     """Writes a visible business history of the key transaction."""
-    with get_db() as conn:
+    with (nullcontext(_conn) if _conn is not None else get_db()) as conn:
         user_id = resolve_account_id(user_id, _conn=conn)
         create_business_operation_tables(conn)
         cursor = conn.execute(

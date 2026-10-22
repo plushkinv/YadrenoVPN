@@ -16,10 +16,11 @@ export interface Bootstrap { api_version: number; auth: AuthSettings; features: 
 export interface Session { account_id: number; telegram_id: number | null; source: string; expires_at: number; }
 export interface Profile {
   account_id: number; telegram_id: number | null; username: string | null;
+  account_name?: string | null;
   first_name: string | null; last_name: string | null; created_at: string | null;
   credentials: { present: boolean; phone: string | null; phone_verified: boolean };
 }
-export interface Method { id: string; presentation: string; }
+export interface Method { id: string; presentation: string; label?: string; }
 export interface Tariff {
   id: number; name: string; group_id: number; duration_days: number; traffic_limit_gb: number;
   max_ips: number; base_currency: string; nominal_amount_minor: number; payable_amount_minor: number;
@@ -51,7 +52,7 @@ export interface Quote {
 }
 export interface Order {
   order_id: string; operation_id?: string | null; purpose: string; status: string; fulfillment_status: string;
-  provider_confirmed: boolean; provider_status?: string | null; payment_type?: string | null;
+  provider_confirmed: boolean; can_check?: boolean; provider_status?: string | null; payment_type?: string | null;
   base_currency: string; nominal_amount_minor: number; payable_amount_minor: number; balance_deduct_minor: number;
   charge_amount?: string | null; charge_currency?: string | null; subscription_id?: number | null;
   access_status: string | null; payment_url?: string | null; presentation?: string;

@@ -9,6 +9,7 @@ async def catalog(account, *, key_id=None):
     from bot.utils.groups import get_tariffs_for_key_renewal
     from bot.utils.action_policy import run_account_action_policies
     from core.payment_offers import available_methods, offer_intent
+    from core.catalog_labels import label_payment_methods, payment_method_buttons
     require_account(account)
     key = owned_key(account, key_id) if key_id is not None else None
     purpose = 'key_renewal' if key is not None else 'key_purchase'
@@ -18,6 +19,7 @@ async def catalog(account, *, key_id=None):
     group_has_servers = {group_id: bool(db.get_active_servers_by_group(group_id)) for group_id in groups}
     result = []
     with bind_account_context(account):
+        page_key, buttons = payment_method_buttons(purpose)
         for tariff in tariffs:
             if tariff.get('system_type') is not None or not tariff.get('is_active'):
                 continue
@@ -28,6 +30,7 @@ async def catalog(account, *, key_id=None):
             price = preview_tariff_price(user_id=account.account_id, tariff=tariff, purpose=purpose, key_id=key_id)
             item = {name: tariff.get(name) for name in ('id', 'name', 'group_id', 'duration_days', 'traffic_limit_gb', 'max_ips')}
             methods = available_methods(account, offer_intent(account, {'purpose': purpose, 'tariff_id': tariff['id'], 'key_id': key_id}, tariff))
+            methods = label_payment_methods(methods, page_key, buttons, account=account, tariff=tariff, price=price, key=key)
             item.update(base_currency=price['base_currency'], nominal_amount_minor=price['nominal_amount_minor'],
                         payable_amount_minor=price['payable_amount_minor'], payment_methods=methods,
                         available=bool(price['ok'] and decision['decision'] == 'continue' and methods),

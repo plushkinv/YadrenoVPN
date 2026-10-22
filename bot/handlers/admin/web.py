@@ -31,28 +31,36 @@ async def _screen(callback, state):
     publication = result['ui']
     ui = {'not_published': 'ещё не подготовлен', 'unavailable': 'не удалось проверить'}.get(publication['state'])
     if ui is None:
-        ui = escape_html(publication['build_id'][:12]) + ' · оформление ' + escape_html(publication['customization_version'])
+        ui = '<code>' + escape_html(publication['build_id'][:12]) + '</code> · оформление <code>' + escape_html(publication['customization_version']) + '</code>'
     text = ('🌐 <b>Веб и Mini App</b>\n\n'
-            f'Ссылка: {origin}\n'
-            f"Веб: {'включён' if result['enabled'] else 'выключен'}\n"
-            f'Интерфейс: {ui}\n'
-            f'Подтверждение телефона: {verification_status}\n'
-            f'Способ: {service}\n\n'
-            f"Вход через Telegram: {'включён' if result['telegram_login']['enabled'] else 'выключен'}\n"
-            'Для Telegram-входа откройте Mini App @BotFather → ваш бот → Login Widget '
-            'и добавьте адрес сайта в Allowed URLs.\n\n'
-            'Подключение домена и HTTPS выполняется через установщик.\n'
-            'Без настроенного подтверждения регистрация доступна без проверки номера, '
-            'а восстановление пароля по телефону недоступно.')
+            f'🔗 <b>Ссылка:</b> {origin}\n'
+            f"<b>Веб:</b> {'включён' if result['enabled'] else 'выключен'}\n"
+            f'<b>Интерфейс:</b> {ui}\n\n'
+            '📱 <b>Подтверждение телефона</b>\n'
+            f'• <b>Статус:</b> {verification_status}\n'
+            f'• <b>Способ:</b> {service}\n\n'
+            f"✈️ <b>Вход через Telegram:</b> {'включён' if result['telegram_login']['enabled'] else 'выключен'}\n"
+            '<b>Настройка в @BotFather:</b>\n'
+            '1. Откройте Mini App → ваш бот → <b>Login Widget</b>.\n'
+            '2. Если есть кнопка <b>Switch to OpenID Connect Login</b>, нажмите её.\n'
+            '3. В <b>Redirect URIs</b> добавьте адрес сайта с <code>/</code> в конце.\n'
+            '4. В <b>Trusted Origins</b> — тот же адрес без <code>/</code> в конце.\n'
+            'Алгоритм подписи — <b>RS256 (Default)</b>. '
+            'Client ID и Client Secret вводить в боте не нужно.\n\n'
+            '⚙️ <b>Домен и HTTPS</b>\n'
+            'Подключаются через <b>установщик</b>.\n\n'
+            'ℹ️ <b>Без подтверждения телефона:</b>\n'
+            '• регистрация — без проверки номера;\n'
+            '• восстановление пароля по телефону — недоступно.')
     if result['error'] == 'web_setup_recovery_failed':
-        text += '\n\nВеб недоступен: не удалось восстановить настройку подключения. Откройте установщик; бот продолжает работать.'
+        text += '\n\n<b>Веб недоступен:</b> не удалось восстановить настройку подключения. Откройте установщик; бот продолжает работать.'
     elif result['error']:
-        text += '\n\nПараметры подключения некорректны. Проверьте их через установщик.'
+        text += '\n\n<b>Параметры подключения некорректны.</b> Проверьте их через установщик.'
     if publication.get('warning'):
-        text += '\n\nПри запуске не удалось обновить базовый интерфейс. Сохранённая версия проверена; подробности — в журнале.'
+        text += '\n\n<b>Не удалось обновить базовый интерфейс при запуске.</b> Сохранённая версия проверена; подробности — в журнале.'
     release = result.get('ui_release')
     if release and release.get('rebuild_required'):
-        text += ('\n\nПосле обновления сохранён прежний интерфейс. Кастомное оформление требует проверки '
+        text += ('\n\n<b>После обновления сохранён прежний интерфейс.</b> Кастомное оформление требует проверки '
                  'и повторной сборки; подробности доступны в диагностике обновления.')
     private = getattr(getattr(callback.message, 'chat', None), 'type', None) == 'private'
     supported = private and not getattr(callback.message, 'business_connection_id', None)

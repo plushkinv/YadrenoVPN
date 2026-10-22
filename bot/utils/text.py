@@ -297,6 +297,7 @@ async def safe_edit_or_send(
     media_type: Optional[str] = None,
     show_web_page_preview: bool = False,
     force_new: bool = False,
+    edit_only: bool = False,
 ) -> Message:
     """Universal function for editing/sending messages.
     
@@ -321,6 +322,7 @@ async def safe_edit_or_send(
         photo: Photo (file_id, URL or InputFile). Old compatible alias for media
         media: Media (file_id, URL or InputFile)
         media_type: Media type: photo, video or animation
+        edit_only: Internal background delivery mode; never delete or send a replacement.
     """
     from aiogram.exceptions import TelegramBadRequest
     from aiogram.types import LinkPreviewOptions
@@ -332,6 +334,8 @@ async def safe_edit_or_send(
     normalized_media_type = normalize_media_type(media_type, media=media)
     is_current_media = bool(message.photo or message.video or message.document or message.animation)
     want_media = media is not None
+    if edit_only and (force_new or want_media != is_current_media):
+        raise ValueError('Edit-only delivery cannot create a replacement message')
     text = prepare_telegram_text(text, has_media=want_media)
     
     # Disable link previews by default. Enable only if show_web_page_preview=True
@@ -387,6 +391,9 @@ async def safe_edit_or_send(
             # The content has not changed - ignore it
             logger.debug('Сообщение не изменено, пропускаем')
             return message
+
+        if edit_only:
+            raise
             
         if 'there is no text in the message' in error_msg or \
            'message can\'t be edited' in error_msg or \

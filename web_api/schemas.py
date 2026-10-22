@@ -34,7 +34,7 @@ def text_bound(size):
 
 ID = {'type': 'integer', 'minimum': 1, 'maximum': 2**52 - 1}
 NS, NI = nullable(S), nullable(I)
-METHOD = obj({'id': S, 'presentation': S})
+METHOD = obj({'id': S, 'presentation': S, 'label': S}, ['id', 'presentation'])
 PAGING = {'limit': I, 'offset': I}
 COMPOSITION = obj({'ok': B, 'status': S, 'binding_id': NI, 'applied': B, 'already_applied': B,
                    'error_code': NS, 'host_count': I, 'host_key_id': I, 'operation_id': S}, ['ok', 'status'])
@@ -59,7 +59,8 @@ SCHEMAS = {
     'Bootstrap': obj({'api_version': I, 'auth': ref('AuthSettings'), 'modules': array(ref('ModuleAvailability')), 'features': obj({name: B for name in
         ('subscriptions', 'trial', 'promotions', 'referrals', 'balance', 'subscription_import', 'support_chat')})}),
     'Profile': obj({'account_id': I, 'telegram_id': NI, 'username': NS, 'first_name': NS, 'last_name': NS,
-        'created_at': NS, 'credentials': obj({'present': B, 'phone': NS, 'phone_verified': B})}),
+        'account_name': NS, 'created_at': NS, 'credentials': obj({'present': B, 'phone': NS, 'phone_verified': B})},
+        ['account_id', 'telegram_id', 'username', 'first_name', 'last_name', 'created_at', 'credentials']),
     'Catalog': obj({'purpose': S, 'subscription_id': NI,
         'groups': array(obj({'id': I, 'name': S})),
         'tariffs': array(obj({'id': I, 'name': S, 'group_id': I, 'duration_days': I, 'traffic_limit_gb': N,
@@ -95,7 +96,7 @@ SCHEMAS = {
         'charge_minor': I, 'charge_currency': S, 'balance_deduct_minor': I, 'duration_days': NI,
         'traffic_limit_gb': nullable(N), 'max_ips': NI}),
     'Order': obj({'order_id': S, 'operation_id': NS, 'purpose': S, 'status': S, 'fulfillment_status': S,
-        'provider_confirmed': B, 'provider_status': NS, 'payment_type': NS, 'base_currency': S,
+        'provider_confirmed': B, 'can_check': B, 'provider_status': NS, 'payment_type': NS, 'base_currency': S,
         'nominal_amount_minor': I, 'payable_amount_minor': I, 'balance_deduct_minor': I,
         'charge_amount': NS, 'charge_currency': NS, 'subscription_id': NI, 'access_status': NS,
         'payment_url': NS, 'presentation': S}, ['order_id', 'status', 'purpose', 'fulfillment_status', 'provider_confirmed',

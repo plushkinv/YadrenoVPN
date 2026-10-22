@@ -155,6 +155,56 @@ async def create_offer(account: AccountContext, payload: dict) -> dict:
     return public_offer(db.save_payment_offer(account.account_id, payload, quote))
 
 
+async def create_extension_offer(account, inputs):
+    """Trusted facade entry; the ordinary HTTP quote schema remains closed."""
+    from core.extension_key_terms import normalize_terms, resolve_terms, select_server
+    if not isinstance(inputs, dict) or set(inputs) - (_PAYLOAD_FIELDS | {'custom_terms', 'server_id'}):
+        raise CoreError('invalid_request')
+    payload = {k: v for k, v in inputs.items() if k not in {'custom_terms', 'server_id'}}
+    custom = inputs.get('custom_terms')
+    if custom is not None:
+        if payload.get('purpose') not in {'key_purchase', 'key_renewal'} or payload.get('nominal_amount_minor') is not None:
+            raise CoreError('invalid_request')
+        selection = normalize_terms(payload.get('tariff_id'), custom, paid=True)
+        tariff = resolve_terms(selection)
+        payload['tariff_id'] = tariff['id']
+        # This marker is written by the server, never accepted by create_offer.
+        payload['_extension_custom_terms'] = selection['custom_terms']
+        tariff = _validate_extension_purchase(account, payload)
+    else:
+        tariff = validate_purchase(account, payload)
+    server_id = inputs.get('server_id')
+    if server_id is not None:
+        if payload['purpose'] != 'key_purchase':
+            raise CoreError('invalid_request', details={'field': 'server_id'})
+        tariff = {**tariff, 'provision_server_id': select_server(tariff, server_id)}
+    await purchase_policy(account, payload, 'preview')
+    quote = preview_provider_quote(account, payload, tariff)
+    quote['extension_offer'] = True
+    return public_offer(db.save_payment_offer(account.account_id, payload, quote))
+
+
+def _validate_extension_purchase(account, payload):
+    from core.extension_key_terms import normalize_terms, resolve_terms
+    custom = payload['_extension_custom_terms']
+    tariff = resolve_terms(normalize_terms(custom_terms=custom, paid=True))
+    # Validate the shared shape and owner independently of catalog sale eligibility.
+    plain = {k: v for k, v in payload.items() if k != '_extension_custom_terms'}
+    require_account(account)
+    if (set(plain) - _PAYLOAD_FIELDS or plain.get('purpose') not in {'key_purchase', 'key_renewal'}
+            or not isinstance(plain.get('payment_type'), str) or len(plain['payment_type']) > 128
+            or type(plain.get('use_balance', False)) is not bool or plain.get('nominal_amount_minor') is not None
+            or plain.get('tariff_id') != tariff['id']):
+        raise CoreError('invalid_request')
+    if plain['purpose'] == 'key_renewal':
+        key = owned_key(account, _positive(plain.get('key_id'), 'key_id'), mutation=True)
+        if key.get('tariff_group_id') != tariff['group_id']:
+            raise CoreError('tariff_unavailable')
+    elif plain.get('key_id') is not None:
+        raise CoreError('invalid_request')
+    return tariff
+
+
 async def create_order(account: AccountContext, quote_id: str, idempotency_key: str) -> str:
     from runtime.readiness import require_active
     from bot.services.payment_intents import payment_invoice_description
@@ -181,7 +231,12 @@ async def create_order(account: AccountContext, quote_id: str, idempotency_key: 
             db.expire_unprepared_payment_offers()
             raise CoreError('quote_expired')
         payload, quoted = offer['payload'], offer['quote']
-        tariff = validate_purchase(account, payload)
+        tariff = (_validate_extension_purchase(account, payload)
+                  if quoted.get('extension_offer') and '_extension_custom_terms' in payload
+                  else validate_purchase(account, payload))
+        if quoted.get('extension_offer') and quoted['tariff'].get('provision_server_id'):
+            from core.extension_key_terms import select_server
+            tariff = {**tariff, 'provision_server_id': select_server(tariff, quoted['tariff']['provision_server_id'])}
         await purchase_policy(account, payload, 'execute')
         fresh = preview_provider_quote(account, payload, tariff, rate_snapshot=quoted['pricing']['rate_snapshot'],
                                        order_id=operation['order_id'] if operation else None)

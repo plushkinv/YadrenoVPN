@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Download, LockKeyhole, Send, UserRound } from 'lucide-react';
 import { ApiError } from '../api/client';
-import { Button, PageHeading } from '../components/Ui';
+import { Badge, Button, PageHeading, RowButton } from '../components/Ui';
 import { Field, Form, Failure, Resource } from '../components/Forms';
 import { useApp, useAction, useBack, useResource } from '../runtime/context';
 import type { Profile, Session, Subscription, SubscriptionImportResult } from '../api/contracts';
@@ -66,13 +67,14 @@ export function Authentication() {
         : bootstrap.auth.verification_method === 'ucaller' ? t.requestCall : t.requestVerification : title}>
       <Field label={t.phone}><input type="tel" autoComplete="tel" required maxLength={64} value={phone} onChange={e => { setPhone(e.target.value); verification.reset(); setVerificationRequired(false); }} /></Field>
       {mode === 'credentials' && <Field label={t.currentPassword}><input type="password" autoComplete="current-password" maxLength={128} value={current} onChange={e => setCurrent(e.target.value)} /></Field>}
-      <Field label={mode === 'login' ? t.password : t.newPassword}><input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required minLength={8} maxLength={128} value={password} onChange={e => setPassword(e.target.value)} /></Field>
+      <Field label={mode === 'login' ? t.password : t.newPassword}><input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required minLength={mode === 'login' ? undefined : 6} maxLength={mode === 'login' ? undefined : 128} value={password} onChange={e => setPassword(e.target.value)} /></Field>
       {needsVerification && <VerificationFields verification={verification} />}
     </Form><Failure error={action.error} />
     {needsVerification && verification.challenge && !proof && !verification.terminal && <Button tone="quiet"
       disabled={!verification.canResend || action.busy || verification.busy}
       onClick={() => action.run(() => verification.advance(true))}>{t.repeatVerification}</Button>}
     {mode === 'login' && <div className="button-row"><Button tone="quiet" onClick={() => navigate('register')}>{t.register}</Button>{bootstrap.auth.password_recovery_available && <Button tone="quiet" onClick={() => navigate('reset')}>{t.reset}</Button>}</div>}
+    {(mode === 'register' || mode === 'reset') && <div className="button-row"><Button tone="quiet" onClick={() => navigate('login')}>{t.login}</Button></div>}
   </section></>;
 }
 
@@ -81,14 +83,25 @@ export function Account() {
   const { navigate, logout } = useApp();
   const state = useResource<Profile>('/me');
   const action = useAction();
-  return <><PageHeading title={t.account} back={back} /><Resource state={state}>{profile => <section className="panel form-panel">
-    <h2>{profile.first_name || profile.username || `${t.account} ${profile.account_id}`}</h2>
-    <p>{profile.credentials.phone}</p><div className="action-list">
-      <Button tone="secondary" onClick={() => navigate('credentials')}>{t.credentials}</Button>
-      {profile.telegram_id ? <p>{t.telegramLinked}</p> : <Button tone="secondary" onClick={() => navigate('telegram-link')}>{t.telegramLink}</Button>}
-      <Button tone="secondary" onClick={() => navigate('import')}>{t.import}</Button>
-    </div><Failure error={action.error} />
-  </section>}</Resource><Button tone="quiet" disabled={action.busy} onClick={() => action.run(logout)}>{t.logout}</Button></>;
+  return <><PageHeading title={t.account} back={back} /><div className="account-page">
+    <Resource state={state}>{profile => <section className="panel account-panel">
+      <div className="account-summary"><span className="icon-box"><UserRound size={24} aria-hidden="true" /></span>
+        <h2>{(!profile.telegram_id && profile.account_name) || profile.first_name || profile.username || `${t.account} ${profile.account_id}`}</h2>
+      </div>
+      <dl className="account-details">
+        <div><dt>{t.accountPhone}</dt><dd className={profile.credentials.phone ? undefined : 'muted'}>{profile.credentials.phone || t.phoneMissing}</dd></div>
+        <div><dt>{t.telegram}</dt><dd><Badge tone={profile.telegram_id ? 'success' : 'neutral'}>{profile.telegram_id ? t.telegramConnected : t.telegramUnlinked}</Badge>
+          {profile.telegram_id && profile.username && <span className="muted">@{profile.username}</span>}
+        </dd></div>
+      </dl>
+      <div className="account-actions">
+        <RowButton icon={<LockKeyhole size={22} aria-hidden="true" />} title={t.credentials} onClick={() => navigate('credentials')} />
+        {!profile.telegram_id && <RowButton icon={<Send size={22} aria-hidden="true" />} title={t.telegramLink} onClick={() => navigate('telegram-link')} />}
+        <RowButton icon={<Download size={22} aria-hidden="true" />} title={t.import} onClick={() => navigate('import')} />
+      </div>
+    </section>}</Resource>
+    <Failure error={action.error} /><div className="button-row"><Button tone="quiet" disabled={action.busy} onClick={() => action.run(logout)}>{t.logout}</Button></div>
+  </div></>;
 }
 
 export function TelegramLink() {

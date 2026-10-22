@@ -3,20 +3,22 @@ Main router of the admin panel.
 
 Processes login to the admin panel and the main menu.
 """
+import asyncio
 import logging
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 
 from bot.services.admin_monitoring import (
     build_admin_summary_text,
-    collect_admin_monitoring_snapshot,
+    AdminMonitoringRead,
 )
 from bot.states.admin_states import AdminStates
 from bot.keyboards.admin import admin_main_menu_kb, author_support_kb, marketing_menu_kb
 from bot.utils.admin import is_admin
 from bot.utils.telegram_links import build_telegram_link
 from bot.utils.text import safe_edit_or_send
+from bot.utils.admin_monitoring_view import monitoring_turn, show_monitoring_screen
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +36,6 @@ router = Router()
 # ADMIN MAIN MENU
 # ============================================================================
 
-async def get_admin_stats_text() -> str:
-    """
-    Generates a short summary of the main admin panel.
-    
-    Returns:
-        Formatted text for the message
-    """
-    snapshot = await collect_admin_monitoring_snapshot()
-    return build_admin_summary_text(snapshot)
-
-
 from aiogram.exceptions import TelegramBadRequest
 
 @router.callback_query(F.data == "admin_panel")
@@ -54,32 +45,31 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
         await callback.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
+    turn = await monitoring_turn(state)
     await callback.answer()
+    # Complete the keyboard-removal message before showing the menu. Only the
+    # Telegram calls hold the delivery lock; the one-second pause does not.
+    try:
+        async with turn.delivery_lock:
+            if not turn.current():
+                return
+            temp_msg = await callback.message.answer("⏳", reply_markup=ReplyKeyboardRemove())
+        await asyncio.sleep(1.0)
+        async with turn.delivery_lock:
+            await temp_msg.delete()
+    except Exception:
+        logger.warning('Не удалось очистить обычную клавиатуру перед админкой', exc_info=True)
+
+    if not turn.current():
+        return
     await state.set_state(AdminStates.admin_menu)
     from bot.services.page_context import clear_page_context
     clear_page_context(callback.from_user.id)
-
-    # Removing a stuck Reply keyboard (for example, after searching for a user)
-    import asyncio
-    from aiogram.types import ReplyKeyboardRemove
     try:
-        temp_msg = await callback.message.answer("⏳", reply_markup=ReplyKeyboardRemove())
-        async def _delete_temp():
-            await asyncio.sleep(2.0)
-            try:
-                await temp_msg.delete()
-            except Exception:
-                pass
-        asyncio.create_task(_delete_temp())
-    except Exception:
-        pass
-
-    text = await get_admin_stats_text()
-    
-    try:
-        await safe_edit_or_send(callback.message, 
-            text,
-            reply_markup=admin_main_menu_kb()
+        await show_monitoring_screen(
+            callback.message, turn, AdminMonitoringRead(),
+            lambda snapshot: (build_admin_summary_text(snapshot), admin_main_menu_kb()),
+            deliver=safe_edit_or_send,
         )
     except TelegramBadRequest as e:
         if "is not modified" not in str(e):

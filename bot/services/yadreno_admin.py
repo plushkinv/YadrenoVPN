@@ -62,6 +62,7 @@ from database.requests import (
     clear_yadreno_admin_tool_runtime,
     get_yadreno_admin_active_request_id,
     get_yadreno_admin_api_key,
+    get_yadreno_admin_application_id,
     get_yadreno_admin_last_request_id,
     get_yadreno_admin_server_ip,
     is_yadreno_admin_core_changes_enabled,
@@ -300,6 +301,27 @@ def yadreno_admin_skill_id_for_topic(
     if is_yadreno_admin_customization_topic(topic_id):
         return YADRENO_ADMIN_CUSTOMIZATION_SKILL_ID
     return YADRENO_ADMIN_DEFAULT_SKILL_ID
+
+
+def _application_identity_fields(capabilities: list[str]) -> dict[str, str]:
+    """Attach the saved project UUID only to a fully negotiated tools-v3 request."""
+    if CUSTOMIZATION_TOOLS_V3_CAPABILITY not in capabilities:
+        return {}
+    application_id = get_yadreno_admin_application_id()
+    try:
+        parsed = uuid.UUID(application_id) if isinstance(application_id, str) else None
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.version != 4 or str(parsed) != application_id:
+        raise YadrenoAdminError(
+            "Missing or invalid Satellite application_id",
+            kind="local",
+            user_message=(
+                "Постоянный идентификатор проекта отсутствует или повреждён. "
+                "Обратитесь к разработчику."
+            ),
+        )
+    return {"application_id": application_id}
 
 
 def _core_policy_for_skill(skill_id: str) -> Optional[bool]:
@@ -2430,6 +2452,7 @@ async def run_dialog(
                 file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
             ),
         }
+        payload.update(_application_identity_fields(payload["capabilities"]))
         if runtime_context_supported:
             if agent_runtime_context is None:
                 raise YadrenoAdminError(
@@ -2573,23 +2596,25 @@ async def run_dialog_with_uploads(
             if is_batch
             else "/api/v1/satellite/upload"
         )
+        capabilities = _capabilities_for_skill(
+            effective_skill_id,
+            runtime_context_supported=runtime_context_supported,
+            customization_tools_supported=(
+                CUSTOMIZATION_TOOLS_CAPABILITY in negotiated_capabilities
+            ),
+            customization_tools_v3_supported=(
+                CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities
+            ),
+            file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
+        )
         fields: dict[str, str | int] = {
             "message": agent_message,
             "knowledge_version": KNOWLEDGE_VERSION,
             "topic_id": topic_id,
             "server_ip": server_ip,
             "skill_id": effective_skill_id,
-            "capabilities": ",".join(_capabilities_for_skill(
-                effective_skill_id,
-                runtime_context_supported=runtime_context_supported,
-                customization_tools_supported=(
-                    CUSTOMIZATION_TOOLS_CAPABILITY in negotiated_capabilities
-                ),
-                customization_tools_v3_supported=(
-                    CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities
-                ),
-                file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
-            )),
+            "capabilities": ",".join(capabilities),
+            **_application_identity_fields(capabilities),
         }
         if runtime_context_supported:
             if agent_runtime_context is None:

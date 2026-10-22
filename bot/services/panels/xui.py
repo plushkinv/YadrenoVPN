@@ -1799,7 +1799,7 @@ class XUIClient(BaseVPNClient):
         return changed
 
     async def rename_client_identity(self, old_email: str, new_email: str, expected_identity: dict) -> dict:
-        """Recover an identity-only rename using a persisted complete snapshot."""
+        """Recover a rename using the persisted canonical client identity."""
         from .identity import rename_client_identity
         return await rename_client_identity(self, old_email, new_email, expected_identity)
 

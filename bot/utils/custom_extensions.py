@@ -690,7 +690,10 @@ def get_custom_extensions_diagnostics(
         },
         'account_capabilities': {
             'contract_version': 2,
-            'methods': ['import_subscription'],
+            'methods': ['import_subscription', 'issue_key', 'renew_key'],
+            'key_grants': {'terms': ['tariff_id', 'custom_terms'], 'owner': 'current_account',
+                           'idempotency': 'permanent_extension_receipt', 'reason_required': True,
+                           'server_selection': 'explicit_or_single', 'access_status': ['pending', 'ready', 'unavailable']},
             'owner': 'user_id',
             'telegram_id': 'optional',
             'sources': ['telegram', 'mini_app', 'site', 'system'],
@@ -724,7 +727,11 @@ def get_custom_extensions_diagnostics(
                 'get_promo_code', 'list_promo_codes', 'check_promo_code', 'create_promo_code',
                 'update_promo_code', 'set_promo_code_active', 'activate_promo_code',
                 'clear_active_promo_code', 'preview_payment_price', 'recheck_payment',
+                'create_quote', 'prepare_order', 'start_order', 'get_order_status',
             ],
+            'automatic_orders': {'owner': 'current_account', 'terms': ['tariff_id', 'custom_terms'],
+                                 'price_unit': 'base_currency_minor', 'saved_card_debit': False,
+                                 'ambiguous_create': 'provider_specific'},
         },
     }
 

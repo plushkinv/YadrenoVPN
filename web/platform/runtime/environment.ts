@@ -44,7 +44,16 @@ function externalUrl(value: string, schemes = ['https:']): URL {
 export async function loadEnvironment(): Promise<Environment> {
   // The regular browser/offline shell does not depend on the Telegram SDK.
   const launch = new URLSearchParams(location.hash.slice(1));
-  if (!window.Telegram && launch.has('tgWebAppData')) {
+  let telegramLaunch = launch.has('tgWebAppData');
+  if (!telegramLaunch) {
+    try {
+      // The official SDK restores its tab-local launch after navigation replaces
+      // the fragment. This is only a loading hint; the server still verifies it.
+      const saved = JSON.parse(sessionStorage.getItem('__telegram__initParams') || 'null');
+      telegramLaunch = typeof saved?.tgWebAppData === 'string' && saved.tgWebAppData.length > 0;
+    } catch { /* Storage may be unavailable or contain an invalid SDK cache. */ }
+  }
+  if (!window.Telegram && telegramLaunch) {
     await new Promise<void>(resolve => {
       const script = document.createElement('script');
       const timer = window.setTimeout(resolve, 8000);

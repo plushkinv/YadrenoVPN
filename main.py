@@ -77,6 +77,11 @@ async def main():
     from bot.middlewares.runtime import RuntimeIngressMiddleware
     dp.update.outer_middleware(RuntimeIngressMiddleware())
 
+    from bot.middlewares.admin_monitoring import AdminMonitoringMiddleware
+    monitoring_middleware = AdminMonitoringMiddleware()
+    dp.message.outer_middleware(monitoring_middleware)
+    dp.callback_query.outer_middleware(monitoring_middleware)
+
     from bot.middlewares.extension_input import ExtensionInputMiddleware
     input_middleware = ExtensionInputMiddleware()
     dp.message.outer_middleware(input_middleware)

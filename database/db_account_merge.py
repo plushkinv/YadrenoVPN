@@ -58,6 +58,12 @@ def merge_account_with_conn(conn, source_id: int, target_id: int, now: int, *, s
                      (target_id, version, now, source_id))
     conn.execute('UPDATE account_sessions SET revoked_at=? WHERE user_id IN (?,?)', (now, source_id, target_id))
 
+    if source['account_name'] and not target['account_name']:
+        # Transfer under the same write lock without temporarily violating uniqueness.
+        conn.execute('UPDATE users SET account_name=NULL WHERE id=?', (source_id,))
+        conn.execute('UPDATE users SET account_name=? WHERE id=?', (source['account_name'], target_id))
+    # When both owners have names, the merged service row continues to reserve its name.
+
     # These records have stable identities independent of their account owner.
     for table in ('vpn_keys', 'payments', 'support_threads', 'promo_link_visits', 'promo_redemptions',
                   'semantic_action_contexts', 'payment_offers', 'extension_scheduled_tasks', 'panel_identity_renames',

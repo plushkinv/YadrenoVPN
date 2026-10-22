@@ -6,6 +6,7 @@ import sqlite3
 from core.results import CoreError
 from .connection import get_db
 from .db_users import _insert_user_with_conn
+from .account_names import available_account_name_with_conn
 
 __all__ = [
     'get_account_credentials', 'get_phone_credentials', 'create_account_credentials',
@@ -68,7 +69,8 @@ def create_account_credentials(
                                purpose='credentials' if user_id is not None else 'register',
                                session_hash=session_hash, now=now)
             if user_id is None:
-                user_id = _insert_user_with_conn(conn, None)['id']
+                account_name = available_account_name_with_conn(conn, phone)
+                user_id = _insert_user_with_conn(conn, None, account_name=account_name)['id']
                 if referral_code:
                     referrer = conn.execute('SELECT id FROM users WHERE referral_code=?', (referral_code,)).fetchone()
                     if referrer and referrer['id'] != user_id:

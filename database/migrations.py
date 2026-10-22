@@ -14,6 +14,7 @@ import re
 from uuid import uuid4
 
 from .connection import get_db
+from .db_settings import _ensure_yadreno_admin_application_id
 from .db_user_ui_texts import update_user_ui_text_defaults
 from .page_registry import (
     CORE_PAGE_KEYS,
@@ -73,7 +74,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 130
+LATEST_VERSION = 132
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -4200,6 +4201,37 @@ def migration_130(conn: sqlite3.Connection) -> None:
                  "WHERE kind GLOB 'module.*' AND completed_at IS NOT NULL")
 
 
+def migration_131(conn: sqlite3.Connection) -> None:
+    """Persist one project UUID for Satellite tools v3, preserving an existing value."""
+    _ensure_yadreno_admin_application_id(conn)
+
+
+def migration_132(conn: sqlite3.Connection) -> None:
+    """Assign permanent phone-account names without changing Telegram profile fields or events."""
+    from .account_names import (
+        DEFAULT_ACCOUNT_NAME_POOL, account_name_pool_with_conn, available_account_name_with_conn,
+    )
+    import json
+
+    if not conn.in_transaction:
+        conn.execute('BEGIN IMMEDIATE')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(users)')}
+    if 'account_name' not in columns:
+        conn.execute('ALTER TABLE users ADD COLUMN account_name TEXT')
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_account_name ON users(account_name) "
+                 "WHERE account_name IS NOT NULL AND account_name <> ''")
+    conn.execute('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)',
+                 ('account_name_pool', json.dumps(DEFAULT_ACCOUNT_NAME_POOL, ensure_ascii=False)))
+    pool = account_name_pool_with_conn(conn)
+    for user_id, phone in conn.execute(
+        'SELECT u.id,c.phone FROM users u JOIN account_credentials c ON c.user_id=u.id '
+        'WHERE u.telegram_id IS NULL AND u.merged_into_user_id IS NULL '
+        "AND (u.account_name IS NULL OR u.account_name='') ORDER BY u.id"
+    ):
+        name = available_account_name_with_conn(conn, phone, pool=pool)
+        conn.execute('UPDATE users SET account_name=? WHERE id=?', (name, user_id))
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -4233,6 +4265,8 @@ MIGRATIONS = {
     128: migration_128,
     129: migration_129,
     130: migration_130,
+    131: migration_131,
+    132: migration_132,
 }
 
 

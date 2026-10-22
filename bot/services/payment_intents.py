@@ -460,7 +460,9 @@ def restart_payment_intent_for_method_change(
         balance_deduct_minor = 0
 
     try:
-        replacement = create_payment_intent(
+        from database.requests import copy_custom_payment_intent
+        custom_replacement = copy_custom_payment_intent(current.order_id, int(user_id))
+        replacement = load_payment_intent(custom_replacement) if custom_replacement else create_payment_intent(
             user_id=int(user_id),
             purpose=purpose,
             purpose_data=purpose_data,

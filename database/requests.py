@@ -25,6 +25,7 @@ from database.db_pages import *
 from database.db_page_routes import *
 from database.db_extensions import *
 from database.db_extension_core import *
+from database.db_extension_keys import *
 from database.db_business_operations import *
 from database.db_key_lifecycle import *
 from database.db_key_cleanup import *

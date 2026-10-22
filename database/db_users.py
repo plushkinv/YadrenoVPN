@@ -103,7 +103,7 @@ def get_or_create_user(
         return _insert_user_with_conn(conn, telegram_id, username, first_name, last_name), True
 
 
-def _insert_user_with_conn(conn, telegram_id, username=None, first_name=None, last_name=None):
+def _insert_user_with_conn(conn, telegram_id, username=None, first_name=None, last_name=None, *, account_name=None):
     """Insert one account and its registration event in the caller's transaction."""
     referral_code = _generate_referral_code()
     attempts = 0
@@ -126,6 +126,9 @@ def _insert_user_with_conn(conn, telegram_id, username=None, first_name=None, la
     if 'last_name' in user_columns:
         fields.append('last_name')
         values.append(last_name)
+    if account_name is not None:
+        fields.append('account_name')
+        values.append(account_name)
 
     placeholders = ', '.join('?' for _ in fields)
     cursor = conn.execute(
@@ -148,6 +151,7 @@ def _insert_user_with_conn(conn, telegram_id, username=None, first_name=None, la
         'username': username,
         'first_name': first_name,
         'last_name': last_name,
+        'account_name': account_name,
         'is_banned': 0,
         'is_bot_blocked': 0,
         'referral_code': referral_code,

@@ -217,6 +217,10 @@ async def resolve_new_key_setup(
 
     selected_server: Mapping[str, Any] | None = None
     if server_id is None:
+        from database.requests import get_payment_order_terms
+        terms = get_payment_order_terms(order_id)
+        server_id = terms['tariff'].get('provision_server_id') if terms else None
+    if server_id is None:
         if len(context.servers) > 1:
             return _result_from_context(
                 context,

@@ -117,11 +117,13 @@ export function Runtime({ environment }: { environment: Environment }) {
     const expired = () => { forgetAccounts(); api.setAccount(null); setSession(null); setConfiguration(undefined); setCachedAt(undefined); };
     const accountChanged = () => { expired(); if (navigator.onLine) setAttempt(value => value + 1); };
     const cached = (event: Event) => setCachedAt((event as CustomEvent<number>).detail);
+    const recovered = () => { if (navigator.onLine) { setOffline(false); setCachedAt(undefined); } };
     window.addEventListener('online', network); window.addEventListener('offline', network);
     window.addEventListener('account-expired', expired); window.addEventListener('account-cache-used', cached);
+    window.addEventListener('account-request-succeeded', recovered);
     window.addEventListener('account-changed', accountChanged);
     const stop = preview ? () => {} : observeSessionChange(accountChanged);
-    return () => { stop(); window.removeEventListener('account-changed', accountChanged); window.removeEventListener('online', network); window.removeEventListener('offline', network); window.removeEventListener('account-expired', expired); window.removeEventListener('account-cache-used', cached); };
+    return () => { stop(); window.removeEventListener('account-changed', accountChanged); window.removeEventListener('online', network); window.removeEventListener('offline', network); window.removeEventListener('account-expired', expired); window.removeEventListener('account-cache-used', cached); window.removeEventListener('account-request-succeeded', recovered); };
   }, [api, refresh]);
   useEffect(() => environment.back(path !== 'home' && path !== 'login', back), [environment, path, back]);
   useEffect(() => environment.observe?.(nextTheme => {

@@ -62,16 +62,16 @@ async def _group_candidates(endpoint, members):
     from bot.services.vpn_api import get_client_from_server_data
     servers = [server for server in db.get_all_servers()
                if server['is_active'] and physical_panel_key(server) == endpoint]
-    placements = [{item['inbound_id'] for item in member['placements']} for member in members]
+    memberships = [set(member['inbound_ids']) for member in members]
     scoped = {}
     for server in servers:
-        inbounds = await get_client_from_server_data(server).get_inbounds(include_ignored=True)
-        scoped[server['id']] = {int(item['id']) for item in inbounds}
+        inbounds = await get_client_from_server_data(server).get_inbound_descriptors(include_ignored=True)
+        scoped[server['id']] = {item.id for item in inbounds}
     result = {}
     for group in db.get_all_groups():
         available = [server for server in servers if group['id'] in db.get_server_group_ids(server['id'])]
         selected = []
-        for ids in placements:
+        for ids in memberships:
             matching = [server for server in available if ids and ids <= scoped[server['id']]]
             if not matching:
                 break
@@ -92,10 +92,7 @@ def _validate_members(snapshot):
         limit = int(record.get(field) or 0)
         if not 0 <= limit <= 999 or int(record.get('totalGB') or 0) < 0 or member['traffic_used'] < 0:
             raise CoreError('subscription_ambiguous')
-        if not member['placements'] or any(
-                any(item['client'].get(name, 0) != record.get(name, 0)
-                    for name in ('subId', 'expiryTime', 'totalGB', 'limitIp', 'limitHwid'))
-                for item in member['placements']):
+        if not member['inbound_ids']:
             raise CoreError('subscription_ambiguous')
         member['device_limit'] = limit
 

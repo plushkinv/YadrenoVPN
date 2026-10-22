@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from database.requests import (
     get_all_servers,
+    get_server_by_id,
     get_daily_payments_stats,
     get_expiring_keys,
     get_keys_stats,
@@ -28,6 +29,41 @@ logger = logging.getLogger(__name__)
 LOAD_WARNING_THRESHOLD = 90.0
 NODE_DISPLAY_LIMIT = 8
 MAX_SUMMARY_PROBLEMS = 3
+
+# Only unfinished reads live here. Completed observations belong to one opening.
+_requests: dict[tuple, asyncio.Task] = {}
+_CONNECTION_FIELDS = (
+    'id', 'protocol', 'host', 'port', 'web_base_path', 'login', 'password',
+    'api_token', 'inbound_group_id', 'is_active',
+)
+
+
+def _connection_key(server: dict) -> tuple:
+    return tuple(server.get(field) for field in _CONNECTION_FIELDS)
+
+
+async def _shared_request(key, fetch):
+    task = _requests.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(fetch(), name='admin_monitoring_request')
+        _requests[key] = task
+
+        def finished(done):
+            if _requests.get(key) is done:
+                _requests.pop(key, None)
+            if not done.cancelled():
+                done.exception()  # Retrieve failures even if every view has left.
+
+        task.add_done_callback(finished)
+    return await asyncio.shield(task)
+
+
+async def stop_monitoring_requests() -> None:
+    tasks = list(_requests.values())
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    _requests.clear()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -198,7 +234,7 @@ def _node_problem_line(server: Dict[str, Any], node: Dict[str, Any]) -> Optional
     return {"severity": node.get("severity", 0), "text": text}
 
 
-async def _collect_server_entry(server: Dict[str, Any]) -> Dict[str, Any]:
+def _local_server_entry(server: dict) -> dict:
     entry: Dict[str, Any] = {
         "server": server,
         "is_active": bool(server.get("is_active")),
@@ -207,19 +243,26 @@ async def _collect_server_entry(server: Dict[str, Any]) -> Dict[str, Any]:
         "nodes": [],
         "error": None,
     }
+    return entry
+
+
+async def _collect_server_entry(server: Dict[str, Any], *, include_nodes=True) -> Dict[str, Any]:
+    entry = _local_server_entry(server)
 
     if not entry["is_active"]:
         return entry
 
     try:
-        client = get_client_from_server_data(server)
-        stats = await client.get_stats()
+        client = get_client_from_server_data(dict(server))
+        stats = await _shared_request(('stats', _connection_key(server)), client.get_stats)
         entry["stats"] = stats
         entry["panel_online"] = bool(stats.get("online"))
         if not entry["panel_online"]:
             entry["error"] = stats.get("error") or "нет подключения"
             return entry
 
+        if not include_nodes:
+            return entry
         try:
             raw_nodes = await client.get_nodes()
             entry["nodes"] = _flatten_nodes(raw_nodes)
@@ -252,20 +295,11 @@ def _deduplicate_panel_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, 
     return list(panels.values())
 
 
-async def collect_admin_monitoring_snapshot() -> Dict[str, Any]:
-    """Collects a common snapshot for the main admin panel and the servers section."""
-    servers = get_all_servers()
-    entries = await asyncio.gather(*[_collect_server_entry(server) for server in servers]) if servers else []
-    entries = _deduplicate_panel_entries(entries)
-
-    users = get_users_stats()
-    keys = get_keys_stats()
-    payments = get_daily_payments_stats()
-    expiring_24h = len(get_expiring_keys(1))
-    new_users = get_new_users_count_today()
-
+def _build_snapshot(servers, entries, *, loading=False, overview=True):
+    if overview:
+        entries = _deduplicate_panel_entries(entries)
     problems: List[Dict[str, Any]] = []
-    for entry in entries:
+    for entry in entries if not loading else []:
         panel_problem = _panel_problem_line(entry)
         if panel_problem:
             problems.append(panel_problem)
@@ -277,15 +311,74 @@ async def collect_admin_monitoring_snapshot() -> Dict[str, Any]:
     problems.sort(key=lambda item: item.get("severity", 0), reverse=True)
 
     return {
-        "collected_at": datetime.now(get_display_tzinfo()),
+        "collected_at": None if loading else datetime.now(get_display_tzinfo()),
+        "records": servers,
+        "loading": loading,
         "servers": entries,
-        "users": users,
-        "keys": keys,
-        "payments": payments,
-        "new_users": new_users,
-        "expiring_24h": expiring_24h,
+        "users": get_users_stats() if overview else {},
+        "keys": get_keys_stats() if overview else {},
+        "payments": get_daily_payments_stats() if overview else {},
+        "new_users": get_new_users_count_today() if overview else 0,
+        "expiring_24h": len(get_expiring_keys(1)) if overview else 0,
         "problems": problems,
     }
+
+
+class AdminMonitoringRead:
+    """Collect one opening, re-reading changed rows before its final delivery."""
+
+    def __init__(self, server_id=None):
+        self.server_id = server_id
+        self._observations = {}
+
+    def _servers(self):
+        if self.server_id is None:
+            return get_all_servers()
+        server = get_server_by_id(self.server_id)
+        return [server] if server else []
+
+    def local_snapshot(self):
+        servers = self._servers()
+        return _build_snapshot(
+            servers, [_local_server_entry(server) for server in servers],
+            loading=any(server.get('is_active') for server in servers),
+            overview=self.server_id is None,
+        )
+
+    async def collect(self):
+        async def read(server):
+            key = _connection_key(server)
+            if key not in self._observations and server.get('is_active'):
+                include_nodes = self.server_id is None
+                self._observations[key] = await _shared_request(
+                    ('entry', include_nodes, key),
+                    lambda: _collect_server_entry(server, include_nodes=include_nodes),
+                )
+
+        await asyncio.gather(*(read(server) for server in self._servers()))
+
+    def resolved_snapshot(self):
+        servers = self._servers()
+        entries = []
+        for server in servers:
+            if not server.get('is_active'):
+                entries.append(_local_server_entry(server))
+                continue
+            observation = self._observations.get(_connection_key(server))
+            if observation is None:
+                return None
+            entries.append({**observation, 'server': server})
+        return _build_snapshot(servers, entries, overview=self.server_id is None)
+
+
+async def collect_admin_monitoring_snapshot() -> Dict[str, Any]:
+    """Compatibility collector; UI handlers render local data before awaiting it."""
+    poll = AdminMonitoringRead()
+    while True:
+        await poll.collect()
+        snapshot = poll.resolved_snapshot()
+        if snapshot is not None:
+            return snapshot
 
 
 def _snapshot_counts(snapshot: Dict[str, Any]) -> Dict[str, int]:
@@ -365,6 +458,9 @@ def build_admin_summary_text(snapshot: Dict[str, Any]) -> str:
             lines.append(f"… ещё {omitted}")
     else:
         lines.append("✅ Проблем не обнаружено")
+
+    if snapshot.get('loading'):
+        lines = ["⚙️ <b>Админ-панель</b>", "", "📊 Мониторинг: ⏳ Загружается"]
 
     payments = snapshot.get("payments", {})
     users = snapshot.get("users", {})
@@ -454,6 +550,8 @@ def build_servers_monitoring_text(snapshot: Dict[str, Any]) -> str:
     collected_at = snapshot.get("collected_at")
     updated = collected_at.strftime("%H:%M") if isinstance(collected_at, datetime) else "—"
     lines = ["🖥️ <b>Сервера</b>", f"🕒 Обновлено: {updated}", ""]
+    if snapshot.get('loading'):
+        lines = ["🖥️ <b>Сервера</b>", "", "⏳ Загружается", ""]
 
     for entry in entries:
         server = entry["server"]
@@ -468,6 +566,13 @@ def build_servers_monitoring_text(snapshot: Dict[str, Any]) -> str:
                     "",
                 ]
             )
+            continue
+
+        if snapshot.get('loading'):
+            lines.extend([
+                f"🖥️ <b>{server_name}</b> (<code>{host}</code>)",
+                "   ⏳ Загружается", "",
+            ])
             continue
 
         if not entry.get("panel_online"):

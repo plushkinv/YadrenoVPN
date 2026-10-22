@@ -3,8 +3,8 @@ from core.results import CoreError
 from database import requests as db
 
 
-async def create_invoice_link(account, intent, price):
-    if account.source != 'mini_app' or account.telegram_id is None:
+async def create_invoice_link(account, intent, price, *, _extension=False):
+    if (account.source != 'mini_app' and not _extension) or account.telegram_id is None or account.source == 'site':
         raise CoreError('payment_method_unavailable')
     from aiogram import Bot
     from aiogram.client.session.aiohttp import AiohttpSession

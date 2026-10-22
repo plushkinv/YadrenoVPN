@@ -6,6 +6,7 @@ import string
 import datetime
 import re
 import hashlib
+import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Optional, List, Dict, Any, Tuple
 from .connection import get_db
@@ -36,6 +37,7 @@ __all__ = [
     'set_display_timezone',
     'normalize_display_timezone',
     'get_yadreno_admin_api_key',
+    'get_yadreno_admin_application_id',
     'set_yadreno_admin_api_key',
     'delete_yadreno_admin_api_key',
     'get_yadreno_admin_server_ip',
@@ -345,11 +347,35 @@ def set_display_timezone(value: str) -> str:
 
 
 YADRENO_ADMIN_API_KEY_SETTING = 'yadreno_admin_api_key'
+YADRENO_ADMIN_APPLICATION_ID_SETTING = 'yadreno_admin_application_id'
 YADRENO_ADMIN_SERVER_IP_SETTING = 'yadreno_admin_server_ip'
 YADRENO_ADMIN_CORE_CHANGES_ENABLED_SETTING = 'yadreno_admin_core_changes_enabled'
 YADRENO_ADMIN_REQUEST_SETTING_PREFIX = 'yadreno_admin_request'
 YADRENO_ADMIN_TOOL_CALL_SETTING_PREFIX = 'yadreno_admin_tool_call'
 YADRENO_ADMIN_TOOL_RUNTIME_SETTING_PREFIX = 'yadreno_admin_tool_runtime'
+
+
+def _ensure_yadreno_admin_application_id(conn: sqlite3.Connection) -> Optional[str]:
+    """Initialize project identity in the caller's write transaction, without committing."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (YADRENO_ADMIN_APPLICATION_ID_SETTING,),
+    ).fetchone()
+    if row is not None:
+        return row[0]
+    application_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?)",
+        (YADRENO_ADMIN_APPLICATION_ID_SETTING, application_id),
+    )
+    return application_id
+
+
+def get_yadreno_admin_application_id() -> Optional[str]:
+    """Read the migration-owned project identity without caching or replacing it."""
+    return get_setting(YADRENO_ADMIN_APPLICATION_ID_SETTING)
 
 
 def get_yadreno_admin_api_key() -> Optional[str]:

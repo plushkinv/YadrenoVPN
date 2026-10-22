@@ -26,6 +26,6 @@ export function App() {
     {!definition ? <h1>{t.notFound}</h1> : definition.feature && !bootstrap.features[definition.feature] ? <p>{t.empty}</p>
       : definition.module_id && !bootstrap.modules?.some(module => module.module_id === definition.module_id && module.state === 'available' && module.api_version === 1)
       ? <p role="alert">Модуль этой страницы недоступен. Повторите позже.</p> : <Component key={`${selected.id}/${param}/${session?.account_id}`} />}
-    {!session && selected.id !== 'login' && <Button onClick={() => navigate('login')}>{t.login}</Button>}
+    {!session && !['login', 'register', 'reset'].includes(selected.id) && <Button onClick={() => navigate('login')}>{t.login}</Button>}
   </Shell></AppContext.Provider>;
 }

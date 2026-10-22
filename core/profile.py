@@ -10,6 +10,7 @@ def profile(account):
     user = require_account(account)
     credentials = db.get_account_credentials(account.account_id)
     return {'account_id': user['id'], 'telegram_id': user['telegram_id'], 'username': user.get('username'),
+            'account_name': user.get('account_name'),
             'first_name': user.get('first_name'), 'last_name': user.get('last_name'), 'created_at': user.get('created_at'),
             'credentials': {'present': credentials is not None, 'phone': credentials['phone'] if credentials else None,
                             'phone_verified': bool(credentials and credentials['phone_verified'])}}

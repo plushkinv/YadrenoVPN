@@ -72,8 +72,8 @@ async def close_password_workers() -> None:
 
 
 def validate_password(password: str) -> None:
-    if not isinstance(password, str) or not 8 <= len(password) <= 128:
-        raise CoreError('password_invalid', details={'min_length': 8, 'max_length': 128})
+    if not isinstance(password, str) or not 6 <= len(password) <= 128:
+        raise CoreError('password_invalid', details={'min_length': 6, 'max_length': 128})
     try:
         password.encode('utf-8')
     except UnicodeError:

@@ -199,6 +199,8 @@ class Application:
             self.bot.custom_payment_webhook_server = self.webhook_server
             self.web_server = await start_web_server()
             await accept_managed_update()
+            from bot.utils.admin_monitoring_view import start_monitoring_views
+            start_monitoring_views()
             readiness.activate()
             if not get_web_setup_error():
                 prepare_web_setup(finish_verified=True)
@@ -229,6 +231,10 @@ class Application:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
         self.tasks.clear()
+        from bot.utils.admin_monitoring_view import stop_monitoring_views
+        from bot.services.admin_monitoring import stop_monitoring_requests
+        await stop_monitoring_views()
+        await stop_monitoring_requests()
         failures = []
         for attribute in ('web_server', 'webhook_server'):
             server = getattr(self, attribute)

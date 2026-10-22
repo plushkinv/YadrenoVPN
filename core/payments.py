@@ -51,6 +51,9 @@ def order_status(account, order_id):
     return {'order_id': intent.order_id, 'operation_id': operation['id'] if operation else None,
             'purpose': intent.purpose, 'status': intent.status, 'fulfillment_status': intent.fulfillment_status,
             'provider_confirmed': bool(intent.provider_confirmed_at),
+            'can_check': (intent.status == 'pending'
+                          or intent.status == 'canceled' and intent.cancellation_source == 'provider'
+                          or intent.status == 'paid' and access == 'pending'),
             'provider_status': provider['status'] if provider else None,
             'payment_type': intent.payment_type, 'base_currency': intent.base_currency,
             'nominal_amount_minor': intent.nominal_amount_minor, 'payable_amount_minor': intent.payable_amount_minor,
@@ -68,7 +71,17 @@ async def _complete(account, order_id):
         return await complete_confirmed_payment(order_id, bot=get_bot(), notify_user=False, background=True)
 
 
-async def select_method(account, order_id, payment_type):
+async def start_order(account, order_id):
+    """Start the already prepared method without synthesizing a user interaction."""
+    owned_order(account, order_id)
+    operation = db.get_account_payment_operation(account.account_id, order_id=order_id)
+    prepared = (operation or {}).get('result') or {}
+    if prepared.get('state') != 'prepared':
+        raise CoreError('payment_preparation_pending', retryable=True)
+    return await select_method(account, order_id, prepared['payment_type'], _automatic=True)
+
+
+async def select_method(account, order_id, payment_type, *, _automatic=False):
     from runtime.readiness import require_active
     from bot.services.payment_provider_adapters import create_provider_invoice, get_payment_provider_adapter
     require_active()
@@ -90,6 +103,13 @@ async def select_method(account, order_id, payment_type):
             owned_key(account, intent.vpn_key_id, mutation=True)
         if not db.get_payment_provider_order(order_id):
             with bind_account_context(account):
+                if _automatic and intent.purpose == 'key_purchase':
+                    from core.extension_key_terms import select_server
+                    terms = db.get_payment_order_terms(order_id)
+                    if not terms:
+                        raise CoreError('order_unavailable')
+                    target = select_server(terms['tariff'], terms['tariff'].get('provision_server_id'))
+                    db.select_automatic_order_server(order_id, account.account_id, target)
                 price = _payment_quote(intent, prepared['quote'])
                 use_balance_only = payment_type == 'balance' or (price.payable_amount_minor == 0 and prepared['balance_deduct_minor'] > 0)
                 if payment_type == 'demo':
@@ -103,14 +123,24 @@ async def select_method(account, order_id, payment_type):
                     adapter = get_payment_provider_adapter(payment_type.removeprefix('ext_'))
                     if adapter is None:
                         raise CoreError('payment_method_unavailable')
+                    # Only YooKassa CREATE has a documented provider idempotence key.
+                    # Crypto is a deterministic local URL; Telegram links do not charge.
+                    safe_create_retry = adapter.provider_id in {'yookassa_qr', 'crypto'} or adapter.presentation == 'telegram_invoice'
+                    automatic_attempt = _automatic or bool((operation or {}).get('request', {}).get('automatic_invoice_started'))
+                    if automatic_attempt:
+                        first_attempt = db.claim_automatic_invoice_start(order_id, account.account_id)
+                        if not first_attempt and not safe_create_retry:
+                            raise CoreError('payment_creation_unknown')
                     try:
                         if adapter.presentation == 'telegram_invoice':
-                            await _telegram_invoice(account, intent, price)
+                            await _telegram_invoice(account, intent, price, _automatic=_automatic)
                         else:
                             await create_provider_invoice(intent, price, telegram_id=account.telegram_id, bot_username='')
                     except CoreError:
                         raise
                     except Exception:
+                        if automatic_attempt and not safe_create_retry:
+                            raise CoreError('payment_creation_unknown') from None
                         raise CoreError('payment_provider_unavailable', retryable=True) from None
         intent = owned_order(account, order_id)
         provider = db.get_payment_provider_order(order_id)
@@ -119,13 +149,13 @@ async def select_method(account, order_id, payment_type):
         return order_status(account, order_id)
 
 
-async def _telegram_invoice(account, intent, price):
+async def _telegram_invoice(account, intent, price, *, _automatic=False):
     """Mini App invoices use the existing Telegram adapter and unchanged settlement."""
-    if account.source != 'mini_app' or account.telegram_id is None:
+    if (account.source != 'mini_app' and not _automatic) or account.telegram_id is None or account.source == 'site':
         raise CoreError('payment_method_unavailable')
     # Implemented with the shared Telegram invoice builder in the Mini App adapter.
     from core.telegram_payments import create_invoice_link
-    await create_invoice_link(account, intent, price)
+    await create_invoice_link(account, intent, price, _extension=_automatic)
 
 
 async def check_order(account, order_id):

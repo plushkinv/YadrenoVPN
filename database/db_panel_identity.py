@@ -219,7 +219,7 @@ def bind_panel_subscription(*, user_id: int, endpoint: str, group_id: int,
             target = generate_unique_panel_email(dict(user))
             if _panel_subscription_keys(conn, endpoint, (), [target]):
                 raise CoreError('panel_identity_conflict')
-            snapshot = {**item, 'version': 1, 'endpoint': endpoint, 'sub_id': record['subId'],
+            snapshot = {**item, 'version': 2, 'endpoint': endpoint, 'sub_id': record['subId'],
                         'source': 'subscription_link'}
             if int(record.get('expiryTime') or 0) < 0:
                 snapshot['expiry_time_ms'] = expiry

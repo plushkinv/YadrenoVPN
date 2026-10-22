@@ -18,6 +18,13 @@
 .list-row small { display: block; color: var(--muted); }
 .brand-logo { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .account-chip { background: transparent; border: 0; min-width: 48px; min-height: 48px; cursor: pointer; }
+.account-page { display: grid; gap: 16px; max-width: 680px; }
+.account-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 20px; padding: 0 20px 24px; }
+.account-details > div { display: grid; align-content: start; justify-content: start; gap: 0; min-width: 0; }
+.account-details dt { color: var(--muted); font-size: .875rem; margin-bottom: 6px; }
+.account-details dd { display: grid; gap: 4px; }
+.account-actions { border-top: 1px solid var(--line); padding: 8px; }
+.account-actions .row-button { border-radius: var(--radius-small); }
 .rich-content { white-space: pre-wrap; }
 .rich-content a { text-decoration: underline; }
 @media (max-width: 600px) { .form-panel { padding: 20px; } .app { padding-top: calc(var(--tg-safe-area-inset-top, env(safe-area-inset-top, 0px)) + var(--tg-content-safe-area-inset-top, 0px)); } }
