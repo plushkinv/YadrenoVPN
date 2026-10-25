@@ -26,6 +26,12 @@ TELEGRAM_API_URL = "https://api.telegram.org"
 #     "https://api.telegram.org",
 # ]
 
+# Optional JWKS transport for Telegram Website Login, independent of Bot API.
+# Existing configurations without this setting use https://oauth.telegram.org.
+# A configured list is tried in order on connection failures only; no extra fallback.
+# TELEGRAM_OAUTH_URL = "http://10.70.1.1:8081/telegram-oauth"
+# TELEGRAM_OAUTH_URL = ["https://oauth-proxy-1.example.com", "https://oauth-proxy-2.example.com"]
+
 # Ссылка на GitHub репозиторий для автообновления
 # Формат: https://github.com/username/repo.git или git@github.com:username/repo.git
 GITHUB_REPO_URL = "https://github.com/plushkinv/YadrenoVPN.git"  # Укажите URL вашего репозитория

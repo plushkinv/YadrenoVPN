@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
+from urllib.parse import urlsplit
 
 import jwt
 
@@ -12,7 +13,57 @@ from core.results import CoreError
 from database import requests as db
 from runtime.readiness import require_active
 
-_KEYS = jwt.PyJWKClient('https://oauth.telegram.org/.well-known/jwks.json', timeout=5, lifespan=300)
+_ISSUER = 'https://oauth.telegram.org'
+
+
+def _oauth_urls() -> tuple[str, ...]:
+    """Read installation transport configuration without adding fallback hosts."""
+    import config
+
+    value = getattr(config, 'TELEGRAM_OAUTH_URL', _ISSUER)
+    values = [value] if isinstance(value, str) else value
+    if not isinstance(values, (list, tuple)) or not values:
+        raise jwt.PyJWKClientConnectionError('Invalid Telegram OAuth transport configuration')
+    urls: list[str] = []
+    for item in values:
+        if not isinstance(item, str):
+            raise jwt.PyJWKClientConnectionError('Invalid Telegram OAuth transport configuration')
+        url = item.strip().rstrip('/')
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            raise jwt.PyJWKClientConnectionError('Invalid Telegram OAuth transport configuration') from None
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or \
+                parsed.password or parsed.query or parsed.fragment:
+            raise jwt.PyJWKClientConnectionError('Invalid Telegram OAuth transport configuration')
+        if url not in urls:
+            urls.append(url)
+    return tuple(urls)
+
+
+class _OAuthJWKClient(jwt.PyJWKClient):
+    """Keep PyJWT key lookup/cache; vary only the JWKS HTTP transport."""
+
+    def fetch_data(self) -> dict:
+        data = None
+        try:
+            urls = _oauth_urls()
+            for index, base in enumerate(urls):
+                try:
+                    data = jwt.PyJWKClient(
+                        base + '/.well-known/jwks.json', timeout=self.timeout, cache_jwk_set=False,
+                    ).fetch_data()
+                    return data
+                except jwt.PyJWKClientConnectionError:
+                    if index == len(urls) - 1:
+                        raise
+            raise jwt.PyJWKClientConnectionError('No Telegram OAuth endpoint available')
+        finally:
+            if self.jwk_set_cache is not None:
+                self.jwk_set_cache.put(data)
+
+
+_KEYS = _OAuthJWKClient(_ISSUER + '/.well-known/jwks.json', timeout=5, lifespan=300)
 
 
 def login_settings() -> dict:
@@ -42,7 +93,7 @@ def _claims(id_token: str, client_id: int) -> dict:
         raise jwt.InvalidAlgorithmError('unsupported Telegram signing algorithm')
     key = _KEYS.get_signing_key_from_jwt(id_token)
     return jwt.decode(id_token, key.key, algorithms=['RS256'], audience=str(client_id),
-                      issuer='https://oauth.telegram.org',
+                      issuer=_ISSUER,
                       options={'require': ['iss', 'aud', 'exp', 'iat', 'nonce', 'id']})
 
 

@@ -1366,16 +1366,19 @@ async def deliver_page_prepare_outcome(
         if reply_markup_override is _USE_PREPARED_MARKUP
         else reply_markup_override
     )
-    rendered_message = await sender(
-        msg,
-        outcome.text,
-        reply_markup=reply_markup,
-        media=outcome.media,
-        media_type=outcome.media_type,
-        force_new=force_new,
-    )
-    if remember_context and rendered_message is not None:
-        _remember_prepared_page_context(target, outcome, rendered_message)
+    from bot.utils.reply_keyboard import main_reply_keyboard
+
+    async with main_reply_keyboard(outcome.page_key, message=msg):
+        rendered_message = await sender(
+            msg,
+            outcome.text,
+            reply_markup=reply_markup,
+            media=outcome.media,
+            media_type=outcome.media_type,
+            force_new=force_new,
+        )
+        if remember_context and rendered_message is not None:
+            _remember_prepared_page_context(target, outcome, rendered_message)
     return PageDeliveryResult('ready', message=rendered_message)
 
 

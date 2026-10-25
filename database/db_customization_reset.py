@@ -82,6 +82,7 @@ def _customization_default_settings() -> dict[str, str | None]:
         "referral_attribution_window_hours": "0",
         "expired_key_panel_cleanup_delay_days": "0",
         "broadcast_message": None,
+        "telegram_reply_keyboard": None,
         "broadcast_style_profile": json.dumps(
             migrations.DEFAULT_BROADCAST_STYLE_PROFILE,
             ensure_ascii=False,

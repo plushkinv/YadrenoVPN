@@ -77,6 +77,9 @@ async def main():
     from bot.middlewares.runtime import RuntimeIngressMiddleware
     dp.update.outer_middleware(RuntimeIngressMiddleware())
 
+    from bot.middlewares.reply_keyboard import ReplyKeyboardMiddleware
+    dp.message.outer_middleware(ReplyKeyboardMiddleware())
+
     from bot.middlewares.admin_monitoring import AdminMonitoringMiddleware
     monitoring_middleware = AdminMonitoringMiddleware()
     dp.message.outer_middleware(monitoring_middleware)

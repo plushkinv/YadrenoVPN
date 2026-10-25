@@ -6,6 +6,7 @@ from typing import Any
 from core.web_ui import PRESENTATION_CONSTRAINTS, presentation_setting_contract, validate_setting
 from core.results import CoreError
 from database.account_names import parse_account_name_pool
+from bot.utils import reply_keyboard
 from database.requests import (
     EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
     REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX,
@@ -23,7 +24,8 @@ _INTEGER_LIMITS = {
     'expired_key_panel_cleanup_delay_days': EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
 }
 CUSTOM_SETTING_KEYS = (*_TEXT_KEYS, *_INTEGER_LIMITS,
-                       *('web_ui_' + name for name in PRESENTATION_CONSTRAINTS), 'account_name_pool')
+                       *('web_ui_' + name for name in PRESENTATION_CONSTRAINTS),
+                       'account_name_pool', reply_keyboard.SETTING_KEY)
 MAX_SETTING_LENGTH = 50_000
 MAX_KEY_PREFIX_LENGTH = 30
 
@@ -35,6 +37,19 @@ def setting_contract(key: str) -> dict[str, Any]:
     if key.startswith('web_ui_'):
         return presentation_setting_contract(key.removeprefix('web_ui_'))
     constraints: dict[str, Any] = {'non_blank': True, 'max_length': MAX_SETTING_LENGTH}
+    if key == reply_keyboard.SETTING_KEY:
+        constraints.update(
+            json_type='object', fields=['message_text', 'rows'],
+            message_text={'type': 'string', 'non_blank': True, 'max_length': 4096,
+                          'required_when_rows_nonempty': True},
+            rows={'type': 'array', 'items': 'non_empty_button_array', 'empty_disables': True},
+            button={'fields': ['label', 'command'], 'label_max_length': reply_keyboard.MAX_LABEL_LENGTH,
+                    'label_single_line': True, 'label_normalization': 'strip', 'unique_labels': True,
+                    'command_pattern': reply_keyboard.COMMAND_PATTERN,
+                    'slash_label_must_match_command': True},
+        )
+        return {'value_type': 'json_string', 'normalization': 'none', 'constraints': constraints,
+                'allowed_commands': reply_keyboard.available_commands(), 'restart_required': False}
     if key in _INTEGER_LIMITS:
         constraints.update(ascii_digits=True, minimum=0, maximum=_INTEGER_LIMITS[key])
         return {'value_type': 'integer_string', 'normalization': 'decimal', 'constraints': constraints}
@@ -62,6 +77,8 @@ def validate_setting_value(key: str, value: Any) -> str:
         raise ValueError('setting value must not be empty')
     if len(value) > MAX_SETTING_LENGTH:
         raise ValueError('setting value is too large')
+    if key == reply_keyboard.SETTING_KEY:
+        reply_keyboard.parse_config(value, require_available=True)
     if key == 'account_name_pool':
         parse_account_name_pool(value)
     if key == 'key_name_prefix':

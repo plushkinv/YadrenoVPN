@@ -19,6 +19,7 @@ async def send_background_page(
     """Prepare and send one stored page without rerunning its guards or hooks."""
     from bot.utils.delivery import is_bot_blocked_error
     from bot.utils.page_renderer import PreparedPageRender, prepare_page_render
+    from bot.utils.reply_keyboard import main_reply_keyboard
     from bot.utils.text import send_media_or_text
     from database.requests import mark_user_bot_blocked
 
@@ -33,14 +34,15 @@ async def send_background_page(
                 render_context.get("order_id"),
             )
             return None
-        return await send_media_or_text(
-            bot,
-            chat_id=int(telegram_id),
-            text=prepared.text,
-            media=prepared.media,
-            media_type=prepared.media_type,
-            reply_markup=prepared.reply_markup,
-        )
+        async with main_reply_keyboard(prepared.page_key, bot=bot, chat_id=int(telegram_id)):
+            return await send_media_or_text(
+                bot,
+                chat_id=int(telegram_id),
+                text=prepared.text,
+                media=prepared.media,
+                media_type=prepared.media_type,
+                reply_markup=prepared.reply_markup,
+            )
     except Exception as error:
         if is_bot_blocked_error(error):
             mark_user_bot_blocked(int(telegram_id))

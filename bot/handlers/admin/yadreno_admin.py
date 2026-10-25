@@ -986,6 +986,10 @@ def _get_yaa_editable_state(page_key: str) -> dict[str, Any]:
         'display_timezone': get_display_timezone(),
         'user_ui_texts_fingerprint': get_user_ui_texts_fingerprint(),
     }
+    if page_key == 'main':
+        from bot.utils.reply_keyboard import SETTING_KEY
+
+        state[SETTING_KEY] = get_setting(SETTING_KEY)
     if page_key in {'my_keys', 'my_keys_empty'}:
         from bot.utils.my_keys_page import (
             MY_KEYS_ITEM_TEMPLATE_SETTING,
