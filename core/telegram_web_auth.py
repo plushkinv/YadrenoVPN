@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
+import logging
 import secrets
 import time
 import zlib
@@ -19,6 +20,7 @@ from database import requests as db
 from runtime.readiness import require_active
 
 _ISSUER = 'https://oauth.telegram.org'
+logger = logging.getLogger(__name__)
 
 
 def _oauth_urls() -> tuple[str, ...]:
@@ -111,18 +113,33 @@ async def finish(*, id_token: str, browser: str | None, ip: str) -> dict:
     if not settings['available']:
         raise CoreError('telegram_login_unavailable')
     auth._limit('telegram_web_finish', ip)
-    if not isinstance(browser, str) or len(browser) != 43 or not isinstance(id_token, str) or len(id_token) > 16384:
+    if not isinstance(browser, str) or len(browser) != 43:
+        logger.warning('telegram_web_login_failed stage=browser_cookie')
+        raise CoreError('telegram_authentication_failed')
+    if not isinstance(id_token, str) or len(id_token) > 16384:
+        logger.warning('telegram_web_login_failed stage=token_input')
         raise CoreError('telegram_authentication_failed')
     try:
         claims = await asyncio.to_thread(_claims, id_token, settings['client_id'])
-    except jwt.PyJWKClientConnectionError:
+    except jwt.PyJWKClientConnectionError as error:
+        logger.warning('telegram_web_login_failed stage=jwks error_type=%s cause_type=%s',
+                       type(error).__name__, type(error.__cause__).__name__)
         raise CoreError('temporarily_unavailable', retryable=True) from None
-    except (jwt.PyJWTError, ValueError, TypeError):
+    except (jwt.PyJWTError, ValueError, TypeError) as error:
+        missing = getattr(error, 'claim', None) if isinstance(error, jwt.MissingRequiredClaimError) else None
+        missing = missing if missing in ('iss', 'aud', 'exp', 'iat', 'nonce', 'id') else None
+        logger.warning('telegram_web_login_failed stage=jwt error_type=%s missing_claim=%s',
+                       type(error).__name__, missing)
         raise CoreError('telegram_authentication_failed') from None
     actor_id, nonce = claims.get('id'), claims.get('nonce')
-    if type(actor_id) is not int or not 0 < actor_id < 2**52 or not isinstance(nonce, str) or len(nonce) != 43:
+    if type(actor_id) is not int or not 0 < actor_id < 2**52:
+        logger.warning('telegram_web_login_failed stage=identity id_type=%s', type(actor_id).__name__)
+        raise CoreError('telegram_authentication_failed')
+    if not isinstance(nonce, str) or len(nonce) != 43:
+        logger.warning('telegram_web_login_failed stage=nonce_format nonce_type=%s', type(nonce).__name__)
         raise CoreError('telegram_authentication_failed')
     if not db.consume_telegram_login_challenge(auth.secret_hash(browser), auth.secret_hash(nonce), int(time.time())):
+        logger.warning('telegram_web_login_failed stage=challenge')
         raise CoreError('telegram_authentication_failed')
     def field(name):
         value = claims.get(name)
