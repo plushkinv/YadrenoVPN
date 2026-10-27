@@ -132,8 +132,10 @@ async def finish(*, id_token: str, browser: str | None, ip: str) -> dict:
                        type(error).__name__, missing)
         raise CoreError('telegram_authentication_failed') from None
     actor_id, nonce = claims.get('id'), claims.get('nonce')
+    if isinstance(actor_id, str) and 1 <= len(actor_id) <= 16 and actor_id.isascii() and actor_id.isdecimal():
+        actor_id = int(actor_id)
     if type(actor_id) is not int or not 0 < actor_id < 2**52:
-        logger.warning('telegram_web_login_failed stage=identity id_type=%s', type(actor_id).__name__)
+        logger.warning('telegram_web_login_failed stage=identity id_type=%s', type(claims.get('id')).__name__)
         raise CoreError('telegram_authentication_failed')
     if not isinstance(nonce, str) or len(nonce) != 43:
         logger.warning('telegram_web_login_failed stage=nonce_format nonce_type=%s', type(nonce).__name__)
