@@ -127,6 +127,11 @@ def get_storage():
     return get_extension_storage(_require_current_extension())
 
 
+def get_database():
+    from bot.utils.custom_extensions import get_database as database
+    return database()
+
+
 def get_core_facade():
     from bot.utils.custom_extensions import _require_current_extension
     from .facade import SharedCoreFacade
@@ -135,7 +140,7 @@ def get_core_facade():
 
 __all__ = ['API_VERSION', 'register_module', 'register_action_policy', 'register_pricing_policy',
            'register_eligibility_policy', 'first_purchase_eligible', 'register_settings', 'get_settings',
-           'register_storage_schema', 'get_storage', 'get_core_facade']
+           'register_storage_schema', 'get_storage', 'get_database', 'get_core_facade']
 __all__ += ['register_user_operation']
 __all__ += ['register_reward_policy', 'register_event_handler', 'register_lifecycle_hook']
 __all__ += ['register_webhook']

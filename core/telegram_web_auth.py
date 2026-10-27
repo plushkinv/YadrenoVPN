@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
+import json
 import secrets
 import time
+import zlib
+from urllib.error import URLError
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 import jwt
 
@@ -50,13 +55,16 @@ class _OAuthJWKClient(jwt.PyJWKClient):
             urls = _oauth_urls()
             for index, base in enumerate(urls):
                 try:
-                    data = jwt.PyJWKClient(
-                        base + '/.well-known/jwks.json', timeout=self.timeout, cache_jwk_set=False,
-                    ).fetch_data()
+                    request = Request(base + '/.well-known/jwks.json', headers={'Accept-Encoding': 'gzip'})
+                    with urlopen(request, timeout=self.timeout) as response:
+                        body = response.read()
+                        if response.headers.get('Content-Encoding', '').strip().lower() == 'gzip':
+                            body = gzip.decompress(body)
+                    data = json.loads(body)
                     return data
-                except jwt.PyJWKClientConnectionError:
+                except (URLError, TimeoutError, gzip.BadGzipFile, EOFError, zlib.error) as error:
                     if index == len(urls) - 1:
-                        raise
+                        raise jwt.PyJWKClientConnectionError('Failed to fetch Telegram signing keys') from error
             raise jwt.PyJWKClientConnectionError('No Telegram OAuth endpoint available')
         finally:
             if self.jwk_set_cache is not None:

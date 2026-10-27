@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from pathlib import Path
 from typing import Iterable
@@ -10,6 +9,7 @@ from typing import Iterable
 from database import connection as db_connection
 from database import migrations
 from database.web_ui_defaults import WEB_UI_DEFAULTS
+from database.extension_sql_access import is_extension_object, quote_identifier
 
 STOCK_CUSTOM_PAGE_KEYS = {"custom_profile"}
 STOCK_PAGE_ROUTES = {
@@ -20,7 +20,6 @@ STOCK_PAGE_ROUTES = {
         "is_enabled": 1,
     },
 }
-EXTENSION_TABLE_RE = re.compile(r"^ext_[a-z][a-z0-9_]{0,47}_[a-z][a-z0-9_]{0,63}$")
 
 
 def _db_path(db_path: str | Path | None = None) -> Path:
@@ -332,19 +331,24 @@ def _reset_extension_tables(conn: sqlite3.Connection, dry_run: bool) -> list[str
         if count and not dry_run:
             conn.execute(f'DELETE FROM "{table_name}"')
 
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
-    ).fetchall()
-    extension_tables = [
-        str(row["name"]) for row in rows if EXTENSION_TABLE_RE.fullmatch(str(row["name"]))
-    ]
+    rows = conn.execute('SELECT type, name, tbl_name FROM sqlite_schema ORDER BY name').fetchall()
+    objects = [row for row in rows if is_extension_object(row['type'], row['name'], row['tbl_name'])]
+    extension_tables = [row['name'] for row in objects if row['type'] == 'table']
     actions.append(
         "extension data tables to drop: "
         + (", ".join(extension_tables) if extension_tables else "none")
     )
+    dependents = [row['name'] for row in objects if row['type'] in {'view', 'trigger'}]
+    actions.append('extension views/triggers to drop: ' + (', '.join(dependents) if dependents else 'none'))
     if not dry_run:
+        conn.execute('PRAGMA defer_foreign_keys = ON')
+        # Dropping a view also drops its INSTEAD OF triggers.
+        for kind in ('trigger', 'view'):
+            for row in objects:
+                if row['type'] == kind:
+                    conn.execute(f'DROP {kind} {quote_identifier(row["name"])}')
         for table_name in extension_tables:
-            conn.execute(f'DROP TABLE "{table_name}"')
+            conn.execute(f'DROP TABLE {quote_identifier(table_name)}')
     return actions
 
 
@@ -360,6 +364,7 @@ def reset_customization_database(
 
     conn = _connect(path)
     try:
+        conn.execute('BEGIN')
         actions: list[str] = []
         actions.extend(_reset_pages(conn, dry_run))
         actions.extend(_reset_user_ui_texts(conn, dry_run))
@@ -381,7 +386,6 @@ def reset_customization_database(
 
 
 __all__ = [
-    "EXTENSION_TABLE_RE",
     "STOCK_CUSTOM_PAGE_KEYS",
     "STOCK_PAGE_ROUTES",
     "reset_customization_database",

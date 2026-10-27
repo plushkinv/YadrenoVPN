@@ -60,6 +60,7 @@ _PUBLIC_CUSTOM_EXTENSIONS_API = {
     'get_core_api',
     'get_extension_config',
     'get_extension_storage',
+    'get_database',
     'is_custom_extensions_enabled',
     'load_custom_extensions',
     'register_action_policy',
@@ -486,6 +487,13 @@ def get_extension_storage(extension_id: str):
     return db_get_extension_storage(_require_current_extension_namespace(extension_id))
 
 
+def get_database():
+    """Return managed SQL access to the database and the shared ext_* area."""
+    from database.extension_sql import ExtensionDatabase
+    _require_current_extension()
+    return ExtensionDatabase()
+
+
 def register_extension_settings(fields: list[dict]) -> list[dict]:
     """Registers admin-editable settings for the current extension."""
     _ensure_extension_mutation_allowed('register_extension_settings')
@@ -599,6 +607,7 @@ def get_custom_extensions_diagnostics(
     from database.requests import get_page_classification_diagnostics, get_setting
     from core.extensions.registry import inspect_modules
     from bot.utils.extension_inputs import input_capabilities
+    from database.extension_sql_access import sql_capabilities
 
     configured_value = get_setting(CUSTOM_EXTENSIONS_ENABLED_SETTING, '0')
     if enabled is None:
@@ -718,6 +727,7 @@ def get_custom_extensions_diagnostics(
             'delivery_policy': 'single_attempt',
         },
         'input_capabilities': input_capabilities(),
+        'sql_capabilities': sql_capabilities(),
         'finance_capabilities': {
             'contract_version': 1,
             'payment_read_access': 'installation', 'promo_management_access': 'installation',
@@ -988,14 +998,18 @@ def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) ->
                 callback_data = _literal_string_arg(node.args[1])
                 if callback_data is not None:
                     normalize_callback_data(callback_data, 'callback_data')
-        elif func_name == 'register_extension_schema' and node.args:
-            schema_extension_id = _literal_string_arg(node.args[0])
-            if schema_extension_id is not None and normalize_extension_id(schema_extension_id) != expected_extension_id:
-                raise ValueError('extension_id schema должен совпадать с именем extension-файла')
-            if len(node.args) >= 2:
-                migrations = _literal_value_arg(node.args[1])
-                if migrations is not None:
-                    validate_extension_schema_migrations(expected_extension_id, migrations)
+        elif func_name in {'register_extension_schema', 'register_storage_schema'}:
+            offset = int(func_name == 'register_extension_schema')
+            if offset:
+                schema_extension_id = (_literal_string_arg(node.args[0]) if node.args
+                                       else _literal_keyword_string_arg(node, 'extension_id'))
+                if schema_extension_id is not None and normalize_extension_id(schema_extension_id) != expected_extension_id:
+                    raise ValueError('extension_id schema должен совпадать с именем extension-файла')
+            declaration = node.args[offset] if len(node.args) > offset else next(
+                (keyword.value for keyword in node.keywords if keyword.arg == 'migrations'), None)
+            migrations = _literal_value_arg(declaration) if declaration is not None else None
+            if migrations is not None:
+                validate_extension_schema_migrations(expected_extension_id, migrations)
         elif func_name == 'register_extension_settings' and node.args:
             fields = _literal_value_arg(node.args[0])
             if fields is not None:
@@ -2100,6 +2114,7 @@ def _as_bool(value: object) -> bool:
 
 
 __all__ = [
+    'get_database',
     'CUSTOM_EXTENSIONS_DIR',
     'CUSTOM_EXTENSIONS_ENABLED_SETTING',
     'CustomExtensionsLoadResult',

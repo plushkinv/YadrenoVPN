@@ -11,6 +11,7 @@ from database.requests import (
     is_user_banned,
 )
 from bot.utils.user_pages import render_access_blocked_page
+from bot.utils.reply_keyboard import send_reply_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,8 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     if user.get('is_banned'):
         await render_access_blocked_page(message, force_new=True)
         return
+
+    await send_reply_keyboard(message)
 
     args = command.args
     if args:

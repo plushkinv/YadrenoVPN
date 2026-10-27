@@ -1,7 +1,6 @@
-"""Optional command keyboard: live configuration and main-page delivery."""
+"""Optional command keyboard: live configuration and /start delivery."""
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import json
 import logging
 import re
@@ -88,30 +87,17 @@ def active_config() -> dict[str, Any] | None:
     return config if config['rows'] else None
 
 
-@asynccontextmanager
-async def main_reply_keyboard(page_key: str, *, message=None, bot=None, chat_id=None):
-    """Install before main delivery and delete only the carrier, even on failure."""
-    carrier = None
+async def send_reply_keyboard(message) -> None:
+    """Send the configured keyboard once per /start and retain its message."""
     try:
-        if page_key == 'main':
-            try:
-                config = active_config()
-                if config:
-                    from bot.keyboards.reply_keyboard import build_reply_keyboard
-                    from bot.utils.text import send_media_or_text
+        config = active_config()
+        if config:
+            from bot.keyboards.reply_keyboard import build_reply_keyboard
+            from bot.utils.text import send_media_or_text
 
-                    if message is not None:
-                        bot, chat_id = message.bot, message.chat.id
-                    carrier = await send_media_or_text(
-                        bot, chat_id=chat_id, text=config['message_text'],
-                        reply_markup=build_reply_keyboard(config['rows']),
-                    )
-            except Exception:
-                logger.warning('Failed to install main reply keyboard', exc_info=True)
-        yield
-    finally:
-        if carrier is not None:
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=carrier.message_id)
-            except Exception:
-                logger.warning('Failed to delete reply keyboard carrier', exc_info=True)
+            await send_media_or_text(
+                message.bot, chat_id=message.chat.id, text=config['message_text'],
+                reply_markup=build_reply_keyboard(config['rows']),
+            )
+    except Exception:
+        logger.warning('Failed to install reply keyboard on /start', exc_info=True)

@@ -46,8 +46,9 @@ def create_extension_support_tables(conn: sqlite3.Connection) -> None:
 
 
 def register_extension_schema(extension_id: str, migrations: Sequence[Mapping[str, Any]]) -> None:
-    """Applies declarative extension migrations to the production database."""
-    with get_db() as conn:
+    """Apply extension-owned migration sequences on a dedicated connection."""
+    from .extension_sql import extension_connection
+    with extension_connection() as conn:
         apply_extension_schema(conn, extension_id, migrations)
 
 
@@ -57,8 +58,18 @@ def validate_extension_schema_migrations(extension_id: str, migrations: Sequence
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     try:
-        apply_extension_schema(conn, ext_id, migrations)
-        return _normalize_schema_migrations(migrations)
+        normalized = _normalize_schema_migrations(migrations)
+        has_sql = any('sql' in step for step in normalized)
+        # SQL can depend on installed core/shared tables. Static validation checks
+        # its declaration; real execution enforces SQL access. Pure declarative
+        # validation stays in memory, outside the live application's write fence.
+        for step in normalized:
+            for table in step.get('tables', []):
+                _create_extension_table(conn, ext_id, table)
+            if not has_sql:
+                for table in step.get('alter_tables', []):
+                    _alter_extension_table(conn, ext_id, table)
+        return normalized
     finally:
         conn.close()
 
@@ -79,12 +90,22 @@ def apply_extension_schema(
         if version <= current_version:
             continue
 
-        for table in migration.get('tables', []):
-            _create_extension_table(conn, ext_id, table)
-        for table in migration.get('alter_tables', []):
-            _alter_extension_table(conn, ext_id, table)
-
-        _set_extension_schema_version(conn, ext_id, version)
+        from .extension_sql import sql_session
+        with sql_session(conn) as session, session.atomic():
+            if 'sql' in migration:
+                for statement in migration['sql']:
+                    session.run(statement)
+            else:
+                # Legacy declarations keep their names and validation rules.
+                from runtime.readiness import sqlite_authorizer
+                conn.set_authorizer(sqlite_authorizer)
+                for table in migration.get('tables', []):
+                    _create_extension_table(conn, ext_id, table)
+                for table in migration.get('alter_tables', []):
+                    _alter_extension_table(conn, ext_id, table)
+            from runtime.readiness import sqlite_authorizer
+            conn.set_authorizer(sqlite_authorizer)
+            _set_extension_schema_version(conn, ext_id, version)
         current_version = version
         logger.info("Extension schema %s обновлена до версии %s", ext_id, version)
 
@@ -304,11 +325,19 @@ def _normalize_schema_migrations(migrations: Sequence[Mapping[str, Any]]) -> lis
     for migration in migrations:
         if not isinstance(migration, Mapping):
             raise ValueError("migration должен быть словарём")
-        _reject_unknown_keys(migration, {'version', 'tables', 'alter_tables'}, 'migration')
+        _reject_unknown_keys(migration, {'version', 'tables', 'alter_tables', 'sql'}, 'migration')
         version = _normalize_schema_version(migration.get('version'))
         if version in seen_versions:
             raise ValueError(f"migration.version {version} повторяется")
         seen_versions.add(version)
+        if 'sql' in migration:
+            if 'tables' in migration or 'alter_tables' in migration:
+                raise ValueError('migration must use either sql or declarative tables/alter_tables')
+            statements = _required_sequence_field(migration, 'sql', 'migration.sql', nonempty=True)
+            if any(not isinstance(sql, str) or not sql.strip() for sql in statements):
+                raise ValueError('migration.sql must contain nonempty SQL statements')
+            result.append({'version': version, 'sql': list(statements)})
+            continue
         tables = _optional_sequence_field(migration, 'tables', 'migration.tables')
         alter_tables = _optional_sequence_field(migration, 'alter_tables', 'migration.alter_tables')
         result.append({
