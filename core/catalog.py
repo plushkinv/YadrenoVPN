@@ -16,14 +16,11 @@ async def catalog(account, *, key_id=None):
     action = 'key.renew.start' if key is not None else 'key.purchase.start'
     tariffs = get_tariffs_for_key_renewal(key) if key else db.get_all_tariffs(include_hidden=False)
     groups = {group['id']: group for group in db.get_all_groups()}
-    group_has_servers = {group_id: bool(db.get_active_servers_by_group(group_id)) for group_id in groups}
     result = []
     with bind_account_context(account):
         page_key, buttons = payment_method_buttons(purpose)
         for tariff in tariffs:
             if tariff.get('system_type') is not None or not tariff.get('is_active'):
-                continue
-            if not key and len(groups) > 1 and not group_has_servers.get(tariff['group_id']):
                 continue
             params = {'key_id': key_id} if key else {'tariff_id': tariff['id']}
             decision = await run_account_action_policies(action, params, account=account, phase='preview')

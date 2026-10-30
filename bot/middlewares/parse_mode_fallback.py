@@ -98,6 +98,31 @@ class SafeParseSession(AiohttpSession):
     If there are several addresses, it switches to the next one after a network failure.
     """
     
+    def __setattr__(self, name, value):
+        if name in {'api', 'proxy', 'timeout', 'json_loads', 'json_dumps', 'middleware'}:
+            from bot.utils.extension_telegram import check_transport_control
+            check_transport_control(f'session.{name}')
+        super().__setattr__(name, value)
+
+    def __delattr__(self, name):
+        if name in {'api', 'proxy', 'timeout', 'json_loads', 'json_dumps', 'middleware'}:
+            from bot.utils.extension_telegram import check_transport_control
+            check_transport_control(f'session.{name}')
+        super().__delattr__(name)
+
+    async def close(self):
+        from bot.utils.extension_telegram import check_transport_control
+        check_transport_control('session.close')
+        await super().close()
+
+    async def create_session(self):
+        # Connector maintenance belongs to the session, including requests made
+        # by extensions. Do not grant extension code a general close permission.
+        if self._should_reset_connector:
+            await super().close()
+            self._should_reset_connector = False
+        return await super().create_session()
+
     def __init__(self, **kwargs):
         explicit_api = kwargs.get('api')
         if explicit_api is not None:
@@ -184,7 +209,7 @@ class SafeParseSession(AiohttpSession):
             next_api_url = self._telegram_api_urls[next_api_index]
 
             self._telegram_api_index = next_api_index
-            self.api = self._telegram_api_servers[next_api_index]
+            object.__setattr__(self, 'api', self._telegram_api_servers[next_api_index])
 
             logger.warning(
                 "⚠️ Telegram Bot API не ответил (%s): %s. Переключаюсь на %s",
@@ -199,8 +224,10 @@ class SafeParseSession(AiohttpSession):
         method: TelegramMethod[TelegramType],
         timeout: Optional[float] = None
     ) -> TelegramType:
+        from bot.utils.extension_telegram import check_telegram_method
         from bot.utils.text import prepare_telegram_method
 
+        check_telegram_method(method)
         method = prepare_telegram_method(method)
 
         try:

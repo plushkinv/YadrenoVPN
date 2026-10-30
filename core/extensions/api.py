@@ -1,6 +1,24 @@
 """Public shared extension API v1; identities come from the installed module loader."""
 API_VERSION = 1
 
+from bot.services.panels.base import PanelErrorKind, PanelRequestError
+from bot.services.panels.http import PanelResponse
+
+
+def get_bot():
+    from bot.utils.custom_extensions import get_bot as borrow_bot
+    return borrow_bot()
+
+
+def list_panels():
+    from bot.utils.custom_extensions import list_panels as list_connections
+    return list_connections()
+
+
+def get_panel_client(server_id: int):
+    from bot.utils.custom_extensions import get_panel_client as borrow_panel
+    return borrow_panel(server_id)
+
 
 def _owner(operation):
     from bot.utils.custom_extensions import _ensure_extension_mutation_allowed, _require_current_extension
@@ -144,3 +162,4 @@ __all__ = ['API_VERSION', 'register_module', 'register_action_policy', 'register
 __all__ += ['register_user_operation']
 __all__ += ['register_reward_policy', 'register_event_handler', 'register_lifecycle_hook']
 __all__ += ['register_webhook']
+__all__ += ['get_bot', 'list_panels', 'get_panel_client', 'PanelResponse', 'PanelRequestError', 'PanelErrorKind']

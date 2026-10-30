@@ -823,7 +823,7 @@ async def create_platega_payment(
         order_id: Our internal order_id
         description: Description of the payment
         bot_name: Username of the bot (for building return)
-        user_telegram_id: Telegram payer ID for metadata.userId
+        user_telegram_id: Telegram payer ID for metadata.userId and metadata.user_email
 
     Returns:
         Dictionary with keys:
@@ -859,6 +859,7 @@ async def create_platega_payment(
     if user_telegram_id is not None:
         payload["metadata"] = {
             "userId": str(user_telegram_id),
+            "user_email": f"{user_telegram_id}@telegram.org",
         }
 
     headers = {

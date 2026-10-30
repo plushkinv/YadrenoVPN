@@ -27,6 +27,7 @@ from bot.utils.inbounds import (
     inbound_matches_group,
     is_mtproto_inbound,
 )
+from bot.utils.panel_email import panel_email_log_value
 from bot.utils.panel_version import (
     CLIENT_EXTERNAL_LINKS_MIN_VERSION,
     CLIENT_HWID_LIMITS_MIN_VERSION,
@@ -852,6 +853,13 @@ class XUIClient(BaseVPNClient):
             self._persist_panel_version(version)
             return True
 
+    async def request_http(self, method: str, endpoint: str, *, params=None,
+                           json=None, data=None, headers=None, timeout=None):
+        """Perform arbitrary HTTP using this adapter's shared authentication."""
+        from .http import request_authorized
+        return await request_authorized(self, method, endpoint, params=params,
+                                        json=json, data=data, headers=headers, timeout=timeout)
+
     async def _request(
         self,
         method: str,
@@ -1554,6 +1562,20 @@ class XUIClient(BaseVPNClient):
             )
 
             record = await self._get_client_record(email)
+            creation_log_pending = not record
+
+            def log_confirmed_creation(confirmed_record):
+                nonlocal creation_log_pending
+                if not creation_log_pending or not confirmed_record:
+                    return
+                confirmed_client, _ = self._split_record(confirmed_record)
+                if confirmed_client.get("email") == email:
+                    logger.info(
+                        "panel_client_create_confirmed server_id=%s email=%s",
+                        self.server_id, panel_email_log_value(email),
+                    )
+                    creation_log_pending = False
+
             if record:
                 client, attached = self._split_record(record)
                 canonical_sub_id = str(client.get("subId") or canonical_sub_id)
@@ -1589,6 +1611,7 @@ class XUIClient(BaseVPNClient):
                             email=email,
                             validator=created,
                         )
+                        log_confirmed_creation(record)
                     except PanelRejectedError as exc:
                         failed[first_target] = self._safe_detail(exc)
                         continue
@@ -1647,6 +1670,7 @@ class XUIClient(BaseVPNClient):
                         failed.setdefault(inbound_id, self._safe_detail(exc))
 
             record = await self._get_client_record(email)
+            log_confirmed_creation(record)
             client, actual_ids = self._split_record(record or {})
             confirmed_sub_id = str(client.get("subId") or "").strip()
             attached = targets.intersection(actual_ids)

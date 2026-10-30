@@ -505,6 +505,8 @@ def _inspect_extensions(cursor: int, limit: int) -> dict[str, Any]:
             'messaging_capabilities': diagnostics.get('messaging_capabilities') or {},
             'input_capabilities': diagnostics.get('input_capabilities') or {},
             'sql_capabilities': diagnostics.get('sql_capabilities') or {},
+            'telegram_capabilities': diagnostics.get('telegram_capabilities') or {},
+            'panel_capabilities': diagnostics.get('panel_capabilities') or {},
             'finance_capabilities': diagnostics.get('finance_capabilities') or {},
         },
     )

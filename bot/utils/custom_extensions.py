@@ -18,6 +18,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
+from bot.services.panels.base import PanelErrorKind, PanelRequestError
+from bot.services.panels.http import PanelResponse
+
 from bot.utils.action_registry import register_action_handler as _register_action_handler
 from bot.utils.page_flow import register_page_guard as _register_page_guard
 from bot.utils.page_flow import register_page_hook as _register_page_hook
@@ -52,6 +55,8 @@ _BLOCKED_INTROSPECTION_CALLS = {'vars', 'dir'}
 _GETATTR_CALLS = {'getattr'}
 _DUNDER_GETATTRIBUTE_CALLS = {'__getattribute__'}
 _PUBLIC_CUSTOM_EXTENSIONS_API = {
+    'get_bot', 'list_panels', 'get_panel_client',
+    'PanelResponse', 'PanelRequestError', 'PanelErrorKind',
     'CUSTOM_EXTENSIONS_DIR',
     'CUSTOM_EXTENSIONS_ENABLED_SETTING',
     'CustomExtensionsLoadResult',
@@ -494,6 +499,30 @@ def get_database():
     return ExtensionDatabase()
 
 
+def get_bot():
+    """Return borrowed aiogram access to the currently bound application bot."""
+    from bot.utils.extension_telegram import ExtensionBot
+    _require_current_extension()
+    bot = _get_current_extension_bot()
+    if bot is None:
+        raise RuntimeError('get_bot requires a bound bot runtime')
+    return ExtensionBot(bot)
+
+
+def list_panels():
+    """List saved panel connections without credentials."""
+    from bot.utils.extension_panels import list_panels as list_connections
+    _require_current_extension()
+    return list_connections()
+
+
+def get_panel_client(server_id: int):
+    """Borrow an authorized panel client without making a network request."""
+    from bot.utils.extension_panels import ExtensionPanelClient
+    _require_current_extension()
+    return ExtensionPanelClient(server_id)
+
+
 def register_extension_settings(fields: list[dict]) -> list[dict]:
     """Registers admin-editable settings for the current extension."""
     _ensure_extension_mutation_allowed('register_extension_settings')
@@ -608,6 +637,8 @@ def get_custom_extensions_diagnostics(
     from core.extensions.registry import inspect_modules
     from bot.utils.extension_inputs import input_capabilities
     from database.extension_sql_access import sql_capabilities
+    from bot.utils.extension_telegram import telegram_capabilities
+    from bot.utils.extension_panels import panel_capabilities
 
     configured_value = get_setting(CUSTOM_EXTENSIONS_ENABLED_SETTING, '0')
     if enabled is None:
@@ -728,6 +759,8 @@ def get_custom_extensions_diagnostics(
         },
         'input_capabilities': input_capabilities(),
         'sql_capabilities': sql_capabilities(),
+        'telegram_capabilities': telegram_capabilities(),
+        'panel_capabilities': panel_capabilities(),
         'finance_capabilities': {
             'contract_version': 1,
             'payment_read_access': 'installation', 'promo_management_access': 'installation',
@@ -2114,6 +2147,8 @@ def _as_bool(value: object) -> bool:
 
 
 __all__ = [
+    'get_bot', 'list_panels', 'get_panel_client',
+    'PanelResponse', 'PanelRequestError', 'PanelErrorKind',
     'get_database',
     'CUSTOM_EXTENSIONS_DIR',
     'CUSTOM_EXTENSIONS_ENABLED_SETTING',

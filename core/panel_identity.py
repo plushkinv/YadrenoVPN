@@ -5,6 +5,7 @@ import json
 import logging
 import time
 
+from bot.utils.panel_email import panel_email_log_value
 from core.results import CoreError
 from database import requests as db
 from runtime.readiness import require_active
@@ -47,6 +48,12 @@ async def _resume(operation: dict) -> None:
         raise CoreError('panel_identity_changed')
     await client.rename_client_identity(operation['old_email'], operation['new_email'], snapshot)
     db.finish_panel_identity_rename(operation['id'], int(time.time()))
+    logger.info(
+        'panel_client_renamed server_id=%s key_id=%s operation=%s old_email=%s new_email=%s attempt=%s',
+        operation['server_id'], operation['key_id'], operation['id'],
+        panel_email_log_value(operation['old_email']), panel_email_log_value(operation['new_email']),
+        operation.get('attempts', 0) + 1,
+    )
 
 
 async def process_panel_identity_renames(*, key_id: int | None = None) -> dict:
@@ -68,6 +75,8 @@ async def process_panel_identity_renames(*, key_id: int | None = None) -> dict:
 
 async def resume_panel_identity_renames(operations: list[dict]) -> dict:
     """Run under the caller's exclusive panel coordinator scope."""
+    from bot.services.panels.base import PanelRequestError
+
     stats = {'seen': 0, 'done': 0, 'pending': 0}
     for operation in operations:
         stats['seen'] += 1
@@ -75,8 +84,18 @@ async def resume_panel_identity_renames(operations: list[dict]) -> dict:
             await _resume(operation)
         except Exception as error:
             code = error.code if isinstance(error, CoreError) else 'panel_unavailable'
-            db.defer_panel_identity_rename(operation['id'], code, int(time.time()))
-            logger.warning('Panel identity recovery deferred operation=%s code=%s', operation['id'], code)
+            now = int(time.time())
+            db.defer_panel_identity_rename(operation['id'], code, now)
+            logger.warning(
+                'Panel identity recovery deferred operation=%s code=%s server_id=%s key_id=%s '
+                'old_email=%s new_email=%s attempt=%s age_seconds=%s exception_type=%s '
+                'panel_kind=%s http_status=%s',
+                operation['id'], code, operation['server_id'], operation['key_id'],
+                panel_email_log_value(operation['old_email']), panel_email_log_value(operation['new_email']),
+                operation.get('attempts', 0) + 1, max(0, now - operation['created_at']),
+                type(error).__name__, error.kind.value if isinstance(error, PanelRequestError) else None,
+                error.status if isinstance(error, PanelRequestError) else None,
+            )
             stats['pending'] += 1
         else:
             stats['done'] += 1

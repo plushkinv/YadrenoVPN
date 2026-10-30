@@ -4,6 +4,11 @@ import uuid
 PANEL_EMAIL_PREFIX = "user_"
 
 
+def panel_email_log_value(email: str) -> str:
+    """Quote a bounded identifier without allowing multiline log entries."""
+    return repr(email[:128] + ("..." if len(email) > 128 else ""))
+
+
 def get_panel_email_prefix(user: dict) -> str:
     """Returns the common email prefix of the client in the 3X-UI panel."""
     if user.get('telegram_id') is None:

@@ -67,10 +67,11 @@ async def main():
     """The main function of launching the bot."""
     # The Telegram transport remains an adapter over the shared runtime.
     from bot.middlewares.parse_mode_fallback import SafeParseSession
+    from bot.utils.extension_telegram import ManagedBot
     
     # Creating a bot with a custom session and a dispatcher
     session = SafeParseSession()
-    bot = Bot(token=BOT_TOKEN, session=session)
+    bot = ManagedBot(token=BOT_TOKEN, session=session)
     from bot.utils.custom_extensions import _set_extension_runtime_bot
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
