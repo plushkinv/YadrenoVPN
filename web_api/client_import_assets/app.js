@@ -7,14 +7,16 @@ const actions = document.getElementById('actions');
 const open = document.getElementById('open');
 const subscription = document.getElementById('subscription');
 const retry = document.getElementById('retry');
+const messages = JSON.parse(document.getElementById('messages').textContent);
+const text = (key, client) => messages[key].replace('{client}', client ?? '');
 
 async function prepare() {
   retry.hidden = true;
   if (!token || !client) {
-    status.textContent = 'Ссылка неполная. Откройте кнопку добавления подписки в боте или личном кабинете.';
+    status.textContent = text('incomplete');
     return;
   }
-  status.textContent = 'Подготавливаем ссылку…';
+  status.textContent = text('preparing');
   try {
     // The external browser need not share the Mini App's session. Authorization
     // is the signed capability; ignore unrelated cabinet cookies explicitly.
@@ -24,32 +26,32 @@ async function prepare() {
     });
     if (!response.ok) {
       status.textContent = response.status >= 500
-        ? 'Не удалось подготовить ссылку. Попробуйте ещё раз.'
-        : 'Ссылка недействительна. Получите новую через кнопку в боте или личном кабинете.';
+        ? text('failed')
+        : text('invalid');
       retry.hidden = response.status < 500;
       return;
     }
     const data = await response.json();
     open.href = data.uri;
-    open.textContent = 'Открыть ' + data.client_name;
+    open.textContent = text('open_client', data.client_name);
     subscription.value = data.url;
-    status.textContent = 'Добавление подписки в ' + data.client_name;
+    status.textContent = text('adding', data.client_name);
     actions.hidden = false;
     // Automatic navigation is best-effort. The ordinary link remains available
     // for a fresh trusted click if the browser requires user activation.
     try { location.href = data.uri; } catch {}
   } catch {
-    status.textContent = 'Нет связи с сервером. Проверьте подключение и попробуйте ещё раз.';
+    status.textContent = text('offline');
     retry.hidden = false;
   }
 }
 document.getElementById('copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(subscription.value);
-    document.getElementById('copy-status').textContent = 'Ссылка скопирована.';
+    document.getElementById('copy-status').textContent = text('copied');
   } catch {
     subscription.focus(); subscription.select();
-    document.getElementById('copy-status').textContent = 'Скопируйте выделенную ссылку вручную.';
+    document.getElementById('copy-status').textContent = text('copy_manually');
   }
 });
 retry.addEventListener('click', prepare);

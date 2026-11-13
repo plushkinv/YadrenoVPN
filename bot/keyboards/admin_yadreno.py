@@ -1,6 +1,8 @@
 """Keyboards of the Yadreno Admin section."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -14,13 +16,13 @@ def yadreno_admin_no_key_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text='🔑 Указать api_key',
+            text=_tr('admin_yadreno.yadreno_admin_no_key_kb.1'),
             callback_data='admin_yadreno_set_key',
         )
     )
     builder.row(
         InlineKeyboardButton(
-            text='🤖 Открыть @YadrenoAdmin_Bot',
+            text=_tr('admin_yadreno.yadreno_admin_no_key_kb.2'),
             url=build_telegram_link('YadrenoAdmin_Bot'),
         )
     )
@@ -37,14 +39,14 @@ def yadreno_admin_chat_kb(
     builder = InlineKeyboardBuilder()
     primary_buttons = [
         InlineKeyboardButton(
-            text='🆕 Новый чат',
+            text=_tr('admin_yadreno.yadreno_admin_chat_kb.1'),
             callback_data=f'admin_yadreno_new_chat:{int(topic_id)}',
         )
     ]
     if show_api_key_action:
         primary_buttons.append(
             InlineKeyboardButton(
-                text='🔑 Заменить api_key',
+                text=_tr('admin_yadreno.yadreno_admin_chat_kb.2'),
                 callback_data='admin_yadreno_set_key',
             )
         )
@@ -65,7 +67,7 @@ def yadreno_admin_agent_kb(
     if viewer_url:
         builder.row(
             InlineKeyboardButton(
-                text='📄 Открыть ответ',
+                text=_tr('admin_yadreno.yadreno_admin_agent_kb.1'),
                 url=viewer_url,
             )
         )
@@ -78,13 +80,13 @@ def yadreno_admin_agent_kb(
         ))
     elif not active_request:
         buttons.append(InlineKeyboardButton(
-            text='🚪 Выйти',
+            text=_tr('admin_broadcast.broadcast_editor_kb.4'),
             callback_data='admin_panel',
         ))
     builder.row(
         *buttons,
         InlineKeyboardButton(
-            text='🔄 Ну чё там?',
+            text=_tr('admin_yadreno.yadreno_admin_agent_kb.2'),
             callback_data=f'admin_yadreno_nudge:{int(topic_id)}',
         ),
     )
@@ -115,7 +117,7 @@ def yadreno_admin_cancel_key_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text='❌ Отмена',
+            text=_tr('system.extension_setting_cancel_kb.1'),
             callback_data='admin_yadreno',
         )
     )

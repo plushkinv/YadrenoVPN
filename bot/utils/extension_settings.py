@@ -1,6 +1,8 @@
 """Declarative settings registry and storage helpers for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -165,9 +167,9 @@ def format_extension_setting_value(field: Mapping[str, Any], value: Any) -> str:
     """Formats one setting value for admin display."""
     field_type = str(field.get('type') or '')
     if field_type == 'bool':
-        return 'включено' if bool(value) else 'выключено'
+        return _tr('coupons.render_purchase_settings.1') if bool(value) else _tr('coupons.render_purchase_settings.2')
     if field_type == 'secret':
-        return SECRET_MASK if value else 'не задано'
+        return SECRET_MASK if value else _tr('web_verification.configuration.4')
     if field_type == 'choice':
         value_text = str(value)
         for choice in field.get('choices') or []:
@@ -175,7 +177,7 @@ def format_extension_setting_value(field: Mapping[str, Any], value: Any) -> str:
                 return str(choice.get('label') or value_text)
         return value_text
     if value is None or value == '':
-        return 'не задано'
+        return _tr('web_verification.configuration.4')
     return str(value)
 
 

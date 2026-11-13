@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 import logging
 import uuid
 from datetime import datetime, timedelta
@@ -76,64 +78,64 @@ def _can_show_key_subscription(key: dict) -> bool:
 async def show_key_view(callback: CallbackQuery, state: FSMContext):
     """Shows the key management screen."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     key_id = int(callback.data.split(':')[1])
     key = get_vpn_key_by_id(key_id)
     if not key:
-        await callback.answer('Ключ не найден', show_alert=True)
+        await callback.answer(_tr('users_keys.show_key_view.1'), show_alert=True)
         return
     await state.set_state(AdminStates.key_view)
     await state.update_data(current_key_id=key_id)
-    key_name = key.get('custom_name') or f'Ключ #{key_id}'
-    server_name = escape_html(key.get('server_name', 'Неизвестный сервер'))
+    key_name = key.get('custom_name') or _tr('users_keys.show_key_view.2', p0=f'{key_id}')
+    server_name = escape_html(key.get('server_name', _tr('users_keys.show_key_view.3')))
     tariff_name = (
-        'Произвольный тариф'
+        _tr('users_keys.show_key_view.4')
         if key.get('tariff_system_type') == 'admin_custom'
-        else escape_html(key.get('tariff_name', 'Неизвестный тариф'))
+        else escape_html(key.get('tariff_name', _tr('users_keys.show_key_view.5')))
     )
     expires_at = (
-        'Без срока'
+        _tr('key_plans.duration_text.1')
         if key.get('expires_at') is None
         else format_datetime_for_display(key.get('expires_at'), fallback='?')
     )
     created_at = format_datetime_for_display(key.get('created_at'), fallback='?')
     panel_email = key.get('panel_email')
     if panel_email:
-        panel_email_line = f'📧 E-mail в панели: <code>{escape_html(panel_email)}</code>'
+        panel_email_line = _tr('users_keys.show_key_view.6', p0=f'{escape_html(panel_email)}')
     else:
-        panel_email_line = '📧 E-mail в панели: <i>не указан</i>'
+        panel_email_line = _tr('users_keys.show_key_view.7')
     max_ips = int(
         key.get('max_ips_override')
         if key.get('max_ips_override') is not None
         else key.get('tariff_max_ips') or 1
     )
-    max_ips = str(max_ips) if max_ips else 'Без лимита'
-    text = f'🔑 <b>{escape_html(key_name)}</b>\n\n🖥️ Сервер: {server_name}\n📋 Тариф: {tariff_name}\n💻 Устройств: {max_ips}\n{panel_email_line}\n📅 Создан: {created_at}\n⏰ Истекает: {expires_at}\n'
+    max_ips = str(max_ips) if max_ips else _tr('users_keys.show_key_view.8')
+    text = _tr('users_keys.show_key_view.9', p0=f'{escape_html(key_name)}', p1=f'{server_name}', p2=f'{tariff_name}', p3=f'{max_ips}', p4=f'{panel_email_line}', p5=f'{created_at}', p6=f'{expires_at}')
     from database.requests import is_key_active, is_traffic_exhausted
     if not is_key_active(key):
         if is_traffic_exhausted(key):
-            text += '\n❌ <b>Трафик исчерпан</b>\n'
+            text += _tr('users_keys.show_key_view.10')
         else:
-            text += '\n⏳ <b>Срок действия истёк</b>\n'
+            text += _tr('users_keys.show_key_view.11')
     traffic_used = key.get('traffic_used', 0) or 0
     traffic_limit = key.get('traffic_limit', 0) or 0
     if traffic_limit > 0:
         remaining = max(0, traffic_limit - traffic_used)
-        text += f'\n📊 <b>Трафик:</b>\n  ✅ Использовано: {format_traffic(traffic_used)}\n  🎯 Лимит: {format_traffic(traffic_limit)}\n  💾 Остаток: {format_traffic(remaining)}\n'
+        text += _tr('users_keys.show_key_view.12', p0=f'{format_traffic(traffic_used)}', p1=f'{format_traffic(traffic_limit)}', p2=f'{format_traffic(remaining)}')
     else:
-        text += f'\n📊 <b>Трафик:</b>\n  ✅ Использовано: {format_traffic(traffic_used)}\n  ∞ Без лимита\n'
+        text += _tr('users_keys.show_key_view.13', p0=f'{format_traffic(traffic_used)}')
     from database.requests import get_key_payments_history
     payments_history = get_key_payments_history(key_id)
     if payments_history:
-        text += '\n📜 <b>История операций:</b>\n'
+        text += _tr('users_keys.show_key_view.14')
         for p in payments_history:
             dt = format_datetime_for_display(p.get('paid_at'), fallback='?')
             if p.get('history_type') == 'key_operation':
                 delta_days = int(p.get('delta_days') or 0)
-                reason_safe = escape_html(p.get('reason') or 'Начисление дней')
+                reason_safe = escape_html(p.get('reason') or _tr('users_keys.show_key_view.15'))
                 if delta_days > 0:
-                    text += f'• <code>{dt}</code>: {reason_safe} (+{delta_days} дн.)\n'
+                    text += _tr('users_keys.show_key_view.16', p0=f'{dt}', p1=f'{reason_safe}', p2=f'{delta_days}')
                 else:
                     text += f'• <code>{dt}</code>: {reason_safe}\n'
                 continue
@@ -143,10 +145,10 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
                 p.get('payable_amount_minor') or 0,
                 p.get('base_currency') or 'RUB',
             )
-            tariff_safe = escape_html(p['tariff_name'] or 'Неизвестно')
+            tariff_safe = escape_html(p['tariff_name'] or _tr('users_keys.show_key_view.17'))
             text += f'• <code>{dt}</code>: {amount} — {tariff_safe}\n'
     else:
-        text += '\n📜 <b>История операций:</b> пусто\n'
+        text += _tr('users_keys.show_key_view.18')
     user_telegram_id = account_selector(key)
     await safe_edit_or_send(
         callback.message,
@@ -164,12 +166,12 @@ async def show_key_view(callback: CallbackQuery, state: FSMContext):
 async def show_key_subscription(callback: CallbackQuery, state: FSMContext):
     """Show the selected user's subscription through the common QR delivery."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     try:
         key_id = int(callback.data.partition(':')[2])
     except ValueError:
-        await callback.answer('Ключ не найден', show_alert=True)
+        await callback.answer(_tr('users_keys.show_key_view.1'), show_alert=True)
         return
 
     from database.requests import get_key_details_for_user, get_key_details_for_account
@@ -182,11 +184,11 @@ async def show_key_subscription(callback: CallbackQuery, state: FSMContext):
         if selected_key else None
     )
     if not key:
-        await callback.answer('Ключ не найден', show_alert=True)
+        await callback.answer(_tr('users_keys.show_key_view.1'), show_alert=True)
         return
     if not _can_show_key_subscription(key):
         await callback.answer(
-            'Подписка недоступна. Откройте карточку ключа заново.',
+            _tr('users_keys.show_key_subscription.1'),
             show_alert=True,
         )
         return
@@ -201,7 +203,7 @@ async def show_key_subscription(callback: CallbackQuery, state: FSMContext):
 async def start_key_extend(callback: CallbackQuery, state: FSMContext):
     """Start of key renewal."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     key_id = int(callback.data.split(':')[1])
     await state.set_state(AdminStates.key_extend_days)
@@ -209,10 +211,7 @@ async def start_key_extend(callback: CallbackQuery, state: FSMContext):
     await render_admin_dialog(
         callback.message,
         state,
-        '📅 <b>Изменение срока действия ключа</b>\n\n'
-        'Введите количество дней. Отрицательное число уменьшает конечный срок, '
-        '0 делает ключ бессрочным. Добавление дней к уже бессрочному ключу не '
-        'снимает бессрочность.',
+        _tr('users_keys.start_key_extend.1'),
         reply_markup=key_action_back_kb(key_id),
     )
     await callback.answer()
@@ -230,11 +229,7 @@ async def process_key_extend(message: Message, state: FSMContext):
         await render_admin_dialog_from_input(
             message,
             state,
-            '📅 <b>Изменение срока действия ключа</b>\n\n'
-            '❌ Введите целое число от -99999 до 99999.\n\n'
-            'Отрицательное число уменьшает конечный срок, 0 делает ключ '
-            'бессрочным. Добавление дней к уже бессрочному ключу не снимает '
-            'бессрочность.',
+            _tr('users_keys.process_key_extend.1'),
             reply_markup=key_action_back_kb(key_id),
         )
         return
@@ -243,7 +238,7 @@ async def process_key_extend(message: Message, state: FSMContext):
     target = await render_admin_dialog_from_input(
         message,
         state,
-        '⏳ <b>Изменение срока действия ключа</b>\n\nПрименяю новое значение…',
+        _tr('users_keys.process_key_extend.2'),
         reply_markup=key_action_back_kb(key_id),
     )
     from bot.services.key_lifecycle import renew_key_access
@@ -254,33 +249,30 @@ async def process_key_extend(message: Message, state: FSMContext):
         is_perpetual = bool(updated_key and updated_key.get('expires_at') is None)
         if is_perpetual and was_perpetual:
             result_text = (
-                '✅ <b>Срок ключа не изменён</b>\n\n'
-                'Ключ уже работал без ограничения по сроку.'
+                _tr('users_keys.process_key_extend.3')
             )
         elif is_perpetual:
             result_text = (
-                '✅ <b>Срок ключа обновлён</b>\n\n'
-                'Ключ переведён в режим «Без срока».'
+                _tr('users_keys.process_key_extend.4')
             )
         else:
-            action_text = f'уменьшен на {abs(days)}' if days < 0 else f'продлён на {days}'
+            action_text = _tr('users_keys.process_key_extend.5', p0=f'{abs(days)}') if days < 0 else _tr('users_keys.process_key_extend.6', p0=f'{days}')
             result_text = (
-                '✅ <b>Срок ключа обновлён</b>\n\n'
-                f'Срок действия {action_text} дней.'
+                _tr('users_keys.process_key_extend.7', p0=f'{action_text}')
             )
         current_expiry = (
-            'Без срока'
+            _tr('key_plans.duration_text.1')
             if is_perpetual
             else format_datetime_for_display(
                 updated_key.get('expires_at') if updated_key else None,
-                fallback='неизвестен',
+                fallback=_tr('users_keys.process_key_extend.8'),
             )
         )
         result_text += (
-            f'\n\n⏰ Текущий срок: <b>{escape_html(current_expiry)}</b>'
+            _tr('users_keys.process_key_extend.9', p0=f'{escape_html(current_expiry)}')
         )
         if not result['panel_synced']:
-            result_text += '\n\n⚠️ БД обновлена, но панель синхронизирована не полностью. Повторная синхронизация сможет дожать состояние.'
+            result_text += _tr('users_keys.process_key_extend.10')
         await render_admin_dialog(
             target,
             state,
@@ -293,8 +285,7 @@ async def process_key_extend(message: Message, state: FSMContext):
         await render_admin_dialog(
             target,
             state,
-            '❌ <b>Срок ключа не изменён</b>\n\n'
-            'Не удалось сохранить новое значение. Попробуйте ещё раз.',
+            _tr('users_keys.process_key_extend.11'),
             reply_markup=key_action_back_kb(key_id),
         )
 
@@ -303,12 +294,12 @@ async def process_key_extend(message: Message, state: FSMContext):
 async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
     """Reset key traffic."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     key_id = int(callback.data.split(':')[1])
     key = get_vpn_key_by_id(key_id)
     if not key:
-        await callback.answer('Ключ не найден', show_alert=True)
+        await callback.answer(_tr('users_keys.show_key_view.1'), show_alert=True)
         return
     try:
         # Resetting traffic_used and notification thresholds in the database
@@ -318,9 +309,9 @@ async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
         from bot.services.vpn_api import sync_key_to_panel_state
         stats = await sync_key_to_panel_state(key_id, reset_traffic=True)
         if not stats.get('ok'):
-            await callback.answer('⚠️ БД обновлена, но панель синхронизирована не полностью', show_alert=True)
+            await callback.answer(_tr('users_keys.reset_key_traffic.1'), show_alert=True)
             return
-        await callback.answer('✅ Трафик успешно сброшен!', show_alert=True)
+        await callback.answer(_tr('users_keys.reset_key_traffic.2'), show_alert=True)
     except VPNAPIError as e:
         logger.error(f'Ошибка сброса трафика: {e}')
         from database.requests import get_server_by_id
@@ -329,24 +320,24 @@ async def reset_key_traffic(callback: CallbackQuery, state: FSMContext):
         )
     except Exception as e:
         logger.error(f'Неожиданная ошибка при сбросе трафика: {e}')
-        await callback.answer('❌ Ошибка при сбросе трафика', show_alert=True)
+        await callback.answer(_tr('users_keys.reset_key_traffic.3'), show_alert=True)
 
 @router.callback_query(F.data.startswith('admin_user_add_key:'))
 async def start_add_key(callback: CallbackQuery, state: FSMContext):
     """Start adding a key."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     telegram_id = callback.data.split(':', 1)[1]
     user = selected_user(telegram_id)
     if not user:
-        await callback.answer('Пользователь не найден', show_alert=True)
+        await callback.answer(_tr('users_keys.start_add_key.1'), show_alert=True)
         return
     from database.requests import get_all_groups
 
     groups = get_all_groups()
     if not groups:
-        await callback.answer('❌ Нет групп тарифов', show_alert=True)
+        await callback.answer(_tr('users_keys.start_add_key.2'), show_alert=True)
         return
     await state.set_state(AdminStates.add_key_group)
     await state.update_data(
@@ -357,8 +348,7 @@ async def start_add_key(callback: CallbackQuery, state: FSMContext):
     )
     rendered = await safe_edit_or_send(
         callback.message,
-        f'➕ <b>Добавление ключа для {format_user_display(user)}</b>\n\n'
-        'Выберите группу тарифов:',
+        _tr('users_keys.start_add_key.3', p0=f'{format_user_display(user)}'),
         reply_markup=add_key_group_kb(groups),
     )
     await state.update_data(
@@ -375,24 +365,24 @@ async def start_add_key(callback: CallbackQuery, state: FSMContext):
 async def select_add_key_group(callback: CallbackQuery, state: FSMContext):
     """Selects the group that owns a new custom administrator key."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     from database.requests import get_active_servers_by_group, get_group_by_id
 
     group_id = int(callback.data.split(':', 1)[1])
     group = get_group_by_id(group_id)
     if group is None:
-        await callback.answer('❌ Группа не найдена', show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
     servers = get_active_servers_by_group(group_id)
     if not servers:
-        await callback.answer('❌ В группе нет активных серверов', show_alert=True)
+        await callback.answer(_tr('users_keys.select_add_key_group.1'), show_alert=True)
         return
     await state.update_data(add_key_group_id=group_id)
     await state.set_state(AdminStates.add_key_server)
     rendered = await safe_edit_or_send(
         callback.message,
-        f"🖥️ <b>Группа: {escape_html(group['name'])}</b>\n\nВыберите сервер:",
+        _tr('users_keys.select_add_key_group.2', p0=f"{escape_html(group['name'])}"),
         reply_markup=add_key_server_kb(servers),
     )
     await state.update_data(
@@ -408,7 +398,7 @@ async def select_add_key_group(callback: CallbackQuery, state: FSMContext):
 async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
     """Selecting a server for a new key."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     from database.requests import get_active_servers_by_group, get_server_by_id
     server_id = int(callback.data.split(':')[1])
@@ -419,7 +409,7 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
         int(item['id']) for item in get_active_servers_by_group(group_id)
     } if group_id else set()
     if not server or server_id not in allowed_server_ids:
-        await callback.answer('Сервер не найден', show_alert=True)
+        await callback.answer(_tr('users_keys.select_add_key_server.1'), show_alert=True)
         return
     await state.update_data(add_key_server_id=server_id)
 
@@ -429,12 +419,12 @@ async def select_add_key_server(callback: CallbackQuery, state: FSMContext):
             client,
         )
         if not any(descriptor.available for descriptor in descriptors):
-            await callback.answer('❌ На сервере нет inbound', show_alert=True)
+            await callback.answer(_tr('users_keys.select_add_key_server.2'), show_alert=True)
             return
         await state.set_state(AdminStates.add_key_traffic)
         rendered = await safe_edit_or_send(
             callback.message,
-            '📊 <b>Лимит трафика</b>\n\nВведите лимит в ГБ (0 = без лимита):',
+            _tr('users_keys.select_add_key_server.3'),
             reply_markup=add_key_step_kb(4),
         )
         await state.update_data(
@@ -461,15 +451,14 @@ async def process_add_key_traffic(message: Message, state: FSMContext):
     if not text.isdigit() or not 0 <= int(text) <= 99999:
         await safe_edit_or_send(
             target,
-            '❌ <b>Некорректный лимит трафика</b>\n\n'
-            'Введите число от 0 до 99999. 0 — без лимита.',
+            _tr('users_keys.process_add_key_traffic.1'),
             reply_markup=add_key_step_kb(4),
         )
         return
     traffic_gb = int(text)
     await state.update_data(add_key_traffic_gb=traffic_gb)
     await state.set_state(AdminStates.add_key_days)
-    await safe_edit_or_send(target, '📅 <b>Срок действия</b>\n\nВведите количество дней (0 = без срока):', reply_markup=add_key_step_kb(5))
+    await safe_edit_or_send(target, _tr('users_keys.process_add_key_traffic.2'), reply_markup=add_key_step_kb(5))
 
 @router.message(AdminStates.add_key_days, F.text, ~F.text.startswith('/'))
 async def process_add_key_days(message: Message, state: FSMContext):
@@ -482,8 +471,7 @@ async def process_add_key_days(message: Message, state: FSMContext):
     if not text.isdigit() or not 0 <= int(text) <= 99999:
         await safe_edit_or_send(
             target,
-            '❌ <b>Некорректный срок</b>\n\n'
-            'Введите число от 0 до 99999. 0 — без срока.',
+            _tr('key_plans.custom_plan_days.1'),
             reply_markup=add_key_step_kb(5),
         )
         return
@@ -492,7 +480,7 @@ async def process_add_key_days(message: Message, state: FSMContext):
     await state.set_state(AdminStates.add_key_devices)
     await safe_edit_or_send(
         target,
-        '💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999:',
+        _tr('users_keys.process_add_key_days.1'),
         reply_markup=add_key_step_kb(6),
     )
 
@@ -509,8 +497,7 @@ async def process_add_key_devices(message: Message, state: FSMContext):
     if not text.isdigit() or not 1 <= int(text) <= 999:
         await safe_edit_or_send(
             target,
-            '❌ <b>Некорректный лимит устройств</b>\n\n'
-            'Введите число от 1 до 999.',
+            _tr('key_plans.custom_plan_devices.1'),
             reply_markup=add_key_step_kb(6),
         )
         return
@@ -522,17 +509,12 @@ async def process_add_key_devices(message: Message, state: FSMContext):
 
     server = get_server_by_id(data['add_key_server_id'])
     group = get_group_by_id(data['add_key_group_id'])
-    traffic_text = f"{data.get('add_key_traffic_gb', 0)} ГБ" if data.get('add_key_traffic_gb', 0) > 0 else 'без лимита'
+    traffic_text = _tr('key_plans.traffic_text.2', p0=f"{data.get('add_key_traffic_gb', 0)}") if data.get('add_key_traffic_gb', 0) > 0 else _tr('promotions.promocode_text.1')
     days = int(data.get('add_key_days', 0))
-    duration_text = f'{days} дней' if days > 0 else 'без срока'
+    duration_text = _tr('key_plans.duration_text.2', p0=f'{days}', count=days) if days > 0 else _tr('promotions.format_date.1')
     await safe_edit_or_send(
         target,
-        '✅ <b>Подтверждение создания ключа</b>\n\n'
-        f"📂 Группа: {escape_html(group['name'] if group else '?')}\n"
-        f"🖥️ Сервер: {escape_html(server['name'] if server else '?')}\n"
-        f'📊 Трафик: {traffic_text}\n'
-        f'📅 Срок: {duration_text}\n'
-        f'💻 Устройств: {devices}\n',
+        _tr('users_keys.process_add_key_devices.1', p0=f"{escape_html(group['name'] if group else '?')}", p1=f"{escape_html(server['name'] if server else '?')}", p2=f'{traffic_text}', p3=f'{duration_text}', p4=f'{devices}'),
         reply_markup=add_key_confirm_kb(),
     )
 
@@ -541,13 +523,13 @@ async def process_add_key_devices(message: Message, state: FSMContext):
 async def confirm_add_key(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Serialize manual key creation for the selected user."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     data = await state.get_data()
     try:
         lock_id = int(data.get('add_key_user_id'))
     except (TypeError, ValueError):
-        await callback.answer('❌ Данные формы устарели', show_alert=True)
+        await callback.answer(_tr('key_plans.apply_custom_key_plan.1'), show_alert=True)
         return
 
     from bot.services.user_locks import user_locks
@@ -563,7 +545,7 @@ async def _confirm_add_key_locked(
 ):
     """Confirmation and key creation."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     data = await state.get_data()
     user_id = data.get('add_key_user_id')
@@ -582,14 +564,14 @@ async def _confirm_add_key_locked(
         days = int(days)
         devices = int(devices)
     except (TypeError, ValueError):
-        await callback.answer('❌ Данные формы устарели', show_alert=True)
+        await callback.answer(_tr('key_plans.apply_custom_key_plan.1'), show_alert=True)
         return
     if (
         not 0 <= traffic_gb <= 99999
         or not 0 <= days <= 99999
         or not 1 <= devices <= 999
     ):
-        await callback.answer('❌ Данные формы некорректны', show_alert=True)
+        await callback.answer(_tr('users_keys.confirm_add_key_locked.1'), show_alert=True)
         return
     from database.requests import (
         get_active_servers_by_group,
@@ -601,12 +583,12 @@ async def _confirm_add_key_locked(
         int(item['id']) for item in get_active_servers_by_group(group_id)
     } if group_id else set()
     if not server or server_id not in allowed_server_ids:
-        await callback.answer('Сервер не найден', show_alert=True)
+        await callback.answer(_tr('users_keys.select_add_key_server.1'), show_alert=True)
         return
     from database.requests import get_user_by_id
     user = get_user_by_id(user_id)
     if user is None or int(user['id']) != user_id:
-        await callback.answer('Пользователь не найден', show_alert=True)
+        await callback.answer(_tr('users_keys.start_add_key.1'), show_alert=True)
         return
     email = generate_unique_email(user)
     traffic_limit_bytes = traffic_gb * 1024 ** 3
@@ -616,7 +598,7 @@ async def _confirm_add_key_locked(
     try:
         admin_tariff = get_admin_custom_tariff(group_id)
         if admin_tariff is None:
-            raise RuntimeError('Системный тариф группы не найден')
+            raise RuntimeError(_tr('users_keys.confirm_add_key_locked.2'))
         tariff_id = admin_tariff['id']
 
         sub_id = uuid.uuid4().hex
@@ -637,7 +619,7 @@ async def _confirm_add_key_locked(
         )
         sub_id = provisioned.sub_id
         if not provisioned.attached_inbound_ids or not sub_id:
-            raise RuntimeError('Не удалось создать ни одного клиента на сервере')
+            raise RuntimeError(_tr('users_keys.confirm_add_key_locked.3'))
         key_id = create_vpn_key_admin(
             user_id=user_id,
             server_id=server_id,
@@ -666,7 +648,7 @@ async def _confirm_add_key_locked(
                 )
 
         await state.set_data({'current_user_telegram_id': user['telegram_id'], 'current_user_id': user['id'], 'current_user_selector': account_selector(user)})
-        await callback.answer('✅ Ключ успешно создан!', show_alert=True)
+        await callback.answer(_tr('users_keys.confirm_add_key_locked.4'), show_alert=True)
         await _show_user_view_edit(callback, state, account_selector(user))
     except VPNAPIError as e:
         if panel_client is not None and key_id is None:
@@ -683,13 +665,13 @@ async def _confirm_add_key_locked(
             except Exception:
                 logger.exception('Could not clean failed admin key candidate email=%s', email)
         logger.exception('Unexpected admin key creation error: %s', e)
-        await callback.answer('❌ Ошибка при создании ключа', show_alert=True)
+        await callback.answer(_tr('users_keys.confirm_add_key_locked.5'), show_alert=True)
 
 @router.callback_query(F.data == 'admin_user_add_key_cancel')
 async def cancel_add_key(callback: CallbackQuery, state: FSMContext):
     """Cancel adding a key."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     data = await state.get_data()
     user_telegram_id = (data.get('add_key_user_selector') or data.get('current_user_selector')
@@ -703,7 +685,7 @@ async def cancel_add_key(callback: CallbackQuery, state: FSMContext):
 async def add_key_back(callback: CallbackQuery, state: FSMContext):
     """Step back when adding a key."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     current_state = await state.get_state()
     data = await state.get_data()
@@ -714,7 +696,7 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
         await state.set_state(AdminStates.add_key_group)
         await safe_edit_or_send(
             callback.message,
-            '📂 <b>Группа тарифа</b>\n\nВыберите группу:',
+            _tr('users_keys.add_key_back.1'),
             reply_markup=add_key_group_kb(get_all_groups()),
         )
     elif current_state == AdminStates.add_key_traffic.state:
@@ -723,28 +705,28 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
         user = selected_user(data.get('add_key_user_selector') or data.get('add_key_user_telegram_id'))
         await safe_edit_or_send(
             callback.message,
-            f"➕ <b>Добавление ключа для {(format_user_display(user) if user else '?')}</b>\n\nВыберите сервер:",
+            _tr('users_keys.add_key_back.2', p0=f"{(format_user_display(user) if user else '?')}"),
             reply_markup=add_key_server_kb(servers),
         )
     elif current_state == AdminStates.add_key_days.state:
         await state.set_state(AdminStates.add_key_traffic)
         await safe_edit_or_send(
             callback.message,
-            '📊 <b>Лимит трафика</b>\n\nВведите лимит в ГБ (0 = без лимита):',
+            _tr('users_keys.select_add_key_server.3'),
             reply_markup=add_key_step_kb(4),
         )
     elif current_state == AdminStates.add_key_devices.state:
         await state.set_state(AdminStates.add_key_days)
         await safe_edit_or_send(
             callback.message,
-            '📅 <b>Срок действия</b>\n\nВведите количество дней (0 = без срока):',
+            _tr('users_keys.process_add_key_traffic.2'),
             reply_markup=add_key_step_kb(5),
         )
     elif current_state == AdminStates.add_key_confirm.state:
         await state.set_state(AdminStates.add_key_devices)
         await safe_edit_or_send(
             callback.message,
-            '💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999:',
+            _tr('users_keys.process_add_key_days.1'),
             reply_markup=add_key_step_kb(6),
         )
     else:
@@ -754,19 +736,19 @@ async def add_key_back(callback: CallbackQuery, state: FSMContext):
 
 def _manual_sync_plan_text(plan, *, preview: bool) -> str:
     direction_title = (
-        'БД → Панель'
+        _tr('users_keys.manual_sync_plan_text.1')
         if plan.direction == 'db_to_panel'
-        else 'Панель → БД'
+        else _tr('users_keys.manual_sync_plan_text.2')
     )
     heading = (
-        '🔎 <b>Предпросмотр синхронизации</b>'
+        _tr('users_keys.manual_sync_plan_text.3')
         if preview
-        else '✅ <b>Синхронизация завершена</b>'
+        else _tr('users_keys.manual_sync_plan_text.4')
     )
-    lines = [heading, '', f'Направление: <b>{direction_title}</b>', '']
+    lines = [heading, '', _tr('users_keys.manual_sync_plan_text.5', p0=f'{direction_title}'), '']
 
     if not plan.reports:
-        lines.append('✅ Нет ключей для проверки.')
+        lines.append(_tr('users_keys.manual_sync_plan_text.6'))
     for report in plan.reports:
         server_name = escape_html(report.server_name)
         if report.error:
@@ -778,64 +760,61 @@ def _manual_sync_plan_text(plan, *, preview: bool) -> str:
 
         if plan.direction == 'db_to_panel':
             stats = report.stats
-            action_word = 'изменится' if preview else 'применено'
+            action_word = _tr('users_keys.manual_sync_plan_text.7') if preview else _tr('users_keys.manual_sync_plan_text.8')
             lines.append(
-                f'🖥 <b>{server_name}</b>: проверено {report.checked}, '
-                f'{action_word} {report.changed}, пропущено {report.skipped}'
+                _tr('users_keys.manual_sync_plan_text.9', p0=f'{server_name}', p1=f'{report.checked}', p2=f'{action_word}', p3=f'{report.changed}', p4=f'{report.skipped}')
             )
             details = []
             if stats.get('created'):
-                details.append(f"создать/подключить {stats['created']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.10', p0=f"{stats['created']}"))
             if stats.get('updated'):
-                details.append(f"обновить {stats['updated']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.11', p0=f"{stats['updated']}"))
             if stats.get('deleted'):
-                details.append(f"отключить {stats['deleted']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.12', p0=f"{stats['deleted']}"))
             if stats.get('enabled'):
-                details.append(f"включить {stats['enabled']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.13', p0=f"{stats['enabled']}"))
             if stats.get('disabled'):
-                details.append(f"выключить {stats['disabled']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.14', p0=f"{stats['disabled']}"))
             if stats.get('reset'):
-                details.append(f"сбросить трафик {stats['reset']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.15', p0=f"{stats['reset']}"))
             if details:
                 lines.append('  • ' + ', '.join(details))
             if stats.get('errors'):
-                lines.append(f"  • ошибок: {stats['errors']}")
+                lines.append(_tr('users_keys.manual_sync_plan_text.16', p0=f"{stats['errors']}"))
         else:
             stats = report.stats
             applied = stats.get('applied')
             action_word = (
-                f'применено {applied}'
+                _tr('users_keys.manual_sync_plan_text.17', p0=f'{applied}')
                 if applied is not None
-                else f'изменится {report.changed}'
+                else _tr('users_keys.manual_sync_plan_text.18', p0=f'{report.changed}')
             )
             lines.append(
-                f'🖥 <b>{server_name}</b>: проверено {report.checked}, '
-                f'{action_word}, пропущено {report.skipped}'
+                _tr('users_keys.manual_sync_plan_text.19', p0=f'{server_name}', p1=f'{report.checked}', p2=f'{action_word}', p3=f'{report.skipped}')
             )
             details = []
             if stats.get('expiry'):
-                details.append(f"срок {stats['expiry']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.20', p0=f"{stats['expiry']}"))
             if stats.get('traffic'):
-                details.append(f"трафик {stats['traffic']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.21', p0=f"{stats['traffic']}"))
             if stats.get('revived'):
-                details.append(f"восстановить истёкших {stats['revived']}")
+                details.append(_tr('users_keys.manual_sync_plan_text.22', p0=f"{stats['revived']}"))
             if details:
                 lines.append('  • ' + ', '.join(details))
 
     lines.extend([
         '',
-        f'🔑 Ключей с изменениями: <b>{len(plan.candidate_key_ids)}</b>',
+        _tr('users_keys.manual_sync_plan_text.23', p0=f'{len(plan.candidate_key_ids)}'),
     ])
     if plan.errors:
-        lines.append(f'❌ Ошибок: <b>{plan.errors}</b>')
+        lines.append(_tr('users_keys.manual_sync_plan_text.24', p0=f'{plan.errors}'))
     if preview and plan.has_changes:
         lines.extend([
             '',
-            'Запись ещё не выполнялась. После подтверждения данные '
-            'будут скачаны и проверены повторно.',
+            _tr('users_keys.manual_sync_plan_text.25'),
         ])
     elif not plan.has_changes:
-        lines.extend(['', '✅ Всё уже актуально, применять нечего.'])
+        lines.extend(['', _tr('users_keys.manual_sync_plan_text.26')])
     return '\n'.join(lines)
 
 
@@ -856,7 +835,7 @@ async def _show_manual_sync_preview(
     direction: str,
 ) -> None:
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     from database.requests import get_all_servers
@@ -869,16 +848,15 @@ async def _show_manual_sync_preview(
 
     if panel_sync_coordinator.manual_pending:
         await callback.answer(
-            '⏳ Другая ручная синхронизация уже выполняется',
+            _tr('users_keys.show_manual_sync_preview.1'),
             show_alert=True,
         )
         return
 
-    await callback.answer('🔎 Составляю предпросмотр…')
+    await callback.answer(_tr('users_keys.show_manual_sync_preview.2'))
     await safe_edit_or_send(
         callback.message,
-        '⏳ <b>Проверяю БД и панели…</b>\n\n'
-        'На этом этапе ничего не изменяется.',
+        _tr('users_keys.show_manual_sync_preview.3'),
     )
 
     keys = await _manual_sync_keys(direction)
@@ -924,7 +902,7 @@ async def sync_panel_to_db(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('admin_sync_cancel:'))
 async def cancel_manual_sync(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     token = callback.data.split(':', 1)[1]
@@ -933,11 +911,10 @@ async def cancel_manual_sync(callback: CallbackQuery, state: FSMContext):
     if preview.get('token') == token:
         data.pop('manual_sync_preview', None)
         await state.set_data(data)
-    await callback.answer('Синхронизация отменена')
+    await callback.answer(_tr('users_keys.cancel_manual_sync.1'))
     await safe_edit_or_send(
         callback.message,
-        '❌ <b>Ручная синхронизация отменена</b>\n\n'
-        'Никакие данные не изменялись.',
+        _tr('users_keys.cancel_manual_sync.2'),
         reply_markup=back_and_home_kb('admin_users'),
     )
 
@@ -945,12 +922,12 @@ async def cancel_manual_sync(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith('admin_sync_apply:'))
 async def apply_manual_sync(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     parts = callback.data.split(':', 2)
     if len(parts) != 3:
-        await callback.answer('Предпросмотр повреждён', show_alert=True)
+        await callback.answer(_tr('users_keys.apply_manual_sync.1'), show_alert=True)
         return
     _, direction, token = parts
     data = await state.get_data()
@@ -961,7 +938,7 @@ async def apply_manual_sync(callback: CallbackQuery, state: FSMContext):
         or direction not in {'db_to_panel', 'panel_to_db'}
     ):
         await callback.answer(
-            'Предпросмотр устарел. Выполните проверку заново.',
+            _tr('users_keys.apply_manual_sync.2'),
             show_alert=True,
         )
         return
@@ -975,11 +952,10 @@ async def apply_manual_sync(callback: CallbackQuery, state: FSMContext):
     )
     from bot.services.panel_sync_coordinator import panel_sync_coordinator
 
-    await callback.answer('⏳ Применяю изменения…')
+    await callback.answer(_tr('users_keys.apply_manual_sync.3'))
     await safe_edit_or_send(
         callback.message,
-        '⏳ <b>Применяю ручную синхронизацию…</b>\n\n'
-        'Новые изменения VPN-ключей временно ожидают завершения.',
+        _tr('users_keys.apply_manual_sync.4'),
     )
 
     try:
@@ -987,8 +963,7 @@ async def apply_manual_sync(callback: CallbackQuery, state: FSMContext):
             if not acquired:
                 await safe_edit_or_send(
                     callback.message,
-                    '⏳ <b>Уже выполняется другая ручная синхронизация</b>\n\n'
-                    'Этот предпросмотр сохранён — повторите применение после её завершения.',
+                    _tr('users_keys.apply_manual_sync.5'),
                     reply_markup=manual_sync_preview_kb(direction, token),
                 )
                 return
@@ -1018,8 +993,7 @@ async def apply_manual_sync(callback: CallbackQuery, state: FSMContext):
         logger.exception('Manual synchronization failed')
         await safe_edit_or_send(
             callback.message,
-            '❌ <b>Не удалось завершить синхронизацию</b>\n\n'
-            f'{escape_html(str(exc)[:500])}',
+            _tr('users_keys.apply_manual_sync.6', p0=f'{escape_html(str(exc)[:500])}'),
             reply_markup=manual_sync_preview_kb(direction, token),
         )
         return

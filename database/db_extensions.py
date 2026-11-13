@@ -1,6 +1,8 @@
 """Controlled storage and schema registry for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 import logging
 import math
@@ -118,10 +120,10 @@ def get_extension_storage(extension_id: str) -> 'ExtensionStorage':
 def normalize_extension_id(extension_id: str) -> str:
     """Normalizes and validates extension_id."""
     if not isinstance(extension_id, str):
-        raise ValueError("extension_id должен быть строкой")
+        raise ValueError(_tr('db_extensions.normalize_extension_id.1'))
     value = extension_id.strip().casefold()
     if not _EXTENSION_ID_RE.fullmatch(value):
-        raise ValueError("extension_id должен соответствовать ^[a-z][a-z0-9_]{0,47}$")
+        raise ValueError(_tr('db_extensions.normalize_extension_id.2'))
     return value
 
 
@@ -279,7 +281,7 @@ class ExtensionTable:
         _ensure_extension_mutation_allowed('extension_table.update')
         where_sql, where_params = _build_where(filters)
         if not where_sql:
-            raise ValueError("update требует filters")
+            raise ValueError(_tr('db_extensions.update.1'))
         payload = _normalize_values(values)
         set_sql = ', '.join(
             f"{_quote_identifier(column)} = ?" for column in payload.keys()
@@ -299,7 +301,7 @@ class ExtensionTable:
         _ensure_extension_mutation_allowed('extension_table.delete')
         where_sql, params = _build_where(filters)
         if not where_sql:
-            raise ValueError("delete требует filters")
+            raise ValueError(_tr('db_extensions.delete.1'))
         sql = f"DELETE FROM {_quote_identifier(self.physical_name)} WHERE {where_sql}"
 
         def op(conn: sqlite3.Connection) -> int:
@@ -318,17 +320,17 @@ def _ensure_extension_mutation_allowed(operation: str) -> None:
 
 def _normalize_schema_migrations(migrations: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(migrations, Sequence) or isinstance(migrations, (str, bytes)):
-        raise ValueError("migrations должен быть списком деклараций")
+        raise ValueError(_tr('db_extensions.normalize_schema_migrations.1'))
 
     result: list[dict[str, Any]] = []
     seen_versions: set[int] = set()
     for migration in migrations:
         if not isinstance(migration, Mapping):
-            raise ValueError("migration должен быть словарём")
+            raise ValueError(_tr('db_extensions.normalize_schema_migrations.2'))
         _reject_unknown_keys(migration, {'version', 'tables', 'alter_tables', 'sql'}, 'migration')
         version = _normalize_schema_version(migration.get('version'))
         if version in seen_versions:
-            raise ValueError(f"migration.version {version} повторяется")
+            raise ValueError(_tr('db_extensions.normalize_schema_migrations.3', p0=f'{version}'))
         seen_versions.add(version)
         if 'sql' in migration:
             if 'tables' in migration or 'alter_tables' in migration:
@@ -351,7 +353,7 @@ def _normalize_schema_migrations(migrations: Sequence[Mapping[str, Any]]) -> lis
 
 def _normalize_schema_version(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError("migration.version должен быть положительным integer")
+        raise ValueError(_tr('db_extensions.normalize_schema_version.1'))
     return value
 
 
@@ -376,7 +378,7 @@ def _create_extension_table(
     table_decl: Mapping[str, Any],
 ) -> None:
     if not isinstance(table_decl, Mapping):
-        raise ValueError("table declaration должен быть словарём")
+        raise ValueError(_tr('db_extensions.create_extension_table.1'))
     _reject_unknown_keys(table_decl, {'name', 'columns', 'unique', 'indexes'}, 'table declaration')
 
     table_name = extension_table_name(extension_id, table_decl.get('name'))
@@ -385,7 +387,7 @@ def _create_extension_table(
     column_defs = [_build_column_sql(column) for column in columns]
     for unique_group in _optional_sequence_field(table_decl, 'unique', 'table.unique'):
         if not isinstance(unique_group, Sequence) or isinstance(unique_group, (str, bytes)) or not unique_group:
-            raise ValueError("table.unique должен содержать непустые списки колонок")
+            raise ValueError(_tr('db_extensions.create_extension_table.2'))
         unique_columns = ', '.join(
             _quote_identifier(_normalize_identifier(column, 'column'))
             for column in unique_group
@@ -406,23 +408,23 @@ def _alter_extension_table(
     table_decl: Mapping[str, Any],
 ) -> None:
     if not isinstance(table_decl, Mapping):
-        raise ValueError("alter table declaration должен быть словарём")
+        raise ValueError(_tr('db_extensions.alter_extension_table.1'))
     _reject_unknown_keys(table_decl, {'name', 'add_columns', 'indexes'}, 'alter table declaration')
 
     table_name = extension_table_name(extension_id, table_decl.get('name'))
     if not _table_exists(conn, table_name):
-        raise ValueError(f"таблица расширения {table_name} не существует")
+        raise ValueError(_tr('db_extensions.alter_extension_table.2', p0=f'{table_name}'))
 
     add_columns = _optional_sequence_field(table_decl, 'add_columns', 'alter_table.add_columns')
     indexes = _optional_sequence_field(table_decl, 'indexes', 'alter_table.indexes')
     if not add_columns and not indexes:
-        raise ValueError("alter table declaration должен содержать add_columns или indexes")
+        raise ValueError(_tr('db_extensions.alter_extension_table.3'))
 
     existing_columns = _table_columns(conn, table_name)
     for column in add_columns:
         column_name = _normalize_identifier(column.get('name') if isinstance(column, Mapping) else None, 'column')
         if column_name in existing_columns:
-            raise ValueError(f"колонка {column_name} уже существует в {table_name}")
+            raise ValueError(_tr('db_extensions.alter_extension_table.4', p0=f'{column_name}', p1=f'{table_name}'))
         conn.execute(
             f"ALTER TABLE {_quote_identifier(table_name)} "
             f"ADD COLUMN {_build_add_column_sql(column)}"
@@ -435,7 +437,7 @@ def _alter_extension_table(
 
 def _build_column_sql(column_decl: Mapping[str, Any]) -> str:
     if not isinstance(column_decl, Mapping):
-        raise ValueError("column declaration должен быть словарём")
+        raise ValueError(_tr('db_extensions.build_column_sql.1'))
     _reject_unknown_keys(
         column_decl,
         {'name', 'type', 'nullable', 'primary_key', 'unique', 'default', 'default_sql'},
@@ -449,7 +451,7 @@ def _build_column_sql(column_decl: Mapping[str, Any]) -> str:
     unique = _schema_bool(column_decl, 'unique', 'column.unique')
 
     if 'default' in column_decl and 'default_sql' in column_decl:
-        raise ValueError("нельзя одновременно указывать default и default_sql")
+        raise ValueError(_tr('db_extensions.build_column_sql.2'))
 
     parts = [_quote_identifier(name), column_type]
     if primary_key:
@@ -467,20 +469,20 @@ def _build_column_sql(column_decl: Mapping[str, Any]) -> str:
 
 def _build_add_column_sql(column_decl: Mapping[str, Any]) -> str:
     if not isinstance(column_decl, Mapping):
-        raise ValueError("column declaration должен быть словарём")
+        raise ValueError(_tr('db_extensions.build_column_sql.1'))
     primary_key = _schema_bool(column_decl, 'primary_key', 'column.primary_key')
     unique = _schema_bool(column_decl, 'unique', 'column.unique')
     nullable = _schema_bool(column_decl, 'nullable', 'column.nullable', default=True)
     if primary_key:
-        raise ValueError("add_columns не поддерживает primary_key")
+        raise ValueError(_tr('db_extensions.build_add_column_sql.1'))
     if unique:
-        raise ValueError("add_columns не поддерживает unique; используйте indexes")
+        raise ValueError(_tr('db_extensions.build_add_column_sql.2'))
     if 'default_sql' in column_decl:
-        raise ValueError("add_columns не поддерживает default_sql")
+        raise ValueError(_tr('db_extensions.build_add_column_sql.3'))
     if not nullable and (
         'default' not in column_decl or column_decl.get('default') is None
     ):
-        raise ValueError("NOT NULL add_column требует scalar default")
+        raise ValueError(_tr('db_extensions.build_add_column_sql.4'))
     return _build_column_sql(column_decl)
 
 
@@ -490,7 +492,7 @@ def _create_extension_index(
     index_decl: Mapping[str, Any],
 ) -> None:
     if not isinstance(index_decl, Mapping):
-        raise ValueError("index declaration должен быть словарём")
+        raise ValueError(_tr('db_extensions.create_extension_index.1'))
     _reject_unknown_keys(index_decl, {'name', 'columns', 'unique'}, 'index declaration')
     local_index_name = _normalize_identifier(index_decl.get('name'), 'index')
     columns = _required_sequence_field(index_decl, 'columns', 'index.columns', nonempty=True)
@@ -549,16 +551,16 @@ def _set_extension_schema_version(
 def _normalize_local_table_name(name: str) -> str:
     value = _normalize_identifier(name, 'table')
     if value.startswith('ext_'):
-        raise ValueError("локальное имя таблицы расширения не должно начинаться с ext_")
+        raise ValueError(_tr('db_extensions.normalize_local_table_name.1'))
     return value
 
 
 def _normalize_identifier(value: Any, kind: str) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"{kind} должен быть строкой")
+        raise ValueError(_tr('action_registry.require_text.1', p0=f'{kind}'))
     identifier = value.strip().casefold()
     if not _IDENTIFIER_RE.fullmatch(identifier):
-        raise ValueError(f"{kind} должен соответствовать ^[a-z][a-z0-9_]{{0,63}}$")
+        raise ValueError(_tr('db_extensions.normalize_identifier.1', p0=f'{kind}'))
     return identifier
 
 
@@ -570,7 +572,7 @@ def _required_sequence_field(
     nonempty: bool = False,
 ) -> list[Any]:
     if field not in data:
-        raise ValueError(f"{label} должен быть списком")
+        raise ValueError(_tr('db_extensions.required_sequence_field.1', p0=f'{label}'))
     return _normalize_sequence_value(data[field], label, nonempty=nonempty)
 
 
@@ -582,43 +584,43 @@ def _optional_sequence_field(data: Mapping[str, Any], field: str, label: str) ->
 
 def _normalize_sequence_value(value: Any, label: str, *, nonempty: bool = False) -> list[Any]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        raise ValueError(f"{label} должен быть списком")
+        raise ValueError(_tr('db_extensions.required_sequence_field.1', p0=f'{label}'))
     items = list(value)
     if nonempty and not items:
-        raise ValueError(f"{label} должен быть непустым списком")
+        raise ValueError(_tr('db_extensions.normalize_sequence_value.1', p0=f'{label}'))
     return items
 
 
 def _normalize_column_type(value: Any) -> str:
     if not isinstance(value, str):
-        raise ValueError("column.type должен быть строкой")
+        raise ValueError(_tr('db_extensions.normalize_column_type.1'))
     column_type = value.strip().upper()
     if column_type not in _ALLOWED_COLUMN_TYPES:
-        raise ValueError(f"тип колонки {column_type!r} не разрешён")
+        raise ValueError(_tr('db_extensions.normalize_column_type.2', p0=f'{column_type!r}'))
     return column_type
 
 
 def _normalize_default_sql(value: Any) -> str:
     if not isinstance(value, str):
-        raise ValueError("default_sql должен быть строкой")
+        raise ValueError(_tr('db_extensions.normalize_default_sql.1'))
     default_sql = value.strip().upper()
     if default_sql not in _ALLOWED_DEFAULT_SQL:
-        raise ValueError("default_sql не разрешён")
+        raise ValueError(_tr('db_extensions.normalize_default_sql.2'))
     return default_sql
 
 
 def _normalize_storage_key(key: str) -> str:
     if not isinstance(key, str):
-        raise ValueError("storage key должен быть строкой")
+        raise ValueError(_tr('db_extensions.normalize_storage_key.1'))
     value = key.strip()
     if not _STORAGE_KEY_RE.fullmatch(value):
-        raise ValueError("storage key содержит недопустимые символы")
+        raise ValueError(_tr('db_extensions.normalize_storage_key.2'))
     return value
 
 
 def _normalize_find_limit(limit: int) -> int:
     if isinstance(limit, bool) or not isinstance(limit, int):
-        raise ValueError("limit должен быть integer")
+        raise ValueError(_tr('db_extensions.normalize_find_limit.1'))
     return max(1, min(limit, 500))
 
 
@@ -628,7 +630,7 @@ def _storage_like_prefix(prefix: str) -> str:
 
 def _normalize_values(values: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(values, Mapping) or not values:
-        raise ValueError("values должен быть непустым словарём")
+        raise ValueError(_tr('db_extensions.normalize_values.1'))
     return {
         _normalize_identifier(column, 'column'): _normalize_repository_value(value)
         for column, value in values.items()
@@ -639,18 +641,18 @@ def _json_dumps_storage_value(value: Any) -> str:
     try:
         return json.dumps(value, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError) as exc:
-        raise ValueError("storage value должен быть JSON-совместимым без NaN/Infinity") from exc
+        raise ValueError(_tr('db_extensions.json_dumps_storage_value.1')) from exc
 
 
 def _normalize_repository_value(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("repository value не должен быть NaN/Infinity")
+        raise ValueError(_tr('db_extensions.normalize_repository_value.1'))
     return value
 
 
 def _build_where(filters: Mapping[str, Any]) -> tuple[str, tuple[Any, ...]]:
     if not isinstance(filters, Mapping):
-        raise ValueError("filters должен быть словарём")
+        raise ValueError(_tr('db_extensions.build_where.1'))
     if not filters:
         return '', ()
     normalized = _normalize_values(filters)
@@ -662,7 +664,7 @@ def _build_where(filters: Mapping[str, Any]) -> tuple[str, tuple[Any, ...]]:
 
 def _quote_identifier(identifier: str) -> str:
     if not _SQL_IDENTIFIER_RE.fullmatch(identifier):
-        raise ValueError(f"недопустимый SQL identifier: {identifier}")
+        raise ValueError(_tr('db_extensions.quote_identifier.1', p0=f'{identifier}'))
     return f'"{identifier}"'
 
 
@@ -675,11 +677,11 @@ def _sql_literal(value: Any) -> str:
         return str(value)
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise ValueError("default не должен быть NaN/Infinity")
+            raise ValueError(_tr('db_extensions.sql_literal.1'))
         return repr(value)
     if isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"
-    raise ValueError("default поддерживает только scalar-значения")
+    raise ValueError(_tr('db_extensions.sql_literal.2'))
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -689,7 +691,7 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
 def _reject_unknown_keys(data: Mapping[str, Any], allowed: set[str], title: str) -> None:
     unknown = set(data.keys()) - allowed
     if unknown:
-        raise ValueError(f"{title} содержит неподдерживаемые поля: {', '.join(sorted(unknown))}")
+        raise ValueError(_tr('db_extensions.reject_unknown_keys.1', p0=f'{title}', p1=f"{', '.join(sorted(unknown))}"))
 
 
 __all__ = [

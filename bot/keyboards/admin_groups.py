@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
@@ -12,7 +14,7 @@ def groups_list_kb(groups: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
         groups: List of groups from get_all_groups()
     """
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='➕ Добавить группу', callback_data='admin_group_add'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_groups.groups_list_kb.1'), callback_data='admin_group_add'))
     for group in groups:
         row_buttons = [InlineKeyboardButton(text=f"📂 {group['name']}", callback_data=f"admin_group_view:{group['id']}")]
         if len(groups) > 1:
@@ -34,16 +36,16 @@ def group_view_kb(
     builder = InlineKeyboardBuilder()
     reset_icon = '🟢' if monthly_traffic_reset_enabled else '⚪'
     builder.row(InlineKeyboardButton(
-        text=f'{reset_icon} Автосброс трафика 1-го числа',
+        text=_tr('admin_groups.group_view_kb.1', p0=f'{reset_icon}'),
         callback_data=f'admin_group_monthly_reset:{group_id}',
     ))
     builder.row(InlineKeyboardButton(
-        text='🔗 Привязка к подписке',
+        text=_tr('admin_groups.group_view_kb.2'),
         callback_data=f'admin_group_parent:{group_id}',
     ))
-    builder.row(InlineKeyboardButton(text='✏️ Переименовать', callback_data=f'admin_group_edit:{group_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_groups.group_view_kb.3'), callback_data=f'admin_group_edit:{group_id}'))
     if group_id != 1:
-        builder.row(InlineKeyboardButton(text='🗑️ Удалить группу', callback_data=f'admin_group_delete:{group_id}'))
+        builder.row(InlineKeyboardButton(text=_tr('admin_groups.group_view_kb.4'), callback_data=f'admin_group_delete:{group_id}'))
     builder.row(back_button('admin_groups'), home_button())
     return builder.as_markup()
 
@@ -58,7 +60,7 @@ def group_subscription_parent_kb(
     builder = InlineKeyboardBuilder()
     standalone_icon = '🟢' if current_parent_group_id is None else '⚪'
     builder.row(InlineKeyboardButton(
-        text=f'{standalone_icon} Не привязывать',
+        text=_tr('admin_groups.group_subscription_parent_kb.1', p0=f'{standalone_icon}'),
         callback_data='admin_group_parent_set:0',
     ))
     for group in groups:
@@ -79,8 +81,8 @@ def group_delete_confirm_kb(group_id: int) -> InlineKeyboardMarkup:
         group_id: Group ID
     """
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='✅ Да, удалить', callback_data=f'admin_group_delete_confirm:{group_id}'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin_group_view:{group_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_groups.group_delete_confirm_kb.1'), callback_data=f'admin_group_delete_confirm:{group_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data=f'admin_group_view:{group_id}'))
     return builder.as_markup()
 
 def group_select_kb(groups: List[Dict[str, Any]], callback_prefix: str, back_callback: str) -> InlineKeyboardMarkup:
@@ -95,5 +97,5 @@ def group_select_kb(groups: List[Dict[str, Any]], callback_prefix: str, back_cal
     builder = InlineKeyboardBuilder()
     for group in groups:
         builder.row(InlineKeyboardButton(text=f"📂 {group['name']}", callback_data=f"{callback_prefix}:{group['id']}"))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=back_callback))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data=back_callback))
     return builder.as_markup()

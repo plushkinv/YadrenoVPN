@@ -8,6 +8,8 @@ Includes:
 - Notifications about ending traffic
 """
 
+from localization import text as _tr
+
 import asyncio
 import logging
 import os
@@ -22,6 +24,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, ReplyKeyboardRemove
 
+from backup_io import copy_stream, write_zip_file
 from config import ADMIN_IDS, GITHUB_REPO_URL
 from database.requests import (
     get_all_servers, get_users_stats, get_keys_stats,
@@ -174,7 +177,7 @@ def _add_custom_extensions_to_archive(zf: zipfile.ZipFile) -> Optional[int]:
             f"{relative_path.replace(os.sep, '/')}"
         )
         try:
-            zf.write(source_path, archive_path)
+            write_zip_file(zf, source_path, archive_path)
             added_count += 1
         except OSError as e:
             logger.warning(
@@ -197,26 +200,26 @@ def _save_local_custom_extensions_backup(day_dir: str) -> Optional[int]:
         os.path.join(day_root, CUSTOM_EXTENSIONS_BACKUP_DIRNAME)
     )
     if os.path.commonpath([day_root, destination_root]) != day_root:
-        raise RuntimeError("Каталог бэкапа custom_extensions находится вне дневного бэкапа")
+        raise RuntimeError(_tr('scheduler.save_local_custom_extensions_backup.1'))
 
     temp_root = tempfile.mkdtemp(prefix='.custom_extensions_', dir=day_root)
     try:
         for source_path, relative_path in files:
             destination_path = os.path.abspath(os.path.join(temp_root, relative_path))
             if os.path.commonpath([temp_root, destination_path]) != temp_root:
-                raise RuntimeError("Некорректный относительный путь custom_extensions")
+                raise RuntimeError(_tr('scheduler.save_local_custom_extensions_backup.2'))
             os.makedirs(os.path.dirname(destination_path), exist_ok=True)
             with open(source_path, 'rb') as source_file, open(
                 destination_path,
                 'xb',
             ) as destination_file:
-                shutil.copyfileobj(source_file, destination_file, length=1024 * 1024)
+                copy_stream(source_file, destination_file)
 
         if os.path.lexists(destination_root):
             destination_real_path = os.path.realpath(destination_root)
             if os.path.commonpath([day_root, destination_real_path]) != day_root:
                 raise RuntimeError(
-                    "Существующий бэкап custom_extensions ведёт за пределы дневного каталога"
+                    _tr('scheduler.save_local_custom_extensions_backup.3')
                 )
             if os.path.islink(destination_root) or not os.path.isdir(destination_root):
                 os.unlink(destination_root)
@@ -274,22 +277,20 @@ async def collect_panel_database_backups() -> PanelBackupCollection:
 def build_backup_caption(today: str, panel_warnings: Sequence[PanelBackupWarning], *, manual: bool = False) -> str:
     """Collects an HTML-safe caption for a Telegram document with a backup archive."""
     lines = [
-        f"📦 <b>{'Ручной' if manual else 'Ежедневный'} бэкап за {escape_html(today)}</b>",
+        _tr('scheduler.build_backup_caption.3', p0=f"{(_tr('scheduler.build_backup_caption.1') if manual else _tr('scheduler.build_backup_caption.2'))}", p1=f'{escape_html(today)}'),
         "",
-        "Содержит базу бота, расширения, Mini App с ключом подписи и доступные бэкапы VPN-панелей.",
+        _tr('scheduler.build_backup_caption.4'),
     ]
     if panel_warnings:
-        lines.extend(["", "⚠️ <b>Предупреждения:</b>"])
+        lines.extend(["", _tr('scheduler.build_backup_caption.5')])
         visible_warnings = panel_warnings[:3]
         for warning in visible_warnings:
             lines.append(
-                "⚠️ Не удалось скачать бэкап панели "
-                f"{escape_html(warning.server_name)}: "
-                f"{escape_html(_short_panel_warning(warning.message))}"
+                _tr('scheduler.build_backup_caption.6', p0=f'{escape_html(warning.server_name)}', p1=f'{escape_html(_short_panel_warning(warning.message))}')
             )
         hidden_count = len(panel_warnings) - len(visible_warnings)
         if hidden_count > 0:
-            lines.append(f"⚠️ И ещё {hidden_count} ошибок panel backup; подробности в логах.")
+            lines.append(_tr('scheduler.build_backup_caption.7', p0=f'{hidden_count}'))
 
     return "\n".join(lines)
 
@@ -317,7 +318,7 @@ async def collect_daily_stats() -> str:
     
     for server in servers:
         if not server.get('is_active'):
-            servers_info.append(f"  🔴 <b>{server['name']}</b> — выключен")
+            servers_info.append(_tr('scheduler.collect_daily_stats.1', p0=f"{server['name']}"))
             continue
             
         try:
@@ -330,16 +331,15 @@ async def collect_daily_stats() -> str:
                 cpu_text = f", CPU: {cpu}%" if cpu else ""
                 online = stats.get('online_clients', 0)
                 servers_info.append(
-                    f"  🟢 <b>{server['name']}</b>: {online} онлайн, "
-                    f"трафик: {traffic}{cpu_text}"
+                    _tr('scheduler.collect_daily_stats.2', p0=f"{server['name']}", p1=f'{online}', p2=f'{traffic}', p3=f'{cpu_text}')
                 )
             else:
-                servers_info.append(f"  🔴 <b>{server['name']}</b> — недоступен")
+                servers_info.append(_tr('scheduler.collect_daily_stats.3', p0=f"{server['name']}"))
         except Exception as e:
             logger.warning(f"Ошибка получения статистики сервера {server['name']}: {e}")
-            servers_info.append(f"  ⚠️ <b>{server['name']}</b> — ошибка подключения")
+            servers_info.append(_tr('scheduler.collect_daily_stats.4', p0=f"{server['name']}"))
     
-    servers_text = "\n".join(servers_info) if servers_info else "  Нет серверов"
+    servers_text = "\n".join(servers_info) if servers_info else _tr('scheduler.collect_daily_stats.5')
     
     # Generating the report text
     today = datetime.now().strftime("%d.%m.%Y")
@@ -360,27 +360,7 @@ async def collect_daily_stats() -> str:
         )
     payments_sum = " + ".join(payments_text) if payments_text else "0"
     
-    report = f"""📊 <b>Суточная статистика за {today}</b>
-
-👥 <b>Пользователи:</b>
-  Всего: {users.get('total', 0)}
-  Активных: {users.get('active', 0)}
-  Новых за сутки: {new_users}
-
-🔑 <b>VPN-ключи:</b>
-  Всего: {keys.get('total', 0)}
-  Активных: {keys.get('active', 0)}
-  Истёкших: {keys.get('expired', 0)}
-  Создано за сутки: {keys.get('created_today', 0)}
-
-💳 <b>Платежи за сутки:</b>
-  Успешных: {payments_total}
-  Ожидающих: {payments_pending}
-  Сумма: {payments_sum}
-
-🖥️ <b>Серверы:</b>
-{servers_text}
-"""
+    report = _tr('scheduler.collect_daily_stats.6', p0=f'{today}', p1=f"{users.get('total', 0)}", p2=f"{users.get('active', 0)}", p3=f'{new_users}', p4=f"{keys.get('total', 0)}", p5=f"{keys.get('active', 0)}", p6=f"{keys.get('expired', 0)}", p7=f"{keys.get('created_today', 0)}", p8=f'{payments_total}', p9=f'{payments_pending}', p10=f'{payments_sum}', p11=f'{servers_text}')
     return report
 
 
@@ -445,7 +425,7 @@ async def create_backup_archive(
                 )
                 os.close(fd)
                 snapshot_path = backup_bot_database_to(temp_bot_db_backup)
-                zf.write(snapshot_path, 'vpn_bot.db')
+                write_zip_file(zf, snapshot_path, 'vpn_bot.db')
                 logger.info(f"Добавлен в архив: vpn_bot.db ({snapshot_path.stat().st_size} байт)")
             else:
                 logger.warning(f"База данных бота не найдена: {bot_db_path}")
@@ -992,7 +972,7 @@ async def check_and_notify_updates(bot: Bot) -> None:
             builder = InlineKeyboardBuilder()
             builder.row(
                 InlineKeyboardButton(
-                    text="🔄 Обновить бота", 
+                    text=_tr('scheduler.check_and_notify_updates.1'),
                     callback_data="admin_update_bot"
                 )
             )
@@ -1000,7 +980,7 @@ async def check_and_notify_updates(bot: Bot) -> None:
             kb = builder.as_markup()
             
             # Generating the notification text
-            notify_text = f"📦 <b>Доступно обновление!</b>\n\n{log_text}"
+            notify_text = _tr('scheduler.check_and_notify_updates.2', p0=f'{log_text}')
             
             # Sending notifications to admins
             for admin_id in ADMIN_IDS:
@@ -1163,14 +1143,14 @@ async def _monthly_traffic_reset_impl(bot: Bot) -> None:
     sync_errors = reconciliation_plan.errors
 
     # ===Report to admins ===
-    report_parts = ["🔄 <b>Ежемесячное обслуживание</b>\n"]
+    report_parts = [_tr('scheduler.monthly_traffic_reset_impl.1')]
     if reset_enabled:
-        report_parts.append(f"📊 <b>Сброс трафика:</b> ✅ {reset_success}")
+        report_parts.append(_tr('scheduler.monthly_traffic_reset_impl.2', p0=f'{reset_success}'))
         if reset_errors > 0:
-            report_parts.append(f"  ❌ Ошибок: {reset_errors}")
-    report_parts.append(f"🔍 <b>Сверка БД↔панель:</b> 🔧 {sync_fixed}")
+            report_parts.append(_tr('scheduler.monthly_traffic_reset_impl.3', p0=f'{reset_errors}'))
+    report_parts.append(_tr('scheduler.monthly_traffic_reset_impl.4', p0=f'{sync_fixed}'))
     if sync_errors > 0:
-        report_parts.append(f"  ❌ Ошибок: {sync_errors}")
+        report_parts.append(_tr('scheduler.monthly_traffic_reset_impl.3', p0=f'{sync_errors}'))
     
     report = "\n".join(report_parts)
     for admin_id in ADMIN_IDS:

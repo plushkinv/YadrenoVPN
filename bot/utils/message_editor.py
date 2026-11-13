@@ -6,6 +6,8 @@ Message = text + optional media (photo, video, gif).
 The database stores JSON: {text, photo_file_id, video_file_id, animation_file_id}.
 Backward compatibility: if the database contains an old string (not JSON), we return {'text': string}.
 """
+
+from localization import text as _tr
 import json
 import logging
 from typing import Optional, List
@@ -277,14 +279,14 @@ def editor_kb(
     
     # Top row: Back + Home
     builder.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
-        InlineKeyboardButton(text="🈴 На главную", callback_data="start"),
+        InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data=back_callback),
+        InlineKeyboardButton(text=_tr('system.extension_settings_kb.8'), callback_data="start"),
     )
 
     if can_delete_media:
         builder.row(
             InlineKeyboardButton(
-                text="🗑 Удалить медиа",
+                text=_tr('message_editor.editor_kb.1'),
                 callback_data="msg_editor_delete_media"
             )
         )
@@ -294,7 +296,7 @@ def editor_kb(
         # The button shows help before entering
         builder.row(
             InlineKeyboardButton(
-                text="📝 Отправьте новое сообщение ⬇️",
+                text=_tr('message_editor.editor_kb.2'),
                 callback_data="msg_editor_show_help"
             )
         )
@@ -302,7 +304,7 @@ def editor_kb(
         # Placeholder button (just a visual indicator, the editor is already waiting for input)
         builder.row(
             InlineKeyboardButton(
-                text="📝 Отправьте новое сообщение ⬇️",
+                text=_tr('message_editor.editor_kb.2'),
                 callback_data="msg_editor_noop_alert"
             )
         )
@@ -314,7 +316,7 @@ def editor_help_kb() -> InlineKeyboardMarkup:
     """Keyboard for editor help screen."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="⬅️ Назад", callback_data="msg_editor_back_to_preview")
+        InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data="msg_editor_back_to_preview")
     )
     return builder.as_markup()
 
@@ -353,13 +355,13 @@ async def send_editor_message(
     # Load data from the database if not passed explicitly
     if data is None:
         if key is None:
-            raise ValueError("Нужно передать key или data")
+            raise ValueError(_tr('message_editor.send_editor_message.1'))
         data = get_message_data(key, default_text)
     
     # Defining the text
     text = text_override if text_override is not None else (data.get('text', '') or default_text)
     if not text:
-        text = '(пусто)'
+        text = _tr('message_editor.send_editor_message.2')
     
     media_file_id, media_type = _media_from_parts(data)
     

@@ -1,6 +1,8 @@
 """Installation bot branding; one atomic cache, independent of UI publications."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import base64
 import hashlib
@@ -38,7 +40,7 @@ def _load():
 
 def presentation():
     value = _load()
-    return {'title': value.get('name', 'Личный кабинет'),
+    return {'title': value.get('name', _tr('bot_profile.presentation.1')),
             'logo': '/ui/bot-avatar/' + value['photo_hash'] + '.jpg' if value.get('photo') else None}
 
 
@@ -51,39 +53,43 @@ def avatar(content_hash):
 
 async def refresh(bot):
     """Commit only a complete profile; transport failure retains the last snapshot."""
+    await asyncio.wait_for(_refresh(bot), timeout=15)
+
+
+async def _refresh(bot):
+    """Read and commit within one deadline, including on supported Python 3.10."""
     from config import BOT_TOKEN
     from PIL import Image
 
-    async with asyncio.timeout(15):
-        info = await bot.get_me()
-        if info.id != int(BOT_TOKEN.partition(':')[0]) or not info.first_name.strip():
-            raise ValueError('unexpected bot identity')
-        photos = await bot.get_user_profile_photos(info.id, limit=1)
-        previous = _load()
-        photo, unique_id = None, None
-        if photos.photos:
-            sizes = photos.photos[0]
-            candidates = [item for item in sizes if min(item.width, item.height) >= 84]
-            selected = min(candidates, key=lambda item: item.width * item.height) if candidates else sizes[-1]
-            unique_id = selected.file_unique_id
-            if previous.get('photo_unique_id') == unique_id and previous.get('photo'):
-                photo = previous['photo']
-            else:
-                file = await bot.get_file(selected.file_id)
-                if not file.file_path:
-                    raise ValueError('missing avatar file')
-                with io.BytesIO() as stream:
-                    await bot.download_file(file.file_path, destination=stream, timeout=10)
-                    photo = stream.getvalue()
-                with Image.open(io.BytesIO(photo)) as image:
-                    if image.format != 'JPEG':
-                        raise ValueError('unexpected avatar format')
-                    image.verify()
-        value = {'bot_id': info.id, 'name': info.first_name.strip(), 'photo_unique_id': unique_id,
-                 'photo_hash': hashlib.sha256(photo).hexdigest() if photo else None,
-                 'photo': base64.b64encode(photo).decode('ascii') if photo else None}
-        if value != {**previous, 'photo': base64.b64encode(previous['photo']).decode('ascii') if previous.get('photo') else None}:
-            atomic_write(_cache_file(), canonical(value))
+    info = await bot.get_me()
+    if info.id != int(BOT_TOKEN.partition(':')[0]) or not info.first_name.strip():
+        raise ValueError('unexpected bot identity')
+    photos = await bot.get_user_profile_photos(info.id, limit=1)
+    previous = _load()
+    photo, unique_id = None, None
+    if photos.photos:
+        sizes = photos.photos[0]
+        candidates = [item for item in sizes if min(item.width, item.height) >= 84]
+        selected = min(candidates, key=lambda item: item.width * item.height) if candidates else sizes[-1]
+        unique_id = selected.file_unique_id
+        if previous.get('photo_unique_id') == unique_id and previous.get('photo'):
+            photo = previous['photo']
+        else:
+            file = await bot.get_file(selected.file_id)
+            if not file.file_path:
+                raise ValueError('missing avatar file')
+            with io.BytesIO() as stream:
+                await bot.download_file(file.file_path, destination=stream, timeout=10)
+                photo = stream.getvalue()
+            with Image.open(io.BytesIO(photo)) as image:
+                if image.format != 'JPEG':
+                    raise ValueError('unexpected avatar format')
+                image.verify()
+    value = {'bot_id': info.id, 'name': info.first_name.strip(), 'photo_unique_id': unique_id,
+             'photo_hash': hashlib.sha256(photo).hexdigest() if photo else None,
+             'photo': base64.b64encode(photo).decode('ascii') if photo else None}
+    if value != {**previous, 'photo': base64.b64encode(previous['photo']).decode('ascii') if previous.get('photo') else None}:
+        atomic_write(_cache_file(), canonical(value))
 
 
 async def run_profile_refresh(bot):

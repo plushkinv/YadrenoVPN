@@ -1,3 +1,4 @@
+import { text as _tr, bindInstallationLanguage } from "./i18n/runtime";
 import { customization } from './config';
 import { loadApplication } from './loader';
 import { receiveRuntime } from './runtime/channel';
@@ -9,7 +10,7 @@ let generation = 0, dispose: (() => void) | undefined;
 let loading: AbortController | undefined;
 const fail = () => {
   element.replaceChildren();
-  const message = document.createElement('p'); message.textContent = 'Не удалось загрузить интерфейс. Повторите открытие приложения.';
+  const message = document.createElement('p'); message.textContent = _tr("frame.1");
   element.append(message);
 };
 window.addEventListener('message', async event => {
@@ -24,6 +25,7 @@ window.addEventListener('message', async event => {
   dispose = () => receiver?.close();
   try {
     const runtime = receiver?.runtime ?? await previewRuntime(message as PreviewMessage);
+    bindInstallationLanguage(runtime.getSnapshot().settings.language ?? customization.language ?? 'ru');
     const stop = await loadApplication(element, customization, runtime, controller.signal);
     if (current !== generation) { stop(); receiver?.close(); return; }
     dispose = () => { stop(); receiver?.close(); };

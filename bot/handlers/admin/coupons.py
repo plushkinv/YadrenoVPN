@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from localization import text as _tr
+
 from typing import Any
 
 from aiogram import F, Router
@@ -60,17 +62,16 @@ def _statistics_text(
     include_waiting: bool = False,
 ) -> str:
     lines = [
-        "📊 <b>Статистика за всё время</b>",
-        f"• Выдано: <b>{int(stats.get('issued') or 0)}</b>",
-        f"• Использовано: <b>{int(stats.get('used') or 0)}</b>",
-        f"• Активно: <b>{int(stats.get('active') or 0)}</b>",
-        f"• Истекло: <b>{int(stats.get('expired') or 0)}</b>",
-        "• Конверсия: "
-        f"<b>{_format_conversion(stats.get('conversion_percent'))}</b>",
+        _tr('coupons.statistics_text.1'),
+        _tr('coupons.statistics_text.2', p0=f"{int(stats.get('issued') or 0)}"),
+        _tr('coupons.statistics_text.3', p0=f"{int(stats.get('used') or 0)}"),
+        _tr('coupons.statistics_text.4', p0=f"{int(stats.get('active') or 0)}"),
+        _tr('coupons.statistics_text.5', p0=f"{int(stats.get('expired') or 0)}"),
+        _tr('coupons.statistics_text.6', p0=f"{_format_conversion(stats.get('conversion_percent'))}"),
     ]
     if include_waiting:
         lines.append(
-            f"• Ожидают отправки: <b>{int(stats.get('waiting') or 0)}</b>"
+            _tr('coupons.statistics_text.7', p0=f"{int(stats.get('waiting') or 0)}")
         )
     return "\n".join(lines)
 
@@ -83,11 +84,7 @@ async def _render_coupons_root(
 ) -> Message:
     await state.set_state(AdminStates.admin_menu)
     text = (
-        "🎫 <b>Купоны</b>\n\n"
-        "Купон — это одноразовый промокод. Его можно использовать самому, "
-        "подарить или передать другому человеку.\n\n"
-        "Настройки автоматической выдачи разделены по сценариям. "
-        "Откройте нужный раздел, чтобы увидеть статистику и параметры."
+        _tr('coupons.render_coupons_root.1')
     )
     return await safe_edit_or_send(
         message,
@@ -111,14 +108,7 @@ async def _render_purchase_settings(
     discount = get_coupon_auto_discount_percent()
     lifetime = get_coupon_auto_lifetime_days()
     text = (
-        "🛒 <b>Автовыдача при покупке</b>\n\n"
-        "После успешной платной операции пользователь получает одноразовый "
-        "купон. Бесплатные, пробные и демонстрационные операции не участвуют.\n\n"
-        f"{_statistics_text(get_purchase_auto_coupon_statistics())}\n\n"
-        "<b>Текущие настройки</b>\n"
-        f"• Состояние: <b>{'включено' if enabled else 'выключено'}</b>\n"
-        f"• Скидка: <b>{discount}%</b>\n"
-        f"• Время жизни: <b>{lifetime} дн.</b>"
+        _tr('coupons.render_purchase_settings.3', p0=f'{_statistics_text(get_purchase_auto_coupon_statistics())}', p1=f"{(_tr('coupons.render_purchase_settings.1') if enabled else _tr('coupons.render_purchase_settings.2'))}", p2=f'{discount}', p3=f'{lifetime}')
     )
     return await safe_edit_or_send(
         message,
@@ -144,16 +134,7 @@ async def _render_lapsed_settings(
     lifetime = get_lapsed_coupon_lifetime_days()
     delay = get_lapsed_coupon_delay_days()
     text = (
-        "🎁 <b>Автовыдача не продлившим ключ</b>\n\n"
-        "Купон отправляется, когда у пользователя истекли все ключи и после "
-        "этого прошло заданное количество полных дней. При появлении активного "
-        "ключа ожидающая отправка отменяется.\n\n"
-        f"{_statistics_text(get_lapsed_coupon_statistics(), include_waiting=True)}\n\n"
-        "<b>Текущие настройки</b>\n"
-        f"• Состояние: <b>{'включено' if enabled else 'выключено'}</b>\n"
-        f"• Скидка: <b>{discount}%</b>\n"
-        f"• Время жизни: <b>{lifetime} дн.</b>\n"
-        f"• Отправлять через: <b>{delay} дн.</b>"
+        _tr('coupons.render_lapsed_settings.1', p0=f'{_statistics_text(get_lapsed_coupon_statistics(), include_waiting=True)}', p1=f"{(_tr('coupons.render_purchase_settings.1') if enabled else _tr('coupons.render_purchase_settings.2'))}", p2=f'{discount}', p3=f'{lifetime}', p4=f'{delay}')
     )
     return await safe_edit_or_send(
         message,
@@ -171,7 +152,7 @@ async def _render_lapsed_settings(
 @router.callback_query(F.data == "admin_coupons")
 async def admin_coupons(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await _render_coupons_root(callback.message, state)
     await callback.answer()
@@ -183,7 +164,7 @@ async def admin_coupons_purchase(
     state: FSMContext,
 ):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await _render_purchase_settings(callback.message, state)
     await callback.answer()
@@ -195,7 +176,7 @@ async def admin_coupons_lapsed(
     state: FSMContext,
 ):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await _render_lapsed_settings(callback.message, state)
     await callback.answer()
@@ -209,23 +190,23 @@ async def _set_coupon_scenario_enabled(
     target_enabled: bool | None,
 ) -> None:
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     if scenario == "purchase":
         current = get_coupon_auto_enabled()
         setter = set_coupon_auto_enabled
         renderer = _render_purchase_settings
-        label = "Автовыдача при покупке"
+        label = _tr('coupons.set_coupon_scenario_enabled.1')
     else:
         current = get_lapsed_coupon_enabled()
         setter = set_lapsed_coupon_enabled
         renderer = _render_lapsed_settings
-        label = "Автовыдача не продлившим ключ"
+        label = _tr('coupons.set_coupon_scenario_enabled.2')
 
     desired = not current if target_enabled is None else target_enabled
     if desired == current:
-        status = "уже включена" if desired else "уже выключена"
+        status = _tr('coupons.set_coupon_scenario_enabled.3') if desired else _tr('coupons.set_coupon_scenario_enabled.4')
         await callback.answer(f"{label} {status}")
         return
 
@@ -296,11 +277,11 @@ async def admin_coupon_setting_start(
     state: FSMContext,
 ):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     parts = str(callback.data or "").split(":")
     if len(parts) != 3:
-        await callback.answer("❌ Неизвестная настройка", show_alert=True)
+        await callback.answer(_tr('coupons.admin_coupon_setting_start.1'), show_alert=True)
         return
     _prefix, kind, field = parts
     allowed = {
@@ -311,13 +292,13 @@ async def admin_coupon_setting_start(
         ("lapsed", "delay"),
     }
     if (kind, field) not in allowed:
-        await callback.answer("❌ Неизвестная настройка", show_alert=True)
+        await callback.answer(_tr('coupons.admin_coupon_setting_start.1'), show_alert=True)
         return
 
     prompts = {
-        "discount": "Введите скидку от 0 до 100%.",
-        "lifetime": "Введите время жизни купона в днях.",
-        "delay": "Введите задержку отправки от 1 до 30 дней.",
+        "discount": _tr('coupons.admin_coupon_setting_start.2'),
+        "lifetime": _tr('coupons.admin_coupon_setting_start.3'),
+        "delay": _tr('coupons.admin_coupon_setting_start.4'),
     }
     back_callback = (
         "admin_coupons_purchase"
@@ -332,8 +313,7 @@ async def admin_coupon_setting_start(
     await state.set_state(AdminStates.coupon_setting_value)
     await safe_edit_or_send(
         callback.message,
-        "🎫 <b>Настройка автовыдачи</b>\n\n"
-        f"{prompts[field]}",
+        _tr('coupons.admin_coupon_setting_start.5', p0=f'{prompts[field]}'),
         reply_markup=promotion_cancel_kb(back_callback),
     )
     await callback.answer()
@@ -398,8 +378,7 @@ async def admin_coupon_setting_save(
     if not valid:
         await safe_edit_or_send(
             target,
-            "❌ <b>Значение не принято</b>\n\n"
-            "Проверьте число и попробуйте ещё раз.",
+            _tr('coupons.admin_coupon_setting_save.1'),
             reply_markup=promotion_cancel_kb(back_callback),
             force_new=target is message,
         )
@@ -410,8 +389,7 @@ async def admin_coupon_setting_save(
     except ValueError:
         await safe_edit_or_send(
             target,
-            "❌ <b>Значение не принято</b>\n\n"
-            "Проверьте число и попробуйте ещё раз.",
+            _tr('coupons.admin_coupon_setting_save.1'),
             reply_markup=promotion_cancel_kb(back_callback),
             force_new=target is message,
         )

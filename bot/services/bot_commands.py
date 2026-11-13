@@ -1,6 +1,8 @@
 """Telegram bot command menu synchronization."""
 from __future__ import annotations
 
+from bot.utils.user_ui_texts import get_ui_text
+
 import logging
 from typing import Any
 
@@ -10,18 +12,23 @@ logger = logging.getLogger(__name__)
 
 MAX_BOT_COMMANDS = 100
 
-CORE_BOT_COMMANDS = (
-    BotCommand(command='start', description='Старт'),
-    BotCommand(command='mykeys', description='Мои ключи'),
-    BotCommand(command='help', description='Справка'),
-)
+def _core_commands() -> tuple[BotCommand, ...]:
+    return tuple(BotCommand(command=name, description=get_ui_text('command.' + name))
+                 for name in ('start', 'mykeys', 'help'))
+
+
+def __getattr__(name):
+    # Preserve the exported tuple while resolving presentation only after bootstrap.
+    if name == 'CORE_BOT_COMMANDS':
+        return _core_commands()
+    raise AttributeError(name)
 
 
 def build_bot_commands() -> list[BotCommand]:
     """Builds the Bot API command list from core and extension commands."""
     from bot.utils.extension_commands import get_extension_command_definitions
 
-    commands = list(CORE_BOT_COMMANDS)
+    commands = list(_core_commands())
     used = {command.command for command in commands}
     for definition in get_extension_command_definitions():
         if definition.command in used:

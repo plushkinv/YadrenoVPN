@@ -10,5 +10,5 @@ class BotError(Exception):
 class TariffNotFoundError(BotError):
     """Exception: Tariff not found or inactive."""
     def __init__(self, message: str = None):
-        from bot.messages import MISSING_TARIFF_MESSAGE
-        super().__init__(message or MISSING_TARIFF_MESSAGE)
+        from bot.messages import missing_tariff_message
+        super().__init__(message or missing_tariff_message())

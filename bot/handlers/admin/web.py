@@ -1,4 +1,6 @@
 """Daily web controls without domain, proxy, certificate or installer changes."""
+
+from localization import text as _tr
 from aiogram import F, Router
 from bot.keyboards.admin_web import web_settings_kb
 from bot.utils.admin import is_admin
@@ -15,53 +17,33 @@ router.include_router(verification_router)
 async def _allowed(callback):
     if is_admin(callback.from_user.id):
         return True
-    await callback.answer('⛔ Доступ запрещён', show_alert=True)
+    await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
     return False
 
 
 async def _screen(callback, state):
     await state.clear()
     result = web_diagnostics(getattr(callback.bot, 'runtime_application', None))
-    origin = escape_html(result['public_origin']) if result['configured'] else 'Не подключён через установщик'
+    origin = escape_html(result['public_origin']) if result['configured'] else _tr('web.screen.1')
     verification = result['verification']
-    verification_status = 'работает' if verification['available'] else 'выключено'
+    verification_status = _tr('web.screen.2') if verification['available'] else _tr('coupons.render_purchase_settings.2')
     if verification['enabled'] and not verification['configured']:
-        verification_status = 'выключено: заполните настройки службы'
-    service = SERVICE_LABELS.get(verification['method'], 'не выбран')
+        verification_status = _tr('web.screen.3')
+    service = SERVICE_LABELS.get(verification['method'], _tr('web.screen.4'))
     publication = result['ui']
-    ui = {'not_published': 'ещё не подготовлен', 'unavailable': 'не удалось проверить'}.get(publication['state'])
+    ui = {'not_published': _tr('web.screen.5'), 'unavailable': _tr('web.screen.6')}.get(publication['state'])
     if ui is None:
-        ui = '<code>' + escape_html(publication['build_id'][:12]) + '</code> · оформление <code>' + escape_html(publication['customization_version']) + '</code>'
-    text = ('🌐 <b>Веб и Mini App</b>\n\n'
-            f'🔗 <b>Ссылка:</b> {origin}\n'
-            f"<b>Веб:</b> {'включён' if result['enabled'] else 'выключен'}\n"
-            f'<b>Интерфейс:</b> {ui}\n\n'
-            '📱 <b>Подтверждение телефона</b>\n'
-            f'• <b>Статус:</b> {verification_status}\n'
-            f'• <b>Способ:</b> {service}\n\n'
-            f"✈️ <b>Вход через Telegram:</b> {'включён' if result['telegram_login']['enabled'] else 'выключен'}\n"
-            '<b>Настройка в @BotFather:</b>\n'
-            '1. Откройте Mini App → ваш бот → <b>Login Widget</b>.\n'
-            '2. Если есть кнопка <b>Switch to OpenID Connect Login</b>, нажмите её.\n'
-            '3. В <b>Redirect URIs</b> добавьте адрес сайта с <code>/</code> в конце.\n'
-            '4. В <b>Trusted Origins</b> — тот же адрес без <code>/</code> в конце.\n'
-            'Алгоритм подписи — <b>RS256 (Default)</b>. '
-            'Client ID и Client Secret вводить в боте не нужно.\n\n'
-            '⚙️ <b>Домен и HTTPS</b>\n'
-            'Подключаются через <b>установщик</b>.\n\n'
-            'ℹ️ <b>Без подтверждения телефона:</b>\n'
-            '• регистрация — без проверки номера;\n'
-            '• восстановление пароля по телефону — недоступно.')
+        ui = '<code>' + escape_html(publication['build_id'][:12]) + _tr('web.screen.7') + escape_html(publication['customization_version']) + '</code>'
+    text = (_tr('web.screen.8', p0=f'{origin}', p1=f"{(_tr('groups.build_group_view_text.3') if result['enabled'] else _tr('groups.build_group_view_text.4'))}", p2=f'{ui}', p3=f'{verification_status}', p4=f'{service}', p5=f"{(_tr('groups.build_group_view_text.3') if result['telegram_login']['enabled'] else _tr('groups.build_group_view_text.4'))}"))
     if result['error'] == 'web_setup_recovery_failed':
-        text += '\n\n<b>Веб недоступен:</b> не удалось восстановить настройку подключения. Откройте установщик; бот продолжает работать.'
+        text += _tr('web.screen.9')
     elif result['error']:
-        text += '\n\n<b>Параметры подключения некорректны.</b> Проверьте их через установщик.'
+        text += _tr('web.screen.10')
     if publication.get('warning'):
-        text += '\n\n<b>Не удалось обновить базовый интерфейс при запуске.</b> Сохранённая версия проверена; подробности — в журнале.'
+        text += _tr('web.screen.11')
     release = result.get('ui_release')
     if release and release.get('rebuild_required'):
-        text += ('\n\n<b>После обновления сохранён прежний интерфейс.</b> Кастомное оформление требует проверки '
-                 'и повторной сборки; подробности доступны в диагностике обновления.')
+        text += (_tr('web.screen.12'))
     private = getattr(getattr(callback.message, 'chat', None), 'type', None) == 'private'
     supported = private and not getattr(callback.message, 'business_connection_id', None)
     await safe_edit_or_send(callback.message, text, reply_markup=web_settings_kb(result, mini_app_supported=supported))
@@ -84,10 +66,10 @@ async def switch_web(callback, state):
             raise ValueError()
         await application.set_web_enabled(callback.data.endswith(':1'))
     except Exception:
-        await callback.answer('Не удалось переключить веб. Проверьте подключение и состояние сервиса.', show_alert=True)
+        await callback.answer(_tr('web.switch_web.1'), show_alert=True)
         return
     await _screen(callback, state)
-    await callback.answer('Настройка применена')
+    await callback.answer(_tr('web.switch_web.2'))
 
 
 @router.callback_query(F.data.startswith('admin_web_telegram:'))
@@ -101,4 +83,4 @@ async def switch_telegram_login(callback, state):
     from database.requests import set_setting
     set_setting('web_telegram_login_enabled', value)
     await _screen(callback, state)
-    await callback.answer('Настройка применена')
+    await callback.answer(_tr('web.switch_web.2'))

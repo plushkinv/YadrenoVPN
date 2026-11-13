@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { useEffect, useRef, useState } from 'react';
 import { microphoneError, recordVoice, type VoiceClip, type VoiceProgress, type VoiceRecorder } from './voice';
 
@@ -21,7 +22,7 @@ export function useEditorVoice(visible: boolean) {
     setPhase('idle'); setProgress(emptyProgress);
     if (active) {
       setClip(value);
-      setError(keep && !value ? 'Запись пустая. Попробуйте записать ещё раз или напишите текстом.' : '');
+      setError(keep && !value ? _tr("useEditorVoice.1") : '');
       setNotice(value ? message : '');
     }
   }
@@ -32,8 +33,8 @@ export function useEditorVoice(visible: boolean) {
     try {
       const value = await recordVoice({ signal: pending.signal,
         onProgress: value => { if (mounted.current && !pending.signal.aborted) setProgress(value); },
-        onLimit: () => finish(true, 'Достигнут лимит 10 МиБ. Запись остановлена и готова к прослушиванию.'),
-        onInterrupted: () => finish(true, 'Запись прервалась. Сохранённую часть можно прослушать или записать заново.'),
+        onLimit: () => finish(true, _tr("useEditorVoice.2")),
+        onInterrupted: () => finish(true, _tr("useEditorVoice.3")),
       });
       if (!mounted.current || pending.signal.aborted || !visibleRef.current || document.visibilityState === 'hidden') {
         value.finish(false); return;

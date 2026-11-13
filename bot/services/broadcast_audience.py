@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+from localization import text as _tr
+
 from typing import Any
 
 from database.db_stats import BROADCAST_FILTER_KEYS, normalize_broadcast_filters
 
 
 BROADCAST_FILTER_LABELS = {
-    'active': 'С активными ключами',
-    'inactive': 'Без активных ключей',
-    'never_paid': 'Никогда не покупали',
-    'expired': 'Ключ истёк',
-    'used_trial': 'Брали пробный период',
+    'active': _tr('admin_user_filters.module.1'),
+    'inactive': _tr('broadcast_audience.module.1'),
+    'never_paid': _tr('admin_user_filters.module.3'),
+    'expired': _tr('admin_user_filters.module.4'),
+    'used_trial': _tr('broadcast_audience.module.2'),
 }
 
 
@@ -28,16 +30,16 @@ def broadcast_filter_summary(filters: object) -> str:
     """Render the selection for an administrator-facing summary."""
     labels = broadcast_filter_labels(filters)
     if not labels:
-        return 'не выбраны — все пользователи'
-    return ' И '.join(labels)
+        return _tr('broadcast_audience.broadcast_filter_summary.1')
+    return _tr('admin_user_filters.user_filter_status.2').join(labels)
 
 
 def broadcast_filter_status(filters: object) -> str:
     """Render the complete administrator-facing filter status line."""
     labels = broadcast_filter_labels(filters)
     if not labels:
-        return 'Фильтры не выбраны — все пользователи'
-    return 'Фильтры (И): ' + ' И '.join(labels)
+        return _tr('admin_user_filters.user_filter_status.3')
+    return _tr('admin_user_filters.user_filter_status.1') + _tr('admin_user_filters.user_filter_status.2').join(labels)
 
 
 def broadcast_audience_state(
@@ -63,7 +65,7 @@ def broadcast_audience_state(
         'empty_means_all': True,
         'recipient_count': count,
         'launch_blocker': (
-            'Нет получателей — рассылка не запустится.'
+            _tr('broadcast_audience.broadcast_audience_state.1')
             if count == 0
             else ''
         ),

@@ -7,6 +7,8 @@ redraw without any questions asked.
 """
 from __future__ import annotations
 
+from localization import text as _tr
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -64,7 +66,7 @@ def _copy_optional_mapping(value: Optional[Mapping[str, Any]], field_name: str) 
     if value is None:
         return None
     if not isinstance(value, Mapping):
-        raise ValueError(f"{field_name} должен быть mapping или None")
+        raise ValueError(_tr('page_context.copy_optional_mapping.1', p0=f'{field_name}'))
     return dict(value)
 
 
@@ -72,13 +74,13 @@ def _copy_visibility(value: Optional[Mapping[str, bool]]) -> Optional[Dict[str, 
     if value is None:
         return None
     if not isinstance(value, Mapping):
-        raise ValueError("visibility должен быть mapping или None")
+        raise ValueError(_tr('page_context.copy_visibility.1'))
     visibility: Dict[str, bool] = {}
     for button_id, visible in value.items():
         if not isinstance(button_id, str):
-            raise ValueError("visibility button_id должен быть строкой")
+            raise ValueError(_tr('page_context.copy_visibility.2'))
         if not isinstance(visible, bool):
-            raise ValueError("visibility values должны быть bool")
+            raise ValueError(_tr('page_context.copy_visibility.3'))
         visibility[button_id] = visible
     return visibility
 
@@ -90,15 +92,15 @@ def _copy_button_rows(
     if rows is None:
         return None
     if not isinstance(rows, list):
-        raise ValueError(f"{field_name} должен быть списком рядов кнопок или None")
+        raise ValueError(_tr('page_context.copy_button_rows.1', p0=f'{field_name}'))
     copied_rows: List[List[InlineKeyboardButton]] = []
     for row in rows:
         if not isinstance(row, list):
-            raise ValueError(f"{field_name} должен содержать только ряды кнопок")
+            raise ValueError(_tr('page_context.copy_button_rows.2', p0=f'{field_name}'))
         copied_row: List[InlineKeyboardButton] = []
         for button in row:
             if not isinstance(button, InlineKeyboardButton):
-                raise ValueError(f"{field_name} должен содержать только InlineKeyboardButton")
+                raise ValueError(_tr('page_context.copy_button_rows.3', p0=f'{field_name}'))
             copied_row.append(button)
         copied_rows.append(copied_row)
     return copied_rows
@@ -107,7 +109,7 @@ def _copy_button_rows(
 def is_supported_yaa_page_key(page_key: str) -> bool:
     """Checks whether the page for the /yaa context command can be remembered."""
     if not isinstance(page_key, str):
-        raise ValueError("page_key должен быть строкой")
+        raise ValueError(_tr('page_context.is_supported_yaa_page_key.1'))
     from database.db_pages import resolve_page_row
     from database.requests import get_page
 

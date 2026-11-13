@@ -1,6 +1,8 @@
 """Read-only renewal conflicts and the stock Certbot scheduler."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import base64
 import re
 import shlex
@@ -29,13 +31,12 @@ def renewal_timer(system):
         timer, service = 'certbot.timer', 'certbot.service'
         expected = re.escape('/usr/bin/certbot -q renew') + r'(?: --no-random-sleep-on-renew)?'
     else:
-        raise SetupError('renewal_scheduler_unknown', 'Способ установки Certbot не распознан; подготовьте штатное продление вручную.')
+        raise SetupError('renewal_scheduler_unknown', _tr('setup_certificates.renewal_timer.1'))
     load = system.run(['systemctl', 'show', timer, '--property=LoadState', '--value'], check=False)
     unit = system.run(['systemctl', 'show', service, '--property=ExecStart', '--value'], check=False)
     if (load.returncode or load.stdout.strip() != 'loaded' or unit.returncode
             or not re.search(r'argv\[\]=' + expected + r'\s*;', unit.stdout)):
-        raise SetupError('renewal_scheduler_unknown', 'Не найдено штатное расписание установленного Certbot. '
-                         'Восстановите его средствами пакета или подготовьте HTTPS-прокси.', details={'timer': timer})
+        raise SetupError('renewal_scheduler_unknown', _tr('setup_certificates.renewal_timer.2'), details={'timer': timer})
     return timer
 
 
@@ -83,12 +84,12 @@ def inspect_renewals(system):
             reasons = []
             if standalone:
                 port = 443 if re.search(r'--alpn\b|Le_Webroot=["\']alpn', text) else 80
-                reasons.append(f'продление самостоятельно занимает публичный TCP-порт {port}')
+                reasons.append(_tr('setup_certificates.inspect_renewals.1', p0=f'{port}'))
             if hooks:
-                reasons.append('не распознаны дополнительные команды продления')
+                reasons.append(_tr('setup_certificates.inspect_renewals.2'))
             reason = '; '.join(reasons)
             issues.append(SetupError('renewal_conflict',
-                f'Настройка продления {relative}: {reason}. Требуется проверить совместимость с Nginx.',
+                _tr('setup_certificates.inspect_renewals.3', p0=f'{relative}', p1=f'{reason}'),
                 details={'file': relative.lstrip('/'), 'port': port}))
     return issues
 
@@ -99,12 +100,11 @@ def check_profile(system, paths, name):
     path = system_path(system, paths['certbot'] + '/renewal/' + name + '.conf')
     if not path.exists():
         if any(system.path(paths['certbot'] + '/' + section + '/' + name).exists() for section in ('live', 'archive')):
-            raise SetupError('certificate_directory_collision', 'Имя сертификата занято без соответствующего профиля продления.')
+            raise SetupError('certificate_directory_collision', _tr('setup_certificates.check_profile.1'))
         return
     try:
         params = renewal_profile(path.read_text(), paths, name)
         if params.get('renew_hook', params.get('deploy_hook')) != deploy_hook(system):
             raise ValueError('unexpected deploy hook')
     except (ValueError, KeyError, OSError):
-        raise SetupError('certificate_directory_collision', 'Профиль сертификата не соответствует этой установке; '
-                         'существующие файлы не изменены.', details={'file': str(path)}) from None
+        raise SetupError('certificate_directory_collision', _tr('setup_certificates.check_profile.2'), details={'file': str(path)}) from None

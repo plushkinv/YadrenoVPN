@@ -88,8 +88,10 @@ def _inspect(binding, workspace, api_key, args):
     cursor = _integer(args.get('cursor', 0), 0, 2**31 - 1)
     limit = _integer(args.get('limit', 20), 1, 50)
     if scope == 'web.context':
+        from localization.discovery import describe
         targets = workspace.inspect_targets()
         return _paginated({'status': 'ok', **binding.runtime_context(api_key),
+                'localization': describe(),
                 'inspect_scopes': sorted(WEB_INSPECT_SCOPES), 'apply_operations': list(WEB_APPLY_FIELDS),
                 'publication_available': True}, targets['targets'], cursor, limit)
     if scope == 'web.publication':

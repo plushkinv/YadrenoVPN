@@ -1,4 +1,5 @@
 import logging
+from localization import text as _tr
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command, CommandObject, StateFilter
@@ -70,7 +71,7 @@ async def _render_main_page(target, force_new: bool = False) -> bool:
     admin_append_buttons = None
     if is_admin:
         admin_append_buttons = [
-            [InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")]
+            [InlineKeyboardButton(text=_tr('navigation.admin_panel'), callback_data="admin_panel")]
         ]
 
     rendered = await render_page(

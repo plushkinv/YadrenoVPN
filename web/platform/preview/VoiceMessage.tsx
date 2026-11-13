@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { useEffect, useRef, useState } from 'react';
 import { Pause, Play, Trash2 } from 'lucide-react';
 import type { VoiceClip } from './voice';
@@ -30,7 +31,7 @@ export function VoiceMessage({ clip, disabled, onRemove }: { clip: VoiceClip; di
   }, []);
   function fail() {
     audio.current?.pause(); setPlaying(false);
-    setError('Не удалось воспроизвести запись. Попробуйте ещё раз или запишите заново.');
+    setError(_tr("VoiceMessage.1"));
   }
   async function toggle() {
     const element = audio.current;
@@ -47,12 +48,12 @@ export function VoiceMessage({ clip, disabled, onRemove }: { clip: VoiceClip; di
     <audio ref={audio} preload="metadata" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
       onEnded={() => { setPlaying(false); setTime(0); }} onTimeUpdate={() => setTime(audio.current?.currentTime ?? 0)}
       onError={fail} />
-    <div className="admin-editor-voice" aria-label="Голосовое сообщение готово">
+    <div className="admin-editor-voice" aria-label={_tr("VoiceMessage.2")}>
       <button type="button" className="button button--quiet admin-icon" disabled={disabled} onClick={() => void toggle()}
-        aria-label={playing ? 'Пауза' : 'Прослушать запись'} aria-pressed={playing}>{playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}</button>
+        aria-label={playing ? _tr("VoiceMessage.3") : _tr("VoiceMessage.4")} aria-pressed={playing}>{playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}</button>
       <VoiceWave peaks={clip.peaks} progress={time / clip.duration} />
-      <span className="admin-voice-time" aria-label={`Длительность записи ${voiceTime(clip.duration)}`}>{voiceTime(playing ? time : clip.duration)}</span>
-      <button type="button" className="button button--quiet admin-icon" aria-label="Удалить запись" disabled={disabled} onClick={onRemove}><Trash2 aria-hidden="true" /></button>
+      <span className="admin-voice-time" aria-label={_tr("VoiceMessage.5", {p0: voiceTime(clip.duration)})}>{voiceTime(playing ? time : clip.duration)}</span>
+      <button type="button" className="button button--quiet admin-icon" aria-label={_tr("AdminEditor.27")} disabled={disabled} onClick={onRemove}><Trash2 aria-hidden="true" /></button>
     </div>
     {error && <p className="admin-editor-input-error" role="alert">{error}</p>}
   </div>;

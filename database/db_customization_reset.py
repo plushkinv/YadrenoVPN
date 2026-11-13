@@ -62,22 +62,11 @@ def _count_where(
     return int(row["count"] if row else 0)
 
 
-def _customization_default_settings() -> dict[str, str | None]:
-    return {
-        "key_name_prefix": "Ключ",
-        "my_keys_item_template": migrations._my_keys_item_template(),
-        "notification_text": (
-            "⚠️ <b>Ваш VPN-ключ %ключ_имя% скоро истекает!</b>\n\n"
-            "Через %ключ_дней_до_окончания% дней закончится срок действия вашего ключа.\n\n"
-            "Продлите подписку, чтобы сохранить доступ к VPN без перерывов!"
-        ),
-        "traffic_notification_text": (
-            "⚠️ По ключу <b>%ключ_имя%</b> осталось "
-            "%ключ_трафик_процент_остатка%% трафика "
-            "(%ключ_трафик_использовано% из %ключ_трафик_лимит%)"
-        ),
-        "referral_new_ref_notification_text": migrations._referral_new_ref_notification_text(),
-        "referral_purchase_notification_text": migrations._referral_purchase_notification_text(),
+def _customization_default_settings(language: str = 'ru') -> dict[str, str | None]:
+    from localization import catalog
+    from core.payment_provider_specs import BUILTIN_PROVIDER_IDS, admin_visibility_key, default_admin_visibility
+    values = {
+        **{admin_visibility_key(pid): str(int(default_admin_visibility(pid, language))) for pid in BUILTIN_PROVIDER_IDS},
         "referral_attribution_window_hours": "0",
         "expired_key_panel_cleanup_delay_days": "0",
         "broadcast_message": None,
@@ -98,6 +87,9 @@ def _customization_default_settings() -> dict[str, str | None]:
         "web_ui_preset": WEB_UI_DEFAULTS["preset"],
         "web_ui_theme": WEB_UI_DEFAULTS["theme"],
     }
+    values.update({key.removeprefix('setting.'): value
+                   for key, value in catalog('seed', language).items() if key.startswith('setting.')})
+    return values
 
 
 def _reset_pages(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
@@ -246,7 +238,8 @@ def _reset_settings(conn: sqlite3.Connection, dry_run: bool) -> list[str]:
 
     actions: list[str] = []
     broadcast_config_changed = False
-    for key, value in _customization_default_settings().items():
+    from .db_language import get_installation_language
+    for key, value in _customization_default_settings(get_installation_language(conn=conn)).items():
         row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         if value is None:
             exists = row is not None

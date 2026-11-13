@@ -1,6 +1,8 @@
 """
 Handlers for deleting keys and synchronizing remote keys (admin panel).
 """
+
+from localization import text as _tr
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 import logging
@@ -39,15 +41,14 @@ async def on_key_delete_ask(callback: CallbackQuery):
     key = get_vpn_key_by_id(key_id)
 
     if not key:
-        await callback.answer("❌ Ключ не найден.", show_alert=True)
+        await callback.answer(_tr('users_keys_deleted.on_key_delete_ask.1'), show_alert=True)
         return
 
     user_telegram_id = key.get('telegram_id', 0)
 
     await safe_edit_or_send(
         callback.message,
-        f"⚠️ <b>Внимание!</b>\n\nВы действительно хотите удалить ключ <code>#{key_id}</code>?\n"
-        f"Он будет безвозвратно удален из БД и навсегда удален с VPN-сервера.",
+        _tr('users_keys_deleted.on_key_delete_ask.2', p0=f'{key_id}'),
         reply_markup=key_delete_confirm_kb(key_id, user_telegram_id)
     )
     await callback.answer()
@@ -61,7 +62,7 @@ async def on_key_delete_confirm(callback: CallbackQuery):
     key = get_vpn_key_by_id(key_id)
 
     if not key:
-        await callback.answer("❌ Ключ уже был удален.", show_alert=True)
+        await callback.answer(_tr('users_keys_deleted.on_key_delete_confirm.1'), show_alert=True)
         return
 
     user_telegram_id = key.get('telegram_id', 0)
@@ -73,7 +74,7 @@ async def on_key_delete_confirm(callback: CallbackQuery):
     # 2. Then we try to remove it from the panel if the key has been linked
     panel_deleted = await _delete_key_from_panel(key)
 
-    status = "✅ Ключ удалён из БД и с панели" if panel_deleted else "✅ Ключ удалён из БД"
+    status = _tr('users_keys_deleted.on_key_delete_confirm.2') if panel_deleted else _tr('users_keys_deleted.on_key_delete_confirm.3')
     await callback.answer(status, show_alert=True)
 
     # Returning to the user profile
@@ -92,7 +93,7 @@ async def on_key_delete_confirm(callback: CallbackQuery):
             keys = get_user_vpn_keys(user['id'])
             await safe_edit_or_send(
                 callback.message,
-                f"👤 Профиль пользователя: <b>{user.get('username', 'Нет')}</b> (ID: <code>{user['telegram_id']}</code>)",
+                _tr('users_keys_deleted.on_key_delete_confirm.5', p0=f"{user.get('username', _tr('users_keys_deleted.on_key_delete_confirm.4'))}", p1=f"{user['telegram_id']}"),
                 reply_markup=user_view_kb(
                     user['telegram_id'],
                     keys,
@@ -107,7 +108,7 @@ async def on_key_delete_confirm(callback: CallbackQuery):
     stats = get_admin_users_stats()
     await safe_edit_or_send(
         callback.message,
-        "👥 <b>Управление пользователями</b>",
+        _tr('users_keys_deleted.on_key_delete_confirm.6'),
         reply_markup=users_menu_kb(stats)
     )
 
@@ -153,11 +154,7 @@ async def on_sync_deleted_menu(callback: CallbackQuery):
     """Submenu for synchronizing remote keys."""
     await safe_edit_or_send(
         callback.message,
-        "🗑️ <b>Синхронизация удалённых ключей</b>\n\n"
-        "Выберите действие:\n"
-        "1. <b>Очистить панель</b>: удаляет с VPN-серверов ключи, которых <b>нет в нашей базе</b>.\n"
-        "2. <b>Очистить базу</b>: удаляет из нашей БД ключи, которых <b>нет на VPN-серверах</b>.\n\n"
-        "⚠️ <b>Внимание: обе операции необратимы!</b>",
+        _tr('users_keys_deleted.on_sync_deleted_menu.1'),
         reply_markup=sync_deleted_menu_kb()
     )
     await callback.answer()
@@ -170,10 +167,7 @@ async def on_sync_deleted_panel_ask(callback: CallbackQuery):
     """We ask for confirmation to clean the panel."""
     await safe_edit_or_send(
         callback.message,
-        "🧹 <b>Очистка панели</b>\n\n"
-        "Вы собираетесь удалить с VPN-серверов ключи (почты которых начинаются на <code>user_</code>), "
-        "которых нет в базе данных этого бота.\n\n"
-        "Вы уверены?",
+        _tr('users_keys_deleted.on_sync_deleted_panel_ask.1'),
         reply_markup=sync_deleted_panel_confirm_kb()
     )
     await callback.answer()
@@ -185,7 +179,7 @@ async def on_sync_deleted_panel_confirm(callback: CallbackQuery):
     """Removing 'orphaned' keys from VPN servers."""
     await safe_edit_or_send(
         callback.message,
-        "⏳ <b>Очистка панели: собираю данные...</b>\n\nПожалуйста, подождите."
+        _tr('users_keys_deleted.on_sync_deleted_panel_confirm.1')
     )
 
     servers = get_active_servers()
@@ -246,13 +240,11 @@ async def on_sync_deleted_panel_confirm(callback: CallbackQuery):
     text_append = ""
     if failed_servers:
         failed_names = ", ".join([f"<b>{fs['name']}</b>" for fs in failed_servers])
-        text_append = f"\n\n⚠️ <b>Не удалось подключиться к серверам:</b> {failed_names}"
+        text_append = _tr('users_keys_deleted.on_sync_deleted_panel_confirm.2', p0=f'{failed_names}')
 
     await safe_edit_or_send(
         callback.message,
-        f"✅ <b>Очистка панели завершена</b>\n\n"
-        f"🗑 Удалено ключей-сирот: <b>{deleted_count}</b>\n"
-        f"❌ Ошибок: <b>{errors_count}</b>{text_append}",
+        _tr('users_keys_deleted.on_sync_deleted_panel_confirm.3', p0=f'{deleted_count}', p1=f'{errors_count}', p2=f'{text_append}'),
         reply_markup=sync_deleted_menu_kb()
     )
     await callback.answer()
@@ -265,14 +257,7 @@ async def on_sync_deleted_db_ask(callback: CallbackQuery):
     """We suggest running a database scan."""
     await safe_edit_or_send(
         callback.message,
-        "🔍 <b>Сканирование базы данных</b>\n\n"
-        "Бот проверит все серверы и покажет отчёт:\n"
-        "• Ключи без привязки к серверу\n"
-        "• Ключи удалённых серверов\n"
-        "• Ключи, отсутствующие на панелях\n"
-        "• Ключи недоступных серверов\n\n"
-        "<b>Ничего не будет удалено автоматически</b> — вы сами выберете, что удалять.\n\n"
-        "Начать сканирование?",
+        _tr('users_keys_deleted.on_sync_deleted_db_ask.1'),
         reply_markup=sync_deleted_db_confirm_kb()
     )
     await callback.answer()
@@ -283,7 +268,7 @@ async def on_sync_deleted_db_scan(callback: CallbackQuery):
     """Scanning databases and servers - displaying a report-menu with categories."""
     await safe_edit_or_send(
         callback.message,
-        "⏳ <b>Сканирование: проверяю серверы...</b>\n\nПожалуйста, подождите."
+        _tr('users_keys_deleted.on_sync_deleted_db_scan.1')
     )
 
     report = await _scan_db_keys()
@@ -313,23 +298,19 @@ async def on_sync_db_orphans_ask(callback: CallbackQuery):
         ).fetchone()[0]
 
     if total == 0:
-        await callback.answer("✅ Ключей без сервера не найдено.", show_alert=True)
+        await callback.answer(_tr('users_keys_deleted.on_sync_db_orphans_ask.1'), show_alert=True)
         return
 
     warning = ""
     if unconfigured > 0:
         warning = (
-            f"\n\n⚠️ <b>Внимание:</b> среди них <b>{unconfigured}</b> ненастроенных — "
-            f"это купленные, но ещё не активированные пользователями ключи! "
-            f"Удаление лишит их возможности настроить оплаченный ключ."
+            _tr('users_keys_deleted.on_sync_db_orphans_ask.2', p0=f'{unconfigured}')
         )
 
     from bot.keyboards.admin_users import sync_db_orphans_confirm_kb
     await safe_edit_or_send(
         callback.message,
-        f"🗑️ <b>Удаление ключей без сервера</b>\n\n"
-        f"Будет удалено <b>{total}</b> ключей, у которых не указан сервер.{warning}\n\n"
-        f"Продолжить?",
+        _tr('users_keys_deleted.on_sync_db_orphans_ask.3', p0=f'{total}', p1=f'{warning}'),
         reply_markup=sync_db_orphans_confirm_kb()
     )
     await callback.answer()
@@ -355,7 +336,7 @@ async def on_sync_db_orphans_confirm(callback: CallbackQuery):
 
     await safe_edit_or_send(
         callback.message,
-        f"✅ <b>Удалено ключей без сервера:</b> <b>{deleted}</b>",
+        _tr('users_keys_deleted.on_sync_db_orphans_confirm.1', p0=f'{deleted}'),
         reply_markup=sync_deleted_menu_kb()
     )
     await callback.answer()
@@ -375,16 +356,13 @@ async def on_sync_db_gone_ask(callback: CallbackQuery):
         ).fetchone()[0]
 
     if count == 0:
-        await callback.answer("✅ Ключей не найдено.", show_alert=True)
+        await callback.answer(_tr('users_keys_deleted.on_sync_db_gone_ask.1'), show_alert=True)
         return
 
     from bot.keyboards.admin_users import sync_db_gone_confirm_kb
     await safe_edit_or_send(
         callback.message,
-        f"👻 <b>Удаление ключей удалённого сервера</b>\n\n"
-        f"Сервер с ID <b>{server_id}</b> больше не существует в базе данных бота.\n\n"
-        f"Будет удалено <b>{count}</b> ключей, привязанных к этому серверу.\n\n"
-        f"Продолжить?",
+        _tr('users_keys_deleted.on_sync_db_gone_ask.2', p0=f'{server_id}', p1=f'{count}'),
         reply_markup=sync_db_gone_confirm_kb(server_id)
     )
     await callback.answer()
@@ -412,7 +390,7 @@ async def on_sync_db_gone_confirm(callback: CallbackQuery):
 
     await safe_edit_or_send(
         callback.message,
-        f"✅ <b>Удалено ключей удалённого сервера ID {server_id}:</b> <b>{deleted}</b>",
+        _tr('users_keys_deleted.on_sync_db_gone_confirm.1', p0=f'{server_id}', p1=f'{deleted}'),
         reply_markup=sync_deleted_menu_kb()
     )
     await callback.answer()
@@ -428,12 +406,12 @@ async def on_sync_db_missing_ask(callback: CallbackQuery):
     server = get_server_by_id(server_id)
 
     if not server:
-        await callback.answer("❌ Сервер не найден.", show_alert=True)
+        await callback.answer(_tr('users_keys_deleted.on_sync_db_missing_ask.1'), show_alert=True)
         return
 
     await safe_edit_or_send(
         callback.message,
-        f"⏳ <b>Проверяю сервер {server['name']}...</b>"
+        _tr('users_keys_deleted.on_sync_db_missing_ask.2', p0=f"{server['name']}")
     )
 
     try:
@@ -453,7 +431,7 @@ async def on_sync_db_missing_ask(callback: CallbackQuery):
         if missing_count == 0:
             await safe_edit_or_send(
                 callback.message,
-                f"✅ <b>{server['name']}</b>: все ключи на месте!",
+                _tr('users_keys_deleted.on_sync_db_missing_ask.3', p0=f"{server['name']}"),
                 reply_markup=sync_deleted_menu_kb()
             )
             await callback.answer()
@@ -462,19 +440,14 @@ async def on_sync_db_missing_ask(callback: CallbackQuery):
         from bot.keyboards.admin_users import sync_db_missing_confirm_kb
         await safe_edit_or_send(
             callback.message,
-            f"🗑️ <b>Удаление ключей с {server['name']}</b>\n\n"
-            f"На сервере <b>{server['name']}</b> не найдено <b>{missing_count}</b> ключей.\n"
-            f"Они есть в БД бота, но отсутствуют на панели 3X-UI.\n\n"
-            f"Скорее всего они были удалены вручную через веб-интерфейс панели.\n\n"
-            f"Удалить эти записи из БД?",
+            _tr('users_keys_deleted.on_sync_db_missing_ask.4', p0=f"{server['name']}", p1=f"{server['name']}", p2=f'{missing_count}'),
             reply_markup=sync_db_missing_confirm_kb(server_id)
         )
     except Exception as e:
         logger.error(f"Ошибка при пересканировании {server['name']}: {e}")
         await safe_edit_or_send(
             callback.message,
-            f"❌ Не удалось подключиться к серверу <b>{server['name']}</b>.\n\n"
-            f"Возможно, сервер стал недоступен после сканирования.",
+            _tr('users_keys_deleted.on_sync_db_missing_ask.5', p0=f"{server['name']}"),
             reply_markup=sync_deleted_menu_kb()
         )
     await callback.answer()
@@ -489,12 +462,12 @@ async def on_sync_db_missing_confirm(callback: CallbackQuery):
     server = get_server_by_id(server_id)
 
     if not server:
-        await callback.answer("❌ Сервер не найден.", show_alert=True)
+        await callback.answer(_tr('users_keys_deleted.on_sync_db_missing_ask.1'), show_alert=True)
         return
 
     await safe_edit_or_send(
         callback.message,
-        f"⏳ <b>Удаляю ключи с {server['name']}...</b>"
+        _tr('users_keys_deleted.on_sync_db_missing_confirm.1', p0=f"{server['name']}")
     )
 
     try:
@@ -521,15 +494,14 @@ async def on_sync_db_missing_confirm(callback: CallbackQuery):
 
         await safe_edit_or_send(
             callback.message,
-            f"✅ <b>Операция завершена</b>\n\n"
-            f"🗑 Удалено с {server['name']}: <b>{deleted}</b>",
+            _tr('users_keys_deleted.on_sync_db_missing_confirm.2', p0=f"{server['name']}", p1=f'{deleted}'),
             reply_markup=sync_deleted_menu_kb()
         )
     except Exception as e:
         logger.error(f"Ошибка при удалении с {server['name']}: {e}")
         await safe_edit_or_send(
             callback.message,
-            f"❌ Не удалось подключиться к серверу <b>{server['name']}</b>.",
+            _tr('users_keys_deleted.on_sync_db_missing_confirm.3', p0=f"{server['name']}"),
             reply_markup=sync_deleted_menu_kb()
         )
     await callback.answer()
@@ -551,19 +523,13 @@ async def on_sync_db_unreach_ask(callback: CallbackQuery):
         ).fetchone()[0]
 
     if count == 0:
-        await callback.answer("✅ Ключей не найдено.", show_alert=True)
+        await callback.answer(_tr('users_keys_deleted.on_sync_db_gone_ask.1'), show_alert=True)
         return
 
     from bot.keyboards.admin_users import sync_db_unreach_confirm_kb
     await safe_edit_or_send(
         callback.message,
-        f"⚠️ <b>Внимание!</b>\n\n"
-        f"Сервер <b>{server_name}</b> недоступен.\n\n"
-        f"Вы действительно хотите удалить <b>ВСЕ {count}</b> ключей в базе данных, "
-        f"которые привязаны к этому серверу?\n\n"
-        f"🚨 <b>Чем это грозит:</b> Если сервер просто временно упал, перезагружается "
-        f"или заблокирован РКН, вы безвозвратно удалите абсолютно рабочие ключи пользователей! "
-        f"Они потеряют доступ к конфигурациям в боте и подписка может сломаться.",
+        _tr('users_keys_deleted.on_sync_db_unreach_ask.1', p0=f'{server_name}', p1=f'{count}'),
         reply_markup=sync_db_unreach_confirm_kb(server_id)
     )
     await callback.answer()
@@ -577,7 +543,7 @@ async def on_sync_db_unreach_confirm(callback: CallbackQuery):
 
     await safe_edit_or_send(
         callback.message,
-        "⏳ <b>Удаление ключей...</b>\n\nПожалуйста, подождите."
+        _tr('users_keys_deleted.on_sync_db_unreach_confirm.1')
     )
 
     from database.connection import get_db
@@ -596,8 +562,7 @@ async def on_sync_db_unreach_confirm(callback: CallbackQuery):
 
     await safe_edit_or_send(
         callback.message,
-        f"✅ <b>Операция завершена</b>\n\n"
-        f"🗑 Принудительно удалено ключей: <b>{deleted}</b>",
+        _tr('users_keys_deleted.on_sync_db_unreach_confirm.2', p0=f'{deleted}'),
         reply_markup=sync_deleted_menu_kb()
     )
     await callback.answer()
@@ -685,21 +650,21 @@ async def _scan_db_keys() -> dict:
 
 def _build_scan_report_text(report: dict) -> str:
     """Generates report text from scan results."""
-    lines = ["🔍 <b>Результаты сканирования</b>\n"]
+    lines = [_tr('users_keys_deleted.build_scan_report_text.1')]
     has_issues = False
 
     # Category 1: no server
     if report['null_total'] > 0:
         has_issues = True
-        text = f"📋 Ключи без сервера: <b>{report['null_total']}</b>"
+        text = _tr('users_keys_deleted.build_scan_report_text.2', p0=f"{report['null_total']}")
         if report['null_unconfigured'] > 0:
-            text += f"\n  ⚠️ Из них <b>{report['null_unconfigured']}</b> — ненастроенные (купленные, не активированные)"
+            text += _tr('users_keys_deleted.build_scan_report_text.3', p0=f"{report['null_unconfigured']}")
         lines.append(text)
 
     # Category 2: remote servers
     for sid, count in report['deleted_srv_keys'].items():
         has_issues = True
-        lines.append(f"\n👻 Удалённый сервер (ID {sid}): <b>{count}</b> ключей")
+        lines.append(_tr('users_keys_deleted.build_scan_report_text.4', p0=f'{sid}', p1=f'{count}'))
 
     # Categories 3-5: by server
     for r in report['server_results']:
@@ -707,22 +672,20 @@ def _build_scan_report_text(report: dict) -> str:
             if r.get('missing_count', 0) > 0:
                 has_issues = True
                 lines.append(
-                    f"\n🟢 <b>{r['name']}</b>: <b>{r['missing_count']}</b> не найдено на панели, "
-                    f"{r['ok_count']} ОК"
+                    _tr('users_keys_deleted.build_scan_report_text.5', p0=f"{r['name']}", p1=f"{r['missing_count']}", p2=f"{r['ok_count']}")
                 )
             else:
-                lines.append(f"\n✅ <b>{r['name']}</b>: все {r['ok_count']} ключей на месте")
+                lines.append(_tr('users_keys_deleted.build_scan_report_text.6', p0=f"{r['name']}", p1=f"{r['ok_count']}"))
         elif r['status'] == 'unreachable':
             has_issues = True
-            active_text = "" if r['is_active'] else " (деактивирован)"
+            active_text = "" if r['is_active'] else _tr('users_keys_deleted.build_scan_report_text.7')
             emoji = "🔴" if r['is_active'] else "⏸️"
             lines.append(
-                f"\n{emoji} <b>{r['name']}</b>{active_text}: не отвечает "
-                f"({r['total_keys']} ключей)"
+                _tr('users_keys_deleted.build_scan_report_text.8', p0=f'{emoji}', p1=f"{r['name']}", p2=f'{active_text}', p3=f"{r['total_keys']}")
             )
 
     if not has_issues:
-        lines.append("\n✅ Всё чисто — удалять нечего!")
+        lines.append(_tr('users_keys_deleted.build_scan_report_text.9'))
 
     return "\n".join(lines)
 

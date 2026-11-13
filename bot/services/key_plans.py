@@ -1,6 +1,8 @@
 """Administrator-only full VPN key plan reissue operations."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import logging
 from typing import Any
 
@@ -89,9 +91,9 @@ async def reissue_key_plan(
             operation_type='change_tariff_plan',
             source='admin',
             reason=(
-                'Переоформление на произвольный тариф'
+                _tr('key_plans.reissue_key_plan.1')
                 if is_custom
-                else f"Переоформление на тариф «{tariff.get('name') or target_tariff_id}»"
+                else _tr('key_plans.reissue_key_plan.2', p0=f"{tariff.get('name') or target_tariff_id}")
             ),
             expires_before=(
                 str(change['expires_before'])

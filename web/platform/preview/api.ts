@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 /** Isolated read-model fixtures. No business execution or network transport exists here. */
 import { ApiError, type Api } from '../api/client';
 import type { Subscription } from '../api/contracts';
@@ -18,13 +19,13 @@ export class PreviewApi implements Api {
     const date = new Date((config.captured_at + 30 * 86400) * 1000).toISOString();
     const tariff = config.tariffs[0];
     const state = context.scenario === 'expired' ? 'expired' : context.scenario === 'traffic' ? 'exhausted' : context.scenario === 'disabled' ? 'disabled' : context.scenario === 'unconfigured' ? 'unconfigured' : 'active';
-    const subscription: Subscription = { id: 1, name: 'Подписка для просмотра', tariff_id: tariff?.id ?? 1,
-      tariff_name: tariff?.name ?? null, server_id: 1, server_name: 'Сервер для просмотра',
+    const subscription: Subscription = { id: 1, get name() { return _tr("api.1"); }, tariff_id: tariff?.id ?? 1,
+      tariff_name: tariff?.name ?? null, server_id: 1, get server_name() { return _tr("api.2"); },
       expires_at: date, created_at: date, state, access_status: context.scenario === 'issuing' ? 'pending' : state === 'unconfigured' ? 'unconfigured' : 'ready',
       traffic: { known: context.scenario !== 'unknown', used_bytes: context.scenario === 'unknown' ? null : 0,
         limit_bytes: null, updated_at: null, source: 'preview' }, devices_available: true,
       actions: Object.fromEntries(['key.rename.start', 'key.renew.start', 'key.delete', 'key.configure.start', 'key.replace.start'].map(id => [id, { allowed: true, reason: null }])),
-      pending_operations: [], servers: [{ id: 1, name: 'Сервер для просмотра' }] };
+      pending_operations: [], servers: [{ id: 1, get name() { return _tr("api.2"); } }] };
     const empty = context.scenario === 'empty';
     const route = path.split('?')[0];
     const page = (items: unknown[]) => ({ items: empty ? [] : items, limit: 50, offset: 0 });
@@ -43,16 +44,16 @@ export class PreviewApi implements Api {
       access_status: context.scenario === 'ready' ? 'ready' : 'pending', subscription_id: 1,
       base_currency: config.currency, nominal_amount_minor: tariff?.price_minor ?? 0,
       payable_amount_minor: tariff?.price_minor ?? 0, balance_deduct_minor: 0, payment_type: 'preview' };
-    else if (route === '/me') result = { account_id: -1, telegram_id: null, account_name: 'Ядрён батон 001', first_name: null, username: null,
+    else if (route === '/me') result = { account_id: -1, telegram_id: null, get account_name() { return _tr("api.3"); }, first_name: null, username: null,
       last_name: null, created_at: null, credentials: { present: true, phone: '+12125550123', phone_verified: false } };
-    else if (route.endsWith('/devices')) result = { devices: empty ? [] : [{ id: 'preview-device', device_model: 'Устройство для просмотра', device_os: 'Android', last_seen: null }] };
-    else if (route.endsWith('/host-candidates')) result = { hosts: empty ? [] : [2, 3].map(id => ({ id, custom_name: `Основная подписка ${id - 1}`, tariff_name: tariff?.name ?? null })) };
+    else if (route.endsWith('/devices')) result = { devices: empty ? [] : [{ id: 'preview-device', get device_model() { return _tr("api.4"); }, device_os: 'Android', last_seen: null }] };
+    else if (route.endsWith('/host-candidates')) result = { hosts: empty ? [] : [2, 3].map(id => ({ id, get custom_name() { return _tr("api.5", {p0: id - 1}); }, tariff_name: tariff?.name ?? null })) };
     else if (route.startsWith('/key-operations/')) result = { operation_id: 'preview-operation', key_id: 1, state: context.scenario === 'ready' ? 'completed' : 'pending', result: context.scenario === 'ready' ? { composition: { ok: true, status: 'selection_required' } } : null };
     else if (route === '/balance') result = { amount_minor: 0, currency: config.currency, history: [], limit: 50, offset: 0 };
     else if (route === '/payments') result = page([{ order_id: 'preview-order', purpose: 'key_purchase', created_at: date, payable_amount_minor: tariff?.price_minor ?? 0, base_currency: config.currency }]);
     else if (route.endsWith('/history')) result = page([]);
-    else if (route === '/referrals') result = { enabled: config.features.referrals, conditions_html: 'Сценарий просмотра. Вознаграждения не начисляются.', site_url: 'https://example.invalid/?ref=preview', statistics: [] };
-    else if (route === '/help') result = { content_html: 'Сценарий просмотра страницы помощи.', links: [] };
+    else if (route === '/referrals') result = { enabled: config.features.referrals, get conditions_html() { return _tr("api.6"); }, site_url: 'https://example.invalid/?ref=preview', statistics: [] };
+    else if (route === '/help') result = { get content_html() { return _tr("api.7"); }, links: [] };
     else throw new ApiError('preview_only');
     return result as T;
   }

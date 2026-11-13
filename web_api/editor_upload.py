@@ -1,6 +1,8 @@
 """Stream authenticated editor attachments into the installation's temporary tree."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 import logging
 import os
@@ -96,7 +98,7 @@ async def read_uploads(request):
             if part.name in {'files', 'voice', 'file'}:
                 voice = part.name != 'files'
                 if len(uploads) >= UPLOAD_MAX_FILES or voice and has_voice:
-                    raise CoreError('invalid_request', details={'message': 'Можно отправить до пяти файлов, включая одну голосовую запись.'})
+                    raise CoreError('invalid_request', details={'message': _tr('editor_upload.read_uploads.1')})
                 uploads.append(await _save_file(request, part, PROJECT_ROOT, paths, voice=voice))
                 has_voice = has_voice or voice
             elif part.name in {'message', 'viewed'} and part.name not in fields:

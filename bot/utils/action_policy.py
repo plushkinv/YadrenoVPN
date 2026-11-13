@@ -1,6 +1,8 @@
 """Semantic action policies for controlled custom extensions."""
 from __future__ import annotations
 
+from bot.utils.user_ui_texts import get_ui_text as _ui_text
+
 import inspect
 import logging
 import re
@@ -225,7 +227,7 @@ async def _run_registered_action_policies(action_name, base_context, *, phase, b
                 return {'decision': 'continue'}
             return {
                 'decision': 'deny',
-                'message': '⚠️ Действие временно недоступно',
+                'message': _ui_text('interface.action_dispatcher.dispatch_core_action.3'),
                 'show_alert': True,
                 '_policy': policy_name,
                 '_extension_id': registration['extension_id'],

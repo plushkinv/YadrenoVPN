@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 import datetime
 import logging
 import re
@@ -79,7 +81,7 @@ def _normalize_expires_at(expires_at: Optional[Any]) -> Optional[str]:
 def _clamp_percent(discount_percent: int) -> int:
     percent = int(discount_percent)
     if percent < 0 or percent > 100:
-        raise ValueError("Скидка должна быть от 0 до 100%")
+        raise ValueError(_tr('db_promotions.clamp_percent.1'))
     return percent
 
 
@@ -98,7 +100,7 @@ def generate_unique_promo_code(length: int = 10) -> str:
         code = _generate_code(length)
         if not get_promo_code_by_code(code):
             return code
-    raise RuntimeError("Не удалось сгенерировать уникальный промокод")
+    raise RuntimeError(_tr('db_promotions.generate_unique_promo_code.1'))
 
 
 def create_promo_code(
@@ -118,9 +120,9 @@ def create_promo_code(
     """Generates a promotional code or coupon and returns the post ID."""
     code = (code or "").strip()
     if not is_base62_code(code):
-        raise ValueError("Код должен состоять только из символов base62: 0-9, A-Z, a-z")
+        raise ValueError(_tr('db_promotions.create_promo_code.1'))
     if code_type not in ("promo", "coupon"):
-        raise ValueError("Тип кода должен быть promo или coupon")
+        raise ValueError(_tr('db_promotions.create_promo_code.2'))
 
     percent = _clamp_percent(discount_percent)
     limit = activation_limit
@@ -178,9 +180,9 @@ def create_coupon_batch(
     days = int(lifetime_days)
     total = int(count)
     if days <= 0:
-        raise ValueError("Время жизни купона должно быть больше 0 дней")
+        raise ValueError(_tr('db_promotions.create_coupon_batch.1'))
     if total <= 0:
-        raise ValueError("Количество купонов должно быть больше 0")
+        raise ValueError(_tr('db_promotions.create_coupon_batch.2'))
 
     expires_at = _utcnow() + datetime.timedelta(days=days)
     created: List[Dict[str, Any]] = []
@@ -885,5 +887,5 @@ def get_coupon_auto_lifetime_days() -> int:
 def set_coupon_auto_lifetime_days(days: int) -> None:
     days = int(days)
     if days <= 0:
-        raise ValueError("Время жизни должно быть больше 0 дней")
+        raise ValueError(_tr('db_promotions.set_coupon_auto_lifetime_days.1'))
     set_setting(COUPON_AUTO_LIFETIME_KEY, str(days))

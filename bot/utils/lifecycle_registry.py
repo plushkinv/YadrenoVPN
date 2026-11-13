@@ -1,6 +1,8 @@
 """Lifecycle hooks for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import inspect
 import logging
 import re
@@ -35,9 +37,9 @@ def register_key_lifecycle_hook(
     hook_name = _normalize_hook_name(name)
     _require_bool_option(replace, 'replace')
     if not callable(func):
-        raise ValueError('key lifecycle hook должен быть callable')
+        raise ValueError(_tr('lifecycle_registry.register_key_lifecycle_hook.1'))
     if hook_name in KEY_LIFECYCLE_HOOKS and not replace:
-        raise ValueError(f"key lifecycle hook '{hook_name}' уже зарегистрирован")
+        raise ValueError(_tr('lifecycle_registry.register_key_lifecycle_hook.2', p0=f'{hook_name}'))
 
     event_set = _normalize_events(events)
     KEY_LIFECYCLE_HOOKS[hook_name] = {
@@ -84,19 +86,19 @@ async def emit_key_lifecycle_event(event: str, context: Mapping[str, Any]) -> li
 
 def _normalize_hook_name(name: str) -> str:
     if not isinstance(name, str):
-        raise ValueError("hook name должен быть строкой")
+        raise ValueError(_tr('lifecycle_registry.normalize_hook_name.1'))
     value = name.strip().casefold()
     if not _HOOK_NAME_RE.fullmatch(value):
-        raise ValueError("hook name должен соответствовать ^[a-z][a-z0-9_.:-]{0,127}$")
+        raise ValueError(_tr('lifecycle_registry.normalize_hook_name.2'))
     return value
 
 
 def _normalize_event(event: str) -> str:
     if not isinstance(event, str):
-        raise ValueError("event должен быть строкой")
+        raise ValueError(_tr('lifecycle_registry.normalize_event.1'))
     value = event.strip().casefold()
     if value not in KEY_LIFECYCLE_EVENTS:
-        raise ValueError(f"неизвестное lifecycle-событие ключа: {event}")
+        raise ValueError(_tr('lifecycle_registry.normalize_event.2', p0=f'{event}'))
     return value
 
 
@@ -104,22 +106,22 @@ def _normalize_events(events: list[str] | tuple[str, ...] | set[str] | None) -> 
     if events is None:
         return set(KEY_LIFECYCLE_EVENTS)
     if not isinstance(events, (list, tuple, set)):
-        raise ValueError('events должен быть списком, кортежем, set или None')
+        raise ValueError(_tr('lifecycle_registry.normalize_events.1'))
     normalized = {_normalize_event(event) for event in events}
     if not normalized:
-        raise ValueError('список events не может быть пустым')
+        raise ValueError(_tr('lifecycle_registry.normalize_events.2'))
     return normalized
 
 
 def _normalize_context(context: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(context, Mapping):
-        raise ValueError('context должен быть mapping')
+        raise ValueError(_tr('action_registry.resolve_system_button.1'))
     return dict(context)
 
 
 def _require_bool_option(value: Any, field: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f'{field} должен быть bool')
+        raise ValueError(_tr('action_registry.require_bool.1', p0=f'{field}'))
     return value
 
 
@@ -127,20 +129,20 @@ def _normalize_hook_result(raw_result: Mapping[str, Any] | None) -> dict[str, An
     if raw_result is None:
         return {}
     if not isinstance(raw_result, Mapping):
-        raise ValueError('key lifecycle hook должен вернуть dict или None')
+        raise ValueError(_tr('lifecycle_registry.normalize_hook_result.1'))
     result = dict(raw_result)
     unknown = set(result.keys()) - _ALLOWED_RESULT_KEYS
     if unknown:
-        raise ValueError(f"неподдерживаемые поля результата: {', '.join(sorted(unknown))}")
+        raise ValueError(_tr('lifecycle_registry.normalize_hook_result.2', p0=f"{', '.join(sorted(unknown))}"))
     if 'ok' in result and not isinstance(result['ok'], bool):
-        raise ValueError('ok должен быть bool')
+        raise ValueError(_tr('lifecycle_registry.normalize_hook_result.3'))
     for field in ('label', 'reason'):
         if field in result and result[field] is not None and not isinstance(result[field], str):
-            raise ValueError(f'{field} должен быть строкой')
+            raise ValueError(_tr('action_registry.require_text.1', p0=f'{field}'))
         if field in result and result[field] is None:
             result.pop(field)
     if 'metadata' in result and not isinstance(result['metadata'], Mapping):
-        raise ValueError('metadata должна быть словарём')
+        raise ValueError(_tr('lifecycle_registry.normalize_hook_result.4'))
     return result
 
 

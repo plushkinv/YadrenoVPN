@@ -1,6 +1,8 @@
 """Read-only prerequisites; no packages, certificate requests or settings writes."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from dataclasses import replace
 import ipaddress
 import json
@@ -66,7 +68,7 @@ def publication(root):
         owned_paths(trust['instance_id'])
         return signed, trust
     except (OSError, ValueError, KeyError, TypeError):
-        raise SetupError('ui_not_ready', 'Сначала установите готовую совместимую сборку интерфейса; Node для базовой сборки не нужен.') from None
+        raise SetupError('ui_not_ready', _tr('setup_preflight.publication.1')) from None
 
 
 def verify_endpoint(system, origin, signed, trust, *, runtime, package=True, nginx_configuration=None):
@@ -94,7 +96,7 @@ def verify_endpoint(system, origin, signed, trust, *, runtime, package=True, ngi
             if verify_package(downloaded, trust)[0] != signed:
                 raise ValueError('wrong package')
     except (ValueError, KeyError, TypeError):
-        raise SetupError('installation_mismatch', 'HTTPS не подтвердил точную установку, версию и полный пакет интерфейса.', stage='https', exit_code=4) from None
+        raise SetupError('installation_mismatch', _tr('setup_preflight.verify_endpoint.1'), stage='https', exit_code=4) from None
 
 
 def listeners(system):
@@ -102,7 +104,7 @@ def listeners(system):
     for line in system.run(['ss', '-H', '-ltnp']).stdout.splitlines():
         columns = line.split()
         if len(columns) < 5:
-            raise SetupError('listeners_unknown', 'Не удалось однозначно разобрать список TCP listeners.')
+            raise SetupError('listeners_unknown', _tr('setup_preflight.listeners.1'))
         endpoint = columns[3]
         host, port = endpoint.rsplit(':', 1)
         host = host.strip('[]').split('%', 1)[0]
@@ -129,11 +131,11 @@ def nginx_configuration_preflight(system, options, paths, instance):
         dump = system.run(['nginx', '-T'], check=False)
         if dump.returncode:
             failure = system.command_error(['nginx', '-T'], dump.stderr, dump.returncode)
-            raise SetupError('nginx_invalid', 'Существующая конфигурация Nginx не проходит проверку. ' + str(failure),
+            raise SetupError('nginx_invalid', _tr('setup_preflight.nginx_configuration_preflight.1') + str(failure),
                              details=failure.details)
         if re.search(r'\bstream\s*\{', re.sub(r'#[^\n]*', '', dump.stdout)):
             raise SetupError('nginx_complex_configuration',
-                'Nginx содержит маршрутизацию TCP/UDP (stream); совместное использование портов требует отдельной проверки.')
+                _tr('setup_preflight.nginx_configuration_preflight.2'))
         # A supported include must occur inside http{}, including across lines.
         context, directive, includes = [], [], []
         for token in re.findall(r'"[^"\n]*"|\'[^\'\n]*\'|[^\s{};#]+|[{};]|#[^\n]*', dump.stdout):
@@ -151,7 +153,7 @@ def nginx_configuration_preflight(system, options, paths, instance):
             else:
                 directive.append(token)
         if '/etc/nginx/conf.d/*.conf' not in includes:
-            raise SetupError('nginx_include_missing', 'Подготовьте include /etc/nginx/conf.d/*.conf внутри http; основной конфиг не изменён.')
+            raise SetupError('nginx_include_missing', _tr('setup_preflight.nginx_configuration_preflight.3'))
         chunks = re.split(r'^# configuration file (.+):\s*$', dump.stdout, flags=re.M)
         for index in range(1, len(chunks), 2):
             if chunks[index] == paths['nginx']:
@@ -160,7 +162,7 @@ def nginx_configuration_preflight(system, options, paths, instance):
                 for name in names.split():
                     if (name == options.domain
                             or name.startswith('*.') and options.domain.endswith(name[1:]) or name.startswith('~')):
-                        raise SetupError('server_name_conflict', 'Домен уже обслуживается другим virtual host; чужая конфигурация не изменена.')
+                        raise SetupError('server_name_conflict', _tr('setup_preflight.nginx_configuration_preflight.4'))
 
 
 def infrastructure_error(issues, addresses=()):
@@ -189,23 +191,23 @@ def preflight(root, options, system, store):
     saved = store.snapshot()
     for command in ('ip', 'ss', 'systemctl'):
         if not system.which(command):
-            raise SetupError('command_missing', 'Не найдена необходимая команда: ' + command)
+            raise SetupError('command_missing', _tr('setup_preflight.preflight.1') + command)
     addresses = system.addresses()
     if options.backend_bind not in addresses:
-        raise SetupError('backend_address_missing', 'Выбранный закрытый адрес отсутствует на этом сервере.')
+        raise SetupError('backend_address_missing', _tr('setup_preflight.preflight.2'))
     resolved = system.resolve(options.domain)
     if not resolved:
-        raise SetupError('dns_unavailable', 'DNS не возвращает A или AAAA домена.')
+        raise SetupError('dns_unavailable', _tr('setup_preflight.preflight.3'))
     if options.listen_address and not ipaddress.ip_address(options.listen_address).is_unspecified and options.listen_address not in addresses:
-        raise SetupError('listen_address_missing', 'Выбранный публичный listen address отсутствует на сервере.')
+        raise SetupError('listen_address_missing', _tr('setup_preflight.preflight.4'))
     if options.proxy in {'auto', 'managed-nginx'}:
         public_local = {value for value in addresses if ipaddress.ip_address(value).is_global}
         if public_local and any(value not in public_local for value in resolved):
-            raise SetupError('dns_address_mismatch', 'A/AAAA указывают не на публичные адреса этого сервера.', details={'dns': resolved, 'server': sorted(public_local)})
+            raise SetupError('dns_address_mismatch', _tr('setup_preflight.preflight.5'), details={'dns': resolved, 'server': sorted(public_local)})
         if any(':' in value for value in resolved) and not any(':' in value for value in addresses):
-            raise SetupError('ipv6_unavailable', 'DNS содержит AAAA, но на сервере нет IPv6.')
+            raise SetupError('ipv6_unavailable', _tr('setup_preflight.preflight.6'))
         if options.proxy == 'auto' and any(value not in addresses for value in resolved):
-            raise SetupError('dns_address_mismatch', 'Автоматическое подключение требует, чтобы домен указывал на этот сервер.',
+            raise SetupError('dns_address_mismatch', _tr('setup_preflight.preflight.7'),
                              details={'dns': resolved, 'server': addresses})
     occupied = listeners(system)
     try:
@@ -213,7 +215,7 @@ def preflight(root, options, system, store):
         if saved_port is not None and not 1 <= saved_port <= 65535:
             raise ValueError('port out of range')
     except (TypeError, ValueError):
-        raise SetupError('invalid_saved_web_settings', 'Сохранённый внутренний порт некорректен; он не изменён автоматически.') from None
+        raise SetupError('invalid_saved_web_settings', _tr('setup_preflight.preflight.8')) from None
     prepared = None
     if options.proxy == 'auto':
         prepared = prepared_local_nginx(system, options, paths, resolved, occupied, options.backend_port or saved_port)
@@ -234,23 +236,21 @@ def preflight(root, options, system, store):
             options = replace(options, backend_port=port)
             break
     else:
-        raise SetupError('backend_port_conflict', 'Выбранный внутренний порт занят; сохранённый или явный порт автоматически не меняется.')
+        raise SetupError('backend_port_conflict', _tr('setup_preflight.preflight.9'))
     if options.proxy == 'managed-nginx':
         for command in (('apt-get',) if not system.which('nginx') or not system.which('certbot') else ()):
             if not system.which(command):
-                raise SetupError('command_missing', 'Не найдена необходимая команда: ' + command)
+                raise SetupError('command_missing', _tr('setup_preflight.preflight.1') + command)
         issues = []
         public_hosts = [options.listen_address] if options.listen_address else ['0.0.0.0', '::']
         if options.backend_port in {80, options.https_port} and any(overlaps(options.backend_bind, host) for host in public_hosts):
-            raise SetupError('backend_port_conflict', 'Внутренний listener пересекается с публичным Nginx listener.')
+            raise SetupError('backend_port_conflict', _tr('setup_preflight.preflight.10'))
         for item in occupied:
             if item['port'] in {80, options.https_port} and any(overlaps(item['host'], host) for host in public_hosts):
                 if not item['process'] or 'nginx' not in item['process'] or 'docker' in item['process']:
                     service = item['process'][:200]
                     issues.append(SetupError('public_port_conflict',
-                        f'TCP-порт {item["port"]}, адрес {item["host"]}, уже занят: {service or "процесс не определён"}. '
-                        'Для Nginx нужен свободный порт. Перенос VPN, панели или другого прокси требует '
-                        'отдельной настройки; службы не изменены.',
+                        _tr('setup_preflight.preflight.12', p0=f"{item['port']}", p1=f"{item['host']}", p2=f"{service or _tr('setup_preflight.preflight.11')}"),
                         details={'address': item['host'], 'port': item['port'], 'service': service}))
         renewal_issues = inspect_renewals(system)
         try:
@@ -265,7 +265,7 @@ def preflight(root, options, system, store):
         infrastructure_error(issues, addresses)
         if not usable_certificate(system, paths, options.domain, min_days=-36500) and (not options.email or not options.agree_tos):
             raise SetupError('acme_arguments_required',
-                'Для новой выдачи нужен --agree-tos; email по умолчанию admin@<домен>, другой можно задать через --email.',
+                _tr('setup_preflight.preflight.13'),
                 stage='arguments', exit_code=2)
     return options, signed, trust, saved, paths, {'dns': resolved, 'server_addresses': addresses,
         'existing_local_proxy': prepared['file'] if prepared else None,

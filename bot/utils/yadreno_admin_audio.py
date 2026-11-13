@@ -1,6 +1,8 @@
 """Telegram audio metadata for the existing Satellite file transport."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,7 +53,7 @@ def audio_upload_meta(message: Any) -> tuple[str, str, str] | None:
     if suffix not in _AUDIO_TYPES:
         raise YadrenoAdminError(
             "Unsupported Telegram audio format",
-            user_message="Этот формат аудио не поддерживается. Отправьте запись OGG/Opus или WAV размером до 10 МБ.",
+            user_message=_tr('yadreno_admin_audio.audio_upload_meta.1'),
         )
     if not name or not Path(name).suffix:
         name = f"{kind}_{message.message_id}{suffix}"

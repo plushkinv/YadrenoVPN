@@ -1,4 +1,6 @@
 """Explicit account selectors keep old numeric Telegram callbacks unambiguous."""
+
+from localization import text as _tr
 from database import requests as db
 
 
@@ -19,4 +21,4 @@ def selected_user(selector):
 def identity_line(user):
     if user.get('telegram_id') is not None:
         return f"📱 ID: <code>{user['telegram_id']}</code>"
-    return f"🌐 Аккаунт: <code>{user['id']}</code>"
+    return _tr('users_manage.format_user_card.3', p0=f"{user['id']}")

@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 PAYMENT_DEEPLINK_PREFIX = 'pay_'
-PAYMENT_DEEPLINK_PROVIDERS = {'yookassa', 'wata', 'platega', 'cardlink'}
+from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
+PAYMENT_DEEPLINK_PROVIDERS = {'yookassa', 'wata', 'platega', 'cardlink', *INTERNATIONAL_PROVIDERS}
 QR_PAYMENT_PAGE_KEY = 'qr_payment'
 
 
@@ -75,6 +76,7 @@ async def handle_payment_deeplink(
         from database.requests import get_payment_provider_order
 
         provider_alias = {
+            **{pid: pid for pid in INTERNATIONAL_PROVIDERS},
             'yookassa': 'yookassa_qr',
             'wata': 'wata',
             'platega': 'platega',

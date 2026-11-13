@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 import inspect
 from dataclasses import dataclass
@@ -44,7 +46,7 @@ class PollDeliveryReference:
 def _message_id(result: Any) -> int:
     value = getattr(result, "message_id", None)
     if value is None:
-        raise BroadcastContentError("Telegram не вернул идентификатор сообщения опроса.")
+        raise BroadcastContentError(_tr('broadcast_content.message_id.1'))
     return int(value)
 
 
@@ -99,7 +101,7 @@ def save_broadcast_content(data: dict[str, Any]) -> None:
     """Persists normalized broadcast content in the existing setting."""
     normalized = normalize_broadcast_content(data)
     if normalized is None:
-        raise BroadcastContentError("Некорректные данные черновика рассылки.")
+        raise BroadcastContentError(_tr('broadcast_content.save_broadcast_content.1'))
     if normalized.get("kind") == BROADCAST_KIND_MESSAGE:
         normalized["text"] = validate_broadcast_message(
             normalized.get("text"),
@@ -146,18 +148,15 @@ def validate_poll_message(message: Message) -> Optional[str]:
     poll = message.poll
     if poll is None:
         return (
-            "❌ <b>Материал не поддерживается</b>\n\n"
-            "Отправьте текст, фото с подписью или нативный опрос Telegram."
+            _tr('broadcast_content.validate_poll_message.1')
         )
     if message.has_protected_content:
         return (
-            "❌ <b>Опрос защищён</b>\n\n"
-            "Создайте новый опрос без защиты от копирования и пересылки."
+            _tr('broadcast_content.validate_poll_message.2')
         )
     if poll.is_closed:
         return (
-            "❌ <b>Опрос уже закрыт</b>\n\n"
-            "Закрытый опрос нельзя подготовить для новой рассылки. Создайте открытый опрос."
+            _tr('broadcast_content.validate_poll_message.3')
         )
     return None
 
@@ -185,7 +184,7 @@ async def create_poll_draft(
             message_id=source_message_id,
         )
     else:
-        raise BroadcastContentError("Неизвестный режим подготовки опроса.")
+        raise BroadcastContentError(_tr('broadcast_content.create_poll_draft.1'))
 
     content = {
         "kind": BROADCAST_KIND_POLL,
@@ -220,7 +219,7 @@ async def prepare_poll_delivery(
     """Creates a clean launch master or reuses the preserved common poll."""
     if content.get("poll_source") == POLL_SOURCE_GENERATED:
         if master_chat_id is None:
-            raise BroadcastContentError("Для запуска нового опроса нужен чат администратора.")
+            raise BroadcastContentError(_tr('broadcast_content.prepare_poll_delivery.1'))
         result = await bot.send_poll(
             chat_id=int(master_chat_id),
             **_generated_poll_kwargs(content),
@@ -296,7 +295,7 @@ def _generated_poll_kwargs(content: dict[str, Any]) -> dict[str, Any]:
 def poll_type_label(content: dict[str, Any]) -> str:
     """Returns a concise Russian poll type label for confirmation screens."""
     if content.get("poll_type") == "quiz":
-        return "Викторина"
+        return _tr('broadcast_content.poll_type_label.1')
     if content.get("allows_multiple_answers"):
-        return "Опрос с несколькими ответами"
-    return "Обычный опрос"
+        return _tr('broadcast_content.poll_type_label.2')
+    return _tr('broadcast_content.poll_type_label.3')

@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { CreditCard, LifeBuoy, Link, Ticket, UserRound, Users, Wallet } from 'lucide-react';
 import { useState } from 'react';
 import { mutationKey } from '../api/client';
@@ -28,7 +29,7 @@ export function History() {
         {'amount_minor' in value && <h2>{money(value.amount_minor, value.currency)}</h2>}
         {!items.length && <Empty />}{items.map((item, index) => <div className="list-row" key={item.order_id ?? item.id ?? index}>
           <span>{item.purpose === 'key_renewal' ? t.renew : item.purpose === 'key_purchase' ? t.buy : t.history}<small>{date(item.created_at)}</small></span>
-          <span>{money(item.delta_minor ?? item.payable_amount_minor, item.currency ?? item.base_currency ?? '')}{item.delta_days != null && <small>{item.delta_days} дн.</small>}{item.expires_after && <small>{date(item.expires_after)}</small>}</span>
+          <span>{money(item.delta_minor ?? item.payable_amount_minor, item.currency ?? item.base_currency ?? '')}{item.delta_days != null && <small>{item.delta_days} {_tr("Information.1")}</small>}{item.expires_after && <small>{date(item.expires_after)}</small>}</span>
           {item.order_id && financialPurposes.has(item.purpose ?? '') && <Button tone="quiet" onClick={() => navigate('payment/' + encodeURIComponent(item.order_id!))}>{t.details}</Button>}
         </div>)}<div className="button-row">{offset > 0 && <Button tone="quiet" onClick={() => setOffset(offset - 50)}>{t.back}</Button>}{items.length === 50 && <Button onClick={() => setOffset(offset + 50)}>{t.continue}</Button>}</div>
       </section>;
@@ -63,9 +64,9 @@ export function Referrals() {
   return <><PageHeading title={t.referrals} back={back} /><Resource state={state}>{data => <section className="panel form-panel">
     {!data.enabled ? <Empty /> : <>
       <div className="rich-content" dangerouslySetInnerHTML={{ __html: data.conditions_html ?? '' }} />
-      {data.site_url && <><Field label={t.share}><input value={data.site_url} readOnly onFocus={e => e.target.select()} /></Field><div className="button-row"><Button onClick={async () => setCopied(await environment.copy(data.site_url!))}>{t.copy}</Button><Button tone="secondary" onClick={() => environment.share(data.site_url!)}>{t.share}</Button></div></>}
+      {data.site_url && <><Field label={t.share}><input type="url" value={data.site_url} readOnly onFocus={e => e.target.select()} /></Field><div className="button-row"><Button onClick={async () => setCopied(await environment.copy(data.site_url!))}>{t.copy}</Button><Button tone="secondary" onClick={() => environment.share(data.site_url!)}>{t.share}</Button></div></>}
       {copied !== undefined && <p role="status">{copied ? t.copied : t.copyFailed}</p>}
-      {data.statistics?.map(item => <div className="list-row" key={item.level}><span>{item.level} · {item.count} / {item.paying_count}</span><span>{money(item.total_reward_minor, item.reward_currency ?? '')} · {item.total_reward_days} дн.</span></div>)}
+      {data.statistics?.map(item => <div className="list-row" key={item.level}><span>{item.level} · {item.count} / {item.paying_count}</span><span>{money(item.total_reward_minor, item.reward_currency ?? '')} · {item.total_reward_days} {_tr("Information.1")}</span></div>)}
     </>}
   </section>}</Resource></>;
 }
@@ -97,7 +98,7 @@ export function MoreAccount() {
       { path: 'help', label: t.help, icon: LifeBuoy, visible: true },
     ] },
   ];
-  return <><PageHeading title="Ещё" /><div className="more-list">{groups.map(group => {
+  return <><PageHeading title={_tr("ru.more")} /><div className="more-list">{groups.map(group => {
     const items = group.items.filter(item => item.visible);
     return items.length > 0 && <section key={group.label}><h2 className="group-label">{group.label}</h2><div className="panel row-group">{items.map(({ path, label, icon: Icon }) =>
       <RowButton key={path} icon={<Icon size={22} aria-hidden="true" />} title={label} onClick={() => navigate(path)} />

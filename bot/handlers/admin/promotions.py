@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 import datetime
 import logging
 
@@ -33,7 +35,7 @@ router = Router()
 
 
 def _format_date(value) -> str:
-    return value or "без срока"
+    return value or _tr('promotions.format_date.1')
 
 
 def _parse_expires(value: str):
@@ -66,39 +68,27 @@ async def _delete_input(message: Message) -> None:
 
 def _promocode_text(promo: dict, bot_username: str | None = None) -> str:
     limit = promo.get("activation_limit")
-    limit_text = str(limit) if limit else "без лимита"
+    limit_text = str(limit) if limit else _tr('promotions.promocode_text.1')
     usage = int(promo.get("usage_count") or 0)
-    status = "включён" if promo.get("is_active") else "выключен"
+    status = _tr('groups.build_group_view_text.3') if promo.get("is_active") else _tr('groups.build_group_view_text.4')
     link_line = ""
     if bot_username:
         promo_link = build_telegram_link(bot_username, f"pr_{promo['code']}")
-        link_line = f"\n🔗 Промо-ссылка: <code>{escape_html(promo_link)}</code>"
+        link_line = _tr('promotions.promocode_text.2', p0=f'{escape_html(promo_link)}')
     return (
-        "🎟 <b>Промокод</b>\n\n"
-        f"Код: <b>{escape_html(promo['code'])}</b>\n"
-        f"Скидка: <b>{int(promo.get('discount_percent') or 0)}%</b>\n"
-        f"Срок: <b>{escape_html(_format_date(promo.get('expires_at')))}</b>\n"
-        f"Лимит: <b>{escape_html(limit_text)}</b>\n"
-        f"Активаций: <b>{usage}</b>\n"
-        f"Статус: <b>{status}</b>"
-        f"{link_line}\n\n"
-        "Промокод можно вводить в поле оплаты или использовать как промо-ссылку."
+        _tr('promotions.promocode_text.3', p0=f"{escape_html(promo['code'])}", p1=f"{int(promo.get('discount_percent') or 0)}", p2=f"{escape_html(_format_date(promo.get('expires_at')))}", p3=f'{escape_html(limit_text)}', p4=f'{usage}', p5=f'{status}', p6=f'{link_line}')
     )
 
 
 @router.callback_query(F.data == "admin_promocodes")
 async def admin_promocodes(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await state.set_state(AdminStates.admin_menu)
     promocodes = get_promo_codes("promo")
     text = (
-        "🎟 <b>Промокоды</b>\n\n"
-        "Промокоды многоразовые для разных клиентов, но каждый пользователь может применить один и тот же код только один раз. "
-        "Их можно вводить вручную при оплате, а ещё каждый промокод работает как промо-ссылка формата "
-        f"<code>https://{escape_html(get_telegram_link_domain())}/&lt;bot&gt;?start=pr_CODE</code>.\n\n"
-        "Промо-ссылки удобно использовать в рекламе и партнёрских размещениях: бот сохранит код пользователю, а успешная покупка попадёт в аналитику."
+        _tr('promotions.admin_promocodes.1', p0=f'{escape_html(get_telegram_link_domain())}')
     )
     await safe_edit_or_send(callback.message, text, reply_markup=promocodes_list_kb(promocodes))
     await callback.answer()
@@ -114,9 +104,8 @@ async def admin_promocode_add(callback: CallbackQuery, state: FSMContext):
         callback.message,
         state,
         _promocode_add_prompt(
-            "➕ <b>Новый промокод</b>",
-            "Введите имя промокода. Можно использовать только <code>0-9</code>, "
-            "<code>A-Z</code>, <code>a-z</code>.",
+            _tr('promotions.admin_promocode_add.1'),
+            _tr('promotions.admin_promocode_add.2'),
         ),
         reply_markup=promotion_cancel_kb("admin_promocodes"),
     )
@@ -131,12 +120,10 @@ async def promocode_add_code(message: Message, state: FSMContext):
             message,
             state,
             _promocode_add_prompt(
-                "➕ <b>Новый промокод</b>",
-                "Введите имя промокода. Можно использовать только <code>0-9</code>, "
-                "<code>A-Z</code>, <code>a-z</code>.",
+                _tr('promotions.admin_promocode_add.1'),
+                _tr('promotions.admin_promocode_add.2'),
                 error=(
-                    "Код должен быть в base62: <code>0-9</code>, "
-                    "<code>A-Z</code>, <code>a-z</code>."
+                    _tr('promotions.promocode_add_code.1')
                 ),
             ),
             reply_markup=promotion_cancel_kb("admin_promocodes"),
@@ -147,9 +134,9 @@ async def promocode_add_code(message: Message, state: FSMContext):
             message,
             state,
             _promocode_add_prompt(
-                "➕ <b>Новый промокод</b>",
-                "Введите другое имя промокода.",
-                error="Такой код уже существует.",
+                _tr('promotions.admin_promocode_add.1'),
+                _tr('promotions.promocode_add_code.2'),
+                error=_tr('promotions.promocode_add_code.3'),
             ),
             reply_markup=promotion_cancel_kb("admin_promocodes"),
         )
@@ -160,8 +147,8 @@ async def promocode_add_code(message: Message, state: FSMContext):
         message,
         state,
         _promocode_add_prompt(
-            "📊 <b>Скидка</b>",
-            "Введите размер скидки от 0 до 100%.",
+            _tr('promotions.promocode_add_code.4'),
+            _tr('coupon_generator.admin_coupons_generate.2'),
         ),
         reply_markup=promotion_cancel_kb("admin_promocodes"),
     )
@@ -175,9 +162,9 @@ async def promocode_add_discount(message: Message, state: FSMContext):
             message,
             state,
             _promocode_add_prompt(
-                "📊 <b>Скидка</b>",
-                "Введите размер скидки от 0 до 100%.",
-                error="Введите целое число от 0 до 100.",
+                _tr('promotions.promocode_add_code.4'),
+                _tr('coupon_generator.admin_coupons_generate.2'),
+                error=_tr('coupon_generator.admin_coupons_generate_discount.1'),
             ),
             reply_markup=promotion_cancel_kb("admin_promocodes"),
         )
@@ -188,9 +175,8 @@ async def promocode_add_discount(message: Message, state: FSMContext):
         message,
         state,
         _promocode_add_prompt(
-            "⏳ <b>Срок действия</b>",
-            "Введите дату в формате <code>YYYY-MM-DD</code> или <code>0</code>, "
-            "если срок не ограничен.",
+            _tr('promotions.promocode_add_discount.1'),
+            _tr('promotions.promocode_add_discount.2'),
         ),
         reply_markup=promotion_cancel_kb("admin_promocodes"),
     )
@@ -206,10 +192,9 @@ async def promocode_add_expires(message: Message, state: FSMContext):
             message,
             state,
             _promocode_add_prompt(
-                "⏳ <b>Срок действия</b>",
-                "Введите дату в формате <code>YYYY-MM-DD</code> или <code>0</code>, "
-                "если срок не ограничен.",
-                error="Неверная дата.",
+                _tr('promotions.promocode_add_discount.1'),
+                _tr('promotions.promocode_add_discount.2'),
+                error=_tr('promotions.promocode_add_expires.1'),
             ),
             reply_markup=promotion_cancel_kb("admin_promocodes"),
         )
@@ -219,9 +204,7 @@ async def promocode_add_expires(message: Message, state: FSMContext):
     await render_admin_dialog_from_input(
         message,
         state,
-        "🔢 <b>Лимит активаций</b>\n\n"
-        "Введите общее количество применений разными пользователями или <code>0</code> без общего лимита. "
-        "Один пользователь в любом случае может применить этот промокод только один раз.",
+        _tr('promotions.promocode_add_expires.2'),
         reply_markup=promotion_cancel_kb("admin_promocodes"),
     )
 
@@ -234,10 +217,9 @@ async def promocode_add_limit(message: Message, state: FSMContext):
             message,
             state,
             _promocode_add_prompt(
-                "🔢 <b>Лимит активаций</b>",
-                "Введите общее количество применений разными пользователями или "
-                "<code>0</code> без общего лимита.",
-                error="Введите целое неотрицательное число.",
+                _tr('promotions.promocode_add_limit.1'),
+                _tr('promotions.promocode_add_limit.2'),
+                error=_tr('promotions.promocode_add_limit.3'),
             ),
             reply_markup=promotion_cancel_kb("admin_promocodes"),
         )
@@ -246,7 +228,7 @@ async def promocode_add_limit(message: Message, state: FSMContext):
     target = await render_admin_dialog_from_input(
         message,
         state,
-        "⏳ <b>Создание промокода</b>\n\nСохраняю введённые параметры…",
+        _tr('promotions.promocode_add_limit.4'),
     )
     promo_id = create_promo_code(
         code=data["promocode_code"],
@@ -274,7 +256,7 @@ async def admin_promocode_view(callback: CallbackQuery, state: FSMContext):
     promo_id = int(callback.data.split(":")[1])
     promo = get_promo_code_by_id(promo_id)
     if not promo:
-        await callback.answer("Промокод не найден", show_alert=True)
+        await callback.answer(_tr('promotions.admin_promocode_view.1'), show_alert=True)
         return
     bot_info = await callback.bot.get_me()
     await safe_edit_or_send(callback.message, _promocode_text(promo, bot_info.username), reply_markup=promocode_detail_kb(promo))
@@ -286,7 +268,7 @@ async def admin_promocode_toggle(callback: CallbackQuery):
     promo_id = int(callback.data.split(":")[1])
     promo = get_promo_code_by_id(promo_id)
     if not promo:
-        await callback.answer("Промокод не найден", show_alert=True)
+        await callback.answer(_tr('promotions.admin_promocode_view.1'), show_alert=True)
         return
     set_promo_code_active(promo_id, not bool(promo.get("is_active")))
     promo = get_promo_code_by_id(promo_id)
@@ -302,11 +284,11 @@ async def admin_promocode_edit_start(callback: CallbackQuery, state: FSMContext)
     await state.update_data(promocode_edit_id=int(promo_id), promocode_edit_field=field)
     await state.set_state(AdminStates.promocode_edit_value)
     hints = {
-        "discount": "Введите скидку от 0 до 100%.",
-        "expires": "Введите дату <code>YYYY-MM-DD</code> или <code>0</code> без срока.",
-        "limit": "Введите лимит применений или <code>0</code> без лимита.",
+        "discount": _tr('coupons.admin_coupon_setting_start.2'),
+        "expires": _tr('promotions.admin_promocode_edit_start.1'),
+        "limit": _tr('promotions.admin_promocode_edit_start.2'),
     }
-    await safe_edit_or_send(callback.message, f"✏️ <b>Редактирование</b>\n\n{hints[field]}", reply_markup=promotion_cancel_kb(f"admin_promocode_view:{promo_id}"))
+    await safe_edit_or_send(callback.message, _tr('promotions.admin_promocode_edit_start.3', p0=f'{hints[field]}'), reply_markup=promotion_cancel_kb(f"admin_promocode_view:{promo_id}"))
     await callback.answer()
 
 
@@ -329,7 +311,7 @@ async def admin_promocode_edit_value(message: Message, state: FSMContext):
                 raise ValueError()
             update_promo_code(promo_id, activation_limit=int(raw))
     except ValueError:
-        await safe_edit_or_send(message, "❌ Значение не принято. Проверьте формат и попробуйте ещё раз.", reply_markup=promotion_cancel_kb(f"admin_promocode_view:{promo_id}"), force_new=True)
+        await safe_edit_or_send(message, _tr('promotions.admin_promocode_edit_value.1'), reply_markup=promotion_cancel_kb(f"admin_promocode_view:{promo_id}"), force_new=True)
         return
     await state.clear()
     promo = get_promo_code_by_id(promo_id)

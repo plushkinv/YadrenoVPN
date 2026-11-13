@@ -7,6 +7,8 @@ so already installed v97 databases and fresh databases use the same transitions.
 """
 from __future__ import annotations
 
+from localization import legacy_text as _legacy
+
 import json
 import logging
 import sqlite3
@@ -23,7 +25,7 @@ from .page_registry import (
     PAGE_KIND_LEGACY_CUSTOM,
     is_valid_custom_page_key,
 )
-from .user_ui_text_catalog import USER_UI_TEXT_DEFINITIONS
+from .user_ui_text_catalog import HISTORICAL_USER_UI_TEXT_DEFINITIONS as USER_UI_TEXT_DEFINITIONS
 
 
 logger = logging.getLogger(__name__)
@@ -74,7 +76,7 @@ if len(_CORE_PAGE_KEYS_V105) != 80:
 INITIAL_VERSION = 97
 
 # Current schema version; post-v97 changes stay outside the compressed baseline.
-LATEST_VERSION = 132
+LATEST_VERSION = 134
 
 
 DEFAULT_BROADCAST_STYLE_PROFILE = {
@@ -94,34 +96,21 @@ DEFAULT_BROADCAST_STYLE_PROFILE = {
 def _my_keys_item_template() -> str:
     """Hidden default of one key format on the “My Keys” page."""
     return (
-        "🔑 <b>%key(field=name)%</b>\n"
-        "%key(field=status)% · %key(field=traffic)%\n"
-        "📅 До %key(field=expires_at)%\n"
-        "📍 %key(field=server)%"
+        _legacy('migrations.1')
     )
 
 
 def _referral_new_ref_notification_text() -> str:
     """Hidden default notification to the referral provider about a new referral."""
     return (
-        "👥 <b>Новый реферал</b>\n\n"
-        "По вашей ссылке зарегистрировался пользователь.\n\n"
-        "👤 Имя: <b>%реферал_имя%</b>\n"
-        "🔗 Логин: %реферал_логин%\n"
-        "📊 Уровень: <b>%реферальный_уровень%</b>"
+        _legacy('migrations.2')
     )
 
 
 def _referral_purchase_notification_text() -> str:
     """Hidden default notification to the referral provider about the purchase of a referral."""
     return (
-        "💳 <b>Покупка реферала</b>\n\n"
-        "Пользователь <b>%покупатель_имя%</b> (%покупатель_логин%) оплатил тариф.\n\n"
-        "🎫 Тариф: <b>%платеж_тариф%</b>\n"
-        "💵 Сумма: <b>%платеж_сумма%</b>\n"
-        "⏳ Срок: <b>%платеж_срок%</b>\n"
-        "🎁 Ваш бонус: <b>%реферальное_вознаграждение%</b>\n"
-        "📊 Уровень: <b>%реферальный_уровень%</b>"
+        _legacy('migrations.3')
     )
 
 
@@ -879,43 +868,22 @@ _BASELINE_SETTINGS_V97 = (('base_currency', 'RUB'),
  ('display_timezone', 'Europe/Moscow'),
  ('expired_key_deletion_notifications_enabled', '1'),
  ('expired_key_retention_days', '30'),
- ('key_name_prefix', 'Ключ'),
+ ('key_name_prefix', _legacy('migrations.4')),
  ('my_keys_item_template',
-  '🔑 <b>%key(field=name)%</b>\n'
-  '%key(field=status)% · %key(field=traffic)%\n'
-  '📅 До %key(field=expires_at)%\n'
-  '📍 %key(field=server)%'),
+  _legacy('migrations.5')),
  ('notification_days', '3'),
  ('notification_text',
-  '⚠️ <b>Ваш VPN-ключ %ключ_имя% скоро истекает!</b>\n'
-  '\n'
-  'Через %ключ_дней_до_окончания% дней закончится срок действия вашего ключа.\n'
-  '\n'
-  'Продлите подписку, чтобы сохранить доступ к VPN без перерыва!'),
+  _legacy('migrations.6')),
  ('platega_enabled', '0'),
  ('platega_merchant_id', ''),
  ('platega_secret', ''),
  ('referral_enabled', '0'),
  ('referral_new_ref_notification_text',
-  '👥 <b>Новый реферал</b>\n'
-  '\n'
-  'По вашей ссылке зарегистрировался пользователь.\n'
-  '\n'
-  '👤 Имя: <b>%реферал_имя%</b>\n'
-  '🔗 Логин: %реферал_логин%\n'
-  '📊 Уровень: <b>%реферальный_уровень%</b>'),
+  _legacy('migrations.7')),
  ('referral_new_ref_notifications_enabled', '0'),
  ('referral_notification_levels', '1'),
  ('referral_purchase_notification_text',
-  '💳 <b>Покупка реферала</b>\n'
-  '\n'
-  'Пользователь <b>%покупатель_имя%</b> (%покупатель_логин%) оплатил тариф.\n'
-  '\n'
-  '🎫 Тариф: <b>%платеж_тариф%</b>\n'
-  '💵 Сумма: <b>%платеж_сумма%</b>\n'
-  '⏳ Срок: <b>%платеж_срок%</b>\n'
-  '🎁 Ваш бонус: <b>%реферальное_вознаграждение%</b>\n'
-  '📊 Уровень: <b>%реферальный_уровень%</b>'),
+  _legacy('migrations.8')),
  ('referral_purchase_notifications_enabled', '0'),
  ('referral_reward_type', 'days'),
  ('stablecoin_rub_rate', '95'),
@@ -924,8 +892,7 @@ _BASELINE_SETTINGS_V97 = (('base_currency', 'RUB'),
  ('support_claim_cleanup_mode', 'remove_button'),
  ('telegram_link_domain', 't.me'),
  ('traffic_notification_text',
-  '⚠️ По ключу <b>%ключ_имя%</b> осталось %ключ_трафик_процент_остатка%% трафика '
-  '(%ключ_трафик_использовано% из %ключ_трафик_лимит%)'),
+  _legacy('migrations.9')),
  ('trial_usage_scope', 'once_per_user'),
  ('update_blocked', '0'),
  ('update_check_time', '12:00'),
@@ -939,7 +906,7 @@ _BASELINE_SETTINGS_V97 = (('base_currency', 'RUB'),
  ('yookassa_shop_id', ''))
 
 
-_BASELINE_TARIFF_GROUPS_V97 = ((1, 'Основная', 1, 0),)
+_BASELINE_TARIFF_GROUPS_V97 = ((1, _legacy('migrations.10'), 1, 0),)
 
 
 _BASELINE_TARIFFS_V97 = ((1, 'Admin Tariff', 0, 999, 0, 0, 0, 1, 1, 'admin_custom', 0),)
@@ -956,821 +923,249 @@ _BASELINE_TRIAL_OFFERS_V97 = ((1, None, 1, 0),)
 
 
 _BASELINE_PAGES_V97 = (('access_blocked',
-  '⛔ <b>Доступ заблокирован</b>\n\nВаш аккаунт заблокирован. Обратитесь в поддержку.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.11'),
+  _legacy('migrations.12')),
  ('action_unavailable',
-  '⚠️ <b>Действие недоступно</b>\n\nОткройте нужный раздел заново и повторите попытку.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.13'),
+  _legacy('migrations.14')),
  ('balance_insufficient',
-  '💎 <b>Недостаточно средств</b>\n'
-  '\n'
-  'Ваш баланс: <b>%payment_balance%</b>\n'
-  'К оплате: <b>%payment_amount%</b>',
-  '[{"id": "btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.15'),
+  _legacy('migrations.16')),
  ('balance_payment',
-  '💎 <b>Оплата с баланса</b>\n'
-  '\n'
-  'Тариф: <b>%payment_tariff%</b>\n'
-  'Стоимость: <b>%payment_amount%</b>\n'
-  '%payment_discount_line%\n'
-  'Ваш баланс: <b>%payment_balance%</b>\n'
-  '\n'
-  'С баланса будет списано: <b>%payment_balance_deduct%</b>\n'
-  'Останется оплатить: <b>%payment_remaining%</b>',
-  '[{"id": "btn_intent_balance", "label": "💎 Использовать баланс", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.17'),
+  _legacy('migrations.18')),
  ('balance_topup_amount',
-  '💰 <b>Пополнение баланса</b>\n'
-  '\n'
-  'Введите сумму в базовой валюте (%payment_base_currency%), которую хотите зачислить на баланс.\n'
-  '\n'
-  'Например: <code>500</code>',
-  '[{"id": "btn_back_main", "label": "❌ Отмена", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.19'),
+  _legacy('migrations.20')),
  ('balance_topup_amount_invalid',
-  '⚠️ <b>Некорректная сумма</b>\n\nВведите положительное число без дополнительных символов.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.21'),
+  _legacy('migrations.22')),
  ('balance_topup_result',
-  '✅ <b>Баланс пополнен</b>\n'
-  '\n'
-  'На баланс зачислено: <b>%платеж_номинал%</b>\n'
-  'Оплачено: <b>%платеж_сумма%</b>\n'
-  '\n'
-  '%payment_coupon%',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.23'),
+  _legacy('migrations.24')),
  ('crypto_payment',
-  '🪙 <b>Оплата криптовалютой</b>\n'
-  '\n'
-  '🎫 Тариф: <b>%payment_tariff%</b>\n'
-  '💰 Сумма: <b>%payment_amount%</b>\n'
-  '%payment_discount_line%\n'
-  'Перейдите к оплате по кнопке ниже.',
-  '[{"id": "btn_intent_open", "label": "💳 Перейти к оплате", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_check", "label": "✅ Я оплатил", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 2, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_intent_cancel", '
-  '"label": "⬅️ Назад", "color": "secondary", "row": 3, "col": 0, "is_hidden": false, '
-  '"action_type": "system", "action_value": null}, {"id": "btn_back_main", "label": "🈴 На '
-  'главную", "color": "secondary", "row": 3, "col": 1, "is_hidden": false, "action_type": '
-  '"internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.25'),
+  _legacy('migrations.26')),
  ('custom_profile',
-  '👤 <b>Личный кабинет</b>\n'
-  '\n'
-  'Имя: <b>%user_name%</b>\n'
-  'Telegram ID: <code>%telegram_id%</code>\n'
-  'Username: %user_username%\n'
-  'Дата регистрации: %user_registered_at%\n'
-  'Баланс: <b>%user_balance%</b>\n'
-  '\n'
-  '━━━━━━━━━━━━━━━\n'
-  '🔑 <b>Ключи</b>\n'
-  'Всего: <b>%keys_total%</b>\n'
-  'Активных: <b>%keys_active%</b>\n'
-  'Истёкших: <b>%keys_expired%</b>',
-  '[{"id": "btn_profile_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": '
-  '0, "is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_profile_buy", "label": "💳 Купить ключ", "color": "secondary", "row": 0, "col": 1, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_buy"}, {"id": '
-  '"btn_profile_referral", "label": "🔗 Реферальная система", "color": "secondary", "row": 1, '
-  '"col": 0, "is_hidden": false, "action_type": "internal", "action_value": "cmd_referral"}, '
-  '{"id": "btn_profile_show_id", "label": "🆔 Мой ID", "color": "secondary", "row": 1, "col": 1, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_show_id"}, {"id": '
-  '"btn_profile_help", "label": "❓ Справка", "color": "secondary", "row": 2, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_help"}, {"id": '
-  '"btn_profile_back_main", "label": "🈴 На главную", "color": "secondary", "row": 3, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.27'),
+  _legacy('migrations.28')),
  ('demo_payment',
-  '🏦 <b>Демонстрационная оплата</b>\n'
-  '\n'
-  'Это демо-режим. Реального списания не происходит.\n'
-  '\n'
-  '🎫 Тариф: <b>%payment_tariff%</b>\n'
-  '📅 Срок: <b>%payment_term%</b>\n'
-  '💰 Сумма: <b>%payment_amount%</b>',
-  '[{"id": "btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.29'),
+  _legacy('migrations.30')),
  ('expired_keys_deleted',
-  '🗑️ <b>Неактивные ключи удалены</b>\n'
-  '\n'
-  'Срок действия этих VPN-ключей закончился не менее %retention_days% дней назад, поэтому мы '
-  'удалили их из бота:\n'
-  '\n'
-  '%deleted_keys%\n'
-  '\n'
-  'Если VPN снова понадобится, нажмите «Купить ключ» — новый доступ можно оформить в любое время.',
-  '[{"id": "btn_buy_key", "label": "💳 Купить ключ", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_buy"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.31'),
+  _legacy('migrations.32')),
  ('expiry_notification_actions',
   '',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.33')),
  ('help',
-  '🔐 Этот бот предоставляет доступ к VPN-сервису.\n'
-  '\n'
-  '<b>Как это работает:</b>\n'
-  '1. Купите ключ через раздел «Купить ключ»\n'
-  '\n'
-  '2. Установите VPN-клиент для вашего устройства:\n'
-  '\n'
-  'Hiddify или v2rayNG или V2Box\n'
-  'Подробная инструкция по настройке VPN👇 '
-  'https://telegra.ph/Kak-nastroit-VPN-Gajd-za-2-minuty-01-23\n'
-  '\n'
-  '3. Импортируйте ключ в приложение\n'
-  '\n'
-  '4. Подключайтесь и наслаждайтесь! 🚀\n'
-  '\n'
-  '---\n'
-  'Разработчик @plushkin_blog\n'
-  '---',
-  '[{"id": "btn_news", "label": "📢 Новости", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "url", "action_value": '
-  '"https://%telegram_link_domain%/plushkin_blog"}, {"id": "btn_support", "label": "💬 Поддержка", '
-  '"color": "secondary", "row": 0, "col": 1, "is_hidden": false, "action_type": "url", '
-  '"action_value": "https://%telegram_link_domain%/plushkin_chat"}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.34'),
+  _legacy('migrations.35')),
  ('key_delivery',
-  '✅ <b>Ваш VPN-ключ!</b>\n'
-  '\n'
-  '%ключ_для_копирования%\n'
-  '☝️ Нажмите, чтобы скопировать.\n'
-  '\n'
-  '📱 <b>Инструкция:</b>\n'
-  '1. Скопируйте ссылку или отсканируйте QR-код.\n'
-  '2. Импортируйте в свой клиент. Какой именно клиент подходит, смотри в инструкции по кнопке '
-  'ниже.\n'
-  '3. Нажмите подключиться!',
-  '[{"id": "btn_help", "label": "📄 Инструкция", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_help"}, {"id": '
-  '"btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 1, "is_hidden": '
-  'false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.36'),
+  _legacy('migrations.37')),
  ('key_delivery_failed',
-  '❌ <b>Ошибка выдачи ключа</b>\n\nПопробуйте позже или обратитесь в поддержку.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.38'),
+  _legacy('migrations.39')),
  ('key_delivery_partial',
-  '📋 <b>Ваш VPN-ключ</b>\n'
-  '\n'
-  '%ключ_для_копирования%\n'
-  '\n'
-  '⚠️ Полную конфигурацию получить не удалось. Попробуйте позже.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.40'),
+  _legacy('migrations.41')),
  ('key_details',
-  '🔑 <b>%key(field=name)%</b>\n'
-  '\n'
-  '<b>Статус:</b> %key(field=status)%\n'
-  '<b>Сервер:</b> %key(field=server)%\n'
-  '<b>Тариф:</b> %key(field=tariff)%\n'
-  '<b>Устройств:</b> %key(field=device_limit)%\n'
-  '<b>Трафик:</b> %key(field=traffic)%\n'
-  '<b>Действует до:</b> %key(field=expires_at)%\n'
-  '\n'
-  '📜 <b>История операций:</b>\n'
-  '%key_history%',
-  '[{"id": "btn_key_show_key", "label": "📋 Показать ключ", "color": "secondary", "row": 0, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_key_show_subscription", "label": "📋 Показать подписку", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_key_configure", "label": "⚙️ Настроить", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_key_renew", '
-  '"label": "📈 Продлить", "color": "secondary", "row": 0, "col": 1, "is_hidden": false, '
-  '"action_type": "system", "action_value": null}, {"id": "btn_key_replace", "label": "🔄 '
-  'Заменить", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, "action_type": '
-  '"system", "action_value": null}, {"id": "btn_key_delete", "label": "🗑 Удалить", "color": '
-  '"secondary", "row": 1, "col": 0, "is_hidden": false, "action_type": "system", "action_value": '
-  'null}, {"id": "btn_key_rename", "label": "✏️ Переименовать", "color": "secondary", "row": 1, '
-  '"col": 1, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 2, "col": 0, "is_hidden": '
-  'false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 2, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.42'),
+  _legacy('migrations.43')),
  ('key_not_found',
-  '❌ <b>Ключ не найден</b>\n\nКлюч удалён, устарел или принадлежит другому пользователю.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.44'),
+  _legacy('migrations.45')),
  ('key_operation_failed',
-  '❌ <b>Не удалось выполнить операцию</b>\n\nПопробуйте позже или обратитесь в поддержку.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.46'),
+  _legacy('migrations.47')),
  ('key_operation_unavailable',
-  '⚠️ <b>Действие с ключом недоступно</b>\n\nОткройте карточку ключа заново и повторите попытку.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.48'),
+  _legacy('migrations.49')),
  ('key_progress',
-  '⏳ <b>Выполняем операцию с ключом</b>\n\nПодождите немного.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.50'),
+  _legacy('migrations.51')),
  ('key_rename_invalid',
-  '⚠️ <b>Некорректное имя</b>\n\nВведите непустое имя длиной не более 30 символов.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.52'),
+  _legacy('migrations.53')),
  ('key_rename_prompt',
-  '✏️ <b>Переименование ключа</b>\n'
-  '\n'
-  'Текущее имя: <b>%key(field=name)%</b>\n'
-  '\n'
-  'Введите новое название для ключа (макс. 30 символов):\n'
-  '<i>(Отправьте любой текст)</i>',
-  '[{"id": "btn_key_flow_back", "label": "❌ Отмена", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}]'),
+  _legacy('migrations.54'),
+  _legacy('migrations.55')),
  ('key_renewed',
-  '✅ <b>Ключ продлён</b>\n'
-  '\n'
-  '🔑 <b>%key(field=name)%</b>\n'
-  'Новый срок: <b>%payment_term%</b>.\n'
-  '\n'
-  '%payment_coupon%',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.56'),
+  _legacy('migrations.57')),
  ('key_replace_confirm',
-  '⚠️ <b>Подтверждение замены</b>\n'
-  '\n'
-  'Ключ: <b>%key(field=name)%</b>\n'
-  'Новый сервер: <b>%selected_server%</b>\n'
-  '\n'
-  'Старый ключ или ссылка перестанет работать. Обновите настройки в приложении.\n'
-  '\n'
-  'Вы уверены?',
-  '[{"id": "btn_key_flow_confirm", "label": "✅ Да, заменить", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_key_flow_back", "label": "❌ Отмена", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}]'),
+  _legacy('migrations.58'),
+  _legacy('migrations.59')),
  ('key_replace_inbound_select',
-  '🖥️ <b>Выбор протокола</b>\n\nСервер: <b>%selected_server%</b>\n\nВыберите протокол:',
-  '[{"id": "btn_protocol_items", "label": "🔌 %item_name% (%item_protocol%)", "color": "secondary", '
-  '"row": 0, "col": 0, "is_hidden": false, "action_type": "system_collection", "action_value": '
-  'null}, {"id": "btn_key_flow_back", "label": "⬅️ Назад", "color": "secondary", "row": 1000, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}]'),
+  _legacy('migrations.60'),
+  _legacy('migrations.61')),
  ('key_replace_server_select',
-  '🔄 <b>Замена ключа</b>\n'
-  '\n'
-  'Вы можете пересоздать ключ на другом или том же сервере.\n'
-  'Старый ключ будет удалён, но срок действия сохранится.\n'
-  '\n'
-  'Выберите сервер:',
-  '[{"id": "btn_server_items", "label": "🌐 %item_name%", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system_collection", "action_value": null}, {"id": '
-  '"btn_key_flow_back", "label": "❌ Отмена", "color": "secondary", "row": 1000, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}]'),
+  _legacy('migrations.62'),
+  _legacy('migrations.63')),
  ('key_show_unconfigured',
-  '📋 <b>Показать ключ</b>\n\n⚠️ Ключ ещё не создан на сервере.\nОбратитесь в поддержку.',
-  '[{"id": "btn_help", "label": "📄 Инструкция", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_help"}, {"id": '
-  '"btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 1, "is_hidden": '
-  'false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.64'),
+  _legacy('migrations.65')),
  ('key_status',
-  '%ключ_статус_заголовок%\n\n%ключ_статус_текст%',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.66'),
+  _legacy('migrations.67')),
  ('lapsed_key_coupon',
-  '🎁 <b>Купон для вас</b>\n'
-  '\n'
-  'Мы заметили, что вы не продлили VPN-ключ, и хотим помочь вам вернуться.\n'
-  '\n'
-  'Ваш купон на скидку <b>%promo_discount%%</b>:\n'
-  '<pre>%promo_code%</pre>\n'
-  'Купон действует до <b>%promo_expires_at%</b>.\n'
-  '\n'
-  'Введите его в поле промокода при следующей покупке или продлении.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.68'),
+  _legacy('migrations.69')),
  ('main',
-  '🔐 <b>Добро пожаловать в VPN-бот!</b>\n'
-  '\n'
-  'Быстрый, безопасный и анонимный доступ к интернету.\n'
-  'Без логов, без ограничений, без проблем! 🚀\n'
-  '\n'
-  '📋 <b>Тарифы:</b>\n'
-  '%tariffs%',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_buy_key", "label": "💳 Купить ключ", "color": "secondary", "row": 0, "col": 1, "is_hidden": '
-  'false, "action_type": "internal", "action_value": "cmd_buy"}, {"id": "btn_trial", "label": "🎁 '
-  'Пробная подписка", "color": "secondary", "row": 1, "col": 0, "is_hidden": true, "action_type": '
-  '"internal", "action_value": "cmd_trial"}, {"id": "btn_referral", "label": "🔗 Реферальная '
-  'ссылка", "color": "secondary", "row": 2, "col": 0, "is_hidden": true, "action_type": '
-  '"internal", "action_value": "cmd_referral"}, {"id": "btn_help", "label": "❓ Справка", "color": '
-  '"secondary", "row": 2, "col": 1, "is_hidden": false, "action_type": "internal", "action_value": '
-  '"cmd_help"}, {"id": "btn_support", "label": "💬 Написать в поддержку", "color": "secondary", '
-  '"row": 3, "col": 0, "is_hidden": true, "action_type": "internal", "action_value": '
-  '"cmd_support"}]'),
+  _legacy('migrations.70'),
+  _legacy('migrations.71')),
  ('my_keys',
-  '🔑 <b>Мои ключи</b>\n\n%список_ключей%\n\nВыберите ключ для управления:',
-  '[{"id": "btn_key_items", "label": "%item_status_indicator% %item_name%", "color": "secondary", '
-  '"row": 0, "col": 0, "is_hidden": false, "action_type": "system_collection", "action_value": '
-  'null}, {"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1000, '
-  '"col": 0, "is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.72'),
+  _legacy('migrations.73')),
  ('my_keys_empty',
-  '🔑 <b>Мои ключи</b>\n'
-  '\n'
-  'У вас пока нет VPN-ключей.\n'
-  '\n'
-  'Нажмите «Купить ключ», чтобы приобрести доступ! 🚀',
-  '[{"id": "btn_buy_key", "label": "💳 Купить ключ", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_buy"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.74'),
+  _legacy('migrations.75')),
  ('my_keys_key_deleted',
-  '✅ <b>Ключ удалён</b>\n\nКлюч <b>%key(field=name)%</b> успешно удалён.',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.76'),
+  _legacy('migrations.77')),
  ('new_key_inbound_select',
-  '🖥️ <b>Выбор протокола</b>\n\nСервер: <b>%selected_server%</b>\n\nВыберите протокол:',
-  '[{"id": "btn_protocol_items", "label": "🔌 %item_name% (%item_protocol%)", "color": "secondary", '
-  '"row": 0, "col": 0, "is_hidden": false, "action_type": "system_collection", "action_value": '
-  'null}, {"id": "btn_key_flow_back", "label": "⬅️ Назад", "color": "secondary", "row": 1000, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}]'),
+  _legacy('migrations.78'),
+  _legacy('migrations.79')),
  ('new_key_no_servers',
-  '⚠️ <b>Нет доступных серверов</b>\n'
-  '\n'
-  'К сожалению, сейчас нет доступных серверов.\n'
-  'Пожалуйста, свяжитесь с поддержкой.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.80'),
+  _legacy('migrations.81')),
  ('new_key_server_select',
-  '🌐 <b>Выбор сервера</b>\n\n%экран_данные%',
-  '[{"id": "btn_server_items", "label": "🌐 %item_name%", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system_collection", "action_value": null}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1000, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.82'),
+  _legacy('migrations.83')),
  ('payment_auto_completed',
-  '✅ <b>Платёж подтверждён</b>\n\nОперация завершена автоматически.\n\n%payment_coupon%',
-  '[{"id": "btn_my_keys", "label": "🔑 Мои ключи", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_my_keys"}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.84'),
+  _legacy('migrations.85')),
  ('payment_canceled',
-  '⚪ <b>Платёж отменён</b>\n\nВыберите другой способ оплаты или вернитесь позже.',
-  '[{"id": "btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.86'),
+  _legacy('migrations.87')),
  ('payment_check_wait',
-  '⏳ <b>Проверка пока недоступна</b>\n\nПовторите через %payment_wait_seconds% сек.',
-  '[{"id": "btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
- ('payment_completed', '✅ <b>Оплата прошла успешно!</b>\n\n%payment_coupon%', '[]'),
+  _legacy('migrations.88'),
+  _legacy('migrations.89')),
+ ('payment_completed', _legacy('migrations.90'), '[]'),
  ('payment_coupon_message', '', '[]'),
  ('payment_creating',
-  '⏳ <b>Создаём платёж</b>\n\nПодождите немного.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.91'),
+  _legacy('migrations.92')),
  ('payment_failed',
-  '❌ <b>Не удалось обработать платёж</b>\n\nПопробуйте позже или выберите другой способ оплаты.',
-  '[{"id": "btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.93'),
+  _legacy('migrations.94')),
  ('payment_link_renewal',
-  '💳 <b>Оплата продления</b>\n'
-  '\n'
-  '🔑 <b>%key(field=name)%</b>\n'
-  '💰 Сумма: <b>%payment_amount%</b>\n'
-  '%payment_discount_line%\n'
-  'Перейдите к оплате по кнопке ниже.\n'
-  '\n'
-  '<i>Статус обновится автоматически; если доступна ручная проверка, используйте кнопку ниже.</i>',
-  '[{"id": "btn_intent_open", "label": "💳 Перейти к оплате", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_check", "label": "✅ Я оплатил", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 2, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_intent_cancel", '
-  '"label": "⬅️ Назад", "color": "secondary", "row": 3, "col": 0, "is_hidden": false, '
-  '"action_type": "system", "action_value": null}, {"id": "btn_back_main", "label": "🈴 На '
-  'главную", "color": "secondary", "row": 3, "col": 1, "is_hidden": false, "action_type": '
-  '"internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.95'),
+  _legacy('migrations.96')),
  ('payment_link_topup',
-  '💰 <b>Пополнение баланса</b>\n'
-  '\n'
-  'На баланс: <b>%payment_nominal%</b>\n'
-  'К оплате: <b>%payment_amount%</b>\n'
-  'Перейдите к оплате по кнопке ниже.\n'
-  '\n'
-  '<i>Статус обновится автоматически; если доступна ручная проверка, используйте кнопку ниже.</i>',
-  '[{"id": "btn_intent_open", "label": "💳 Перейти к оплате", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_check", "label": "✅ Я оплатил", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 2, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_intent_cancel", '
-  '"label": "⬅️ Назад", "color": "secondary", "row": 3, "col": 0, "is_hidden": false, '
-  '"action_type": "system", "action_value": null}, {"id": "btn_back_main", "label": "🈴 На '
-  'главную", "color": "secondary", "row": 3, "col": 1, "is_hidden": false, "action_type": '
-  '"internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.97'),
+  _legacy('migrations.98')),
  ('payment_method_select',
-  '💳 <b>Выбор способа оплаты</b>\n'
-  '\n'
-  '%payment_tariff%\n'
-  '💰 К оплате: <b>%payment_amount%</b>\n'
-  '%payment_discount_line%\n'
-  'Выберите способ оплаты:',
-  '[{"id": "btn_intent_provider_crypto", "label": "🪙 Оплатить USDT", "color": "secondary", "row": '
-  '0, "col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_stars", "label": "⭐ Оплатить звёздами", "color": "secondary", "row": 1, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_cards", "label": "💳 TG payments", "color": "secondary", "row": 2, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_yookassa_qr", "label": "📱 ЮКасса", "color": "secondary", "row": 3, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_wata", "label": "🌊 WATA", "color": "secondary", "row": 4, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_platega", "label": "💸 Platega", "color": "secondary", "row": 5, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_cardlink", "label": "🔗 Cardlink", "color": "secondary", "row": 6, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_demo", "label": "🏦 Демо оплата", "color": "secondary", "row": 7, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_balance", "label": "💎 Использовать баланс", "color": "secondary", "row": 8, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 9, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 9, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.99'),
+  _legacy('migrations.100')),
  ('payment_method_select_renewal',
-  '💳 <b>Продление ключа</b>\n'
-  '\n'
-  '🔑 <b>%key(field=name)%</b>\n'
-  '💰 К оплате: <b>%payment_amount%</b>\n'
-  '%payment_discount_line%\n'
-  'Выберите способ оплаты:',
-  '[{"id": "btn_intent_provider_crypto", "label": "🪙 Оплатить USDT", "color": "secondary", "row": '
-  '0, "col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_stars", "label": "⭐ Оплатить звёздами", "color": "secondary", "row": 1, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_cards", "label": "💳 TG payments", "color": "secondary", "row": 2, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_yookassa_qr", "label": "📱 ЮКасса", "color": "secondary", "row": 3, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_wata", "label": "🌊 WATA", "color": "secondary", "row": 4, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_platega", "label": "💸 Platega", "color": "secondary", "row": 5, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_cardlink", "label": "🔗 Cardlink", "color": "secondary", "row": 6, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_demo", "label": "🏦 Демо оплата", "color": "secondary", "row": 7, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_balance", "label": "💎 Использовать баланс", "color": "secondary", "row": 8, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 9, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 9, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.101'),
+  _legacy('migrations.102')),
  ('payment_method_select_surcharge',
-  '💎 <b>Доплата после списания баланса</b>\n'
-  '\n'
-  'С баланса: <b>%payment_balance_deduct%</b>\n'
-  'Осталось оплатить: <b>%payment_remaining%</b>\n'
-  'Выберите способ доплаты:',
-  '[{"id": "btn_intent_provider_crypto", "label": "🪙 Оплатить USDT", "color": "secondary", "row": '
-  '0, "col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_stars", "label": "⭐ Оплатить звёздами", "color": "secondary", "row": 1, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_cards", "label": "💳 TG payments", "color": "secondary", "row": 2, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_yookassa_qr", "label": "📱 ЮКасса", "color": "secondary", "row": 3, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_wata", "label": "🌊 WATA", "color": "secondary", "row": 4, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_platega", "label": "💸 Platega", "color": "secondary", "row": 5, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_cardlink", "label": "🔗 Cardlink", "color": "secondary", "row": 6, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_demo", "label": "🏦 Демо оплата", "color": "secondary", "row": 7, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_balance", "label": "💎 Использовать баланс", "color": "secondary", "row": 8, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 9, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 9, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.103'),
+  _legacy('migrations.104')),
  ('payment_method_select_topup',
-  '💰 <b>Пополнение баланса</b>\n'
-  '\n'
-  'На баланс: <b>%payment_nominal%</b>\n'
-  'К оплате: <b>%payment_amount%</b>\n'
-  'Выберите способ оплаты:',
-  '[{"id": "btn_intent_provider_crypto", "label": "🪙 Оплатить USDT", "color": "secondary", "row": '
-  '0, "col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_stars", "label": "⭐ Оплатить звёздами", "color": "secondary", "row": 1, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_cards", "label": "💳 TG payments", "color": "secondary", "row": 2, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_yookassa_qr", "label": "📱 ЮКасса", "color": "secondary", "row": 3, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_wata", "label": "🌊 WATA", "color": "secondary", "row": 4, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_platega", "label": "💸 Platega", "color": "secondary", "row": 5, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_cardlink", "label": "🔗 Cardlink", "color": "secondary", "row": 6, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_provider_demo", "label": "🏦 Демо оплата", "color": "secondary", "row": 7, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_balance", "label": "💎 Использовать баланс", "color": "secondary", "row": 8, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_promo", "label": "🎟 Ввести промокод", "color": "secondary", "row": 9, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_intent_cancel", '
-  '"label": "⬅️ Назад", "color": "secondary", "row": 10, "col": 0, "is_hidden": false, '
-  '"action_type": "system", "action_value": null}, {"id": "btn_back_main", "label": "🈴 На '
-  'главную", "color": "secondary", "row": 10, "col": 1, "is_hidden": false, "action_type": '
-  '"internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.105'),
+  _legacy('migrations.106')),
  ('payment_minimum_unavailable',
-  '⚠️ <b>Сумма слишком мала</b>\n'
-  '\n'
-  'Минимальная сумма для выбранного способа: <b>%payment_minimum%</b>.',
-  '[{"id": "btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.107'),
+  _legacy('migrations.108')),
  ('payment_order_unavailable',
-  '⚠️ <b>Платёж не найден</b>\n\nОткройте оплату заново — прежний счёт мог устареть.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.109'),
+  _legacy('migrations.110')),
  ('payment_pending',
-  '⏳ <b>Платёж ещё не поступил</b>\n\nЗавершите оплату и повторите проверку немного позже.',
-  '[{"id": "btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
- ('payment_status', '%платеж_провайдер%\n\n%платеж_инструкция%%платеж_подсказка%', '[]'),
+  _legacy('migrations.111'),
+  _legacy('migrations.112')),
+ ('payment_status', _legacy('migrations.113'), '[]'),
  ('payment_tariff_select',
-  '💳 <b>Выбор тарифа</b>\n\nВыберите подходящий тариф:',
-  '[{"id": "btn_tariff_items", "label": "💳 %item_name% — %item_price%", "color": "secondary", '
-  '"row": 0, "col": 0, "is_hidden": false, "action_type": "system_collection", "action_value": '
-  'null}, {"id": "btn_tariff_back", "label": "⬅️ Назад", "color": "secondary", "row": 1000, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1000, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.114'),
+  _legacy('migrations.115')),
  ('payment_unavailable',
-  '⚠️ <b>Оплата недоступна</b>\n\nВыберите другой способ оплаты или попробуйте позже.',
-  '[{"id": "btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_cancel", "label": "⬅️ Назад", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.116'),
+  _legacy('migrations.117')),
  ('prepayment',
-  '💳 <b>Купить ключ</b>\n'
-  '\n'
-  '🔐 <b>Что вы получаете:</b>\n'
-  '• Доступ к нескольким серверам и протоколам\n'
-  '• 1 ключ = 1 устройство (одновременное подключение)\n'
-  '• Лимит трафика: до 1 ТБ в месяц (сброс каждые 30 дней)\n'
-  '\n'
-  '⚠️ <b>Важно знать:</b>\n'
-  '• Средства не возвращаются — услуга считается оказанной в момент получения ключа\n'
-  '• Мы не даём никаких гарантий бесперебойной работы сервиса в будущем\n'
-  '• Мы не можем гарантировать, что данная технология останется рабочей\n'
-  '\n'
-  '<i>Приобретая ключ, вы соглашаетесь с этими условиями.</i>',
-  '[{"id": "btn_tariff_items", "label": "💳 %item_name% — %item_price%", "color": "secondary", '
-  '"row": 0, "col": 0, "is_hidden": false, "action_type": "system_collection", "action_value": '
-  'null}, {"id": "btn_enter_promo", "label": "🎟 Ввести промокод", "color": "secondary", "row": '
-  '999, "col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1000, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.118'),
+  _legacy('migrations.119')),
  ('prepayment_unavailable',
-  '💳 <b>Купить ключ</b>\n'
-  '\n'
-  '😔 К сожалению, сейчас оплата недоступна.\n'
-  '\n'
-  'Попробуйте позже или обратитесь в поддержку.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.120'),
+  _legacy('migrations.121')),
  ('promo_applied',
-  '✅ <b>Промокод применён</b>\n\nКод: <code>%promo_code%</code>\nСкидка: <b>%promo_discount%%</b>',
-  '[{"id": "btn_promo_return", "label": "💳 К оплате", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.122'),
+  _legacy('migrations.123')),
  ('promo_enter',
-  '🎟 <b>Промокод</b>\n'
-  '\n'
-  'Отправьте промокод или одноразовый купон одним сообщением.\n'
-  '\n'
-  'Ручной ввод заменит промокод, который мог быть сохранён по промо-ссылке.',
-  '[{"id": "btn_promo_return", "label": "⬅️ Назад", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.124'),
+  _legacy('migrations.125')),
  ('promo_exhausted',
-  '⚪ <b>Промокод уже использован</b>\n\nВернитесь к оплате и выберите другой вариант.',
-  '[{"id": "btn_promo_return", "label": "💳 К оплате", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.126'),
+  _legacy('migrations.127')),
  ('promo_expired',
-  '⌛ <b>Срок промокода истёк</b>\n\nВернитесь к оплате и выберите другой вариант.',
-  '[{"id": "btn_promo_return", "label": "💳 К оплате", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.128'),
+  _legacy('migrations.129')),
  ('promo_inactive',
-  '⚪ <b>Промокод неактивен</b>\n\nВернитесь к оплате и выберите другой вариант.',
-  '[{"id": "btn_promo_return", "label": "💳 К оплате", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.130'),
+  _legacy('migrations.131')),
  ('promo_invalid',
-  '⚠️ <b>Некорректный промокод</b>\n\nПроверьте введённое значение и попробуйте снова.',
-  '[{"id": "btn_promo_return", "label": "⬅️ Назад", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.132'),
+  _legacy('migrations.133')),
  ('promo_link_saved',
-  '🎟 <b>Промокод сохранён</b>\n\nКод <code>%promo_code%</code> будет применён при оплате.',
-  '[{"id": "btn_promo_return", "label": "💳 Перейти к оплате", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.134'),
+  _legacy('migrations.135')),
  ('promo_not_found',
-  '❌ <b>Промокод не найден</b>\n\nПроверьте код или вернитесь к оплате.',
-  '[{"id": "btn_promo_return", "label": "⬅️ Назад", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
- ('promo_status', '%промо_статус_заголовок%\n\n%промо_статус_текст%', '[]'),
+  _legacy('migrations.136'),
+  _legacy('migrations.137')),
+ ('promo_status', _legacy('migrations.138'), '[]'),
  ('promo_unavailable',
-  '⚠️ <b>Промокоды недоступны</b>\n\nВернитесь к оплате и выберите другой вариант.',
-  '[{"id": "btn_promo_return", "label": "💳 К оплате", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.139'),
+  _legacy('migrations.140')),
  ('qr_payment',
-  '💳 <b>Оплата</b>\n'
-  '\n'
-  '%payment_tariff%\n'
-  '💰 Сумма: <b>%payment_amount%</b>\n'
-  '%payment_discount_line%\n'
-  'Перейдите по ссылке или отсканируйте QR-код.\n'
-  '\n'
-  '<i>Статус обновится автоматически; если доступна ручная проверка, используйте кнопку ниже.</i>',
-  '[{"id": "btn_intent_open", "label": "💳 Перейти к оплате", "color": "secondary", "row": 0, '
-  '"col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_check", "label": "✅ Я оплатил", "color": "secondary", "row": 1, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": '
-  '"btn_intent_methods", "label": "🔄 Сменить способ", "color": "secondary", "row": 2, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_intent_cancel", '
-  '"label": "⬅️ Назад", "color": "secondary", "row": 3, "col": 0, "is_hidden": false, '
-  '"action_type": "system", "action_value": null}, {"id": "btn_back_main", "label": "🈴 На '
-  'главную", "color": "secondary", "row": 3, "col": 1, "is_hidden": false, "action_type": '
-  '"internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.141'),
+  _legacy('migrations.142')),
  ('referral',
-  '👥 <b>Реферальная система</b>\n'
-  '\n'
-  '📎 Ваша реферальная ссылка:\n'
-  '<code>%referral_link%</code>\n'
-  '\n'
-  '━━━━━━━━━━━━━━━\n'
-  '📝 <b>Условия:</b>\n'
-  'Приглашённые пользователи регистрируются по вашей ссылке. Когда они оплачивают подписку, вы '
-  'получаете реферальное вознаграждение.\n'
-  '\n'
-  '━━━━━━━━━━━━━━━\n'
-  '📊 <b>Ваша статистика:</b>\n'
-  '\n'
-  '%referral_stats%',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.143'),
+  _legacy('migrations.144')),
  ('renew_payment',
-  '💳 <b>Продление ключа</b>\n\n🔑 <b>%key(field=name)%</b>\nВыберите тариф:',
-  '[{"id": "btn_tariff_items", "label": "💳 %item_name% — %item_price%", "color": "secondary", '
-  '"row": 0, "col": 0, "is_hidden": false, "action_type": "system_collection", "action_value": '
-  'null}, {"id": "btn_renew_enter_promo", "label": "🎟 Ввести промокод", "color": "secondary", '
-  '"row": 999, "col": 0, "is_hidden": false, "action_type": "system", "action_value": null}, '
-  '{"id": "btn_tariff_back", "label": "⬅️ Назад", "color": "secondary", "row": 1000, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1000, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.145'),
+  _legacy('migrations.146')),
  ('renew_payment_unavailable',
-  '💳 <b>Продление ключа</b>\n\n😔 Способы оплаты временно недоступны.\nПопробуйте позже.',
-  '[{"id": "btn_renew_back", "label": "⬅️ Назад", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 0, "col": 1, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.147'),
+  _legacy('migrations.148')),
  ('screen_unavailable',
-  '⚠️ <b>Экран недоступен</b>\n\nВернитесь на главную и попробуйте ещё раз.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.149'),
+  _legacy('migrations.150')),
  ('show_id',
-  '🆔 <b>Ваш Telegram ID</b>\n\n<code>%telegram_id%</code>',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.151'),
+  _legacy('migrations.152')),
  ('support_failed',
-  '⚠️ <b>Сообщение не отправлено</b>\n\nПопробуйте позже.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.153'),
+  _legacy('migrations.154')),
  ('support_format_unsupported',
-  '❌ <b>Формат не поддерживается</b>\n\nОтправьте текст, фото, видео или GIF.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.155'),
+  _legacy('migrations.156')),
  ('support_reply',
   '',
-  '[{"id": "btn_support_reply", "label": "💬 Ответить", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.157')),
  ('support_reply_start',
-  '💬 <b>Ответ в поддержку</b>\n\nОтправьте текст, фото, видео или GIF одним сообщением.',
-  '[{"id": "btn_back_main", "label": "❌ Отмена", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.158'),
+  _legacy('migrations.159')),
  ('support_sent',
-  '✅ <b>Сообщение отправлено</b>\n\nОтвет придёт сюда, в бот.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.160'),
+  _legacy('migrations.161')),
  ('support_start',
-  '💬 <b>Поддержка</b>\n\nОтправьте текст, фото, видео или GIF одним сообщением.',
-  '[{"id": "btn_back_main", "label": "❌ Отмена", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.162'),
+  _legacy('migrations.163')),
  ('support_status',
-  '%поддержка_статус_заголовок%\n\n%поддержка_статус_текст%',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.164'),
+  _legacy('migrations.165')),
  ('support_thread_unavailable',
-  '❌ <b>Диалог не найден</b>\n\nНачните новое обращение в поддержку.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.166'),
+  _legacy('migrations.167')),
  ('trial',
-  '🎁 <b>Пробная подписка</b>\n'
-  '\n'
-  'Попробуйте VPN бесплатно и оцените качество соединения.\n'
-  '\n'
-  '%trial_offer%\n'
-  '\n'
-  'Нажмите кнопку ниже, чтобы активировать пробный доступ.\n'
-  '\n'
-  '%trial_eligibility%',
-  '[{"id": "btn_activate_trial", "label": "✅ Активировать", "color": "primary", "row": 0, "col": '
-  '0, "is_hidden": false, "action_type": "system", "action_value": null}, {"id": "btn_back_main", '
-  '"label": "🈴 На главную", "color": "secondary", "row": 1, "col": 0, "is_hidden": false, '
-  '"action_type": "internal", "action_value": "cmd_back_main"}]'),
+  _legacy('migrations.168'),
+  _legacy('migrations.169')),
  ('trial_already_used',
-  '🎁 <b>Пробный период недоступен</b>\n'
-  '\n'
-  'Это пробное предложение уже недоступно для вашего аккаунта.',
-  '[{"id": "btn_back_main", "label": "🈴 На главную", "color": "secondary", "row": 0, "col": 0, '
-  '"is_hidden": false, "action_type": "internal", "action_value": "cmd_back_main"}]'))
+  _legacy('migrations.170'),
+  _legacy('migrations.171')))
 
 
 _BASELINE_PAGE_UPDATED_KEYS_V97 = (
@@ -2727,7 +2122,7 @@ def migration_101(conn: sqlite3.Connection) -> None:
         },
         {
             'id': 'btn_subscription_host_skip',
-            'label': '⏭ Продолжить отдельно',
+            'label': _legacy('migrations.172'),
             'color': 'secondary',
             'row': 1000,
             'col': 0,
@@ -2744,10 +2139,7 @@ def migration_101(conn: sqlite3.Connection) -> None:
         """,
         (
             'key_subscription_host_select',
-            '🔗 <b>Основная подписка</b>\n\n'
-            'Выберите ключ, в подписку которого нужно добавить серверы '
-            'этого ключа.\n\nЭтот ключ также останется доступен отдельно. '
-            'Если вариантов больше 50, в списке показываются первые 50.',
+            _legacy('migrations.173'),
             json.dumps(host_select_buttons, ensure_ascii=False),
         ),
     )
@@ -3424,7 +2816,7 @@ def _add_key_devices_button_v108(conn: sqlite3.Connection) -> None:
             button['row'] = row_value + 1
     buttons.append({
         'id': 'btn_key_devices',
-        'label': '📱 Мои устройства',
+        'label': _legacy('migrations.174'),
         'color': 'secondary',
         'row': 2,
         'col': 0,
@@ -3477,7 +2869,7 @@ def migration_108(conn: sqlite3.Connection) -> None:
         },
         {
             'id': 'btn_key_devices_back',
-            'label': '⬅️ Назад',
+            'label': _legacy('migrations.183'),
             'color': 'secondary',
             'row': 100,
             'col': 0,
@@ -3487,7 +2879,7 @@ def migration_108(conn: sqlite3.Connection) -> None:
         },
         {
             'id': 'btn_back_main',
-            'label': '🈴 На главную',
+            'label': _legacy('migrations.184'),
             'color': 'secondary',
             'row': 100,
             'col': 1,
@@ -3509,7 +2901,7 @@ def migration_108(conn: sqlite3.Connection) -> None:
         """,
         (
             'key_devices',
-            '📱 <b>Мои устройства</b>\n\n%devices_list%',
+            _legacy('migrations.175'),
             device_buttons,
             PAGE_KIND_CORE,
         ),
@@ -3541,7 +2933,7 @@ def migration_109(conn: sqlite3.Connection) -> None:
     buttons_default = json.dumps([
         {
             'id': 'btn_my_keys',
-            'label': '🔑 Мои ключи',
+            'label': _legacy('migrations.185'),
             'color': 'secondary',
             'row': 0,
             'col': 0,
@@ -3551,7 +2943,7 @@ def migration_109(conn: sqlite3.Connection) -> None:
         },
         {
             'id': 'btn_back_main',
-            'label': '🈴 На главную',
+            'label': _legacy('migrations.186'),
             'color': 'secondary',
             'row': 1,
             'col': 0,
@@ -3573,8 +2965,7 @@ def migration_109(conn: sqlite3.Connection) -> None:
         """,
         (
             'key_replace_server_unavailable',
-            '⚠️ <b>На сервере нет доступных подключений</b>\n\n'
-            'Вернитесь к карточке ключа и выберите для замены другой сервер.',
+            _legacy('migrations.176'),
             buttons_default,
             PAGE_KIND_CORE,
         ),
@@ -3757,12 +3148,7 @@ def migration_113(conn: sqlite3.Connection) -> None:
 
     conn.execute('''UPDATE pages SET text_default = ?, updated_at = CURRENT_TIMESTAMP
         WHERE page_key = 'expired_keys_deleted' AND page_kind = 'core' ''', (
-        '🗑️ <b>Неактивные ключи удалены</b>\n\n'
-        'Эти VPN-ключи неактивны не менее %retention_days% дней: у них закончился '
-        'срок действия или трафик, поэтому мы удалили их из бота:\n\n'
-        '%deleted_keys%\n\n'
-        'Если VPN снова понадобится, нажмите «Купить ключ» — новый доступ можно '
-        'оформить в любое время.',
+        _legacy('migrations.177'),
     ))
 
 
@@ -4002,18 +3388,15 @@ def migration_122(conn: sqlite3.Connection) -> None:
         "UPDATE pages SET text_default = ? WHERE page_key = ? AND page_kind = 'core'",
         (
             (
-                "💬 <b>Поддержка</b>\n\n"
-                "Отправьте текст или файл любого формата.",
+                _legacy('migrations.187'),
                 "support_format_unsupported",
             ),
             (
-                "💬 <b>Ответ в поддержку</b>\n\n"
-                "Отправьте текст или файл любого формата одним сообщением.",
+                _legacy('migrations.188'),
                 "support_reply_start",
             ),
             (
-                "💬 <b>Поддержка</b>\n\n"
-                "Отправьте текст или файл любого формата одним сообщением.",
+                _legacy('migrations.189'),
                 "support_start",
             ),
         ),
@@ -4064,16 +3447,10 @@ def migration_124(conn: sqlite3.Connection) -> None:
         """,
         (
             page_key,
-            '💬 <b>%support_ticket(field=title)%</b>\n\n'
-            '👤 Пользователь: %support_ticket(field=user_name)%\n'
-            '%support_ticket(field=identity_label)%: '
-            '<code>%support_ticket(field=identity_id)%</code>\n'
-            '🧵 Диалог: <code>%support_ticket(field=id)%</code>\n'
-            '%support_ticket(field=assignment)%\n\n'
-            'Выше сообщение пользователя.',
+            _legacy('migrations.178'),
             json.dumps([{
                 'id': 'btn_admin_support_reply',
-                'label': '💬 Ответить',
+                'label': _legacy('migrations.190'),
                 'color': 'secondary',
                 'row': 0,
                 'col': 0,
@@ -4145,13 +3522,13 @@ def migration_128(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE payments ADD COLUMN cancellation_source TEXT "
                      "CHECK (cancellation_source IN ('provider', 'local'))")
     buttons = [
-        {'id': 'btn_intent_check', 'label': '✅ Я оплатил', 'row': 0, 'col': 0,
+        {'id': 'btn_intent_check', 'label': _legacy('migrations.179'), 'row': 0, 'col': 0,
          'action_type': 'system', 'action_value': None},
-        {'id': 'btn_intent_methods', 'label': '🔄 Сменить способ', 'row': 1, 'col': 0,
+        {'id': 'btn_intent_methods', 'label': _legacy('migrations.180'), 'row': 1, 'col': 0,
          'action_type': 'system', 'action_value': None},
-        {'id': 'btn_intent_cancel', 'label': '⬅️ Назад', 'row': 2, 'col': 0,
+        {'id': 'btn_intent_cancel', 'label': _legacy('migrations.181'), 'row': 2, 'col': 0,
          'action_type': 'system', 'action_value': None},
-        {'id': 'btn_back_main', 'label': '🈴 На главную', 'row': 3, 'col': 0,
+        {'id': 'btn_back_main', 'label': _legacy('migrations.182'), 'row': 3, 'col': 0,
          'action_type': 'internal', 'action_value': 'cmd_back_main'},
     ]
     for button in buttons:
@@ -4232,6 +3609,64 @@ def migration_132(conn: sqlite3.Connection) -> None:
         conn.execute('UPDATE users SET account_name=? WHERE id=?', (name, user_id))
 
 
+def migration_133(conn: sqlite3.Connection) -> None:
+    """Fix one installation language, preserving every existing installation's copy."""
+    from .localized_defaults import initialize_presentation
+    row = conn.execute("SELECT value FROM settings WHERE key='installation_language'").fetchone()
+    if row is None:
+        conn.execute("INSERT INTO settings(key,value) VALUES ('installation_language','ru')")
+    else:
+        # Only the new-database branch below writes this key before v133. Keeping it
+        # with the baseline also makes a partially committed first startup resumable.
+        initialize_presentation(conn, row[0])
+    from dataclasses import replace
+    from localization import seed_text
+    from .user_ui_text_catalog import LOCALIZED_USER_UI_TEXT_DEFINITIONS
+    code = row[0] if row else 'ru'
+    update_user_ui_text_defaults(
+        (replace(item, text_default=seed_text('ui.' + item.text_key, code))
+         for item in LOCALIZED_USER_UI_TEXT_DEFINITIONS), conn=conn)
+
+
+def migration_134(conn: sqlite3.Connection) -> None:
+    """Seed hosted providers and admin visibility without replacing installation customizations."""
+    from core.payment_provider_specs import INTERNATIONAL_PROVIDERS, payment_setting_defaults
+    from .db_language import get_installation_language
+    from localization import seed_text
+    language = get_installation_language(conn=conn)
+    conn.executemany('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)',
+                     payment_setting_defaults(language).items())
+    for page_key in _CRYPTOBOT_METHOD_PAGE_KEYS_V99:
+        row = conn.execute('SELECT buttons_default FROM pages WHERE page_key=?', (page_key,)).fetchone()
+        if row is None:
+            continue
+        try:
+            buttons = json.loads(row[0] or '[]')
+        except (TypeError, ValueError):
+            # Preserve an unusual legacy page for the ordinary page editor to repair.
+            continue
+        if not isinstance(buttons, list):
+            continue
+        ids = {item['id'] for item in buttons if isinstance(item, dict) and isinstance(item.get('id'), str)}
+        missing = [pid for pid in INTERNATIONAL_PROVIDERS if 'btn_intent_provider_' + pid not in ids]
+        if not missing:
+            continue
+        provider_rows = [item['row'] for item in buttons if isinstance(item, dict)
+                         and str(item.get('id', '')).startswith('btn_intent_provider_')
+                         and type(item.get('row')) is int]
+        insertion = max(provider_rows, default=-1) + 1
+        for item in buttons:
+            if isinstance(item, dict) and type(item.get('row')) is int and item['row'] >= insertion:
+                item['row'] += (len(missing) + 1) // 2
+        for index, pid in enumerate(missing):
+            button_id = 'btn_intent_provider_' + pid
+            buttons.append({'id': button_id, 'label': seed_text(f'page.{page_key}.button.{button_id}', language),
+                            'color': 'secondary', 'row': insertion + index // 2, 'col': index % 2,
+                            'is_hidden': False, 'action_type': 'system', 'action_value': None})
+        conn.execute('UPDATE pages SET buttons_default=?,updated_at=CURRENT_TIMESTAMP WHERE page_key=?',
+                     (json.dumps(buttons, ensure_ascii=False, separators=(',', ':')), page_key))
+
+
 MIGRATIONS = {
     98: migration_98,
     99: migration_99,
@@ -4267,6 +3702,8 @@ MIGRATIONS = {
     130: migration_130,
     131: migration_131,
     132: migration_132,
+    133: migration_133,
+    134: migration_134,
 }
 
 
@@ -4323,8 +3760,15 @@ def run_migrations() -> None:
         with get_db() as conn:
             # New installation - creating a database from scratch
             if current == 0:
+                from .db_language import initial_language
+                selected_language = initial_language()
                 migration_initial(conn)
+                conn.execute("INSERT INTO settings(key,value) VALUES ('installation_language',?)",
+                             (selected_language,))
                 set_version(conn, INITIAL_VERSION)
+                # Persist the chosen language with the complete baseline, before
+                # any historical migration can fail or commit an intermediate state.
+                conn.commit()
                 current = INITIAL_VERSION
             
             # Incremental migrations after the compressed baseline.
@@ -4350,6 +3794,8 @@ def run_migrations() -> None:
                 )
         
         logger.info(f"✅ Миграция успешная: БД обновлена до версии {LATEST_VERSION}")
+        from .db_language import refresh_installation_language
+        refresh_installation_language()
         
     except Exception as e:
         logger.error(f"❌ Неуспешная миграция: {e}")

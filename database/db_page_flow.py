@@ -1,6 +1,8 @@
 """Common DB helpers for page hooks/guards names."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 
 
@@ -19,7 +21,7 @@ def normalize_registry_names(value: list[str] | tuple[str, ...] | str | None) ->
     clean = []
     for name in names:
         if not isinstance(name, str):
-            raise ValueError('registry name должен быть строкой')
+            raise ValueError(_tr('page_flow.normalize_registered_name.1'))
         normalized = name.strip()
         if normalized:
             clean.append(normalized)

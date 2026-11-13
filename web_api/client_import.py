@@ -1,5 +1,8 @@
 """Permanent app-handoff page, independent of the cabinet's UI publication."""
 from pathlib import Path
+import html
+import json
+import re
 
 from aiohttp import web
 
@@ -17,7 +20,18 @@ _ASSETS = {
 
 async def page(request):
     filename, content_type = _ASSETS[request.path]
-    return web.Response(body=(Path(__file__).with_name('client_import_assets') / filename).read_bytes(),
+    content = (Path(__file__).with_name('client_import_assets') / filename).read_bytes()
+    if filename == 'index.html':
+        from localization import catalog, language, LANGUAGES
+        code = language()
+        messages = {key.removeprefix('client_import.'): value for key, value in catalog('admin', code).items()
+                    if key.startswith('client_import.')}
+        template = content.decode('utf-8')
+        template = re.sub(r'__TEXT_([a-z_]+)__', lambda match: html.escape(messages[match[1]]), template)
+        data = json.dumps(messages, ensure_ascii=False).replace('<', '\\u003c').replace('&', '\\u0026')
+        content = (template.replace('__MESSAGES__', data)
+                   .replace('lang="ru"', 'lang="' + code + '" dir="' + LANGUAGES[code]['direction'] + '"')).encode('utf-8')
+    return web.Response(body=content,
         content_type=content_type, charset='utf-8', headers={
             'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
             'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex, nofollow',

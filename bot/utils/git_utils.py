@@ -3,6 +3,8 @@ Utilities for working with Git.
 
 Functions for checking for updates, performing git pull, and restarting the bot.
 """
+
+from localization import text as _tr
 import subprocess
 import logging
 import sys
@@ -21,8 +23,7 @@ def _repository_update_blocked_message() -> Optional[str]:
     if not is_repository_guard_active():
         return None
     return (
-        "❌ Обновление временно недоступно: Yadreno Admin проверяет изменения "
-        "защищённого tool call. Повторите обновление после его завершения."
+        _tr('git_utils.repository_update_blocked_message.1')
     )
 
 
@@ -36,7 +37,7 @@ def _ordered_update_blocked_message(update_mode: str) -> Optional[str]:
         )
     except Exception as exc:
         logger.exception("Cannot load the ordered update gate")
-        return f"❌ Не удалось проверить блокировку обновлений: {exc}"
+        return _tr('git_utils.ordered_update_blocked_message.1', p0=f'{exc}')
 
     if update_mode not in ORDERED_UPDATE_MODES:
         return None
@@ -47,7 +48,7 @@ def _ordered_update_blocked_message(update_mode: str) -> Optional[str]:
         return str(exc)
     except Exception as exc:
         logger.exception("Cannot evaluate the ordered update gate")
-        return f"❌ Не удалось проверить блокировку обновлений: {exc}"
+        return _tr('git_utils.ordered_update_blocked_message.1', p0=f'{exc}')
     return None
 
 
@@ -89,12 +90,12 @@ def run_git_command(args: List[str], timeout: int = 30) -> Tuple[bool, str]:
         success = result.returncode == 0
         return success, output.strip()
     except subprocess.TimeoutExpired:
-        return False, "⏱ Превышено время ожидания команды"
+        return False, _tr('git_utils.run_git_command.1')
     except FileNotFoundError:
-        return False, "❌ Git не установлен или не найден в PATH"
+        return False, _tr('git_utils.run_git_command.2')
     except Exception as e:
         logger.error(f"Ошибка выполнения git: {e}")
-        return False, f"❌ Ошибка: {e}"
+        return False, _tr('system.do_clear_logs.2', p0=f'{e}')
 
 
 def check_git_available() -> bool:
@@ -139,8 +140,7 @@ def _prepare_update_snapshot(
     except Exception as exc:
         logger.exception("Cannot create pre-update database snapshot")
         return None, (
-            "❌ Не удалось создать и проверить резервную копию базы данных "
-            f"перед обновлением. Обновление отменено.\n{exc}"
+            _tr('git_utils.prepare_update_snapshot.1', p0=f'{exc}')
         )
 
 
@@ -161,8 +161,7 @@ def _finalize_update_snapshot(snapshot, *, git_succeeded: bool) -> Optional[str]
             getattr(snapshot, "snapshot_id", "unknown"),
         )
         return (
-            "❌ Код изменён, но точку отката не удалось зафиксировать. "
-            f"Автоматический перезапуск отменён.\n{exc}"
+            _tr('git_utils.finalize_update_snapshot.1', p0=f'{exc}')
         )
 
 
@@ -199,8 +198,7 @@ def _run_snapshotted_git_mutation(
                 except Exception as exc:
                     logger.exception("Cannot activate the blocking update flag")
                     block_error = (
-                        "❌ Блокирующая версия установлена, но её защитный "
-                        f"флаг не удалось сохранить: {exc}"
+                        _tr('git_utils.run_snapshotted_git_mutation.1', p0=f'{exc}')
                     )
             finalize_error = _finalize_update_snapshot(
                 snapshot,
@@ -209,7 +207,7 @@ def _run_snapshotted_git_mutation(
             return success, output, block_error or finalize_error
     except Exception as exc:
         logger.exception("Cannot run protected Git update mutation")
-        return False, "", f"❌ Обновление не выполнено: {exc}"
+        return False, "", _tr('git_utils.run_snapshotted_git_mutation.2', p0=f'{exc}')
 
 
 def get_current_branch() -> Optional[str]:
@@ -363,7 +361,7 @@ def pull_to_commit(
             ['rev-parse', '--verify', f'{commit_hash}^{{commit}}']
         )
         if not success:
-            return False, f"❌ Коммит обновления недоступен:\n{output}"
+            return False, _tr('git_utils.pull_to_commit.1', p0=f'{output}')
 
         success, output, snapshot_error = _run_snapshotted_git_mutation(
             ['reset', '--hard', commit_hash],
@@ -373,17 +371,17 @@ def pull_to_commit(
             timeout=120,
         )
         if snapshot_error:
-            return False, snapshot_error or "❌ Не удалось создать backup перед обновлением."
+            return False, snapshot_error or _tr('git_utils.pull_to_commit.2')
         if not success:
             logger.error(f"Ошибка pull_to_commit({commit_hash}): {output}")
-            return False, f"❌ Ошибка обновления до коммита {commit_hash[:8]}:\n{output}"
+            return False, _tr('git_utils.pull_to_commit.3', p0=f'{commit_hash[:8]}', p1=f'{output}')
         
         commit_info = get_last_commit_info('HEAD')
         logger.info(f"✅ Успешно обновлено до блокирующего коммита {commit_hash[:8]}")
-        return True, f"✅ Обновление успешно!\n\n🔹 Текущая версия:\n<pre>{commit_info}</pre>"
+        return True, _tr('git_utils.pull_to_commit.4', p0=f'{commit_info}')
     except Exception as e:
         logger.error(f"Исключение в pull_to_commit({commit_hash}): {e}", exc_info=True)
-        return False, f"❌ Критическая ошибка: {e}"
+        return False, _tr('git_utils.pull_to_commit.5', p0=f'{e}')
 
 
 def check_for_updates() -> Tuple[bool, int, str, bool, Optional[Dict[str, str]], bool]:
@@ -402,12 +400,12 @@ def check_for_updates() -> Tuple[bool, int, str, bool, Optional[Dict[str, str]],
     # We get a list of pending commits (does fetch inside)
     success, pending_commits = get_pending_commits_list()
     if not success:
-        return False, 0, "Ошибка получения списка коммитов", False, None, False
+        return False, 0, _tr('git_utils.check_for_updates.1'), False, None, False
     
     commits_behind = len(pending_commits)
     
     if commits_behind == 0:
-        return True, 0, "✅ Бот уже обновлён до последней версии", False, None, False
+        return True, 0, _tr('git_utils.check_for_updates.2'), False, None, False
     
     # Looking for a blocking commit
     blocking_commit = find_first_blocking_commit(pending_commits)
@@ -427,9 +425,9 @@ def check_for_updates() -> Tuple[bool, int, str, bool, Optional[Dict[str, str]],
         'log', '--format=%h %B', f'HEAD..origin/{branch}', '-n', '10'
     ])
     
-    log_text = f"📦 Доступно обновлений: {commits_behind}\n\n"
+    log_text = _tr('git_utils.check_for_updates.3', p0=f'{commits_behind}')
     if success_log and log_output:
-        log_text += "Последние изменения:\n<pre>" + log_output + "</pre>"
+        log_text += _tr('git_utils.check_for_updates.4') + log_output + "</pre>"
     
     return True, commits_behind, log_text, has_blocking, blocking_commit, is_beta_only
 
@@ -453,7 +451,7 @@ def pull_updates(
         ['status', '--porcelain', '--untracked-files=no']
     )
     if success and status.strip():
-        return False, "❌ Есть локальные изменения. Сделайте commit или stash перед обновлением."
+        return False, _tr('git_utils.pull_updates.1')
 
     branch = get_current_branch() or "main"
     success, output, snapshot_error = _run_snapshotted_git_mutation(
@@ -464,15 +462,15 @@ def pull_updates(
         timeout=120,
     )
     if snapshot_error:
-        return False, snapshot_error or "❌ Не удалось создать backup перед обновлением."
+        return False, snapshot_error or _tr('git_utils.pull_to_commit.2')
     
     if not success:
         if 'conflict' in output.lower():
-            return False, "❌ Конфликт слияния. Требуется ручное разрешение."
-        return False, f"❌ Ошибка обновления:\n{output}"
+            return False, _tr('git_utils.pull_updates.2')
+        return False, _tr('git_utils.pull_updates.3', p0=f'{output}')
     
     commit_info = get_last_commit_info('HEAD')
-    return True, f"✅ Обновление успешно!\n\n🔹 Последний коммит:\n<pre>{commit_info}</pre>"
+    return True, _tr('git_utils.pull_updates.4', p0=f'{commit_info}')
 
 
 def force_pull_updates(
@@ -503,8 +501,7 @@ def force_pull_updates(
         success, pending_commits, target_commit = get_pending_update_plan()
         if not success:
             return False, (
-                "❌ Не удалось проверить порядок обновлений. "
-                "Принудительная перезапись отменена."
+                _tr('git_utils.force_pull_updates.1')
             )
         blocking_commit = find_first_blocking_commit(pending_commits)
         if blocking_commit:
@@ -518,16 +515,16 @@ def force_pull_updates(
     if target_commit is None and update_mode != "admin_force":
         success, output = run_git_command(['fetch', 'origin'], timeout=120)
         if not success:
-            return False, f"❌ Ошибка fetch:\n{output}"
+            return False, _tr('git_utils.force_pull_updates.2', p0=f'{output}')
         branch = get_current_branch() or "main"
         success, target_commit = run_git_command(
             ['rev-parse', '--verify', f'origin/{branch}^{{commit}}']
         )
         if not success:
-            return False, f"❌ Целевой коммит обновления недоступен:\n{target_commit}"
+            return False, _tr('git_utils.force_pull_updates.3', p0=f'{target_commit}')
 
     if not target_commit:
-        return False, "❌ Целевой коммит обновления недоступен."
+        return False, _tr('git_utils.force_pull_updates.4')
     target_commit = target_commit.strip()
 
     success, output, snapshot_error = _run_snapshotted_git_mutation(
@@ -538,12 +535,12 @@ def force_pull_updates(
         timeout=120,
     )
     if snapshot_error:
-        return False, snapshot_error or "❌ Не удалось создать backup перед обновлением."
+        return False, snapshot_error or _tr('git_utils.pull_to_commit.2')
     if not success:
-        return False, f"❌ Ошибка принудительного обновления:\n{output}"
+        return False, _tr('git_utils.force_pull_updates.5', p0=f'{output}')
         
     commit_info = get_last_commit_info('HEAD')
-    return True, f"✅ Принудительное обновление успешно завершено!\nВсе файлы перезаписаны из репозитория.\n\n🔹 Актуальный коммит:\n<pre>{commit_info}</pre>"
+    return True, _tr('git_utils.force_pull_updates.6', p0=f'{commit_info}')
 
 
 def get_last_commit_info(revision: str = 'HEAD') -> str:
@@ -553,7 +550,7 @@ def get_last_commit_info(revision: str = 'HEAD') -> str:
     ])
     if success and output:
         return output
-    return "Не удалось получить информацию о последнем коммите"
+    return _tr('git_utils.get_last_commit_info.1')
 
 
 def get_previous_commits_info(limit: int = 5, revision: str = 'HEAD') -> str:
@@ -563,7 +560,7 @@ def get_previous_commits_info(limit: int = 5, revision: str = 'HEAD') -> str:
     ])
     if success and output:
         return output
-    return "Нет предыдущих коммитов"
+    return _tr('git_utils.get_previous_commits_info.1')
 
 
 def install_requirements() -> Tuple[bool, str]:
@@ -581,7 +578,7 @@ def install_requirements() -> Tuple[bool, str]:
 
     if not os.path.exists(requirements_path):
         logger.warning("requirements.txt не найден, пропускаем установку зависимостей")
-        return True, "requirements.txt не найден"
+        return True, _tr('git_utils.install_requirements.1')
 
     try:
         result = subprocess.run(
@@ -596,17 +593,17 @@ def install_requirements() -> Tuple[bool, str]:
         if result.returncode != 0:
             error_output = result.stderr.strip() or result.stdout.strip()
             logger.error(f"Ошибка установки зависимостей: {error_output}")
-            return False, f"❌ Ошибка установки зависимостей:\n{error_output}"
+            return False, _tr('git_utils.install_requirements.2', p0=f'{error_output}')
 
         logger.info("✅ Зависимости успешно обновлены")
-        return True, "✅ Зависимости обновлены"
+        return True, _tr('git_utils.install_requirements.3')
 
     except subprocess.TimeoutExpired:
         logger.error("Таймаут установки зависимостей (300 сек)")
-        return False, "❌ Превышено время ожидания установки зависимостей"
+        return False, _tr('git_utils.install_requirements.4')
     except Exception as e:
         logger.error(f"Исключение при установке зависимостей: {e}")
-        return False, f"❌ Ошибка: {e}"
+        return False, _tr('system.do_clear_logs.2', p0=f'{e}')
 
 
 def restart_bot() -> None:

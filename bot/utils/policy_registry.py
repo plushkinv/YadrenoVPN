@@ -1,6 +1,9 @@
 """Domain policy points for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+from bot.utils.user_ui_texts import get_ui_text as _ui_text
+
 import inspect
 import logging
 import re
@@ -98,7 +101,7 @@ def apply_pricing_policies(
             if inspect.isawaitable(raw_decision):
                 if inspect.iscoroutine(raw_decision):
                     raw_decision.close()
-                raise ValueError('pricing policy должна быть синхронной')
+                raise ValueError(_tr('policy_registry.apply_pricing_policies.1'))
             decision = _normalize_pricing_decision(raw_decision)
         except Exception as e:
             logger.warning("Pricing policy '%s' пропущена из-за ошибки: %s", name, e)
@@ -115,7 +118,7 @@ def apply_pricing_policies(
         if decision.get('ok') is False:
             result['ok'] = False
             result['unavailable_reason'] = (
-                decision.get('reason') or 'Способ оплаты недоступен по правилам расширения.'
+                decision.get('reason') or _ui_text('interface.policy_registry.apply_pricing_policies.1')
             )
             result['pricing_policies'].append(entry)
             result['pricing_policy'] = name
@@ -153,7 +156,7 @@ def apply_promo_reward_policies(context: Mapping[str, Any]) -> list[dict[str, An
         try:
             raw_decision = policy(dict(context))
             if inspect.isawaitable(raw_decision):
-                raise ValueError('promo reward policy должна быть синхронной')
+                raise ValueError(_tr('policy_registry.apply_promo_reward_policies.1'))
             decision = _normalize_promo_reward_decision(raw_decision)
         except Exception as e:
             logger.warning("Promo reward policy '%s' пропущена из-за ошибки: %s", name, e)
@@ -203,7 +206,7 @@ def apply_referral_reward_policies(
         try:
             raw_decision = policy(policy_context)
             if inspect.isawaitable(raw_decision):
-                raise ValueError('referral reward policy должна быть синхронной')
+                raise ValueError(_tr('policy_registry.apply_referral_reward_policies.1'))
             decision = _normalize_referral_reward_decision(raw_decision)
         except Exception as e:
             logger.warning("Referral reward policy '%s' пропущена из-за ошибки: %s", name, e)
@@ -242,24 +245,24 @@ def _register_policy(registry: dict[str, Callable], name: str, func: Callable, *
     policy_name = _normalize_policy_name(name)
     _require_bool_option(replace, 'replace')
     if not callable(func):
-        raise ValueError('policy должна быть callable')
+        raise ValueError(_tr('policy_registry.register_policy.1'))
     if policy_name in registry and not replace:
-        raise ValueError(f"policy '{policy_name}' уже зарегистрирована")
+        raise ValueError(_tr('policy_registry.register_policy.2', p0=f'{policy_name}'))
     registry[policy_name] = func
 
 
 def _normalize_policy_name(name: str) -> str:
     if not isinstance(name, str):
-        raise ValueError("policy name должен быть строкой")
+        raise ValueError(_tr('policy_registry.normalize_policy_name.1'))
     value = name.strip().casefold()
     if not _POLICY_NAME_RE.fullmatch(value):
-        raise ValueError("policy name должен соответствовать ^[a-z][a-z0-9_.:-]{0,127}$")
+        raise ValueError(_tr('policy_registry.normalize_policy_name.2'))
     return value
 
 
 def _require_bool_option(value: Any, field: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f'{field} должен быть bool')
+        raise ValueError(_tr('action_registry.require_bool.1', p0=f'{field}'))
     return value
 
 
@@ -267,13 +270,13 @@ def _normalize_pricing_decision(raw_decision: Mapping[str, Any] | None) -> dict[
     if raw_decision is None:
         return {}
     if not isinstance(raw_decision, Mapping):
-        raise ValueError('pricing policy должна вернуть dict или None')
+        raise ValueError(_tr('policy_registry.normalize_pricing_decision.1'))
     decision = dict(raw_decision)
     unknown = set(decision.keys()) - _ALLOWED_PRICING_KEYS
     if unknown:
-        raise ValueError(f"неподдерживаемые поля решения: {', '.join(sorted(unknown))}")
+        raise ValueError(_tr('policy_registry.normalize_pricing_decision.2', p0=f"{', '.join(sorted(unknown))}"))
     if 'final_amount' in decision and 'discount_amount' in decision:
-        raise ValueError('нельзя одновременно возвращать final_amount и discount_amount')
+        raise ValueError(_tr('policy_registry.normalize_pricing_decision.3'))
     _validate_common_decision_fields(decision)
     for field in ('final_amount', 'discount_amount'):
         if field in decision:
@@ -283,10 +286,10 @@ def _normalize_pricing_decision(raw_decision: Mapping[str, Any] | None) -> dict[
 
 def _normalize_amount(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f'{field} должен быть целым числом')
+        raise ValueError(_tr('payment_provider_registry.normalize_amount.1', p0=f'{field}'))
     amount = value
     if amount < 0:
-        raise ValueError(f'{field} не может быть отрицательным')
+        raise ValueError(_tr('payment_provider_registry.normalize_amount.2', p0=f'{field}'))
     return amount
 
 
@@ -299,12 +302,12 @@ def _validate_quote_amounts(quote: dict[str, Any]) -> None:
 def _validate_common_decision_fields(decision: Mapping[str, Any]) -> None:
     for field in ('ok', 'stop'):
         if field in decision and not isinstance(decision[field], bool):
-            raise ValueError(f'{field} должен быть bool')
+            raise ValueError(_tr('action_registry.require_bool.1', p0=f'{field}'))
     for field in ('label', 'reason'):
         if field in decision and decision[field] is not None and not isinstance(decision[field], str):
-            raise ValueError(f'{field} должен быть строкой')
+            raise ValueError(_tr('action_registry.require_text.1', p0=f'{field}'))
     if 'metadata' in decision and not isinstance(decision['metadata'], Mapping):
-        raise ValueError('metadata должна быть словарём')
+        raise ValueError(_tr('lifecycle_registry.normalize_hook_result.4'))
 
 
 def _policy_entry(name: str, decision: Mapping[str, Any]) -> dict[str, Any]:
@@ -319,11 +322,11 @@ def _normalize_promo_reward_decision(raw_decision: Mapping[str, Any] | None) -> 
     if raw_decision is None:
         return {}
     if not isinstance(raw_decision, Mapping):
-        raise ValueError('promo reward policy должна вернуть dict или None')
+        raise ValueError(_tr('policy_registry.normalize_promo_reward_decision.1'))
     decision = dict(raw_decision)
     unknown = set(decision.keys()) - _ALLOWED_PROMO_REWARD_KEYS
     if unknown:
-        raise ValueError(f"неподдерживаемые поля решения: {', '.join(sorted(unknown))}")
+        raise ValueError(_tr('policy_registry.normalize_pricing_decision.2', p0=f"{', '.join(sorted(unknown))}"))
     _validate_common_decision_fields(decision)
     if 'reward_days' in decision:
         decision['reward_days'] = _normalize_amount(decision['reward_days'], 'reward_days')
@@ -334,13 +337,13 @@ def _normalize_referral_reward_decision(raw_decision: Mapping[str, Any] | None) 
     if raw_decision is None:
         return {}
     if not isinstance(raw_decision, Mapping):
-        raise ValueError('referral reward policy должна вернуть dict или None')
+        raise ValueError(_tr('policy_registry.normalize_referral_reward_decision.1'))
     decision = dict(raw_decision)
     unknown = set(decision.keys()) - _ALLOWED_REFERRAL_REWARD_KEYS
     if unknown:
-        raise ValueError(f"неподдерживаемые поля решения: {', '.join(sorted(unknown))}")
+        raise ValueError(_tr('policy_registry.normalize_pricing_decision.2', p0=f"{', '.join(sorted(unknown))}"))
     if 'reward_cents' in decision and 'reward_days' in decision:
-        raise ValueError('нельзя одновременно возвращать reward_cents и reward_days')
+        raise ValueError(_tr('policy_registry.normalize_referral_reward_decision.2'))
     _validate_common_decision_fields(decision)
     for field in ('reward_cents', 'reward_days'):
         if field in decision:

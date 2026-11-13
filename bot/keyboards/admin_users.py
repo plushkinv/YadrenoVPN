@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
@@ -17,11 +19,11 @@ def users_menu_kb(stats: Dict[str, int]) -> InlineKeyboardMarkup:
         stats: User statistics by filters
     """
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text=f"📋 Все пользователи ({stats.get('total', 0)})", callback_data='admin_users_list'))
-    builder.row(InlineKeyboardButton(text='🔍 Выбрать пользователя', callback_data='admin_users_select'))
-    builder.row(InlineKeyboardButton(text='📤 Выгрузить в панель (БД → Панель)', callback_data='admin_sync_db_to_panel'))
-    builder.row(InlineKeyboardButton(text='📥 Загрузить из панели (Панель → БД)', callback_data='admin_sync_panel_to_db'))
-    builder.row(InlineKeyboardButton(text='🗑️ Синхронизация удалённых', callback_data='admin_sync_deleted_menu'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.users_menu_kb.1', p0=f"{stats.get('total', 0)}"), callback_data='admin_users_list'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.users_menu_kb.2'), callback_data='admin_users_select'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.users_menu_kb.3'), callback_data='admin_sync_db_to_panel'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.users_menu_kb.4'), callback_data='admin_sync_panel_to_db'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.users_menu_kb.5'), callback_data='admin_sync_deleted_menu'))
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
 
@@ -30,11 +32,11 @@ def manual_sync_preview_kb(direction: str, token: str) -> InlineKeyboardMarkup:
     """Confirmation keyboard for a previously calculated manual sync preview."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
-        text='✅ Применить изменения',
+        text=_tr('admin_users.manual_sync_preview_kb.1'),
         callback_data=f'admin_sync_apply:{direction}:{token}',
     ))
     builder.row(InlineKeyboardButton(
-        text='❌ Отмена',
+        text=_tr('system.extension_setting_cancel_kb.1'),
         callback_data=f'admin_sync_cancel:{token}',
     ))
     builder.row(back_button('admin_users'), home_button())
@@ -47,7 +49,7 @@ def _user_list_button_text(user: Dict[str, Any]) -> str:
     telegram_id = user.get('telegram_id')
     identifier = f'@{username}' if username else f'ID: {telegram_id}'
     if telegram_id is None:
-        identifier = f"🌐 Аккаунт #{user['id']}"
+        identifier = _tr('admin_users.user_list_button_text.1', p0=f"{user['id']}")
     name_parts = [
         ' '.join(str(user.get(field) or '').split())
         for field in ('first_name', 'last_name')
@@ -84,7 +86,7 @@ def users_list_kb(users: List[Dict[str, Any]], page: int, total_pages: int, curr
             builder.row(*filter_buttons[index:index + 2])
     else:
         builder.row(InlineKeyboardButton(
-            text='🔎 Изменить фильтр', callback_data='admin_users_reset_filters',
+            text=_tr('admin_users.users_list_kb.1'), callback_data='admin_users_reset_filters',
         ))
     for user in users:
         telegram_id = user.get('telegram_id')
@@ -122,25 +124,25 @@ def user_view_kb(telegram_id: int, vpn_keys: List[Dict[str, Any]], is_banned: bo
     builder = InlineKeyboardBuilder()
     for key in vpn_keys:
         key_id = key['id']
-        key_name = key.get('custom_name') or f'Ключ #{key_id}'
+        key_name = key.get('custom_name') or _tr('users_keys.show_key_view.2', p0=f'{key_id}')
         expires_at = key.get('expires_at')
         if expires_at:
             status = '🔑'
         else:
             status = '🔑'
         builder.row(InlineKeyboardButton(text=f'{status} {key_name}', callback_data=f'admin_key_view:{key_id}'))
-    builder.row(InlineKeyboardButton(text='➕ Добавить ключ', callback_data=f'admin_user_add_key:{telegram_id}'))
-    builder.row(InlineKeyboardButton(text='💬 Написать', callback_data=f'admin_support_start:{telegram_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.user_view_kb.1'), callback_data=f'admin_user_add_key:{telegram_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.user_view_kb.2'), callback_data=f'admin_support_start:{telegram_id}'))
     from bot.services.money import format_money_minor
     from database.requests import get_base_currency
 
     balance_text = format_money_minor(balance_cents, get_base_currency())
-    builder.row(InlineKeyboardButton(text=f'💰 Баланс: {balance_text}', callback_data=f'admin_user_balance:{telegram_id}'), InlineKeyboardButton(text='➕ Пополнить', callback_data=f'admin_user_balance_add:{telegram_id}'), InlineKeyboardButton(text='➖ Списать', callback_data=f'admin_user_balance_deduct:{telegram_id}'))
-    builder.row(InlineKeyboardButton(text=f'📊 Реферальный коэффициент: {referral_coefficient}x', callback_data=f'admin_user_coefficient:{telegram_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.user_view_kb.3', p0=f'{balance_text}'), callback_data=f'admin_user_balance:{telegram_id}'), InlineKeyboardButton(text=_tr('admin_users.user_view_kb.4'), callback_data=f'admin_user_balance_add:{telegram_id}'), InlineKeyboardButton(text=_tr('admin_users.user_view_kb.5'), callback_data=f'admin_user_balance_deduct:{telegram_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.user_view_kb.6', p0=f'{referral_coefficient}'), callback_data=f'admin_user_coefficient:{telegram_id}'))
     if is_banned:
-        ban_text = '✅ Разблокировать'
+        ban_text = _tr('admin_users.user_view_kb.7')
     else:
-        ban_text = '🚫 Заблокировать'
+        ban_text = _tr('admin_users.user_view_kb.8')
     builder.row(InlineKeyboardButton(text=ban_text, callback_data=f'admin_user_toggle_ban:{telegram_id}'))
     builder.row(back_button('admin_users_list'), home_button())
     return builder.as_markup()
@@ -155,11 +157,11 @@ def user_ban_confirm_kb(telegram_id: int, is_banned: bool) -> InlineKeyboardMark
     """
     builder = InlineKeyboardBuilder()
     if is_banned:
-        confirm_text = '✅ Да, разблокировать'
+        confirm_text = _tr('admin_users.user_ban_confirm_kb.1')
     else:
-        confirm_text = '🚫 Да, заблокировать'
+        confirm_text = _tr('admin_users.user_ban_confirm_kb.2')
     builder.row(InlineKeyboardButton(text=confirm_text, callback_data=f'admin_user_ban_confirm:{telegram_id}'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin_user_view:{telegram_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data=f'admin_user_view:{telegram_id}'))
     return builder.as_markup()
 
 def key_view_kb(
@@ -179,13 +181,13 @@ def key_view_kb(
     builder = InlineKeyboardBuilder()
     if show_subscription:
         builder.row(InlineKeyboardButton(
-            text='📋 Показать подписку',
+            text=_tr('admin_users.key_view_kb.1'),
             callback_data=f'admin_key_show:{key_id}',
         ))
-    builder.row(InlineKeyboardButton(text='📅 Продлить', callback_data=f'admin_key_extend:{key_id}'))
-    builder.row(InlineKeyboardButton(text='🔄 Сбросить трафик', callback_data=f'admin_key_reset_traffic:{key_id}'))
-    builder.row(InlineKeyboardButton(text='📋 Изменить тарифный план', callback_data=f'admin_key_change_plan:{key_id}'))
-    builder.row(InlineKeyboardButton(text='🗑️ Удалить ключ', callback_data=f'admin_key_delete_ask:{key_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_view_kb.2'), callback_data=f'admin_key_extend:{key_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_view_kb.3'), callback_data=f'admin_key_reset_traffic:{key_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_view_kb.4'), callback_data=f'admin_key_change_plan:{key_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_view_kb.5'), callback_data=f'admin_key_delete_ask:{key_id}'))
     builder.row(back_button(f'admin_user_view:{user_telegram_id}'), home_button())
     return builder.as_markup()
 
@@ -195,7 +197,7 @@ def key_delivery_admin_kb(key_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         back_button(f'admin_key_view:{key_id}'),
-        InlineKeyboardButton(text='🈴 На главную', callback_data='admin_panel'),
+        InlineKeyboardButton(text=_tr('system.extension_settings_kb.8'), callback_data='admin_panel'),
     )
     return builder.as_markup()
 
@@ -208,7 +210,7 @@ def key_plan_select_kb(
     """Tariff choices for a full administrator key reissue."""
     builder = InlineKeyboardBuilder()
     for tariff in tariffs:
-        hidden_suffix = ' · скрытый' if not tariff.get('is_active') else ''
+        hidden_suffix = _tr('admin_users.key_plan_select_kb.1') if not tariff.get('is_active') else ''
         builder.row(InlineKeyboardButton(
             text=f"📋 {tariff['name']}{hidden_suffix}",
             callback_data=f"admin_key_plan_select:{key_id}:{tariff['id']}",
@@ -216,7 +218,7 @@ def key_plan_select_kb(
     customs = custom_tariff_id if isinstance(custom_tariff_id, list) else [{'id': custom_tariff_id}]
     for custom in customs:
         builder.row(InlineKeyboardButton(
-            text='🛠 Произвольный тариф' + (f" · {custom['name']}" if len(customs) > 1 else ''),
+            text=_tr('admin_users.key_plan_select_kb.2') + (f" · {custom['name']}" if len(customs) > 1 else ''),
             callback_data=f"admin_key_plan_select:{key_id}:{custom['id']}",
         ))
     builder.row(back_button(f'admin_key_view:{key_id}'), home_button())
@@ -227,11 +229,11 @@ def key_plan_confirm_kb(key_id: int, tariff_id: int) -> InlineKeyboardMarkup:
     """Confirmation for a full key plan reissue."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
-        text='✅ Полностью переоформить',
+        text=_tr('admin_users.key_plan_confirm_kb.1'),
         callback_data=f'admin_key_plan_apply:{key_id}:{tariff_id}',
     ))
     builder.row(InlineKeyboardButton(
-        text='⬅️ Назад',
+        text=_tr('system.extension_settings_kb.7'),
         callback_data=f'admin_key_change_plan:{key_id}',
     ))
     builder.row(home_button())
@@ -242,11 +244,11 @@ def key_plan_custom_confirm_kb(key_id: int) -> InlineKeyboardMarkup:
     """Confirmation for an administrator-defined custom plan."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
-        text='✅ Полностью переоформить',
+        text=_tr('admin_users.key_plan_confirm_kb.1'),
         callback_data='admin_key_plan_custom_apply',
     ))
     builder.row(InlineKeyboardButton(
-        text='⬅️ Назад',
+        text=_tr('system.extension_settings_kb.7'),
         callback_data=f'admin_key_change_plan:{key_id}',
     ))
     builder.row(home_button())
@@ -262,7 +264,7 @@ def add_key_group_kb(groups: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
             callback_data=f"admin_add_key_group:{group['id']}",
         ))
     builder.row(InlineKeyboardButton(
-        text='❌ Отмена',
+        text=_tr('system.extension_setting_cancel_kb.1'),
         callback_data='admin_user_add_key_cancel',
     ))
     return builder.as_markup()
@@ -277,7 +279,7 @@ def add_key_server_kb(servers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for server in servers:
         builder.row(InlineKeyboardButton(text=f"🖥️ {server['name']}", callback_data=f"admin_add_key_server:{server['id']}"))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_user_add_key_cancel'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_user_add_key_cancel'))
     return builder.as_markup()
 
 def add_key_step_kb(step: int) -> InlineKeyboardMarkup:
@@ -290,28 +292,28 @@ def add_key_step_kb(step: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     buttons = []
     if step > 1:
-        buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_add_key_back'))
-    buttons.append(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_user_add_key_cancel'))
+        buttons.append(InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data='admin_add_key_back'))
+    buttons.append(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_user_add_key_cancel'))
     builder.row(*buttons)
     return builder.as_markup()
 
 def add_key_confirm_kb() -> InlineKeyboardMarkup:
     """Keyboard confirmation for key creation."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='✅ Создать ключ', callback_data='admin_add_key_confirm'))
-    builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_add_key_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_user_add_key_cancel'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.add_key_confirm_kb.1'), callback_data='admin_add_key_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data='admin_add_key_back'), InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_user_add_key_cancel'))
     return builder.as_markup()
 
 def users_input_cancel_kb() -> InlineKeyboardMarkup:
     """Cancel keyboard."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_users'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_users'))
     return builder.as_markup()
 
 def key_action_cancel_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMarkup:
     """Undo keypad with key."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin_key_view:{key_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data=f'admin_key_view:{key_id}'))
     return builder.as_markup()
 
 
@@ -325,30 +327,30 @@ def key_action_back_kb(key_id: int) -> InlineKeyboardMarkup:
 def key_delete_confirm_kb(key_id: int, user_telegram_id: int) -> InlineKeyboardMarkup:
     """Keypad to confirm key deletion."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🗑️ Да, удалить', callback_data=f'admin_key_delete_confirm:{key_id}'))
-    builder.row(InlineKeyboardButton(text='❌ Оставить', callback_data=f'admin_key_view:{key_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_delete_confirm_kb.1'), callback_data=f'admin_key_delete_confirm:{key_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_delete_confirm_kb.2'), callback_data=f'admin_key_view:{key_id}'))
     return builder.as_markup()
 
 def sync_deleted_menu_kb() -> InlineKeyboardMarkup:
     """Submenu for synchronizing remote keys."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🧹 Очистить панель', callback_data='admin_sync_deleted_panel_ask'))
-    builder.row(InlineKeyboardButton(text='🗑️ Очистить базу', callback_data='admin_sync_deleted_db_ask'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.sync_deleted_menu_kb.1'), callback_data='admin_sync_deleted_panel_ask'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.sync_deleted_menu_kb.2'), callback_data='admin_sync_deleted_db_ask'))
     builder.row(back_button('admin_users'), home_button())
     return builder.as_markup()
 
 def sync_deleted_panel_confirm_kb() -> InlineKeyboardMarkup:
     """Panel clear confirmation keypad."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🧹 Да, очистить панель', callback_data='admin_sync_deleted_panel_confirm'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.sync_deleted_panel_confirm_kb.1'), callback_data='admin_sync_deleted_panel_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_deleted_db_confirm_kb() -> InlineKeyboardMarkup:
     """Keyboard confirmation to start scanning the database."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🔍 Начать сканирование', callback_data='admin_sync_deleted_db_confirm'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.sync_deleted_db_confirm_kb.1'), callback_data='admin_sync_deleted_db_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_deleted_db_report_kb(report: Dict[str, Any]) -> InlineKeyboardMarkup:
@@ -358,14 +360,14 @@ def sync_deleted_db_report_kb(report: Dict[str, Any]) -> InlineKeyboardMarkup:
     # Category 1: Serverless keys
     if report.get('null_total', 0) > 0:
         builder.row(InlineKeyboardButton(
-            text=f"🗑️ Без сервера ({report['null_total']})",
+            text=_tr('admin_users.sync_deleted_db_report_kb.1', p0=f"{report['null_total']}"),
             callback_data='admin_sync_db_orphans_ask'
         ))
 
     # Category 2: remote servers
     for sid, count in report.get('deleted_srv_keys', {}).items():
         builder.row(InlineKeyboardButton(
-            text=f"👻 Удалённый сервер ID {sid} ({count})",
+            text=_tr('admin_users.sync_deleted_db_report_kb.2', p0=f'{sid}', p1=f'{count}'),
             callback_data=f'admin_sync_db_gone_ask:{sid}'
         ))
 
@@ -373,44 +375,44 @@ def sync_deleted_db_report_kb(report: Dict[str, Any]) -> InlineKeyboardMarkup:
     for r in report.get('server_results', []):
         if r['status'] == 'reachable' and r.get('missing_count', 0) > 0:
             builder.row(InlineKeyboardButton(
-                text=f"🗑️ {r['name']}: нет на панели ({r['missing_count']})",
+                text=_tr('admin_users.sync_deleted_db_report_kb.3', p0=f"{r['name']}", p1=f"{r['missing_count']}"),
                 callback_data=f'admin_sync_db_missing_ask:{r["server_id"]}'
             ))
         elif r['status'] == 'unreachable':
             active_mark = "" if r['is_active'] else " ⏸️"
             builder.row(InlineKeyboardButton(
-                text=f"⚠️ {r['name']}{active_mark}: недоступен ({r['total_keys']})",
+                text=_tr('admin_users.sync_deleted_db_report_kb.4', p0=f"{r['name']}", p1=f'{active_mark}', p2=f"{r['total_keys']}"),
                 callback_data=f'admin_sync_db_unreach_ask:{r["server_id"]}'
             ))
 
-    builder.row(InlineKeyboardButton(text='🔄 Повторить', callback_data='admin_sync_deleted_db_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.sync_deleted_db_report_kb.5'), callback_data='admin_sync_deleted_db_confirm'))
     builder.row(back_button('admin_sync_deleted_menu'), home_button())
     return builder.as_markup()
 
 def sync_db_orphans_confirm_kb() -> InlineKeyboardMarkup:
     """Keyboard confirmation for deleting keys without a server."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🗑️ Да, удалить', callback_data='admin_sync_db_orphans_confirm'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_delete_confirm_kb.1'), callback_data='admin_sync_db_orphans_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_db_gone_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
     """Keyboard for confirming the deletion of remote server keys."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🗑️ Да, удалить', callback_data=f'admin_sync_db_gone_confirm:{server_id}'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_delete_confirm_kb.1'), callback_data=f'admin_sync_db_gone_confirm:{server_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_db_missing_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
     """Keyboard to confirm deletion of keys missing from the panel."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🗑️ Да, удалить', callback_data=f'admin_sync_db_missing_confirm:{server_id}'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.key_delete_confirm_kb.1'), callback_data=f'admin_sync_db_missing_confirm:{server_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()
 
 def sync_db_unreach_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
     """Confirmation keyboard for deleting unavailable server keys."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🚨 ДА, УДАЛИТЬ КЛЮЧИ', callback_data=f'admin_sync_db_unreach_confirm:{server_id}'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_sync_deleted_menu'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_users.sync_db_unreach_confirm_kb.1'), callback_data=f'admin_sync_db_unreach_confirm:{server_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_sync_deleted_menu'))
     return builder.as_markup()

@@ -1,6 +1,8 @@
 """Core flow for custom payment providers extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from collections.abc import Mapping
 from typing import Any
 
@@ -31,11 +33,11 @@ async def check_custom_payment_order(
         raise ValueError('custom payment purpose is invalid')
     provider = get_payment_provider(provider_id)
     if provider is None:
-        raise ValueError('payment provider не зарегистрирован')
+        raise ValueError(_tr('custom_payments.check_custom_payment_order.1'))
 
     provider_order = get_payment_provider_order(str(order.get('order_id') or ''))
     if not provider_order or provider_order.get('provider_id') != provider.provider_id:
-        raise ValueError('payment provider order не найден')
+        raise ValueError(_tr('custom_payments.check_custom_payment_order.2'))
 
     known = get_payment_check_status(str(order['order_id']), allow_canceled_recheck=allow_canceled_recheck)
     if known is not None:

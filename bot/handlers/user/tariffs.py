@@ -64,7 +64,10 @@ async def _render_buy_page(target, *, action_context_token: str | None = None):
     demo_enabled = is_demo_payment_enabled()
 
     # Verification: at least one payment method is configured
+    from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
+    from database.requests import is_gateway_configured
     if not any((
+        *(is_gateway_configured(pid) for pid in INTERNATIONAL_PROVIDERS),
         crypto_configured, cryptobot_configured, stars_enabled, cards_enabled,
         yookassa_qr, wata_enabled, platega_enabled, cardlink_enabled, demo_enabled,
     )) and not has_available_custom_payment_method(

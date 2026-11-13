@@ -7,6 +7,11 @@ running even after the Git worktree is reset to an older commit.
 
 from __future__ import annotations
 
+if __package__:
+    from localization import text as _tr
+else:
+    from maintenance_localization import text as _tr
+
 import argparse
 import asyncio
 import hashlib
@@ -27,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
+import backup_io
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +119,9 @@ class RollbackPoint:
     def display_release(self) -> str:
         """Return a human-readable release label."""
         return (
-            f"Версия {self.source_release}"
+            _tr('system.show_update_rollback_confirmation.2', p0=f'{self.source_release}')
             if self.source_release and self.source_release != UNKNOWN_RELEASE
-            else "Версия не определена"
+            else _tr('system.show_update_rollback_confirmation.3')
         )
 
 
@@ -160,7 +166,7 @@ def _parse_datetime(value: Any) -> datetime:
 
 def _bounded_detail(value: Any, *, limit: int = 1200) -> str:
     """Return a bounded single diagnostic suitable for journals and Telegram."""
-    normalized = str(value or "Нет подробностей.").strip()
+    normalized = str(value or _tr('update_rollback.bounded_detail.1')).strip()
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(0, limit - 1)].rstrip() + "…"
@@ -284,7 +290,7 @@ def _validated_backup_root(project_root: Path) -> Path:
     """Return the canonical ignored backup directory or fail closed."""
     raw_root = project_root / "backup"
     if raw_root.is_symlink():
-        raise UpdateRollbackError("Каталог backup не должен быть символической ссылкой")
+        raise UpdateRollbackError(_tr('update_rollback.validated_backup_root.1'))
     raw_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     backup_root = _ensure_inside(raw_root, project_root)
 
@@ -294,10 +300,10 @@ def _validated_backup_root(project_root: Path) -> Path:
         timeout=30,
     )
     if tracked.returncode != 0:
-        raise UpdateRollbackError("Не удалось проверить tracked-файлы в backup")
+        raise UpdateRollbackError(_tr('update_rollback.validated_backup_root.2'))
     if tracked.stdout.strip():
         raise UpdateRollbackError(
-            "Каталог backup содержит файлы под контролем Git; обновление отменено"
+            _tr('update_rollback.validated_backup_root.3')
         )
 
     ignored = _run_command(
@@ -307,7 +313,7 @@ def _validated_backup_root(project_root: Path) -> Path:
     )
     if ignored.returncode != 0:
         raise UpdateRollbackError(
-            "Каталог backup не игнорируется Git; обновление отменено"
+            _tr('update_rollback.validated_backup_root.4')
         )
     return backup_root
 
@@ -352,7 +358,7 @@ def _validate_persistent_git_ignores(project_root: Path) -> None:
             missing.append(path)
     if missing:
         raise UpdateRollbackError(
-            "Локальные persistent-пути не игнорируются Git: " + ", ".join(missing)
+            _tr('update_rollback.validate_persistent_git_ignores.1') + ", ".join(missing)
         )
 
 
@@ -441,14 +447,14 @@ def ensure_ordered_update_unblocked() -> None:
         )
     except Exception as exc:
         raise UpdateRollbackError(
-            "Не удалось проверить условия штатного обновления"
+            _tr('update_rollback.ensure_ordered_update_unblocked.1')
         ) from exc
 
     try_unblock()
     if is_update_blocked():
         message = _plain_telegram_html(get_blocked_message())
         raise UpdateRollbackError(
-            message or "Штатные обновления приостановлены до выполнения условия."
+            message or _tr('update_rollback.ensure_ordered_update_unblocked.2')
         )
 
 
@@ -497,11 +503,7 @@ def get_current_version_identity(
 
 
 def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return backup_io.file_digest(path)
 
 
 def _format_foreign_key_errors(rows: Sequence[Sequence[Any]]) -> str:
@@ -515,7 +517,7 @@ def _format_foreign_key_errors(rows: Sequence[Sequence[Any]]) -> str:
         details.append(
             f"table={table}, rowid={row_id}, parent={parent}, fk={foreign_key_id}"
         )
-    suffix = "" if len(rows) <= DATABASE_CHECK_ERROR_LIMIT else f"; всего={len(rows)}"
+    suffix = "" if len(rows) <= DATABASE_CHECK_ERROR_LIMIT else _tr('update_rollback.format_foreign_key_errors.1', p0=f'{len(rows)}')
     return "; ".join(details) + suffix
 
 
@@ -545,12 +547,12 @@ def _check_database_integrity(
     if len(quick_rows) != 1 or quick_rows[0][0] != "ok":
         details = "; ".join(str(row[0]) for row in quick_rows[:DATABASE_CHECK_ERROR_LIMIT])
         raise DatabaseIntegrityError(
-            "PRAGMA quick_check не пройден"
+            _tr('update_rollback.check_database_integrity.1')
             + (f": {details}" if details else "")
         )
     if foreign_key_rows:
         raise DatabaseIntegrityError(
-            "PRAGMA foreign_key_check обнаружил нарушения: "
+            _tr('update_rollback.check_database_integrity.2')
             + _format_foreign_key_errors(foreign_key_rows)
         )
 
@@ -567,20 +569,15 @@ def _copy_database(source_path: Path, destination_path: Path) -> None:
     destination_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     destination_path.unlink(missing_ok=True)
     source: sqlite3.Connection | None = None
-    target: sqlite3.Connection | None = None
     try:
         source = sqlite3.connect(str(source_path), timeout=30)
-        target = sqlite3.connect(str(destination_path), timeout=30)
-        source.backup(target)
+        with backup_io.sqlite_snapshot(source, destination_path, timeout=30):
+            pass
         try:
             destination_path.chmod(0o600)
         except OSError:
             pass
-    except Exception:
-        raise
     finally:
-        if target is not None:
-            target.close()
         if source is not None:
             source.close()
     if not destination_path.is_file():
@@ -781,6 +778,7 @@ def _stage_registered_service_request(
     if not snapshot_dir.is_dir():
         raise UpdateRollbackError("Updater snapshot directory is missing")
 
+    _copy_backup_helper(snapshot_dir)
     runner_path = snapshot_dir / SERVICE_RUNNER_FILENAME
     temp_runner = _new_sibling_temp_path(runner_path)
     try:
@@ -807,6 +805,26 @@ def _stage_registered_service_request(
     )
     _atomic_write_json(snapshot_dir / SERVICE_REQUEST_FILENAME, request)
     return _registered_updater_unit(snapshot_id)
+
+
+def _copy_backup_helper(destination: Path) -> None:
+    """Publish the stdlib helper before a runner that imports it, including restore jobs."""
+    if __package__:
+        from localization import catalog, language
+        from localization.maintenance import export
+        code = language()
+        export(destination, code=code, messages=catalog('admin', code))
+    else:
+        from maintenance_localization import export
+        export(destination)
+    path = destination / 'backup_io.py'
+    temporary = _new_sibling_temp_path(path)
+    try:
+        shutil.copy2(backup_io.__file__, temporary)
+        os.replace(temporary, path)
+        _fsync_directory(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _discard_registered_service_request(
@@ -1041,8 +1059,7 @@ def create_pre_update_snapshot(
         helper_dir.mkdir(mode=0o700)
         (helper_dir / '__init__.py').write_text('', encoding='utf-8')
         shutil.copy2(ui_paths.__file__, helper_dir / 'paths.py')
-        for helper in ('system_backup.py', 'setup_paths.py'):
-            shutil.copy2(Path(ui_paths.__file__).with_name(helper), helper_dir / helper)
+        _copy_backup_helper(temp_dir)
         backup_local(temp_dir, root)
         backup_path = temp_dir / DATABASE_BACKUP_FILENAME
         database_size: int | None = None
@@ -1105,8 +1122,7 @@ def create_pre_update_snapshot(
 
     if preflight_error is not None:
         raise DatabaseIntegrityError(
-            "Обновление не началось: проверка базы данных не пройдена. "
-            f"{preflight_error}. Диагностический snapshot: {snapshot_id}"
+            _tr('update_rollback.create_pre_update_snapshot.1', p0=f'{preflight_error}', p1=f'{snapshot_id}')
         ) from preflight_error
 
     return PreparedUpdateSnapshot(
@@ -1198,22 +1214,22 @@ def _load_prepared_snapshot(
     """Load a prepared snapshot before any worktree mutation."""
     snapshot_dir = _safe_snapshot_dir(project_root, snapshot_id)
     if not snapshot_dir.is_dir() or snapshot_dir.is_symlink():
-        raise UpdateRollbackError("Подготовленный snapshot обновления недоступен")
+        raise UpdateRollbackError(_tr('update_rollback.load_prepared_snapshot.1'))
     manifest = _load_manifest(snapshot_dir)
     update = manifest.get("update")
     source = manifest.get("source")
     if not isinstance(update, dict) or update.get("status") != "prepared":
-        raise UpdateRollbackError("Snapshot не находится в состоянии prepared")
+        raise UpdateRollbackError(_tr('update_rollback.load_prepared_snapshot.2'))
     if not isinstance(source, dict):
-        raise UpdateRollbackError("В snapshot отсутствуют данные исходной версии")
+        raise UpdateRollbackError(_tr('update_rollback.load_prepared_snapshot.3'))
     source_commit = str(source.get("commit") or "").lower()
     if source_commit != _current_commit(project_root):
         raise UpdateRollbackError(
-            "Текущий Git commit изменился после создания snapshot; обновление отменено"
+            _tr('update_rollback.load_prepared_snapshot.4')
         )
     database_path = snapshot_dir / DATABASE_BACKUP_FILENAME
     if not database_path.is_file():
-        raise UpdateRollbackError("В подготовленном snapshot отсутствует база данных")
+        raise UpdateRollbackError(_tr('update_rollback.load_prepared_snapshot.5'))
     _check_database_integrity(database_path)
     return PreparedUpdateSnapshot(
         snapshot_id=snapshot_id,
@@ -1240,7 +1256,7 @@ def _refresh_pre_update_snapshot(
         _backup_database(live_database, temp_database)
         if temp_database.stat().st_dev != live_database.parent.stat().st_dev:
             raise UpdateRollbackError(
-                "Каталоги backup и database находятся на разных файловых системах"
+                _tr('update_rollback.refresh_pre_update_snapshot.1')
             )
         os.replace(temp_database, final_database)
         _fsync_directory(snapshot.snapshot_dir)
@@ -1257,7 +1273,7 @@ def _refresh_pre_update_snapshot(
     manifest = _load_manifest(snapshot.snapshot_dir)
     database = manifest.setdefault("database", {})
     if not isinstance(database, dict):
-        raise UpdateRollbackError("Некорректная секция database в snapshot")
+        raise UpdateRollbackError(_tr('update_rollback.refresh_pre_update_snapshot.2'))
     database.update(
         {
             "file": DATABASE_BACKUP_FILENAME,
@@ -1662,7 +1678,7 @@ def _resolve_update_target(project_root: Path, target: str) -> str:
     """Fetch and resolve an update target without changing the worktree."""
     target = str(target or "").strip()
     if not target:
-        raise UpdateRollbackError("Цель обновления не указана")
+        raise UpdateRollbackError(_tr('update_rollback.resolve_update_target.1'))
     fetch = _run_command(
         ["git", "fetch", "origin"],
         cwd=project_root,
@@ -1677,12 +1693,12 @@ def _resolve_update_target(project_root: Path, target: str) -> str:
         fetch_error = (fetch.stdout + fetch.stderr).strip()
         resolve_error = (resolved.stdout + resolved.stderr).strip()
         raise UpdateRollbackError(
-            "Целевой commit обновления недоступен: "
+            _tr('update_rollback.resolve_update_target.2')
             + (resolve_error or fetch_error or target)
         )
     commit = resolved.stdout.splitlines()[0].strip().lower()
     if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
-        raise UpdateRollbackError("Git вернул некорректный hash целевого commit")
+        raise UpdateRollbackError(_tr('update_rollback.resolve_update_target.3'))
     return commit
 
 
@@ -1694,9 +1710,9 @@ def _validate_update_strategy(
     strategy: str,
 ) -> None:
     if strategy not in {"pull", "reset"}:
-        raise UpdateRollbackError(f"Неподдерживаемая стратегия обновления: {strategy}")
+        raise UpdateRollbackError(_tr('update_rollback.validate_update_strategy.1', p0=f'{strategy}'))
     if source_commit == target_commit:
-        raise UpdateRollbackError("Выбранная версия уже установлена")
+        raise UpdateRollbackError(_tr('update_rollback.validate_update_strategy.2'))
     protected_paths = (
         "backup",
         "config.py",
@@ -1725,7 +1741,7 @@ def _validate_update_strategy(
     )
     if tracked_protected.strip():
         raise UpdateRollbackError(
-            "Целевая версия содержит tracked-файлы в локальных persistent-путях: "
+            _tr('update_rollback.validate_update_strategy.3')
             + ", ".join(tracked_protected.splitlines()[:5])
         )
     if strategy == "pull":
@@ -1737,7 +1753,7 @@ def _validate_update_strategy(
         )
         if status.strip():
             raise UpdateRollbackError(
-                "Есть локальные изменения tracked-файлов; безопасное обновление отменено"
+                _tr('update_rollback.validate_update_strategy.4')
             )
         ancestor = _run_command(
             ["git", "merge-base", "--is-ancestor", source_commit, target_commit],
@@ -1746,7 +1762,7 @@ def _validate_update_strategy(
         )
         if ancestor.returncode != 0:
             raise UpdateRollbackError(
-                "Мягкое обновление не является fast-forward; используйте жёсткую перезапись"
+                _tr('update_rollback.validate_update_strategy.5')
             )
 
 
@@ -1820,7 +1836,7 @@ def _set_candidate_update_block(candidate: Path) -> None:
         foreign_keys_row = connection.execute("PRAGMA foreign_keys").fetchone()
         if not foreign_keys_row or foreign_keys_row[0] != 1:
             raise UpdateRollbackError(
-                "Не удалось включить foreign_keys для blocking update"
+                _tr('update_rollback.set_candidate_update_block.1')
             )
         connection.execute(
             "INSERT INTO settings (key, value) VALUES ('update_blocked', '1') "
@@ -1926,7 +1942,7 @@ def _promote_database_candidate(
     destination.parent.mkdir(parents=True, exist_ok=True)
     if candidate.stat().st_dev != destination.parent.stat().st_dev:
         raise UpdateRollbackError(
-            "Невозможно атомарно применить БД: backup и database на разных файловых системах"
+            _tr('update_rollback.promote_database_candidate.1')
         )
     for suffix in ("-wal", "-shm"):
         Path(str(destination) + suffix).unlink(missing_ok=True)
@@ -1974,8 +1990,7 @@ def _restore_database_atomically(source: Path, destination: Path) -> None:
         _check_database_integrity(temp_path)
         if temp_path.stat().st_dev != destination.parent.stat().st_dev:
             raise UpdateRollbackError(
-                "Невозможно атомарно восстановить БД: backup и database "
-                "на разных файловых системах"
+                _tr('update_rollback.restore_database_atomically.1')
             )
         if current_mode is not None:
             temp_path.chmod(current_mode)
@@ -2303,9 +2318,7 @@ def perform_rollback(
                 _database_path(root),
             )
             success_message = (
-                f"Откат выполнен: {point.display_release} "
-                f"({point.source_short_commit}). База данных восстановлена "
-                f"на {_isoformat_utc(point.created_at)}."
+                _tr('update_rollback.perform_rollback.1', p0=f'{point.display_release}', p1=f'{point.source_short_commit}', p2=f'{_isoformat_utc(point.created_at)}')
             )
             if manage_service:
                 _write_rollback_result(
@@ -2322,8 +2335,7 @@ def perform_rollback(
                     )
             if not _prepare_web_toolchain(root):
                 success_message += (
-                    " Инструменты веб-редактора пока недоступны; их подготовка "
-                    "повторится при обновлении. Бот и сайт продолжают работать."
+                    _tr('update_rollback.perform_rollback.2')
                 )
             _write_rollback_result(
                 root,
@@ -2342,7 +2354,7 @@ def perform_rollback(
                 root,
                 admin_id=admin_id,
                 status="pending",
-                message=f"Откат не выполнен: {exc}. Выполняется восстановление.",
+                message=_tr('update_rollback.perform_rollback.3', p0=f'{exc}'),
                 snapshot_id=snapshot_id,
             )
             if rescue_root is not None:
@@ -2365,11 +2377,11 @@ def perform_rollback(
                         "Cannot restart service after rescue snapshot failure"
                     )
             failure_message = (
-                f"Откат не выполнен: {exc}. "
+                _tr('update_rollback.perform_rollback.4', p0=f'{exc}')
                 + (
-                    "Исходные код и база данных автоматически восстановлены."
+                    _tr('update_rollback.perform_rollback.5')
                     if recovered
-                    else "Автоматически восстановить исходное состояние не удалось."
+                    else _tr('update_rollback.perform_rollback.6')
                 )
             )
             _write_rollback_result(
@@ -2418,13 +2430,13 @@ def _emergency_restore_pre_update_state(
                 )
         return RollbackExecutionResult(
             True,
-            "Исходные код и база данных восстановлены аварийным путём.",
+            _tr('update_rollback.emergency_restore_pre_update_state.1'),
         )
     except Exception as exc:
         logger.exception("Emergency update rollback failed")
         return RollbackExecutionResult(
             False,
-            f"Аварийное восстановление не удалось: {exc}",
+            _tr('update_rollback.emergency_restore_pre_update_state.2', p0=f'{exc}'),
         )
 
 
@@ -2451,28 +2463,26 @@ def _web_release_command(root: Path, *arguments: str) -> str:
 
 def _ui_permissions_message(issues: list[dict[str, Any]]) -> str:
     """Render only bounded metadata; the complete failure stays in the existing log."""
-    lines = [f"Неверный владелец или права файлов веб-интерфейса. Нарушений: {len(issues)}."]
+    lines = [_tr('update_rollback.ui_permissions_message.1', p0=f'{len(issues)}')]
     shown = 0
-    footer = ("Исправьте указанные настройки на сервере и повторите обновление. "
-              "Владельцы и права автоматически не изменялись.")
+    footer = (_tr('update_rollback.ui_permissions_message.2'))
     for issue in issues[:3]:
-        actual = f"{str(issue.get('owner_name') or 'пользователь')[:40]} (uid {int(issue['owner_uid'])})"
-        expected = f"{str(issue.get('expected_name') or 'пользователь')[:40]} (uid {int(issue['expected_uid'])})"
+        actual = f"{str(issue.get('owner_name') or _tr('update_rollback.account_owner'))[:40]} (uid {int(issue['owner_uid'])})"
+        expected = f"{str(issue.get('expected_name') or _tr('update_rollback.account_owner'))[:40]} (uid {int(issue['expected_uid'])})"
         reasons = []
         if issue['owner_mismatch']:
-            reasons.append('владелец не совпадает с пользователем обновления')
+            reasons.append(_tr('update_rollback.ui_permissions_message.3'))
         if int(issue['forbidden_mode'], 8):
-            reasons.append('доступ группы/остальных к закрытому ключу' if issue['private']
-                           else 'разрешена запись группе или остальным')
+            reasons.append(_tr('update_rollback.ui_permissions_message.4') if issue['private']
+                           else _tr('update_rollback.ui_permissions_message.5'))
         path = str(issue['path']).replace('\n', '\\n').replace('\r', '\\r')
-        line = (f"{_bounded_detail(path, limit=160)}: владелец {actual}, требуется {expected}; "
-                f"права {issue['mode']}; {', '.join(reasons)}.")
+        line = (_tr('update_rollback.ui_permissions_message.6', p0=f'{_bounded_detail(path, limit=160)}', p1=f'{actual}', p2=f'{expected}', p3=f"{issue['mode']}", p4=f"{', '.join(reasons)}"))
         if shown and len('\n'.join([*lines, line, footer])) > 1100:
             break
         lines.append(line)
         shown += 1
     if len(issues) > shown:
-        lines.append(f"Ещё нарушений: {len(issues) - shown}. Полный список — в журнале бота/обновлятора.")
+        lines.append(_tr('update_rollback.ui_permissions_message.7', p0=f'{len(issues) - shown}'))
     lines.append(footer)
     return '\n'.join(lines)
 
@@ -2606,8 +2616,7 @@ def perform_update_transaction(
             )
 
             pending_message = (
-                "Новая версия установлена на диск. Проверяется запуск бота "
-                f"на commit {target_commit[:8]}. Snapshot: {snapshot.snapshot_id}."
+                _tr('update_rollback.perform_update_transaction.1', p0=f'{target_commit[:8]}', p1=f'{snapshot.snapshot_id}')
             )
             _try_write_update_result(
                 root,
@@ -2632,7 +2641,7 @@ def perform_update_transaction(
                     target_commit=target_commit,
                 ):
                     raise UpdateRollbackError(
-                        "Новая версия не подтвердила успешный запуск за 120 секунд"
+                        _tr('update_rollback.perform_update_transaction.2')
                     )
                 _accept_update_health(
                     root,
@@ -2643,14 +2652,11 @@ def perform_update_transaction(
                 _update_health_path(root).unlink(missing_ok=True)
             compiler_ready = _prepare_web_toolchain(root)
             success_message = (
-                f"Обновление успешно установлено: commit {target_commit[:8]}. "
-                "Миграции и целостность базы данных проверены. "
-                f"Snapshot для ручного отката: {snapshot.snapshot_id}."
+                _tr('update_rollback.perform_update_transaction.3', p0=f'{target_commit[:8]}', p1=f'{snapshot.snapshot_id}')
             )
             if not compiler_ready:
                 success_message += (
-                    " Инструменты веб-редактора пока недоступны; их подготовка "
-                    "повторится при обновлении. Бот и сайт продолжают работать."
+                    _tr('update_rollback.perform_rollback.2')
                 )
             _try_write_update_result(
                 root,
@@ -2700,8 +2706,7 @@ def perform_update_transaction(
                     admin_id=admin_id,
                     status="pending",
                     message=(
-                        f"Обновление не установлено: {failure_detail}. "
-                        "Выполняется автоматический откат."
+                        _tr('update_rollback.perform_update_transaction.4', p0=f'{failure_detail}')
                     ),
                     snapshot_id=snapshot.snapshot_id,
                     target_commit=target_commit or None,
@@ -2727,17 +2732,12 @@ def perform_update_transaction(
                     )
                 if rollback.success:
                     message = (
-                        f"Обновление не установлено: {failure_detail}. "
-                        f"Автоматически восстановлена {snapshot.source_release} "
-                        f"({snapshot.source_commit[:8]}), данные сохранены. "
-                        f"Snapshot: {snapshot.snapshot_id}."
+                        _tr('update_rollback.perform_update_transaction.5', p0=f'{failure_detail}', p1=f'{snapshot.source_release}', p2=f'{snapshot.source_commit[:8]}', p3=f'{snapshot.snapshot_id}')
                     )
                     status = "rolled_back"
                 else:
                     message = (
-                        f"Обновление не установлено: {failure_detail}. "
-                        f"Автоматический откат завершился ошибкой: {rollback.message}. "
-                        f"Snapshot: {snapshot.snapshot_id}."
+                        _tr('update_rollback.perform_update_transaction.6', p0=f'{failure_detail}', p1=f'{rollback.message}', p2=f'{snapshot.snapshot_id}')
                     )
                     status = "failed"
                 _try_write_update_result(
@@ -2769,11 +2769,11 @@ def perform_update_transaction(
                     logger.exception("Cannot restart unchanged bot after update failure")
                     recovered = False
             message = (
-                f"Обновление не началось: {failure_detail}. "
+                _tr('update_rollback.perform_update_transaction.7', p0=f'{failure_detail}')
                 + (
-                    "Текущая версия продолжает работать. "
+                    _tr('update_rollback.perform_update_transaction.8')
                     if recovered
-                    else "Не удалось подтвердить повторный запуск текущей версии. "
+                    else _tr('update_rollback.perform_update_transaction.9')
                 )
                 + f"Snapshot: {snapshot_id}."
             )
@@ -2858,8 +2858,7 @@ def schedule_admin_update(
     root = _resolve_project_root(project_root)
     if _repository_guard_is_active():
         return False, (
-            "Обновление временно недоступно: Yadreno Admin проверяет изменения "
-            "защищённого tool call. Повторите после его завершения."
+            _tr('update_rollback.schedule_admin_update.1')
         )
     try:
         install_registered_updater_service(
@@ -2868,7 +2867,7 @@ def schedule_admin_update(
         )
     except Exception as exc:
         logger.exception("Cannot register managed updater service")
-        return False, f"Не удалось зарегистрировать updater-service: {exc}"
+        return False, _tr('update_rollback.schedule_admin_update.2', p0=f'{exc}')
     snapshot: PreparedUpdateSnapshot | None = None
     try:
         with update_operation_lock(root):
@@ -2914,7 +2913,7 @@ def schedule_admin_update(
                 output = (result.stdout + result.stderr).strip()
                 _discard_registered_service_request(root, snapshot.snapshot_id)
                 discard_prepared_snapshot(snapshot.snapshot_id, project_root=root)
-                return False, output or "Не удалось запустить зарегистрированный updater service"
+                return False, output or _tr('update_rollback.schedule_admin_update.3')
     except Exception as exc:
         logger.exception("Cannot schedule managed administrator update")
         if snapshot is not None:
@@ -2925,7 +2924,7 @@ def schedule_admin_update(
                 logger.exception("Cannot discard an unscheduled update snapshot")
         return False, str(exc)
     if snapshot is None:
-        return False, "Не удалось подготовить snapshot обновления"
+        return False, _tr('update_rollback.schedule_admin_update.4')
     return True, snapshot.snapshot_id
 
 
@@ -2963,7 +2962,7 @@ def schedule_admin_rollback(
         if result.returncode != 0:
             output = (result.stdout + result.stderr).strip()
             _discard_registered_service_request(root, point.snapshot_id)
-            return False, output or "Не удалось запустить зарегистрированный updater service."
+            return False, output or _tr('update_rollback.schedule_admin_rollback.1')
     except Exception as exc:
         logger.exception("Cannot schedule managed administrator rollback")
         try:
@@ -3009,8 +3008,8 @@ async def notify_pending_rollback_result(
         logger.error("Rollback result has an invalid administrator id")
         return False
     success = payload.get("status") == "success"
-    title = "✅ <b>Откат обновления завершён</b>" if success else "❌ <b>Ошибка отката обновления</b>"
-    text = f"{title}\n\n{html.escape(str(payload.get('message') or 'Нет подробностей.'))}"
+    title = _tr('update_rollback.notify_pending_rollback_result.1') if success else _tr('update_rollback.notify_pending_rollback_result.2')
+    text = f"{title}\n\n{html.escape(str(payload.get('message') or _tr('update_rollback.bounded_detail.1')))}"
     try:
         await bot.send_message(
             chat_id=admin_id,
@@ -3072,13 +3071,13 @@ async def notify_pending_update_result(
 
     status = str(payload.get("status") or "failed")
     if status == "success":
-        title = "✅ <b>Обновление успешно установлено</b>"
+        title = _tr('update_rollback.notify_pending_update_result.1')
     elif status == "rolled_back":
-        title = "⚠️ <b>Обновление отменено и выполнен откат</b>"
+        title = _tr('update_rollback.notify_pending_update_result.2')
     elif status == "not_started":
-        title = "⚠️ <b>Обновление не началось</b>"
+        title = _tr('update_rollback.notify_pending_update_result.3')
     else:
-        title = "❌ <b>Ошибка обновления</b>"
+        title = _tr('update_rollback.notify_pending_update_result.4')
     message = html.escape(_bounded_detail(payload.get("message"), limit=3000))
     text = f"{title}\n\n{message}"
     delivered = True
@@ -3107,10 +3106,10 @@ def _interactive_rollback(
         verify_integrity=True,
     )
     if not points:
-        print("Доступных точек отката нет.")
+        print(_tr('update_rollback.interactive_rollback.1'))
         return 1
 
-    print("\nДоступные точки отката:")
+    print(_tr('update_rollback.interactive_rollback.2'))
     for index, point in enumerate(points, start=1):
         local_time = point.created_at.astimezone()
         print(
@@ -3119,29 +3118,25 @@ def _interactive_rollback(
             f"{local_time:%d.%m.%Y %H:%M:%S}"
         )
     try:
-        selected_raw = input(f"\nВыберите точку [1-{len(points)}]: ").strip()
+        selected_raw = input(_tr('update_rollback.interactive_rollback.3', p0=f'{len(points)}')).strip()
         selected_index = int(selected_raw)
     except (EOFError, ValueError):
-        print("Некорректный выбор.")
+        print(_tr('update_rollback.interactive_rollback.4'))
         return 1
     if selected_index < 1 or selected_index > len(points):
-        print("Некорректный выбор.")
+        print(_tr('update_rollback.interactive_rollback.4'))
         return 1
 
     point = points[selected_index - 1]
     print(
-        "\nВНИМАНИЕ: база данных будет полностью восстановлена на момент "
-        f"{point.created_at.astimezone():%d.%m.%Y %H:%M:%S}.\n"
-        "Все добавленные после этого пользователи, оплаты, ключи, настройки "
-        "и другие изменения базы данных будут потеряны.\n"
-        "Локальные изменения Git-контролируемых файлов также будут перезаписаны."
+        _tr('update_rollback.interactive_rollback.5', p0=f'{point.created_at.astimezone():%d.%m.%Y %H:%M:%S}')
     )
     try:
-        confirmation = input("\nВведите ОТКАТИТЬ для подтверждения: ").strip()
+        confirmation = input(_tr('update_rollback.interactive_rollback.6', confirmation=_tr('confirmation.rollback'))).strip()
     except EOFError:
         confirmation = ""
-    if confirmation != "ОТКАТИТЬ":
-        print("Откат отменён.")
+    if confirmation != _tr('confirmation.rollback'):
+        print(_tr('update_rollback.interactive_rollback.7'))
         return 0
 
     result = perform_rollback(
@@ -3299,12 +3294,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(unit_path)
             return 0
     except UpdateRollbackError as exc:
-        title = "Обновление не началось" if args.command == "update" else "Ошибка"
+        title = _tr('update_rollback.main.1') if args.command == "update" else _tr('tariffs.get_add_step_text.1')
         print(f"{title}: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
         logger.exception("Unexpected update rollback error")
-        print(f"Критическая ошибка: {exc}", file=sys.stderr)
+        print(_tr('update_rollback.main.2', p0=f'{exc}'), file=sys.stderr)
         return 1
     return 1
 

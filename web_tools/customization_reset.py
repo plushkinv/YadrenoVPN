@@ -1,6 +1,8 @@
 """Restore the shipped UI through the existing source/publication transaction."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
@@ -23,9 +25,9 @@ def has_web(root):
 
 def preview_reset(root):
     if not has_web(root):
-        return ['Web не установлен; файловый сброс пропущен']
-    return ['Опубликованный дизайн и неопубликованные правки → базовая поставка установленной версии',
-            'Исходники и их эталон будут восстановлены вместе с публикацией']
+        return [_tr('customization_reset.preview_reset.1')]
+    return [_tr('customization_reset.preview_reset.2'),
+            _tr('customization_reset.preview_reset.3')]
 
 
 @contextmanager
@@ -93,8 +95,8 @@ class PreparedReset:
                     raise
             else:
                 recover_reset(runtime, folder, transaction)
-        return ['Базовая Web-публикация активирована: ' + signed['manifest']['build_id'],
-                'Неопубликованные правки сброшены; исходники и эталон восстановлены']
+        return [_tr('customization_reset.apply.1') + signed['manifest']['build_id'],
+                _tr('customization_reset.apply.2')]
 
 
 def recover_reset(runtime, folder, transaction):

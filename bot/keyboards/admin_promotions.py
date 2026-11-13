@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -10,7 +12,7 @@ from bot.keyboards.admin_misc import (
 
 def promocodes_list_kb(promocodes: list[dict]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="➕ Добавить", callback_data="admin_promocode_add"))
+    builder.row(InlineKeyboardButton(text=_tr('admin_promotions.promocodes_list_kb.1'), callback_data="admin_promocode_add"))
     for promo in promocodes[:20]:
         status = "🟢" if promo.get("is_active") else "⚪"
         builder.row(
@@ -25,11 +27,11 @@ def promocodes_list_kb(promocodes: list[dict]) -> InlineKeyboardMarkup:
 
 def promocode_detail_kb(promo: dict) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    status_text = "🟢 Включено" if promo.get("is_active") else "⚪ Выключено"
+    status_text = _tr('admin_promotions.promocode_detail_kb.1') if promo.get("is_active") else _tr('admin_promotions.promocode_detail_kb.2')
     builder.row(InlineKeyboardButton(text=status_text, callback_data=f"admin_promocode_toggle:{promo['id']}"))
-    builder.row(InlineKeyboardButton(text="📊 Размер скидки", callback_data=f"admin_promocode_edit_discount:{promo['id']}"))
-    builder.row(InlineKeyboardButton(text="⏳ Срок действия", callback_data=f"admin_promocode_edit_expires:{promo['id']}"))
-    builder.row(InlineKeyboardButton(text="🔢 Лимит активаций", callback_data=f"admin_promocode_edit_limit:{promo['id']}"))
+    builder.row(InlineKeyboardButton(text=_tr('admin_promotions.promocode_detail_kb.3'), callback_data=f"admin_promocode_edit_discount:{promo['id']}"))
+    builder.row(InlineKeyboardButton(text=_tr('admin_promotions.promocode_detail_kb.4'), callback_data=f"admin_promocode_edit_expires:{promo['id']}"))
+    builder.row(InlineKeyboardButton(text=_tr('admin_promotions.promocode_detail_kb.5'), callback_data=f"admin_promocode_edit_limit:{promo['id']}"))
     builder.row(back_button("admin_promocodes"), home_button())
     return builder.as_markup()
 
@@ -43,17 +45,17 @@ def coupons_menu_kb(
     lapsed_status = "🟢" if lapsed_enabled else "⚪"
     builder.row(
         InlineKeyboardButton(
-            text=f"{purchase_status} Автовыдача при покупке",
+            text=_tr('admin_promotions.coupons_menu_kb.1', p0=f'{purchase_status}'),
             callback_data="admin_coupons_purchase",
         )
     )
     builder.row(
         InlineKeyboardButton(
-            text=f"{lapsed_status} Автовыдача не продлившим ключ",
+            text=_tr('admin_promotions.coupons_menu_kb.2', p0=f'{lapsed_status}'),
             callback_data="admin_coupons_lapsed",
         )
     )
-    builder.row(InlineKeyboardButton(text="🎲 Сгенерировать", callback_data="admin_coupons_generate"))
+    builder.row(InlineKeyboardButton(text=_tr('admin_promotions.coupons_menu_kb.3'), callback_data="admin_coupons_generate"))
     builder.row(back_button("admin_marketing"), home_button())
     return builder.as_markup()
 
@@ -66,20 +68,20 @@ def coupon_purchase_settings_kb(
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
         enabled,
-        "Включено",
+        _tr('admin_payments.wata_management_kb.1'),
         "admin_coupons_purchase_set:1",
-        "Выключено",
+        _tr('admin_payments.wata_management_kb.2'),
         "admin_coupons_purchase_set:0",
     ))
     builder.row(
         InlineKeyboardButton(
-            text=f"📊 Размер скидки: {discount_percent}%",
+            text=_tr('admin_promotions.coupon_purchase_settings_kb.1', p0=f'{discount_percent}'),
             callback_data="admin_coupons_setting:purchase:discount",
         )
     )
     builder.row(
         InlineKeyboardButton(
-            text=f"⏳ Время жизни: {lifetime_days} дн.",
+            text=_tr('admin_promotions.coupon_purchase_settings_kb.2', p0=f'{lifetime_days}'),
             callback_data="admin_coupons_setting:purchase:lifetime",
         )
     )
@@ -99,26 +101,26 @@ def coupon_lapsed_settings_kb(
     builder = InlineKeyboardBuilder()
     builder.row(*state_pair_buttons(
         enabled,
-        "Включено",
+        _tr('admin_payments.wata_management_kb.1'),
         "admin_coupons_lapsed_set:1",
-        "Выключено",
+        _tr('admin_payments.wata_management_kb.2'),
         "admin_coupons_lapsed_set:0",
     ))
     builder.row(
         InlineKeyboardButton(
-            text=f"📊 Размер скидки: {discount_percent}%",
+            text=_tr('admin_promotions.coupon_purchase_settings_kb.1', p0=f'{discount_percent}'),
             callback_data="admin_coupons_setting:lapsed:discount",
         )
     )
     builder.row(
         InlineKeyboardButton(
-            text=f"⏳ Время жизни: {lifetime_days} дн.",
+            text=_tr('admin_promotions.coupon_purchase_settings_kb.2', p0=f'{lifetime_days}'),
             callback_data="admin_coupons_setting:lapsed:lifetime",
         )
     )
     builder.row(
         InlineKeyboardButton(
-            text=f"📅 Отправлять через: {delay_days} дн.",
+            text=_tr('admin_promotions.coupon_lapsed_settings_kb.1', p0=f'{delay_days}'),
             callback_data="admin_coupons_setting:lapsed:delay",
         )
     )
@@ -131,5 +133,5 @@ def coupon_lapsed_settings_kb(
 
 def promotion_cancel_kb(back_callback: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data=back_callback))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data=back_callback))
     return builder.as_markup()

@@ -1,3 +1,6 @@
+
+from localization import text as _tr
+from bot.utils.user_ui_texts import get_ui_text
 import logging
 from typing import Any, Dict, Optional
 
@@ -7,6 +10,7 @@ from bot.services.exchange_rate import (
     provider_units_to_base_minor,
 )
 from bot.services.money import format_money_minor, payment_type_currency
+from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
 
 from database.requests import (
     apply_promo_for_order,
@@ -63,8 +67,8 @@ def _amount_unit(payment_type: str) -> str:
 
 
 def _base_amount(tariff: Dict[str, Any], payment_type: str) -> int:
-    if payment_type not in {"stars", "crypto", "cryptobot"} | RUB_PAYMENT_TYPES and not _is_custom_payment_type(payment_type):
-        raise ValueError(f"Неизвестный тип оплаты: {payment_type}")
+    if payment_type not in {"stars", "crypto", "cryptobot", *INTERNATIONAL_PROVIDERS} | RUB_PAYMENT_TYPES and not _is_custom_payment_type(payment_type):
+        raise ValueError(_tr('promotions.base_amount.1', p0=f'{payment_type}'))
     return max(0, int(tariff.get('price_minor') or 0))
 
 
@@ -116,6 +120,8 @@ def _is_custom_payment_type(payment_type: str | None) -> bool:
 
 
 def _payment_minimum(payment_type: str) -> int:
+    if payment_type == 'cards' and payment_type_currency(payment_type) == 'USD':
+        return 100
     try:
         from bot.utils.payment_provider_registry import get_payment_provider_by_type
 
@@ -128,7 +134,7 @@ def _payment_minimum(payment_type: str) -> int:
 
 
 def _payment_minimum_label(payment_type: str, minimum: int) -> str:
-    if payment_type == "cryptobot" or _is_custom_payment_type(payment_type):
+    if payment_type in {"cryptobot", "cards", *INTERNATIONAL_PROVIDERS} or _is_custom_payment_type(payment_type):
         return format_amount(minimum, payment_type)
     return PAYMENT_MINIMUM_LABELS.get(payment_type, str(minimum))
 
@@ -539,7 +545,7 @@ async def _apply_promo_reward_policies_after_payment(order: Dict[str, Any]) -> l
                 int(order["user_id"]),
                 reward_days,
                 source='promo_reward',
-                reason=str(reward.get('label') or reward.get('name') or 'Промо-награда'),
+                reason=str(reward.get('label') or reward.get('name') or get_ui_text('reward.reason.promotion')),
                 reference_type='payment_promo_reward',
                 reference_id=f"{str(order.get('order_id') or '')}:{reward_index}",
                 metadata={

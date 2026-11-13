@@ -89,9 +89,9 @@ export function Account() {
         <h2>{(!profile.telegram_id && profile.account_name) || profile.first_name || profile.username || `${t.account} ${profile.account_id}`}</h2>
       </div>
       <dl className="account-details">
-        <div><dt>{t.accountPhone}</dt><dd className={profile.credentials.phone ? undefined : 'muted'}>{profile.credentials.phone || t.phoneMissing}</dd></div>
+        <div><dt>{t.accountPhone}</dt><dd className={profile.credentials.phone ? undefined : 'muted'}>{profile.credentials.phone ? <bdi dir="ltr">{profile.credentials.phone}</bdi> : t.phoneMissing}</dd></div>
         <div><dt>{t.telegram}</dt><dd><Badge tone={profile.telegram_id ? 'success' : 'neutral'}>{profile.telegram_id ? t.telegramConnected : t.telegramUnlinked}</Badge>
-          {profile.telegram_id && profile.username && <span className="muted">@{profile.username}</span>}
+          {profile.telegram_id && profile.username && <bdi dir="ltr" className="muted">@{profile.username}</bdi>}
         </dd></div>
       </dl>
       <div className="account-actions">
@@ -130,7 +130,7 @@ export function TelegramLink() {
       <Button onClick={() => environment.openLink(link.telegram_url)}>{t.openTelegram}</Button>
       <Button tone="secondary" disabled={action.busy} onClick={() => runLink(async () => setStatus(await api.request('/account/telegram/link/status', 'POST', { token: link.token })))}>{t.linkCheck}</Button>
       {status?.telegram_id && status.state === 'confirmed' ? <><p>{status.first_name || String(status.telegram_id)}</p>
-      {status.merge && <p className="notice">{t.mergeWarning} {t.account}: {status.target_account_id}. {t.phone}: {status.phone}.</p>}
+      {status.merge && <p className="notice">{t.mergeWarning} {t.account}: {status.target_account_id}. {t.phone}: <bdi dir="ltr">{status.phone}</bdi>.</p>}
       <Button disabled={action.busy} onClick={() => runLink(async () => {
         await api.request('/account/telegram/link/finish', 'POST', { token: link.token, telegram_id: status.telegram_id }); remember(savedKey, null); refresh(); navigate('account');
       })}>{t.linkFinish}</Button></> : status && <p role="status">{t.linkWaiting}</p>}

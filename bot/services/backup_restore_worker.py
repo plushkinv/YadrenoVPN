@@ -1,6 +1,8 @@
 """Apply a confirmed backup through the existing independent maintenance service."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import json
 import logging
@@ -22,13 +24,13 @@ RESULT_FILENAME = 'backup_restore_result.json'
 def schedule_restore(job_id: str, admin_id: int, *, root: Path = PROJECT_ROOT) -> None:
     require_admin(admin_id)
     if maintenance._repository_guard_is_active():
-        raise ValueError('Дождитесь завершения текущей операции Yadreno Admin')
+        raise ValueError(_tr('backup_restore_worker.schedule_restore.1'))
     with maintenance.update_operation_lock(root):
         folder, job = verify_prepared(root, job_id, admin_id, status='prepared')
         for request_path in (root / 'backup/pre_update').glob('*/service_request.json'):
             request = json.loads(local_path(request_path.parent, request_path.name).read_bytes())
             if request.get('status') in {'pending', 'running'}:
-                raise ValueError('Уже выполняется обслуживание бота. Дождитесь его завершения.')
+                raise ValueError(_tr('backup_restore_worker.schedule_restore.2'))
         maintenance.install_registered_updater_service(project_root=root)
         unit = maintenance._stage_registered_service_request(
             root, job_id, operation='restore_backup', admin_id=admin_id, start_delay=2,
@@ -38,7 +40,7 @@ def schedule_restore(job_id: str, admin_id: int, *, root: Path = PROJECT_ROOT) -
             save_job(folder, job)
             result = maintenance._run_command(['systemctl', 'start', '--no-block', unit], cwd=root, timeout=30)
             if result.returncode:
-                raise RuntimeError((result.stdout + result.stderr).strip() or 'Не удалось запустить восстановление')
+                raise RuntimeError((result.stdout + result.stderr).strip() or _tr('backup_restore_worker.schedule_restore.3'))
         except Exception as exc:
             maintenance._discard_registered_service_request(root, job_id)
             fail_job(folder, exc)
@@ -48,16 +50,16 @@ def schedule_restore(job_id: str, admin_id: int, *, root: Path = PROJECT_ROOT) -
 def _check_destinations(root: Path, folder: Path, job: dict) -> None:
     database = local_path(root, 'database/vpn_bot.db')
     if database.exists() and not database.is_file():
-        raise ValueError('Рабочая база не является обычным файлом')
+        raise ValueError(_tr('backup_restore_worker.check_destinations.1'))
     if database.parent.stat().st_dev != folder.stat().st_dev:
-        raise ValueError('backup и database должны находиться на одной файловой системе')
+        raise ValueError(_tr('backup_restore_worker.check_destinations.2'))
     if any(tree not in RESTORE_TREES for tree in job['trees']):
-        raise ValueError('Неизвестный каталог восстановления')
+        raise ValueError(_tr('backup_restore_worker.check_destinations.3'))
     for tree in job['trees']:
         destination = local_path(root, tree)
         if (destination.parent.stat().st_dev != folder.stat().st_dev or destination.exists()
                 and (not destination.is_dir() or destination.stat().st_dev != folder.stat().st_dev)):
-            raise ValueError(f'Каталог {tree} нельзя заменить на этой файловой системе')
+            raise ValueError(_tr('backup_restore_worker.check_destinations.4', p0=f'{tree}'))
 
 
 def _apply_files(root: Path, folder: Path, job: dict) -> None:
@@ -95,14 +97,18 @@ def perform_restore(job_id: str, admin_id: int, *, root: Path = PROJECT_ROOT,
             maintenance._systemctl('stop', service_name, project_root=root)
             stopped = True
             _apply_files(root, folder, job)
+            # The worker outlives the database replacement. Its completion message
+            # must use the restored installation language, just like the restarted bot.
+            from database.db_language import refresh_installation_language
+            refresh_installation_language()
             maintenance._prepare_update_health(root, snapshot_id=job_id, target_commit=job['commit'])
             maintenance._systemctl('start', service_name, project_root=root)
             if not maintenance._wait_for_update_health(
                 service_name, project_root=root, snapshot_id=job_id, target_commit=job['commit'],
             ):
-                raise RuntimeError('Бот не подтвердил успешный запуск после восстановления')
+                raise RuntimeError(_tr('backup_restore_worker.perform_restore.1'))
             validate_restored_ui(root)
-            message = 'Данные восстановлены из бэкапа. Бот успешно запущен.'
+            message = _tr('backup_restore_worker.perform_restore.2')
             job['status'] = 'success'
             save_job(folder, job)
             _write_result(root, job_id, admin_id, True, message)
@@ -115,18 +121,17 @@ def perform_restore(job_id: str, admin_id: int, *, root: Path = PROJECT_ROOT,
                 try:
                     maintenance._systemctl('stop', service_name, project_root=root)
                 except Exception as stop_exc:
-                    stop_error = f' Не удалось подтвердить остановку службы: {stop_exc}.'
+                    stop_error = _tr('backup_restore_worker.perform_restore.3', p0=f'{stop_exc}')
                 maintenance._update_health_path(root).unlink(missing_ok=True)
             if folder is None:
                 folder, _ = load_job(root, job_id, admin_id)
             fail_job(folder, exc)
             detail = maintenance._bounded_detail(exc)
-            state = ('Служба остановлена; данные могли быть заменены. Автоматический откат не выполнялся.'
+            state = (_tr('backup_restore_worker.perform_restore.4')
                      if stopped and not stop_error else
-                     'Данные могли быть заменены; состояние службы требует проверки.' if stopped else
-                     'Рабочие данные не заменялись.')
-            message = (f'{detail}\n{state}{stop_error}\nАрхив и диагностика: '
-                       f'backup/pre_update/{job_id}/')
+                     _tr('backup_restore_worker.perform_restore.5') if stopped else
+                     _tr('backup_restore_worker.perform_restore.6'))
+            message = (_tr('backup_restore_worker.perform_restore.7', p0=f'{detail}', p1=f'{state}', p2=f'{stop_error}', p3=f'{job_id}'))
             _write_result(root, job_id, admin_id, False, message)
             try:
                 asyncio.run(_notify_from_worker(root))
@@ -142,7 +147,7 @@ async def notify_pending_backup_restore_result(bot, *, root: Path = PROJECT_ROOT
         return False
     result = json.loads(result_path.read_bytes())
     require_admin(result['admin_id'])
-    title = '✅ <b>Бэкап восстановлен</b>' if result['success'] else '❌ <b>Ошибка восстановления бэкапа</b>'
+    title = _tr('backup_restore_worker.notify_pending_backup_restore_result.1') if result['success'] else _tr('backup_restore_worker.notify_pending_backup_restore_result.2')
     await bot.send_message(result['admin_id'], title + '\n\n' + escape_html(result['message']), parse_mode='HTML')
     result_path.unlink(missing_ok=True)
     return True

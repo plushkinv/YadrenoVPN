@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { ArrowUp, Check, ChevronDown, ChevronUp, Expand, LogOut, Mic, MoreHorizontal, Paperclip, Plus, RefreshCw, Square, Trash2, X } from 'lucide-react';
 import { Button } from '../components/Ui';
@@ -13,7 +14,7 @@ function ActivityDots() {
   return <span className="admin-editor-dots" aria-hidden="true"><span /><span /><span /></span>;
 }
 
-export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pageTitle = 'Главная', preview = true,
+export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pageTitle = _tr("AdminEditor.1"), preview = true,
   onCollapse, onExit, onTogglePreview, viewNotice, onOpenPublished, loadingPublished, recoveryError }: {
   editor: AdminEditorController; expanded: boolean; onActivate: () => void; onAttach: () => void; tools: ReactNode;
   pageTitle?: string; preview?: boolean; onCollapse?: () => void; onExit?: () => void; onTogglePreview: () => void; viewNotice?: string;
@@ -24,9 +25,9 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
   const [large, setLarge] = useState(false), [menuOpen, setMenuOpen] = useState(false);
   const focusPending = useRef(expanded);
   const voice = editor.voice, recording = voice.phase === 'recording', requesting = voice.phase === 'requesting';
-  const activity = editor.submission === 'sending' ? 'Отправляем запрос…'
-    : editor.active && !editor.latest?.final ? editor.latest?.progress?.content || 'Агент работает…'
-    : editor.submission === 'accepted' && !editor.latest?.final ? 'Агент работает…' : null;
+  const activity = editor.submission === 'sending' ? _tr("AdminEditor.2")
+    : editor.active && !editor.latest?.final ? editor.latest?.progress?.content || _tr("AdminEditor.3")
+    : editor.submission === 'accepted' && !editor.latest?.final ? _tr("AdminEditor.3") : null;
   useLayoutEffect(() => {
     const element = header.current!;
     const measure = () => {
@@ -51,22 +52,22 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
   }, [menuOpen]);
   const closeMenu = () => { setMenuOpen(false); menuButton.current?.focus(); };
   const status = preview && editor.displayedCandidate && <span className="admin-editor-candidate"><span aria-hidden="true">·</span>{editor.displayedCandidate.published
-      ? <span className="admin-editor-applied"><Check aria-hidden="true" />Применено</span>
-      : <span className="admin-editor-draft">Черновик</span>}</span>;
-  return <section className={'admin-editor' + (expanded ? ' admin-editor--expanded' : '')} aria-label="Редактор страницы">
+      ? <span className="admin-editor-applied"><Check aria-hidden="true" />{_tr("AdminEditor.4")}</span>
+      : <span className="admin-editor-draft">{_tr("AdminEditor.5")}</span>}</span>;
+  return <section className={'admin-editor' + (expanded ? ' admin-editor--expanded' : '')} aria-label={_tr("AdminEditor.6")}>
     <header ref={header} className="admin-editor-header">
       <div className="admin-editor-heading">
-        {expanded ? <strong className="admin-editor-page" title={`Редактор · ${pageTitle}`}>Редактор · {pageTitle}</strong>
-          : <button type="button" className="admin-editor-open admin-editor-page" onClick={onActivate} aria-label="Открыть редактор" title={`Редактор · ${pageTitle}`}>Редактор · {pageTitle}</button>}
+        {expanded ? <strong className="admin-editor-page" title={_tr("AdminEditor.7", {p0: pageTitle})}>{_tr("AdminEditor.8")}{pageTitle}</strong>
+          : <button type="button" className="admin-editor-open admin-editor-page" onClick={onActivate} aria-label={_tr("AdminEditor.9")} title={_tr("AdminEditor.7", {p0: pageTitle})}>{_tr("AdminEditor.8")}{pageTitle}</button>}
         <div className="admin-editor-version">
-          <button type="button" className="admin-preview-toggle" role="switch" aria-checked={preview} aria-label="Предпросмотр" disabled={loadingPublished} onClick={onTogglePreview}>
-            Предпросмотр<span className="admin-preview-switch" aria-hidden="true"><span /></span>
+          <button type="button" className="admin-preview-toggle" role="switch" aria-checked={preview} aria-label={_tr("AdminEditor.10")} disabled={loadingPublished} onClick={onTogglePreview}>
+            {_tr("AdminEditor.10")}<span className="admin-preview-switch" aria-hidden="true"><span /></span>
           </button>{status}
         </div>
       </div>
       {editor.connectionLost && <EditorConnection />}
       {tools}
-      <EditorIcon label={expanded ? 'Свернуть редактор' : 'Развернуть редактор'} onClick={expanded ? onCollapse : onActivate}>
+      <EditorIcon label={expanded ? _tr("AdminEditor.11") : _tr("AdminEditor.12")} onClick={expanded ? onCollapse : onActivate}>
         {expanded ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}
       </EditorIcon>
     </header>
@@ -80,48 +81,48 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
           {editor.active && <div className="admin-editor-task">
             <div className="admin-editor-actions">
               <Button tone="secondary" disabled={!editor.ready || editor.busy || recording || requesting} onClick={() => void editor.control('cancel')}>
-                <Square aria-hidden="true" />{editor.latest?.cancel_button_text ?? editor.latest?.progress?.cancel_button_text ?? 'Прервать задачу'}
+                <Square aria-hidden="true" />{editor.latest?.cancel_button_text ?? editor.latest?.progress?.cancel_button_text ?? _tr("AdminEditor.13")}
               </Button>
               {editor.latest?.resume_allowed && !editor.latest.final && !editor.state?.local_polling &&
-                <Button tone="secondary" disabled={!editor.ready || editor.busy} onClick={() => void editor.control('resume')}>Продолжить ожидание</Button>}
+                <Button tone="secondary" disabled={!editor.ready || editor.busy} onClick={() => void editor.control('resume')}>{_tr("AdminEditor.14")}</Button>}
             </div>
           </div>}
           {editor.notice && <p role="status">{editor.notice}</p>}
           {viewNotice && <p role="status">{viewNotice}</p>}
         </div>
-        {editor.canApply && <div className="admin-editor-apply"><Button onClick={() => void editor.apply()}>Применить</Button></div>}
+        {editor.canApply && <div className="admin-editor-apply"><Button onClick={() => void editor.apply()}>{_tr("AdminEditor.15")}</Button></div>}
         {(editor.actionError || editor.uncertain) && <div className="admin-editor-error" role="alert">
           {editor.actionError && <p>{editor.actionError}</p>}
-          {editor.uncertain && <p role="status">Не удалось подтвердить отправку. Запрос мог быть принят. Проверьте статус перед повторной отправкой.</p>}
+          {editor.uncertain && <p role="status">{_tr("AdminEditor.16")}</p>}
           <div className="admin-editor-actions">
-            {editor.uncertain && <Button tone="secondary" disabled={editor.busy || editor.refreshing} onClick={() => void editor.refresh()}>Проверить статус</Button>}
-            {editor.canRepeat && <Button tone="secondary" onClick={() => void editor.repeat()}>{editor.uncertain ? 'Отправить повторно' : 'Повторить'}</Button>}
+            {editor.uncertain && <Button tone="secondary" disabled={editor.busy || editor.refreshing} onClick={() => void editor.refresh()}>{_tr("AdminEditor.17")}</Button>}
+            {editor.canRepeat && <Button tone="secondary" onClick={() => void editor.repeat()}>{editor.uncertain ? _tr("AdminEditor.18") : _tr("ApplicationBoundary.3")}</Button>}
           </div>
         </div>}
         {editor.stateError && <div className="admin-editor-error" role="alert"><p>{editor.stateError}</p>
-          <Button tone="secondary" disabled={editor.busy || editor.refreshing} onClick={() => void editor.refresh()}>Обновить статус</Button></div>}
+          <Button tone="secondary" disabled={editor.busy || editor.refreshing} onClick={() => void editor.refresh()}>{_tr("AdminEditor.19")}</Button></div>}
         {(editor.candidateError || recoveryError) && <div className="admin-editor-error" role="alert"><p>{recoveryError || editor.candidateError}</p>
-          <div className="admin-editor-actions">{!recoveryError && <Button tone="secondary" disabled={editor.busy || editor.refreshing || loadingPublished} onClick={() => void editor.refresh()}>Обновить предпросмотр</Button>}
-            {onOpenPublished && <Button tone="secondary" disabled={editor.busy || editor.refreshing || loadingPublished} onClick={onOpenPublished}>Открыть текущую версию</Button>}
+          <div className="admin-editor-actions">{!recoveryError && <Button tone="secondary" disabled={editor.busy || editor.refreshing || loadingPublished} onClick={() => void editor.refresh()}>{_tr("AdminEditor.20")}</Button>}
+            {onOpenPublished && <Button tone="secondary" disabled={editor.busy || editor.refreshing || loadingPublished} onClick={onOpenPublished}>{_tr("AdminEditor.21")}</Button>}
           </div></div>}
       </div>
       <form className="admin-editor-compose" onSubmit={event => { event.preventDefault(); void editor.submit(); }}>
-        {editor.files.length > 0 && <ul className="admin-editor-files" aria-label="Выбранные файлы">{editor.files.map((file, index) => <li key={index}>
-          <span>{file.name} · {Math.max(1, Math.ceil(file.size / 1024))} КиБ</span>
-          <EditorIcon label={`Удалить ${file.name}`} disabled={editor.busy || recording || requesting} onClick={() => editor.removeFile(index)}><X aria-hidden="true" /></EditorIcon>
+        {editor.files.length > 0 && <ul className="admin-editor-files" aria-label={_tr("AdminEditor.22")}>{editor.files.map((file, index) => <li key={index}>
+          <span>{file.name} · {Math.max(1, Math.ceil(file.size / 1024))} {_tr("AdminEditor.23")}</span>
+          <EditorIcon label={_tr("AdminEditor.24", {p0: file.name})} disabled={editor.busy || recording || requesting} onClick={() => editor.removeFile(index)}><X aria-hidden="true" /></EditorIcon>
         </li>)}</ul>}
         {voice.clip && !recording && <VoiceMessage clip={voice.clip} disabled={editor.busy} onRemove={voice.clear} />}
         {recording ? <div className="admin-voice-recording">
           <div className="admin-editor-voice"><span className="admin-record-dot" aria-hidden="true" />
             <span className="admin-voice-time">{voiceTime(voice.progress.duration)}</span><VoiceWave peaks={voice.progress.peaks} />
-            <Button tone="quiet" aria-label="Завершить запись" onClick={() => voice.finish()}><Square aria-hidden="true" />Стоп</Button>
-            <EditorIcon label="Удалить запись" onClick={() => voice.finish(false)}><Trash2 aria-hidden="true" /></EditorIcon>
-          </div><p className="admin-voice-caption" role="status">Идёт запись. После остановки можно прослушать.</p>
+            <Button tone="quiet" aria-label={_tr("AdminEditor.25")} onClick={() => voice.finish()}><Square aria-hidden="true" />{_tr("AdminEditor.26")}</Button>
+            <EditorIcon label={_tr("AdminEditor.27")} onClick={() => voice.finish(false)}><Trash2 aria-hidden="true" /></EditorIcon>
+          </div><p className="admin-voice-caption" role="status">{_tr("AdminEditor.28")}</p>
         </div> : <>
-          {requesting && <div className="admin-voice-request"><span role="status">Ожидание разрешения микрофона…</span>
-            <Button tone="quiet" onClick={() => voice.finish(false)}>Отменить</Button></div>}
+          {requesting && <div className="admin-voice-request"><span role="status">{_tr("AdminEditor.29")}</span>
+            <Button tone="quiet" onClick={() => voice.finish(false)}>{_tr("app.cancel")}</Button></div>}
           <div className="admin-editor-input-well">
-            <textarea ref={input} aria-label="Что изменить на этой странице?" placeholder="Что изменить?" value={editor.message}
+            <textarea ref={input} aria-label={_tr("AdminEditor.30")} placeholder={_tr("AdminEditor.31")} value={editor.message}
               maxLength={8192} rows={large ? 5 : 2} onChange={event => editor.setMessage(event.target.value)}
               onPaste={event => {
                 const files = Array.from(event.clipboardData.files);
@@ -133,31 +134,31 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
               }}
               disabled={!editor.ready || editor.busy || editor.active} />
             <div className="admin-editor-tools">
-              <EditorIcon label="Прикрепить файлы" disabled={!editor.canAttach} onClick={onAttach}><Paperclip aria-hidden="true" /></EditorIcon>
-              <EditorIcon label="Записать голос" disabled={!editor.canRecord} onClick={editor.microphone}><Mic aria-hidden="true" /></EditorIcon>
-              <button ref={menuButton} type="button" className="button button--quiet admin-icon" aria-label="Действия редактора"
+              <EditorIcon label={_tr("AdminEditor.32")} disabled={!editor.canAttach} onClick={onAttach}><Paperclip aria-hidden="true" /></EditorIcon>
+              <EditorIcon label={_tr("AdminEditor.33")} disabled={!editor.canRecord} onClick={editor.microphone}><Mic aria-hidden="true" /></EditorIcon>
+              <button ref={menuButton} type="button" className="button button--quiet admin-icon" aria-label={_tr("AdminEditor.34")}
                 aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}><MoreHorizontal aria-hidden="true" /></button>
               <span className="admin-editor-spacer" />
               {activity && <ActivityDots />}
-              <Button type="submit" aria-label="Отправить" title="Отправить" className="admin-icon admin-editor-send" disabled={!editor.canSubmit}><ArrowUp aria-hidden="true" /></Button>
+              <Button type="submit" aria-label={_tr("AdminEditor.35")} title={_tr("AdminEditor.35")} className="admin-icon admin-editor-send" disabled={!editor.canSubmit}><ArrowUp aria-hidden="true" /></Button>
             </div>
           </div>
         </>}
         {voice.notice && <p className="admin-voice-caption" role="status">{voice.notice}</p>}
         {voice.error && <div className="admin-editor-input-error" role="alert"><p>{voice.error}</p><div className="admin-editor-actions">
-          <Button tone="quiet" disabled={!editor.canRecord} onClick={editor.microphone}>Проверить снова</Button>
-          <Button tone="quiet" onClick={() => { voice.dismissError(); input.current?.focus(); }}>Написать текстом</Button>
+          <Button tone="quiet" disabled={!editor.canRecord} onClick={editor.microphone}>{_tr("AdminEditor.36")}</Button>
+          <Button tone="quiet" onClick={() => { voice.dismissError(); input.current?.focus(); }}>{_tr("AdminEditor.37")}</Button>
         </div></div>}
         {editor.inputError && <p className="admin-editor-input-error" role="alert">{editor.inputError}</p>}
       </form>
-      {menuOpen && <div ref={menu} className="admin-editor-menu" aria-label="Действия редактора" onKeyDown={event => {
+      {menuOpen && <div ref={menu} className="admin-editor-menu" aria-label={_tr("AdminEditor.34")} onKeyDown={event => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMenu(); }
       }}>
-        <Button tone="quiet" disabled={editor.busy || editor.refreshing} onClick={() => { closeMenu(); void editor.refresh(); }}><RefreshCw aria-hidden="true" />Обновить статус</Button>
+        <Button tone="quiet" disabled={editor.busy || editor.refreshing} onClick={() => { closeMenu(); void editor.refresh(); }}><RefreshCw aria-hidden="true" />{_tr("AdminEditor.19")}</Button>
         <Button tone="quiet" disabled={!editor.ready || editor.busy || editor.active || editor.uncertain || recording || requesting}
-          onClick={() => { closeMenu(); void editor.control('new-chat'); }}><Plus aria-hidden="true" />Новый чат</Button>
-        <Button tone="quiet" onClick={() => { closeMenu(); setLarge(value => !value); input.current?.focus(); }}><Expand aria-hidden="true" />{large ? 'Компактное поле' : 'Увеличить поле'}</Button>
-        {onExit && <Button tone="quiet" onClick={() => { closeMenu(); onExit(); }}><LogOut aria-hidden="true" />Выйти из предпросмотра</Button>}
+          onClick={() => { closeMenu(); void editor.control('new-chat'); }}><Plus aria-hidden="true" />{_tr("AdminEditor.38")}</Button>
+        <Button tone="quiet" onClick={() => { closeMenu(); setLarge(value => !value); input.current?.focus(); }}><Expand aria-hidden="true" />{large ? _tr("AdminEditor.39") : _tr("AdminEditor.40")}</Button>
+        {onExit && <Button tone="quiet" onClick={() => { closeMenu(); onExit(); }}><LogOut aria-hidden="true" />{_tr("AdminEditor.41")}</Button>}
       </div>}
     </>}
   </section>;

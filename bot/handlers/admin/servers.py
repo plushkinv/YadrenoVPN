@@ -9,6 +9,8 @@ Processes:
 - Activation/deactivation
 - Removal
 """
+
+from localization import text as _tr
 import logging
 import datetime
 from aiogram import Router, F
@@ -110,56 +112,54 @@ def build_server_view(snapshot):
     server_id = server['id']
 
     status_emoji = "🟢" if server['is_active'] else "🔴"
-    status_text = "Активен" if server['is_active'] else "Деактивирован"
+    status_text = _tr('servers.build_server_view.1') if server['is_active'] else _tr('servers.build_server_view.2')
     auth_method = get_server_auth_method(server)
 
     lines = [
         f"🖥️ <b>{escape_html(server['name'])}</b>\n",
-        f"🔗 URL панели: <code>{escape_html(server.get('protocol', 'https'))}://"
-        f"{escape_html(server['host'])}:{server['port']}{escape_html(server['web_base_path'])}</code>",
+        _tr('servers.build_server_view.3', p0=f"{escape_html(server.get('protocol', 'https'))}", p1=f"{escape_html(server['host'])}", p2=f"{server['port']}", p3=f"{escape_html(server['web_base_path'])}"),
         (
-            "🧩 Виртуальная inbound-группа: "
-            f"<code>{server['inbound_group_id']}</code>"
+            _tr('servers.build_server_view.4', p0=f"{server['inbound_group_id']}")
             if server.get('inbound_group_id') is not None
-            else "🧩 Виртуальная inbound-группа: <code>Все inbound’ы</code>"
+            else _tr('servers.build_server_view.5')
         ),
-        f"🔐 Подключение: <b>{'API-ключ' if auth_method == AUTH_API_TOKEN else 'Логин и пароль'}</b>",
+        _tr('servers.build_server_view.8', p0=f"{(_tr('servers.build_server_view.6') if auth_method == AUTH_API_TOKEN else _tr('servers.build_server_view.7'))}"),
     ]
     if auth_method == AUTH_API_TOKEN:
-        token_status = "сохранён" if server.get('api_token') else "не сохранён"
-        lines.append(f"🔑 API-ключ: <code>{token_status}</code>\n")
+        token_status = _tr('servers.build_server_view.9') if server.get('api_token') else _tr('servers.build_server_view.10')
+        lines.append(_tr('servers.build_server_view.11', p0=f'{token_status}'))
     else:
         password_masked = "•" * min(len(server.get('password') or ''), 8)
         lines.extend([
-            f"👤 Логин: <code>{escape_html(server.get('login') or '')}</code>",
-            f"🔐 Пароль: <code>{password_masked}</code>\n",
+            _tr('servers.build_server_view.12', p0=f"{escape_html(server.get('login') or '')}"),
+            _tr('servers.build_server_view.13', p0=f'{password_masked}'),
         ])
 
     lines.extend([
         f"🧩 <b>3x-ui API:</b>",
-        f"   Версия: <code>{escape_html(server.get('panel_version') or 'не определена')}</code>",
-        f"   Проверка: <code>{escape_html(server.get('panel_checked_at') or 'ещё не выполнялась')}</code>\n",
-        f"📊 <b>Статистика:</b>",
-        f"   {status_emoji} Статус: {status_text}",
+        _tr('servers.build_server_view.15', p0=f"{escape_html(server.get('panel_version') or _tr('servers.build_server_view.14'))}"),
+        _tr('servers.build_server_view.17', p0=f"{escape_html(server.get('panel_checked_at') or _tr('servers.build_server_view.16'))}"),
+        _tr('servers.build_server_view.18'),
+        _tr('servers.build_server_view.19', p0=f'{status_emoji}', p1=f'{status_text}'),
     ])
 
     if server['is_active']:
         entry = snapshot['servers'][0]
         if snapshot['loading']:
-            lines.append("   ⏳ Загружается")
-        elif entry['error'] == 'ошибка подключения':
-            lines.append("   ⚠️ Ошибка подключения")
+            lines.append(_tr('servers.build_server_view.20'))
+        elif entry['error'] == _tr('admin_monitoring.collect_server_entry.1'):
+            lines.append(_tr('servers.build_server_view.21'))
         else:
             stats = entry['stats']
             if stats.get('online'):
                 traffic = format_traffic(stats.get('total_traffic_bytes', 0))
-                lines.append(f"   🔑 Онлайн: {stats.get('online_clients', 0)}")
-                lines.append(f"   📈 Трафик: {traffic}")
+                lines.append(_tr('servers.build_server_view.22', p0=f"{stats.get('online_clients', 0)}"))
+                lines.append(_tr('servers.build_server_view.23', p0=f'{traffic}'))
 
                 if stats.get('cpu_percent') is not None:
                     lines.append(f"   💻 CPU: {stats['cpu_percent']}%")
             else:
-                lines.append(f"   ⚠️ Сервер недоступен")
+                lines.append(_tr('servers.build_server_view.24'))
 
     # Groups—show if there is more than one group
     groups_count = get_groups_count()
@@ -170,8 +170,8 @@ def build_server_view(snapshot):
             g = get_group_by_id(gid)
             if g:
                 group_names.append(g['name'])
-        groups_str = ", ".join(group_names) if group_names else "Основная"
-        lines.append(f"\n📂 Тарифные группы: <code>{groups_str}</code>")
+        groups_str = ", ".join(group_names) if group_names else _tr('servers.build_server_view.25')
+        lines.append(_tr('servers.build_server_view.26', p0=f'{groups_str}'))
 
     return (
         "\n".join(lines),
@@ -187,7 +187,7 @@ def build_server_view(snapshot):
 async def show_servers_list(callback: CallbackQuery, state: FSMContext):
     """Shows a list of servers."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     turn = await monitoring_turn(state)
@@ -204,10 +204,10 @@ async def show_servers_list(callback: CallbackQuery, state: FSMContext):
 async def refresh_servers_list(callback: CallbackQuery, state: FSMContext):
     """Updates server statistics."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
-    await callback.answer("🔄 Обновляю статистику...")
+    await callback.answer(_tr('servers.refresh_servers_list.1'))
     
     await render_servers_list(callback.message, state)
 
@@ -220,14 +220,14 @@ async def refresh_servers_list(callback: CallbackQuery, state: FSMContext):
 async def show_server_view(callback: CallbackQuery, state: FSMContext):
     """Shows server details."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     server_id = int(callback.data.split(":")[1])
     server = get_server_by_id(server_id)
     
     if not server:
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
     
     await callback.answer()
@@ -278,25 +278,19 @@ def _masked_server_value(key: str, value: object) -> str:
     if key in {'password', 'api_token'}:
         return "•" * min(len(str(value or '')), 8)
     if key == 'inbound_group_id' and value in (None, '', '—'):
-        return 'Все inbound’ы'
+        return _tr('servers.masked_server_value.1')
     return escape_html(str(value if value is not None else '—'))
 
 
 def _inbound_group_display(server_data: dict) -> str:
     value = server_data.get('inbound_group_id')
-    return str(value) if value is not None else 'Все inbound’ы'
+    return str(value) if value is not None else _tr('servers.masked_server_value.1')
 
 
 def _connection_success_text(server_data: dict, stats: dict) -> str:
     traffic = format_traffic(stats.get('total_traffic_bytes', 0))
     return (
-        "✅ <b>Проверка подключения успешна!</b>\n\n"
-        "📊 Статистика:\n"
-        f"   🔑 Онлайн: {stats.get('online_clients', 0)}\n"
-        f"   📈 Трафик: {traffic}\n"
-        "🧩 Виртуальная inbound-группа: "
-        f"<code>{_inbound_group_display(server_data)}</code>\n\n"
-        "Сохранить сервер?"
+        _tr('servers.connection_success_text.1', p0=f"{stats.get('online_clients', 0)}", p1=f'{traffic}', p2=f'{_inbound_group_display(server_data)}')
     )
 
 
@@ -325,19 +319,12 @@ def _edit_step_keyboard(current_param: int, auth_method: str):
 
 def _inbound_group_help_text(*, allow_skip: bool) -> str:
     tail = (
-        " Если разделение не нужно, нажмите «⏭ Пропустить» — сервер будет "
-        "использовать все inbound’ы."
+        _tr('servers.inbound_group_help_text.1')
         if allow_skip
-        else " Чтобы отключить разделение, нажмите «🌐 Все inbound’ы»."
+        else _tr('servers.inbound_group_help_text.2')
     )
     return (
-        "Она позволяет разделить одну 3x-ui панель на несколько виртуальных серверов. "
-        "В 3x-ui откройте: Inbounds → изменить подключение → «Расширенный шаблон» "
-        "→ «Всё» → поле <code>\"tag\"</code> и добавьте в конец существующего tag "
-        "маркер <code>--1</code>, <code>--2</code> и т. д. Один inbound может иметь "
-        "несколько маркеров, например <code>--1--2</code>.\n\n"
-        "Здесь отправьте только номер без <code>--</code>, например <code>1</code> "
-        f"или <code>2</code>.{tail}"
+        _tr('servers.inbound_group_help_text.3', p0=f'{tail}')
     )
 
 
@@ -353,9 +340,9 @@ def get_add_step_text(
     total = get_total_params(auth_method)
     
     title = (
-        "🧩 <b>Виртуальная группа inbound’ов</b>"
+        _tr('servers.get_add_step_text.1')
         if param['key'] == 'inbound_group_id'
-        else "📝 <b>Добавление сервера</b>"
+        else _tr('servers.get_add_step_text.2')
     )
     lines = [f"{title} ({step}/{total})\n"]
 
@@ -374,7 +361,7 @@ def get_add_step_text(
     if param['key'] == 'inbound_group_id':
         lines.append(_inbound_group_help_text(allow_skip=True))
     else:
-        lines.append(f"Введите <b>{param['label'].lower()}</b>:")
+        lines.append(_tr('servers.get_add_step_text.3', p0=f"{param['label'].lower()}"))
         lines.append(f"<i>({escape_html(param['hint'])})</i>")
     
     return "\n".join(lines)
@@ -399,14 +386,7 @@ async def render_add_auth_method(
     return await render_admin_dialog(
         message,
         state,
-        "🔐 <b>Подключение сервера</b>\n\n"
-        "🔑 <b>API-ключ</b> — рекомендуемый вариант для 3X-UI 3.3.0 и новее. "
-        "Бот работает без входа в аккаунт панели, поэтому в панели можно оставить "
-        "включённой двухфакторную аутентификацию.\n\n"
-        "👤 <b>Логин и пароль</b> — бот входит в 3X-UI только для получения и "
-        "восстановления собственного API-ключа. Обычные операции всё равно идут через Bearer API. "
-        "При включённой двухфакторной аутентификации этот способ не работает.\n\n"
-        "Выберите способ подключения:",
+        _tr('servers.render_add_auth_method.1'),
         reply_markup=add_server_auth_method_kb(),
     )
 
@@ -415,7 +395,7 @@ async def render_add_auth_method(
 async def start_add_server(callback: CallbackQuery, state: FSMContext):
     """Starts the Add Server dialog."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await render_add_auth_method(callback.message, state, reset=True)
@@ -426,7 +406,7 @@ async def start_add_server(callback: CallbackQuery, state: FSMContext):
 async def show_add_server_auth_method(callback: CallbackQuery, state: FSMContext):
     """Returns from group/field selection to the authentication choice."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await render_add_auth_method(callback.message, state, reset=False)
     await callback.answer()
@@ -439,7 +419,7 @@ async def show_add_server_auth_method(callback: CallbackQuery, state: FSMContext
 async def select_server_auth_method(callback: CallbackQuery, state: FSMContext):
     """Selects API-token or username/password authentication."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     auth_method = (
@@ -462,8 +442,7 @@ async def select_server_auth_method(callback: CallbackQuery, state: FSMContext):
         await render_admin_dialog(
             callback.message,
             state,
-            "📂 <b>Тарифная группа сервера</b>\n\n"
-            "Выберите тарифную группу для нового сервера:",
+            _tr('servers.select_server_auth_method.1'),
             reply_markup=group_select_kb(
                 groups,
                 "server_group_select",
@@ -499,10 +478,10 @@ async def server_group_selected(callback: CallbackQuery, state: FSMContext):
     await state.update_data(add_step=1, selected_group_id=group_id)
     
     group = get_group_by_id(group_id)
-    group_name = group['name'] if group else 'Основная'
+    group_name = group['name'] if group else _tr('servers.build_server_view.25')
     
     text = (
-        f"📂 Тарифная группа: <b>{escape_html(group_name)}</b>\n\n"
+        _tr('servers.server_group_selected.1', p0=f'{escape_html(group_name)}')
         + get_add_step_text(1, server_data, auth_method)
     )
     
@@ -517,7 +496,7 @@ async def server_group_selected(callback: CallbackQuery, state: FSMContext):
 async def add_server_back(callback: CallbackQuery, state: FSMContext):
     """Return to the previous adding step."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -554,7 +533,7 @@ async def skip_add_server_inbound_group(
 ):
     """Keep legacy all-inbound behavior and continue the add-server wizard."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     data = await state.get_data()
@@ -562,7 +541,7 @@ async def skip_add_server_inbound_group(
     auth_method = data.get('auth_method', AUTH_LOGIN_PASSWORD)
     states = _get_add_states(auth_method)
     if not _is_inbound_group_step(current_step, auth_method):
-        await callback.answer("❌ Шаг уже изменился", show_alert=True)
+        await callback.answer(_tr('servers.skip_add_server_inbound_group.1'), show_alert=True)
         return
 
     server_data = dict(data.get('server_data', {}))
@@ -621,7 +600,7 @@ async def process_add_step(message: Message, state: FSMContext):
             protocol = parsed.scheme
             host = parsed.hostname
             if not host:
-                raise ValueError("Не удалось определить хост")
+                raise ValueError(_tr('servers.process_add_step.1'))
                 
             port = parsed.port
             if not port:
@@ -648,8 +627,7 @@ async def process_add_step(message: Message, state: FSMContext):
                     server_data,
                     auth_method,
                     error=(
-                        "Неверный формат ссылки. Убедитесь, что указан хост. "
-                        "Пример: 123.45.67.89:2053/api/"
+                        _tr('servers.process_add_step.2')
                     ),
                 ),
                 reply_markup=_add_step_keyboard(current_step, auth_method),
@@ -683,7 +661,7 @@ async def process_add_step(message: Message, state: FSMContext):
         await state.update_data(add_step=total_params + 1, connection_test_passed=False)
         
         target = await render_admin_dialog_from_input(message, state,
-            "⏳ <b>Проверка подключения...</b>",
+            _tr('servers.process_add_step.3'),
         )
         
         # Testing the connection
@@ -698,7 +676,7 @@ async def process_add_step(message: Message, state: FSMContext):
             text = _connection_success_text(server_data, stats)
             kb = add_server_confirm_kb()
         else:
-            text = "❌ <b>Не удалось подключиться к панели</b>"
+            text = _tr('servers.process_add_step.4')
             kb = add_server_test_failed_kb()
         
         await render_admin_dialog(target, state, text, reply_markup=kb)
@@ -739,7 +717,7 @@ async def add_server_password_handler(message: Message, state: FSMContext):
 async def add_server_retest(callback: CallbackQuery, state: FSMContext):
     """Recheck the connection."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -747,7 +725,7 @@ async def add_server_retest(callback: CallbackQuery, state: FSMContext):
     auth_method = data.get('auth_method', AUTH_LOGIN_PASSWORD)
     
     target = await render_admin_dialog(callback.message, state,
-        "⏳ <b>Проверка подключения...</b>"
+        _tr('servers.process_add_step.3')
     )
     
     test_result = await test_server_connection(server_data)
@@ -761,7 +739,7 @@ async def add_server_retest(callback: CallbackQuery, state: FSMContext):
         text = _connection_success_text(server_data, stats)
         kb = add_server_confirm_kb()
     else:
-        text = "❌ <b>Не удалось подключиться к панели</b>"
+        text = _tr('servers.process_add_step.4')
         kb = add_server_test_failed_kb()
     
     await render_admin_dialog(target, state, text, reply_markup=kb)
@@ -772,7 +750,7 @@ async def add_server_retest(callback: CallbackQuery, state: FSMContext):
 async def add_server_save(callback: CallbackQuery, state: FSMContext):
     """Saves the new server."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -781,7 +759,7 @@ async def add_server_save(callback: CallbackQuery, state: FSMContext):
 
     if not data.get('connection_test_passed'):
         await callback.answer(
-            "❌ Сначала успешно проверьте подключение",
+            _tr('servers.add_server_save.1'),
             show_alert=True,
         )
         return
@@ -802,17 +780,11 @@ async def add_server_save(callback: CallbackQuery, state: FSMContext):
         )
         
         target = await render_admin_dialog(callback.message, state,
-            f"✅ <b>Сервер успешно добавлен!</b>\n\n"
-            f"🖥️ {escape_html(server_data['name'])}\n"
-            f"🔗 <code>{escape_html(server_data.get('protocol', 'https'))}://"
-            f"{escape_html(server_data['host'])}:{server_data['port']}"
-            f"{escape_html(server_data['web_base_path'])}</code>\n"
-            f"🧩 Виртуальная inbound-группа: "
-            f"<code>{_inbound_group_display(server_data)}</code>"
+            _tr('servers.add_server_save.2', p0=f"{escape_html(server_data['name'])}", p1=f"{escape_html(server_data.get('protocol', 'https'))}", p2=f"{escape_html(server_data['host'])}", p3=f"{server_data['port']}", p4=f"{escape_html(server_data['web_base_path'])}", p5=f'{_inbound_group_display(server_data)}')
         )
         
         # Show the server in a second
-        await callback.answer("✅ Сервер добавлен!")
+        await callback.answer(_tr('servers.add_server_save.3'))
         
         # Redirect to view the new server
         # Redirect to view the new server
@@ -821,10 +793,10 @@ async def add_server_save(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.error(f"Ошибка добавления сервера: {e}")
         await render_admin_dialog(callback.message, state,
-            f"❌ <b>Ошибка сохранения</b>\n\n<code>{escape_html(str(e))}</code>",
+            _tr('servers.add_server_save.4', p0=f'{escape_html(str(e))}'),
             reply_markup=back_and_home_kb("admin_servers")
         )
-        await callback.answer("❌ Ошибка", show_alert=True)
+        await callback.answer(_tr('servers.add_server_save.5'), show_alert=True)
 
 
 # ============================================================================
@@ -845,15 +817,15 @@ def get_edit_text(server: dict, current_param: int, auth_method: str) -> str:
     display_value = _masked_server_value(param['key'], current_value)
     
     lines = [
-        f"✏️ <b>Редактирование: {escape_html(server['name'])}</b> ({current_param + 1}/{total})\n",
-        f"📌 Параметр: <b>{param['label']}</b>",
-        f"📝 Текущее значение: <code>{display_value}</code>\n",
+        _tr('servers.get_edit_text.1', p0=f"{escape_html(server['name'])}", p1=f'{current_param + 1}', p2=f'{total}'),
+        _tr('servers.get_edit_text.2', p0=f"{param['label']}"),
+        _tr('servers.get_edit_text.3', p0=f'{display_value}'),
     ]
     if param['key'] == 'inbound_group_id':
         lines.append(_inbound_group_help_text(allow_skip=False))
     else:
         lines.extend([
-            "Введите новое значение или используйте кнопки навигации:",
+            _tr('servers.get_edit_text.4'),
             f"<i>({escape_html(param['hint'])})</i>",
         ])
     
@@ -864,14 +836,14 @@ def get_edit_text(server: dict, current_param: int, auth_method: str) -> str:
 async def start_edit_server(callback: CallbackQuery, state: FSMContext):
     """Starts editing the server."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     server_id = int(callback.data.split(":")[1])
     server = get_server_by_id(server_id)
     
     if not server:
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
     
     auth_method = get_server_auth_method(server)
@@ -898,7 +870,7 @@ async def clear_server_inbound_group(
 ):
     """Restore legacy all-inbound behavior for one logical server."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     data = await state.get_data()
@@ -909,28 +881,28 @@ async def clear_server_inbound_group(
         get_param_by_index(current_param, auth_method)['key']
         != 'inbound_group_id'
     ):
-        await callback.answer("❌ Параметр уже изменился", show_alert=True)
+        await callback.answer(_tr('servers.clear_server_inbound_group.1'), show_alert=True)
         return
     if not update_server(server_id, inbound_group_id=None):
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
 
     await invalidate_client_cache(server_id)
     server = get_server_by_id(server_id)
     await safe_edit_or_send(
         callback.message,
-        "✅ <b>Виртуальная inbound-группа отключена</b>\n\n"
+        _tr('servers.clear_server_inbound_group.2')
         + get_edit_text(server, current_param, auth_method),
         reply_markup=_edit_step_keyboard(current_param, auth_method),
     )
-    await callback.answer("✅ Сервер использует все inbound’ы")
+    await callback.answer(_tr('servers.clear_server_inbound_group.3'))
 
 
 @router.callback_query(F.data == "admin_server_edit_prev")
 async def edit_server_prev(callback: CallbackQuery, state: FSMContext):
     """Previous parameter when editing."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -940,7 +912,7 @@ async def edit_server_prev(callback: CallbackQuery, state: FSMContext):
     
     server = get_server_by_id(server_id)
     if not server:
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
     
     new_param = max(0, current_param - 1)
@@ -959,7 +931,7 @@ async def edit_server_prev(callback: CallbackQuery, state: FSMContext):
 async def edit_server_next(callback: CallbackQuery, state: FSMContext):
     """Next parameter when editing."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -969,7 +941,7 @@ async def edit_server_next(callback: CallbackQuery, state: FSMContext):
     
     server = get_server_by_id(server_id)
     if not server:
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
     
     new_param = min(get_total_params(auth_method) - 1, current_param + 1)
@@ -1007,7 +979,7 @@ async def edit_server_value(message: Message, state: FSMContext):
     
     server = get_server_by_id(server_id)
     if not server:
-        await safe_edit_or_send(message, "❌ Сервер не найден")
+        await safe_edit_or_send(message, _tr('servers.show_server_view.1'))
         return
 
     updates = {}
@@ -1021,7 +993,7 @@ async def edit_server_value(message: Message, state: FSMContext):
             protocol = parsed.scheme
             host = parsed.hostname
             if not host:
-                raise ValueError("Не удалось определить хост")
+                raise ValueError(_tr('servers.process_add_step.1'))
                 
             port = parsed.port
             if not port:
@@ -1039,7 +1011,7 @@ async def edit_server_value(message: Message, state: FSMContext):
             })
         except Exception as e:
             await safe_edit_or_send(message,
-                "❌ Неверный формат ссылки. Убедитесь, что указан хост и по умолчанию подставляется <code>https://</code>.\nПример: <code>123.45.67.89:2053/api/</code>"
+                _tr('servers.edit_server_value.1')
             )
             return
     else:
@@ -1071,7 +1043,7 @@ async def edit_server_value(message: Message, state: FSMContext):
         if not test_result['success']:
             await safe_edit_or_send(
                 message,
-                "❌ <b>Не удалось подключиться к панели</b>",
+                _tr('servers.process_add_step.4'),
                 reply_markup=_edit_step_keyboard(current_param, auth_method),
                 force_new=True,
             )
@@ -1089,7 +1061,7 @@ async def edit_server_value(message: Message, state: FSMContext):
     success = update_server(server_id, **updates)
     
     if not success:
-        await safe_edit_or_send(message, "❌ Ошибка сохранения")
+        await safe_edit_or_send(message, _tr('servers.edit_server_value.2'))
         return
     
     # Resetting the client cache (the settings have changed)
@@ -1106,7 +1078,7 @@ async def edit_server_value(message: Message, state: FSMContext):
     text = get_edit_text(server, current_param, auth_method)
     
     await safe_edit_or_send(message,
-        f"✅ <b>{param['label']}</b> обновлено!\n\n" + text,
+        _tr('servers.edit_server_value.3', p0=f"{param['label']}") + text,
         reply_markup=_edit_step_keyboard(current_param, auth_method),
         force_new=True
     )
@@ -1116,7 +1088,7 @@ async def edit_server_value(message: Message, state: FSMContext):
 async def edit_server_done(callback: CallbackQuery, state: FSMContext):
     """Finish editing - return to viewing."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await callback.answer()
@@ -1143,21 +1115,21 @@ async def edit_server_cancel(callback: CallbackQuery, state: FSMContext):
 async def toggle_server(callback: CallbackQuery, state: FSMContext):
     """Toggles server activity."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     server_id = int(callback.data.split(":")[1])
     new_status = toggle_server_active(server_id)
     
     if new_status is None:
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
     
     # Resetting the cache
     await invalidate_client_cache(server_id)
     
-    status_text = "активирован 🟢" if new_status else "деактивирован 🔴"
-    await callback.answer(f"Сервер {status_text}")
+    status_text = _tr('servers.toggle_server.1') if new_status else _tr('servers.toggle_server.2')
+    await callback.answer(_tr('servers.toggle_server.3', p0=f'{status_text}'))
     
     # Refresh the viewing screen
     # Refresh the viewing screen
@@ -1172,24 +1144,20 @@ async def toggle_server(callback: CallbackQuery, state: FSMContext):
 async def confirm_delete_server(callback: CallbackQuery, state: FSMContext):
     """Requests confirmation of deletion."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     server_id = int(callback.data.split(":")[1])
     server = get_server_by_id(server_id)
     
     if not server:
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.delete_server_confirm)
     
     await safe_edit_or_send(callback.message, 
-        f"🗑️ <b>Удаление сервера</b>\n\n"
-        f"Вы уверены, что хотите удалить сервер?\n\n"
-        f"🖥️ <b>{server['name']}</b>\n"
-        f"🔗 `{server.get('protocol', 'https')}://{server['host']}:{server['port']}{server['web_base_path']}`\n\n"
-        f"⚠️ _Это действие нельзя отменить!_",
+        _tr('servers.confirm_delete_server.1', p0=f"{server['name']}", p1=f"{server.get('protocol', 'https')}", p2=f"{server['host']}", p3=f"{server['port']}", p4=f"{server['web_base_path']}"),
         reply_markup=confirm_delete_kb(server_id)
     )
     await callback.answer()
@@ -1200,14 +1168,14 @@ async def confirm_delete_server(callback: CallbackQuery, state: FSMContext):
 async def execute_delete_server(callback: CallbackQuery, state: FSMContext):
     """Deletes the server."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     server_id = int(callback.data.split(":")[1])
     server = get_server_by_id(server_id)
     
     if not server:
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
     
     server_name = server['name']
@@ -1220,15 +1188,14 @@ async def execute_delete_server(callback: CallbackQuery, state: FSMContext):
         await invalidate_client_cache(server_id)
         
         await safe_edit_or_send(callback.message, 
-            f"✅ <b>Сервер удалён</b>\n\n"
-            f"🖥️ {server_name}"
+            _tr('servers.execute_delete_server.1', p0=f'{server_name}')
         )
-        await callback.answer("✅ Сервер удалён")
+        await callback.answer(_tr('servers.execute_delete_server.2'))
         
         # Return to list
         await show_servers_list(callback, state)
     else:
-        await callback.answer("❌ Ошибка удаления", show_alert=True)
+        await callback.answer(_tr('servers.execute_delete_server.3'), show_alert=True)
 
 
 # ============================================================================
@@ -1239,26 +1206,24 @@ async def execute_delete_server(callback: CallbackQuery, state: FSMContext):
 async def server_change_group_start(callback: CallbackQuery, state: FSMContext):
     """Shows group toggle screen for the server."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     server_id = int(callback.data.split(":")[1])
     server = get_server_by_id(server_id)
 
     if not server:
-        await callback.answer("❌ Сервер не найден", show_alert=True)
+        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
         return
 
     groups = get_all_groups()
     selected = get_server_group_ids(server_id)
 
     group_names = [g['name'] for g in groups if g['id'] in selected]
-    groups_str = ", ".join(group_names) if group_names else "Основная"
+    groups_str = ", ".join(group_names) if group_names else _tr('servers.build_server_view.25')
 
     await safe_edit_or_send(callback.message, 
-        f"📂 <b>Тарифные группы сервера «{server['name']}»</b>\n\n"
-        f"Текущие группы: <b>{groups_str}</b>\n\n"
-        "Нажмите на группу чтобы добавить или убрать:",
+        _tr('servers.server_change_group_start.1', p0=f"{server['name']}", p1=f'{groups_str}'),
         reply_markup=server_groups_kb(server_id, groups, selected)
     )
     await callback.answer()
@@ -1268,7 +1233,7 @@ async def server_change_group_start(callback: CallbackQuery, state: FSMContext):
 async def server_toggle_group(callback: CallbackQuery, state: FSMContext):
     """Switches the server's group membership."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     parts = callback.data.split(":")
@@ -1281,20 +1246,18 @@ async def server_toggle_group(callback: CallbackQuery, state: FSMContext):
     group_name = group['name'] if group else str(group_id)
 
     if now_in_group:
-        await callback.answer(f"✅ Добавлен в «{group_name}»")
+        await callback.answer(_tr('servers.server_toggle_group.1', p0=f'{group_name}'))
     else:
-        await callback.answer(f"➖ Убран из «{group_name}»")
+        await callback.answer(_tr('servers.server_toggle_group.2', p0=f'{group_name}'))
 
     # Refresh the screen with an updated list of checkmarks
     server = get_server_by_id(server_id)
     groups = get_all_groups()
     selected = get_server_group_ids(server_id)
     group_names = [g['name'] for g in groups if g['id'] in selected]
-    groups_str = ", ".join(group_names) if group_names else "Основная"
+    groups_str = ", ".join(group_names) if group_names else _tr('servers.build_server_view.25')
 
     await safe_edit_or_send(callback.message, 
-        f"📂 <b>Тарифные группы сервера «{server['name']}»</b>\n\n"
-        f"Текущие группы: <b>{groups_str}</b>\n\n"
-        "Нажмите на группу чтобы добавить или убрать:",
+        _tr('servers.server_change_group_start.1', p0=f"{server['name']}", p1=f'{groups_str}'),
         reply_markup=server_groups_kb(server_id, groups, selected)
     )

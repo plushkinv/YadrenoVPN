@@ -1,6 +1,8 @@
 """Loopback-only preview of a validated draft, with isolated synthetic read models."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,13 +23,14 @@ def preview(stage, trust, port=5176, *, runtime):
     system_base = '/ui/platform/' + application['platform_version'] + '/'
     # No installation credentials, accounts or network mutations are available.
     message = {'type': 'yadreno.preview', 'installation': {
-        'settings': {'title': 'Локальный просмотр', 'logo': None, 'preset': 'clear', 'theme': 'light', 'sync_interval_seconds': 300},
+        'settings': {'title': _tr('preview.preview.1'), 'language': application['language'],
+                     'logo': None, 'preset': 'clear', 'theme': 'light', 'sync_interval_seconds': 300},
         'captured_at': 0, 'currency': 'RUB', 'features': {'subscriptions': True, 'subscription_import': True}, 'tariffs': [], 'trial_offers': [], 'modules': []},
         'context': {'contract_version': 1, 'route': 'home', 'scenario': 'active', 'preset': 'clear', 'theme': 'light',
             'ui_version': manifest['build_id'], 'customization_version': manifest['customization_version']}}
-    html = ('<!doctype html><html lang="ru"><meta charset="utf-8"><title>Локальный просмотр UI</title>'
-        '<p>Локальный черновик · синтетические данные · действия недоступны</p>'
-        '<iframe sandbox="allow-scripts" style="width:100%;height:90vh;border:0" src="' + base + 'preview.html"></iframe>'
+    from localization import LANGUAGES
+    attributes = 'lang="' + application['language'] + '" dir="' + LANGUAGES[application['language']]['direction'] + '"'
+    html = (_tr('preview.preview.2').replace('lang="ru"', attributes) + base + 'preview.html"></iframe>'
         '<script>const frame=document.querySelector("iframe");addEventListener("message",event=>{'
         'if(event.source===frame.contentWindow&&event.data?.type==="yadreno.preview.ready")'
         'frame.contentWindow.postMessage(' + canonical(message).decode() + ',"*");});</script></html>').encode()

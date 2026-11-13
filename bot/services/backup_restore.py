@@ -1,6 +1,8 @@
 """Prepare Telegram backup data without touching the running installation."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 import os
 import re
@@ -13,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from backup_io import copy_stream, supported_zip_entry
 from bot.services import update_rollback as maintenance
 from database.db_backup import validate_backup_database
 from web_tools.paths import atomic_write, canonical, local_path, relative_name
@@ -25,7 +28,7 @@ JOB_FILENAME = 'backup_restore.json'
 def require_admin(admin_id: int) -> None:
     from bot.utils.admin import is_admin
     if not is_admin(admin_id):
-        raise PermissionError('Доступно только администратору')
+        raise PermissionError(_tr('backups.authorized.1'))
 
 
 def job_directory(root: Path, job_id: str) -> Path:
@@ -52,9 +55,9 @@ def load_job(root: Path, job_id: str, admin_id: int, *, status: str | None = Non
     folder = job_directory(root, job_id)
     job = json.loads(local_path(folder, JOB_FILENAME).read_bytes())
     if job.get('admin_id') != admin_id:
-        raise PermissionError('Этот запрос принадлежит другому администратору')
+        raise PermissionError(_tr('backup_restore.load_job.1'))
     if status is not None and job.get('status') != status:
-        raise ValueError('Этот запрос уже обработан. Откройте бэкап заново.')
+        raise ValueError(_tr('backup_restore.load_job.2'))
     return folder, job
 
 
@@ -71,27 +74,26 @@ def _archive_entries(archive: zipfile.ZipFile) -> list[tuple[zipfile.ZipInfo, st
         # Use the same path contract as installation-owned UI files, with hidden sources allowed.
         relative_name(name, hidden=True)
         if any(part.endswith(('.', ' ')) for part in name.split('/')):
-            raise ValueError('Неоднозначный путь в архиве')
+            raise ValueError(_tr('backup_restore.archive_entries.1'))
         if name.casefold() in names:
-            raise ValueError('Повторяющийся путь в архиве')
+            raise ValueError(_tr('backup_restore.archive_entries.2'))
         names.add(name.casefold())
-        file_type = stat.S_IFMT(info.external_attr >> 16)
-        if info.flag_bits & 1 or file_type not in (0, stat.S_IFREG, stat.S_IFDIR):
-            raise ValueError('Шифрованные файлы и ссылки в архиве не поддерживаются')
-        if file_type == stat.S_IFDIR and not info.is_dir():
-            raise ValueError('Некорректный тип файла в архиве')
+        if stat.S_IFMT(info.external_attr >> 16) == stat.S_IFDIR and not info.is_dir():
+            raise ValueError(_tr('backup_restore.archive_entries.3'))
+        if not supported_zip_entry(info, directories=True):
+            raise ValueError(_tr('backup_restore.archive_entries.4'))
         top = name.split('/')[0]
         panel = re.fullmatch(r'server_[^/]+_x-ui\.(db|dump)', name)
         if name != 'vpn_bot.db' and top not in RESTORE_TREES and not panel:
-            raise ValueError(f'Неизвестный файл в бэкапе: {name}')
+            raise ValueError(_tr('backup_restore.archive_entries.5', p0=f'{name}'))
         if (top in RESTORE_TREES and name == top and not info.is_dir()
                 or top not in RESTORE_TREES and info.is_dir()):
-            raise ValueError('Некорректная структура бэкапа')
+            raise ValueError(_tr('backup_restore.archive_entries.6'))
         if name.startswith('web_runtime/secrets/') and name != 'web_runtime/secrets/ed25519.key':
-            raise ValueError('В бэкапе допустим только ключ подписи Mini App')
+            raise ValueError(_tr('backup_restore.archive_entries.7'))
         entries.append((info, name))
     if 'vpn_bot.db' not in names:
-        raise ValueError('В архиве нет базы vpn_bot.db')
+        raise ValueError(_tr('backup_restore.archive_entries.8'))
     return entries
 
 
@@ -101,7 +103,7 @@ def _extract_archive(folder: Path) -> tuple[Path, list[str], int]:
     with zipfile.ZipFile(local_path(folder, 'original.zip')) as archive:
         entries = _archive_entries(archive)
         if sum(info.file_size for info, _ in entries) > shutil.disk_usage(folder).free:
-            raise ValueError('Недостаточно места для распаковки бэкапа')
+            raise ValueError(_tr('backup_restore.extract_archive.1'))
         for info, name in entries:
             top = name.split('/')[0]
             panel = top not in RESTORE_TREES and name != 'vpn_bot.db'
@@ -114,15 +116,14 @@ def _extract_archive(folder: Path) -> tuple[Path, list[str], int]:
             if panel:
                 # Verify CRC without applying or expanding remote panel backups.
                 with archive.open(info) as source:
-                    while source.read(1024 * 1024):
-                        pass
+                    copy_stream(source)
                 panels += 1
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             with archive.open(info) as source, destination.open('xb') as target:
                 mode = 0o600 | ((info.external_attr >> 16) & stat.S_IXUSR)
                 os.chmod(destination, 0o600 if name == 'web_runtime/secrets/ed25519.key' else mode)
-                shutil.copyfileobj(source, target, length=1024 * 1024)
+                copy_stream(source, target)
     return stage, sorted(trees), panels
 
 
@@ -143,7 +144,7 @@ def validate_restored_ui(stage: Path) -> bool:
     pointer = read_pointer(runtime)
     if pointer['current']:
         if not has_identity:
-            raise ValueError('В бэкапе Mini App нет ключа подписи и публичной идентичности')
+            raise ValueError(_tr('backup_restore.validate_restored_ui.1'))
         publication(runtime, pointer['current'], current_capabilities())
     return has_identity
 
@@ -154,7 +155,7 @@ def _inventory(stage: Path) -> dict[str, str | None]:
         name = path.relative_to(stage).as_posix()
         checked = local_path(stage, name, hidden=True)
         if not checked.is_dir() and not stat.S_ISREG(checked.stat().st_mode):
-            raise ValueError('Подготовленные данные содержат не обычный файл')
+            raise ValueError(_tr('backup_restore.inventory.1'))
         inventory[name] = None if checked.is_dir() else maintenance._sha256_file(checked)
     return inventory
 
@@ -172,7 +173,7 @@ def prepare_restore(job_id: str, admin_id: int, *, root: Path = PROJECT_ROOT) ->
         )
         atomic_write(folder / 'migration.log', result.stdout + result.stderr)
         if result.returncode:
-            raise ValueError('Не удалось обновить копию базы. Подробности сохранены в migration.log.')
+            raise ValueError(_tr('backup_restore.prepare_restore.1'))
         version = validate_backup_database(database)
         signing_key = validate_restored_ui(stage)
         job.update(status='prepared', trees=trees, panels=panels, signing_key=signing_key,
@@ -189,10 +190,10 @@ def prepare_restore(job_id: str, admin_id: int, *, root: Path = PROJECT_ROOT) ->
 def verify_prepared(root: Path, job_id: str, admin_id: int, *, status: str) -> tuple[Path, dict]:
     folder, job = load_job(root, job_id, admin_id, status=status)
     if job['commit'] != maintenance._current_commit(root):
-        raise ValueError('Код обновился после проверки архива. Откройте бэкап заново.')
+        raise ValueError(_tr('backup_restore.verify_prepared.1'))
     if (job['inventory'] != _inventory(folder / 'prepared')
             or job['archive_sha256'] != maintenance._sha256_file(folder / 'original.zip')):
-        raise ValueError('Подготовленные данные изменились. Откройте бэкап заново.')
+        raise ValueError(_tr('backup_restore.verify_prepared.2'))
     return folder, job
 
 

@@ -5,6 +5,8 @@ Functional:
 - Sending messages and Telegram-native polls with recipient filters
 - Setting up auto-notifications about key expiration
 """
+
+from localization import text as _tr
 import asyncio
 import logging
 from aiogram import Router, F, Bot
@@ -185,15 +187,11 @@ async def request_broadcast_stop_or_reset() -> str:
 def get_broadcast_menu_text(in_progress: bool = False) -> str:
     """Generates the text of the main mailing screen."""
     text = (
-        "📢 <b>Рассылка</b>\n\n"
-        "Отправьте сообщение или опрос пользователям бота.\n\n"
-        "1️⃣ Подготовьте материал\n"
-        "2️⃣ При необходимости выберите условия получателей\n"
-        "3️⃣ Нажмите «Начать рассылку»"
+        _tr('broadcast.get_broadcast_menu_text.1')
     )
 
     if in_progress:
-        text += "\n\n⏳ Сейчас идёт рассылка. Её можно остановить кнопкой ниже."
+        text += _tr('broadcast.get_broadcast_menu_text.2')
 
     return text
 
@@ -224,27 +222,27 @@ async def render_broadcast_menu(
         else count_users_for_broadcast(selected_filters)
     )
     if not msg_data:
-        material_label = "не задан"
+        material_label = _tr('broadcast.render_broadcast_menu.1')
     elif msg_data.get("kind") == BROADCAST_KIND_POLL:
         material_label = poll_type_label(msg_data)
     elif msg_data.get("photo_file_id"):
-        material_label = "фото с подписью"
+        material_label = _tr('broadcast.render_broadcast_menu.2')
     else:
-        material_label = "текстовое сообщение"
+        material_label = _tr('broadcast.render_broadcast_menu.3')
     style_summary = style_profile_summary(load_broadcast_style_profile())
     filter_status = (
-        "Фильтры (И): ошибка настройки — рассылка заблокирована"
+        _tr('broadcast.render_broadcast_menu.4')
         if filter_error
         else broadcast_filter_status(selected_filters)
     )
     menu_text = (
         get_broadcast_menu_text(in_progress)
-        + "\n\n<b>Текущие настройки</b>\n"
-        + f"• Материал: {escape_html(material_label)}\n"
+        + _tr('broadcast.render_broadcast_menu.5')
+        + _tr('broadcast.render_broadcast_menu.6', p0=f'{escape_html(material_label)}')
         + f"• {escape_html(filter_status)}\n"
-        + f"• Получателей: {user_count}\n"
-        + f"• Стиль: {escape_html(style_summary)}\n\n"
-        + "💡 Напишите <code>/yaa ваша задача</code>, чтобы открыть редактора рассылки."
+        + _tr('broadcast.render_broadcast_menu.7', p0=f'{user_count}')
+        + _tr('broadcast.render_broadcast_menu.8', p0=f'{escape_html(style_summary)}')
+        + _tr('broadcast.render_broadcast_menu.9')
     )
 
     await safe_edit_or_send(
@@ -269,7 +267,7 @@ async def render_broadcast_menu(
 async def show_broadcast_menu(callback: CallbackQuery, state: FSMContext):
     """Shows the main screen of the mailing section."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.update_data(broadcast_pending_poll=None)
@@ -295,21 +293,14 @@ async def noop_callback(callback: CallbackQuery):
 async def broadcast_edit_message(callback: CallbackQuery, state: FSMContext):
     """Starts editing the message for distribution."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.update_data(broadcast_pending_poll=None)
     await state.set_state(AdminStates.broadcast_waiting_message)
     
     text = (
-        "✉️ <b>Материал рассылки</b>\n\n"
-        "Отправьте материал, который хотите разослать.\n\n"
-        "Можно отправить:\n"
-        "• Текст (с форматированием)\n"
-        "• Фото с подписью\n"
-        "• Нативный опрос Telegram\n\n"
-        f"{BROADCAST_PLACEHOLDER_HINT}\n\n"
-        "💡 Опрос можно создать прямо здесь или переслать из «Избранного», группы или канала."
+        _tr('broadcast.broadcast_edit_message.1', p0=f'{BROADCAST_PLACEHOLDER_HINT}')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -353,10 +344,7 @@ async def broadcast_save_message(message: Message, state: FSMContext, bot: Bot):
             )
             await safe_edit_or_send(
                 message,
-                "📊 <b>В опросе уже есть голоса</b>\n\n"
-                f"<b>Вопрос:</b> {escape_html(metadata['question'])}\n"
-                f"<b>Голосов:</b> {metadata['total_voter_count']}\n\n"
-                "Выберите, сохранить результаты и видимый источник или создать чистый опрос от имени бота.",
+                _tr('broadcast.broadcast_save_message.1', p0=f"{escape_html(metadata['question'])}", p1=f"{metadata['total_voter_count']}"),
                 reply_markup=broadcast_poll_mode_kb(),
                 force_new=True,
             )
@@ -375,8 +363,7 @@ async def broadcast_save_message(message: Message, state: FSMContext, bot: Bot):
             logger.warning("Не удалось создать чистый черновик опроса: %s", error)
             await safe_edit_or_send(
                 message,
-                "❌ <b>Не удалось скопировать опрос</b>\n\n"
-                "Проверьте защиту содержимого и для викторины убедитесь, что задан правильный ответ.",
+                _tr('broadcast.broadcast_save_message.2'),
                 reply_markup=broadcast_back_kb(),
                 force_new=True,
             )
@@ -397,8 +384,7 @@ async def broadcast_save_message(message: Message, state: FSMContext, bot: Bot):
         text = get_message_text_for_storage(message, 'html')
     else:
         await safe_edit_or_send(message,
-            "❌ <b>Материал не поддерживается</b>\n\n"
-            "Поддерживаются только текст, фото с подписью или нативный опрос Telegram.",
+            _tr('broadcast.broadcast_save_message.3'),
             reply_markup=broadcast_back_kb()
         )
         return
@@ -408,15 +394,14 @@ async def broadcast_save_message(message: Message, state: FSMContext, bot: Bot):
     except BroadcastValidationError as error:
         await safe_edit_or_send(
             message,
-            "❌ <b>Материал не сохранён</b>\n\n" + escape_html(str(error)),
+            _tr('broadcast.broadcast_save_message.4') + escape_html(str(error)),
             reply_markup=broadcast_back_kb(),
             force_new=True,
         )
         return
     
     await safe_edit_or_send(message,
-        "✅ <b>Сообщение сохранено!</b>\n\n"
-        "Теперь можете посмотреть превью или начать рассылку."
+        _tr('broadcast.broadcast_save_message.5')
     )
     
     # Returning to the mailing menu
@@ -429,18 +414,18 @@ async def broadcast_save_message(message: Message, state: FSMContext, bot: Bot):
 async def broadcast_choose_poll_mode(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Saves an imported voted poll using the selected delivery mode."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     delivery_mode = callback.data.split(":", 1)[1]
     if delivery_mode not in {POLL_MODE_CLEAN, POLL_MODE_PRESERVE}:
-        await callback.answer("❌ Неизвестный режим опроса", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_choose_poll_mode.1'), show_alert=True)
         return
 
     state_data = await state.get_data()
     pending = state_data.get("broadcast_pending_poll")
     if not isinstance(pending, dict):
-        await callback.answer("❌ Черновик опроса устарел. Отправьте опрос ещё раз.", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_choose_poll_mode.2'), show_alert=True)
         return
 
     try:
@@ -455,7 +440,7 @@ async def broadcast_choose_poll_mode(callback: CallbackQuery, state: FSMContext,
     except (KeyError, TypeError, ValueError, TelegramAPIError) as error:
         logger.warning("Не удалось сохранить импортированный опрос: %s", error)
         await callback.answer(
-            "❌ Не удалось подготовить опрос. Возможно, исходное сообщение удалено или защищено.",
+            _tr('broadcast.broadcast_choose_poll_mode.3'),
             show_alert=True,
         )
         return
@@ -472,7 +457,7 @@ async def broadcast_choose_poll_mode(callback: CallbackQuery, state: FSMContext,
     await state.update_data(broadcast_pending_poll=None)
     await state.set_state(AdminStates.broadcast_menu)
     await render_broadcast_menu(callback.message)
-    await callback.answer("✅ Опрос сохранён")
+    await callback.answer(_tr('broadcast.broadcast_choose_poll_mode.4'))
 
 
 # ============================================================================
@@ -483,13 +468,13 @@ async def broadcast_choose_poll_mode(callback: CallbackQuery, state: FSMContext,
 async def broadcast_preview(callback: CallbackQuery, bot: Bot):
     """Shows a preview of the message for the newsletter."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     msg_data = get_broadcast_message()
 
     if not is_broadcast_content_ready(msg_data):
-        await callback.answer("❌ Материал рассылки не задан", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_preview.1'), show_alert=True)
         return
 
     if msg_data.get('kind') == BROADCAST_KIND_POLL:
@@ -498,14 +483,14 @@ async def broadcast_preview(callback: CallbackQuery, bot: Bot):
         except TelegramAPIError as error:
             logger.warning("Не удалось показать превью опроса: %s", error)
             await callback.answer(
-                "❌ Черновик опроса недоступен. Отправьте опрос заново.",
+                _tr('broadcast.broadcast_preview.2'),
                 show_alert=True,
             )
             return
-        await callback.answer("📤 Превью отправлено")
+        await callback.answer(_tr('broadcast.broadcast_preview.3'))
         return
 
-    await callback.answer("📤 Отправляю превью...")
+    await callback.answer(_tr('broadcast.broadcast_preview.4'))
     
     preview_text = await render_broadcast_message_text(
         msg_data.get('text', ''),
@@ -535,13 +520,13 @@ async def broadcast_preview(callback: CallbackQuery, bot: Bot):
 async def broadcast_set_filter(callback: CallbackQuery):
     """Toggles one recipient condition in the canonical filter set."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     filter_key = callback.data.split(":", 1)[1]
     
     if filter_key not in BROADCAST_FILTERS:
-        await callback.answer("❌ Неизвестный фильтр", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_set_filter.1'), show_alert=True)
         return
 
     try:
@@ -560,9 +545,9 @@ async def broadcast_set_filter(callback: CallbackQuery):
     await render_broadcast_menu(callback.message, current_filters=canonical)
     await callback.answer(
         (
-            "Условие добавлено: "
+            _tr('broadcast.broadcast_set_filter.2')
             if enabled
-            else "Условие снято: "
+            else _tr('broadcast.broadcast_set_filter.3')
         )
         + BROADCAST_FILTERS[filter_key]
     )
@@ -572,10 +557,10 @@ async def broadcast_set_filter(callback: CallbackQuery):
 async def broadcast_empty_audience(callback: CallbackQuery):
     """Explains why a zero-recipient broadcast cannot start."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await callback.answer(
-        "По выбранным условиям нет получателей. Рассылка не запущена.",
+        _tr('broadcast.broadcast_empty_audience.1'),
         show_alert=True,
     )
 
@@ -588,25 +573,25 @@ async def broadcast_empty_audience(callback: CallbackQuery):
 async def broadcast_start(callback: CallbackQuery):
     """Shows confirmation of mailing."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     # Checking to see if the mailing is already in progress
     if is_broadcast_in_progress():
-        await callback.answer("⏳ Рассылка уже идёт!", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_start.1'), show_alert=True)
         return
     
     # Checking for prepared content
     msg_data = get_broadcast_message()
     if not is_broadcast_content_ready(msg_data):
-        await callback.answer("❌ Сначала подготовьте сообщение или опрос!", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_start.2'), show_alert=True)
         return
     
     try:
         current_filters = get_broadcast_filters()
     except BroadcastFilterError:
         await callback.answer(
-            "❌ Настройка фильтров повреждена. Выберите условия заново.",
+            _tr('broadcast.broadcast_start.3'),
             show_alert=True,
         )
         return
@@ -614,7 +599,7 @@ async def broadcast_start(callback: CallbackQuery):
     
     if user_count == 0:
         await callback.answer(
-            "❌ По выбранным условиям нет получателей. Рассылка не запущена.",
+            _tr('broadcast.broadcast_start.4'),
             show_alert=True,
         )
         return
@@ -632,33 +617,31 @@ async def broadcast_start(callback: CallbackQuery):
     content_lines = []
     if msg_data.get('kind') == BROADCAST_KIND_POLL:
         content_lines.extend([
-            f"<b>Материал:</b> {poll_type_label(msg_data)}",
-            f"<b>Вопрос:</b> {escape_html(msg_data.get('question', ''))}",
-            "<b>Результаты:</b> " + (
-                "начнутся с нуля" if msg_data.get('delivery_mode') == POLL_MODE_CLEAN
-                else "сохраняются вместе с источником"
+            _tr('broadcast.broadcast_start.5', p0=f'{poll_type_label(msg_data)}'),
+            _tr('broadcast.broadcast_start.6', p0=f"{escape_html(msg_data.get('question', ''))}"),
+            _tr('broadcast.broadcast_start.7') + (
+                _tr('broadcast.broadcast_start.8') if msg_data.get('delivery_mode') == POLL_MODE_CLEAN
+                else _tr('broadcast.broadcast_start.9')
             ),
         ])
         if not msg_data.get('is_anonymous', True):
             content_lines.extend([
                 "",
-                "⚠️ Опрос неанонимный: сведения о голосах могут быть доступны участникам.",
+                _tr('broadcast.broadcast_start.10'),
             ])
         if msg_data.get('delivery_mode') == POLL_MODE_PRESERVE:
             content_lines.extend([
                 "",
-                "ℹ️ Этот опрос закрывается только в месте, где был создан.",
+                _tr('broadcast.broadcast_start.11'),
             ])
     else:
-        content_lines.append("<b>Материал:</b> Сообщение")
+        content_lines.append(_tr('broadcast.broadcast_start.12'))
 
     text = (
-        "🚀 <b>Подтверждение рассылки</b>\n\n"
+        _tr('broadcast.broadcast_start.13')
         + "\n".join(content_lines)
         + "\n\n"
-        + f"<b>{escape_html(filter_status)}</b>\n"
-        f"<b>Получателей:</b> {user_count} чел.\n\n"
-        "Начать рассылку?"
+        + _tr('broadcast.broadcast_start.14', p0=f'{escape_html(filter_status)}', p1=f'{user_count}')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -672,16 +655,16 @@ async def broadcast_start(callback: CallbackQuery):
 async def broadcast_in_progress_callback(callback: CallbackQuery):
     """Notification that the mailing is already underway."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
-    await callback.answer("⏳ Рассылка уже идёт. Её можно остановить кнопкой ниже.", show_alert=True)
+    await callback.answer(_tr('broadcast.broadcast_in_progress_callback.1'), show_alert=True)
 
 
 @router.callback_query(F.data == "broadcast_stop")
 async def broadcast_stop(callback: CallbackQuery):
     """Stops the current broadcast or resets a stuck flag."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     result = await request_broadcast_stop_or_reset()
@@ -689,30 +672,29 @@ async def broadcast_stop(callback: CallbackQuery):
     if result == BROADCAST_STOP_REQUESTED:
         await safe_edit_or_send(
             callback.message,
-            "🛑 <b>Остановка рассылки</b>\n\n"
-            "Остановка запрошена. Рассылка прекратится перед следующей отправкой.",
+            _tr('broadcast.broadcast_stop.1'),
         )
-        await callback.answer("🛑 Остановка запрошена")
+        await callback.answer(_tr('broadcast.broadcast_stop.2'))
         return
 
     if result == BROADCAST_STALE_RESET:
         await render_broadcast_menu(callback.message)
-        await callback.answer("✅ Зависшая рассылка сброшена", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_stop.3'), show_alert=True)
         return
 
     await render_broadcast_menu(callback.message)
-    await callback.answer("ℹ️ Активной рассылки нет", show_alert=True)
+    await callback.answer(_tr('broadcast.broadcast_stop.4'), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("broadcast_confirm"))
 async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
     """Launches a newsletter."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     if is_broadcast_in_progress() or is_broadcast_runtime_active():
-        await callback.answer("⏳ Рассылка уже идёт!", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_start.1'), show_alert=True)
         return
     
     _, separator, token = str(callback.data or "").partition(":")
@@ -727,26 +709,24 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         except BroadcastEditorError:
             await render_broadcast_menu(callback.message)
             await callback.answer(
-                "Материал, фильтры или число получателей изменились. Проверьте рассылку заново.",
+                _tr('broadcast.broadcast_confirm.1'),
                 show_alert=True,
             )
             return
         await safe_edit_or_send(
             callback.message,
-            "⚠️ <b>Подтверждение устарело</b>\n\n"
-            "Материал, фильтры или число получателей изменились. "
-            "Проверьте актуальные данные и подтвердите ещё раз.",
+            _tr('broadcast.broadcast_confirm.2'),
             reply_markup=broadcast_confirm_kb(
                 int(fresh["recipient_count"]),
                 str(fresh["token"]),
             ),
         )
-        await callback.answer("Подтверждение обновлено", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_confirm.3'), show_alert=True)
         return
 
     msg_data = get_broadcast_message()
     if not msg_data:
-        await callback.answer("❌ Сообщение не задано!", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_confirm.4'), show_alert=True)
         return
     
     try:
@@ -754,7 +734,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
     except BroadcastFilterError:
         await render_broadcast_menu(callback.message)
         await callback.answer(
-            "Настройка фильтров повреждена. Выберите условия заново.",
+            _tr('broadcast.broadcast_confirm.5'),
             show_alert=True,
         )
         return
@@ -776,29 +756,27 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         except BroadcastEditorError:
             await render_broadcast_menu(callback.message)
             await callback.answer(
-                "Материал, фильтры или число получателей изменились. Проверьте рассылку заново.",
+                _tr('broadcast.broadcast_confirm.1'),
                 show_alert=True,
             )
             return
         await safe_edit_or_send(
             callback.message,
-            "⚠️ <b>Подтверждение устарело</b>\n\n"
-            "Материал, фильтры или число получателей изменились. "
-            "Проверьте актуальные данные и подтвердите ещё раз.",
+            _tr('broadcast.broadcast_confirm.2'),
             reply_markup=broadcast_confirm_kb(
                 int(fresh["recipient_count"]),
                 str(fresh["token"]),
             ),
         )
-        await callback.answer("Подтверждение обновлено", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_confirm.3'), show_alert=True)
         return
 
     if not user_ids:
-        await callback.answer("❌ Нет получателей!", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_confirm.6'), show_alert=True)
         return
     
     if not await try_mark_broadcast_started():
-        await callback.answer("⏳ Рассылка уже идёт!", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_start.1'), show_alert=True)
         return
     
     total = len(user_ids)
@@ -824,10 +802,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
 
         await safe_edit_or_send(
             callback.message,
-            f"📤 <b>Рассылка запущена</b>\n\n"
-            f"Отправлено: 0/{total}\n"
-            f"🚫 Заблокировали бота: 0\n"
-            f"⚠️ Ошибки отправки: 0",
+            _tr('broadcast.broadcast_confirm.7', p0=f'{total}'),
             reply_markup=broadcast_stop_kb(),
         )
         await callback.answer()
@@ -879,10 +854,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
                 try:
                     await safe_edit_or_send(
                         callback.message,
-                        f"📤 <b>Рассылка в процессе...</b>\n\n"
-                        f"Отправлено: {sent}/{total}\n"
-                        f"🚫 Заблокировали бота: {blocked}\n"
-                        f"⚠️ Ошибки отправки: {failed}",
+                        _tr('broadcast.broadcast_confirm.8', p0=f'{sent}', p1=f'{total}', p2=f'{blocked}', p3=f'{failed}'),
                         reply_markup=broadcast_stop_kb(),
                     )
                 except TelegramBadRequest:
@@ -909,8 +881,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         )
     elif is_poll and msg_data.get('delivery_mode') == POLL_MODE_PRESERVE:
         preserved_poll_notice = (
-            "\n\nℹ️ Опрос сохраняет исходные результаты. Закрыть его можно только "
-            "в месте, где он был создан."
+            _tr('broadcast.broadcast_confirm.9')
         )
 
     result_markup = broadcast_result_kb(poll_close_callback)
@@ -918,20 +889,14 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
     if unexpected_error is not None:
         if not callback_answered:
             try:
-                await callback.answer("⚠️ Рассылка прервана технической ошибкой", show_alert=True)
+                await callback.answer(_tr('broadcast.broadcast_confirm.10'), show_alert=True)
             except Exception:
                 pass
 
         try:
             await safe_edit_or_send(
                 callback.message,
-                f"⚠️ <b>Рассылка прервана технической ошибкой</b>\n\n"
-                f"📤 Отправлено: {sent}\n"
-                f"🚫 Заблокировали бота: {blocked}\n"
-                f"⚠️ Ошибки отправки: {failed}\n"
-                f"📌 Обработано: {processed}/{total}\n\n"
-                "Флаг рассылки сброшен, можно запустить новую рассылку."
-                f"{preserved_poll_notice}",
+                _tr('broadcast.broadcast_confirm.11', p0=f'{sent}', p1=f'{blocked}', p2=f'{failed}', p3=f'{processed}', p4=f'{total}', p5=f'{preserved_poll_notice}'),
                 reply_markup=result_markup,
             )
         except Exception as report_error:
@@ -942,23 +907,14 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
         remaining = max(total - processed, 0)
         await safe_edit_or_send(
             callback.message,
-            f"🛑 <b>Рассылка остановлена</b>\n\n"
-            f"📤 Отправлено: {sent}\n"
-            f"🚫 Заблокировали бота: {blocked}\n"
-            f"⚠️ Ошибки отправки: {failed}\n"
-            f"⏸️ Не отправлено: {remaining}"
-            f"{preserved_poll_notice}",
+            _tr('broadcast.broadcast_confirm.12', p0=f'{sent}', p1=f'{blocked}', p2=f'{failed}', p3=f'{remaining}', p4=f'{preserved_poll_notice}'),
             reply_markup=result_markup,
         )
         return
 
     await safe_edit_or_send(
         callback.message,
-        f"✅ <b>Рассылка завершена!</b>\n\n"
-        f"📤 Отправлено: {sent}\n"
-        f"🚫 Заблокировали бота: {blocked}\n"
-        f"⚠️ Ошибки отправки: {failed}"
-        f"{preserved_poll_notice}",
+        _tr('broadcast.broadcast_confirm.13', p0=f'{sent}', p1=f'{blocked}', p2=f'{failed}', p3=f'{preserved_poll_notice}'),
         reply_markup=result_markup,
     )
 
@@ -967,7 +923,7 @@ async def broadcast_confirm(callback: CallbackQuery, bot: Bot):
 async def broadcast_close_poll(callback: CallbackQuery, bot: Bot):
     """Closes a bot-owned common poll from a persisted result button."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     try:
@@ -975,7 +931,7 @@ async def broadcast_close_poll(callback: CallbackQuery, bot: Bot):
         chat_id = int(chat_id_raw)
         message_id = int(message_id_raw)
     except (TypeError, ValueError):
-        await callback.answer("❌ Некорректная ссылка на опрос", show_alert=True)
+        await callback.answer(_tr('broadcast.broadcast_close_poll.1'), show_alert=True)
         return
 
     already_closed = False
@@ -988,27 +944,27 @@ async def broadcast_close_poll(callback: CallbackQuery, bot: Bot):
         else:
             logger.warning("Не удалось закрыть опрос %s/%s: %s", chat_id, message_id, error)
             await callback.answer(
-                "❌ Не удалось закрыть опрос. Возможно, эталонное сообщение удалено.",
+                _tr('broadcast.broadcast_close_poll.2'),
                 show_alert=True,
             )
             return
     except TelegramAPIError as error:
         logger.warning("Ошибка Telegram при закрытии опроса %s/%s: %s", chat_id, message_id, error)
         await callback.answer(
-            "❌ Telegram временно недоступен. Попробуйте закрыть опрос ещё раз.",
+            _tr('broadcast.broadcast_close_poll.3'),
             show_alert=True,
         )
         return
 
-    report_text = callback.message.html_text or callback.message.text or "✅ <b>Рассылка завершена</b>"
-    if "Опрос закрыт" not in report_text:
-        report_text += "\n\n🛑 <b>Опрос закрыт.</b>"
+    report_text = callback.message.html_text or callback.message.text or _tr('broadcast.broadcast_close_poll.4')
+    if _tr('broadcast.broadcast_close_poll.5').strip() not in report_text:
+        report_text += _tr('broadcast.broadcast_close_poll.5')
     await safe_edit_or_send(
         callback.message,
         report_text,
         reply_markup=home_only_kb(),
     )
-    await callback.answer("ℹ️ Опрос уже был закрыт" if already_closed else "✅ Опрос закрыт")
+    await callback.answer(_tr('broadcast.broadcast_close_poll.6') if already_closed else _tr('broadcast.broadcast_close_poll.7'))
 
 
 # ============================================================================
@@ -1019,16 +975,13 @@ async def broadcast_close_poll(callback: CallbackQuery, bot: Bot):
 async def broadcast_notifications(callback: CallbackQuery, state: FSMContext):
     """Shows auto notification settings."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     days = int(get_setting('notification_days', '3'))
     
     text = (
-        "⏰ <b>Автоуведомления</b>\n\n"
-        "Бот автоматически напоминает пользователям об истечении VPN-ключей.\n\n"
-        f"📅 Уведомлять за <b>{days}</b> дней до истечения\n"
-        "📝 Текст уведомления настраивается отдельно"
+        _tr('broadcast.broadcast_notifications.1', p0=f'{days}')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -1042,7 +995,7 @@ async def broadcast_notifications(callback: CallbackQuery, state: FSMContext):
 async def broadcast_notify_days(callback: CallbackQuery, state: FSMContext):
     """Begins entering the number of days."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.broadcast_waiting_notify_days)
@@ -1050,9 +1003,7 @@ async def broadcast_notify_days(callback: CallbackQuery, state: FSMContext):
     current_days = get_setting('notification_days', '3')
     
     text = (
-        "📅 <b>За сколько дней уведомлять?</b>\n\n"
-        f"Текущее значение: <b>{current_days}</b> дней\n\n"
-        "Введите число от 1 до 30:"
+        _tr('broadcast.broadcast_notify_days.1', p0=f'{current_days}')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -1070,7 +1021,7 @@ async def broadcast_save_notify_days(message: Message, state: FSMContext):
     
     if not message.text or not message.text.isdigit():
         await safe_edit_or_send(message,
-            "❌ Введите число!",
+            _tr('broadcast.broadcast_save_notify_days.1'),
             reply_markup=broadcast_notify_back_kb()
         )
         return
@@ -1078,7 +1029,7 @@ async def broadcast_save_notify_days(message: Message, state: FSMContext):
     days = int(message.text)
     if not 1 <= days <= 30:
         await safe_edit_or_send(message,
-            "❌ Число должно быть от 1 до 30!",
+            _tr('broadcast.broadcast_save_notify_days.2'),
             reply_markup=broadcast_notify_back_kb()
         )
         return
@@ -1086,17 +1037,14 @@ async def broadcast_save_notify_days(message: Message, state: FSMContext):
     set_setting('notification_days', str(days))
     
     await safe_edit_or_send(message,
-        f"✅ Теперь уведомления будут отправляться за <b>{days}</b> дней до истечения."
+        _tr('broadcast.broadcast_save_notify_days.3', p0=f'{days}')
     )
     
     # Returning to notification settings
     await state.set_state(AdminStates.broadcast_menu)
     
     text = (
-        "⏰ <b>Автоуведомления</b>\n\n"
-        "Бот автоматически напоминает пользователям об истечении VPN-ключей.\n\n"
-        f"📅 Уведомлять за <b>{days}</b> дней до истечения\n"
-        "📝 Текст уведомления настраивается отдельно"
+        _tr('broadcast.broadcast_notifications.1', p0=f'{days}')
     )
     
     await safe_edit_or_send(message,
@@ -1110,7 +1058,7 @@ async def broadcast_save_notify_days(message: Message, state: FSMContext):
 async def broadcast_notify_text(callback: CallbackQuery, state: FSMContext):
     """Shows/edits notification text through a universal editor."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     from bot.handlers.admin.message_editor import show_message_editor

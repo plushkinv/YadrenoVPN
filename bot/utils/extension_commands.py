@@ -1,6 +1,8 @@
 """Registry of declarative bot commands for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import inspect
 import logging
 import re
@@ -151,17 +153,17 @@ async def dispatch_extension_command(context: Mapping[str, Any], *, bot: Any = N
         command = normalize_extension_command(context.get('command'))
     except ValueError:
         return {
-            'answer_text': '⚠️ Команда расширения недоступна',
+            'answer_text': _tr('extension_commands.dispatch_extension_command.1'),
         }
     definition = EXTENSION_COMMAND_DEFINITIONS.get(command)
     if definition is None:
         return {
-            'answer_text': '⚠️ Команда расширения недоступна',
+            'answer_text': _tr('extension_commands.dispatch_extension_command.1'),
         }
     handler = EXTENSION_COMMAND_HANDLERS.get(definition.action_key)
     if handler is None:
         return {
-            'answer_text': '⚠️ Команда расширения недоступна',
+            'answer_text': _tr('extension_commands.dispatch_extension_command.1'),
         }
 
     try:
@@ -185,7 +187,7 @@ async def dispatch_extension_command(context: Mapping[str, Any], *, bot: Any = N
     except Exception as exc:
         logger.exception("Extension command '/%s' failed: %s", command, exc)
         return {
-            'answer_text': '⚠️ Команда расширения временно недоступна',
+            'answer_text': _tr('extension_commands.dispatch_extension_command.2'),
         }
 
 

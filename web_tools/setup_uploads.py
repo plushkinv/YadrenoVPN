@@ -1,6 +1,8 @@
 """Check public upload admission without a session or an editor operation."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import json
 import ssl
@@ -35,10 +37,10 @@ def _failure(size, *, status=None, reason='unexpected_response'):
         details['http_status'] = status
     if status == 413:
         return SetupError('upload_limit_too_small',
-            'HTTPS-прокси отклонил допустимый размер загрузки вложений (HTTP 413).',
+            _tr('setup_uploads.failure.1'),
             stage='https', exit_code=4, details=details)
     return SetupError('upload_check_failed',
-        'HTTPS-проверка допуска загрузки вложений не получила штатный ответ API об отсутствии авторизации.',
+        _tr('setup_uploads.failure.2'),
         stage='https', exit_code=4, details=details)
 
 

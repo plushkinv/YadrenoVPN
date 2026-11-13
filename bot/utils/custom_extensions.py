@@ -1,6 +1,8 @@
 """Loader and public API for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import ast
 import hashlib
 import importlib.util
@@ -191,7 +193,7 @@ def register_action_handler(action_value: str, callback_data: str, *, replace: b
     callback = _require_text(callback_data, 'callback_data').strip()
     _require_bool_option(replace, 'replace')
     if not action_key.startswith('cmd_ext_'):
-        raise ValueError("action_value расширения должен начинаться с cmd_ext_")
+        raise ValueError(_tr('custom_extensions.register_action_handler.1'))
     _register_action_handler(action_key, callback, replace=replace)
     _record_registration('actions', action_key)
 
@@ -830,7 +832,7 @@ def _load_extension_module(path: Path) -> ModuleType:
     module_name = f"_custom_extensions_{path.stem}_{abs(hash(path.resolve()))}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"не удалось создать spec для {path.name}")
+        raise ImportError(_tr('custom_extensions.load_extension_module.1', p0=f'{path.name}'))
 
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
@@ -862,7 +864,7 @@ def _validate_extension_source(path: Path) -> None:
                 if _is_public_custom_extensions_import(alias.name):
                     if not alias.asname:
                         raise ValueError(
-                            "import bot.utils.custom_extensions должен использовать alias public API"
+                            _tr('custom_extensions.validate_extension_source.1')
                         )
                     public_custom_extensions_aliases[alias.asname] = alias.name
                     continue
@@ -925,7 +927,7 @@ def _validate_extension_source(path: Path) -> None:
             )
         ):
             raise ValueError(
-                "dynamic import bot.utils.custom_extensions запрещён; используйте static public API import"
+                _tr('custom_extensions.validate_extension_source.2')
             )
         if (
             isinstance(node, ast.Call)
@@ -946,7 +948,7 @@ def _validate_extension_source(path: Path) -> None:
                 constant_string_names,
             )
         ):
-            raise ValueError("расширениям доступен только public API bot.utils.custom_extensions")
+            raise ValueError(_tr('custom_extensions.validate_extension_source.3'))
         if (
             isinstance(node, ast.Call)
             and _is_blocked_custom_extensions_dunder_getattribute(
@@ -956,7 +958,7 @@ def _validate_extension_source(path: Path) -> None:
                 constant_string_names,
             )
         ):
-            raise ValueError("расширениям запрещён introspection private API bot.utils.custom_extensions")
+            raise ValueError(_tr('custom_extensions.validate_extension_source.4'))
         if (
             isinstance(node, ast.Call)
             and _is_blocked_custom_extensions_introspection(
@@ -966,13 +968,13 @@ def _validate_extension_source(path: Path) -> None:
                 constant_string_names,
             )
         ):
-            raise ValueError("расширениям запрещён introspection private API bot.utils.custom_extensions")
+            raise ValueError(_tr('custom_extensions.validate_extension_source.4'))
         if (
             isinstance(node, ast.Call)
             and _is_blocked_dynamic_code_call(node, dynamic_code_names, constant_string_names)
         ):
             raise ValueError(
-                "расширениям запрещены eval/exec/compile; используйте public extension API"
+                _tr('custom_extensions.validate_extension_source.5')
             )
 
 
@@ -1026,7 +1028,7 @@ def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) ->
         elif func_name == 'register_action_handler' and node.args:
             action_value = _literal_string_arg(node.args[0])
             if action_value is not None and not action_value.strip().startswith('cmd_ext_'):
-                raise ValueError("action_value расширения должен начинаться с cmd_ext_")
+                raise ValueError(_tr('custom_extensions.register_action_handler.1'))
             if len(node.args) >= 2:
                 callback_data = _literal_string_arg(node.args[1])
                 if callback_data is not None:
@@ -1037,7 +1039,7 @@ def _validate_static_extension_declarations(tree: ast.AST, extension_id: str) ->
                 schema_extension_id = (_literal_string_arg(node.args[0]) if node.args
                                        else _literal_keyword_string_arg(node, 'extension_id'))
                 if schema_extension_id is not None and normalize_extension_id(schema_extension_id) != expected_extension_id:
-                    raise ValueError('extension_id schema должен совпадать с именем extension-файла')
+                    raise ValueError(_tr('custom_extensions.validate_static_extension_declarations.1'))
             declaration = node.args[offset] if len(node.args) > offset else next(
                 (keyword.value for keyword in node.keywords if keyword.arg == 'migrations'), None)
             migrations = _literal_value_arg(declaration) if declaration is not None else None
@@ -1080,8 +1082,7 @@ def _literal_value_arg(node: ast.AST) -> Any | None:
 def _raise_if_blocked_import(module_name: str) -> None:
     if _is_blocked_import_module(module_name):
         raise ValueError(
-            "расширениям запрещён прямой импорт sqlite3/database/sys/internal registries/core runtime modules; "
-            "используйте public extension API"
+            _tr('custom_extensions.raise_if_blocked_import.1')
         )
 
 
@@ -1106,7 +1107,7 @@ def _raise_if_private_custom_extensions_api_name(name: str, *, api_module='bot.u
     if api_module == 'core.extensions.api':
         from core.extensions.api import __all__ as names
     if name == '*' or name not in names:
-        raise ValueError("расширениям доступен только public API bot.utils.custom_extensions")
+        raise ValueError(_tr('custom_extensions.validate_extension_source.3'))
 
 
 def _is_public_custom_extensions_alias(node: ast.AST, aliases: set[str]) -> bool:
@@ -1560,7 +1561,7 @@ def _require_current_extension_namespace(extension_id: str) -> str:
 
     current_id = normalize_extension_id(current_extension)
     if ext_id != current_id:
-        raise ValueError('extension_id должен совпадать с именем текущего расширения')
+        raise ValueError(_tr('custom_extensions.require_current_extension_namespace.1'))
     return ext_id
 
 
@@ -1569,14 +1570,14 @@ def _require_current_extension() -> str:
 
     current_extension = _CURRENT_EXTENSION.get()
     if current_extension is None:
-        raise ValueError('операция доступна только из контекста custom extension')
+        raise ValueError(_tr('custom_extensions.require_current_extension.1'))
     return normalize_extension_id(current_extension)
 
 
 def _require_extension_registry_name(name: str, kind: str) -> str:
     registry_name = _require_text(name, f'{kind} name').strip()
     if not registry_name.casefold().startswith('ext_'):
-        raise ValueError(f"{kind} расширения должен начинаться с ext_")
+        raise ValueError(_tr('custom_extensions.require_extension_registry_name.1', p0=f'{kind}'))
     return registry_name
 
 
@@ -1595,20 +1596,19 @@ def _require_extension_owned_registry_name(name: str, kind: str) -> str:
             return registry_name
 
     raise ValueError(
-        f"{kind} расширения должен начинаться с ext_, ext. "
-        "или namespace текущего расширения"
+        _tr('custom_extensions.require_extension_owned_registry_name.1', p0=f'{kind}')
     )
 
 
 def _require_text(value: Any, field: str) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"{field} должен быть строкой")
+        raise ValueError(_tr('action_registry.require_text.1', p0=f'{field}'))
     return value
 
 
 def _require_bool_option(value: Any, field: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f"{field} должен быть bool")
+        raise ValueError(_tr('action_registry.require_bool.1', p0=f'{field}'))
     return value
 
 
@@ -1619,13 +1619,13 @@ def _require_extension_payment_provider_id(provider_id: str) -> str:
     provider_key = normalize_payment_provider_id(provider_id)
     current_extension = _CURRENT_EXTENSION.get()
     if current_extension is None:
-        raise ValueError('payment provider расширения можно регистрировать только во время загрузки расширения')
+        raise ValueError(_tr('custom_extensions.require_extension_payment_provider_id.1'))
 
     current_id = normalize_extension_id(current_extension)
     if provider_key == current_id or provider_key.startswith(f'{current_id}_'):
         return provider_key
 
-    raise ValueError('provider_id расширения должен совпадать с namespace текущего расширения')
+    raise ValueError(_tr('custom_extensions.require_extension_payment_provider_id.2'))
 
 
 def _bind_extension_callable(

@@ -3,6 +3,8 @@ Main router of the admin panel.
 
 Processes login to the admin panel and the main menu.
 """
+
+from localization import text as _tr
 import asyncio
 import logging
 from aiogram import Router, F
@@ -42,7 +44,7 @@ from aiogram.exceptions import TelegramBadRequest
 async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
     """Shows the main menu of the admin panel."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     turn = await monitoring_turn(state)
@@ -84,14 +86,13 @@ async def show_admin_panel(callback: CallbackQuery, state: FSMContext):
 async def show_marketing_menu(callback: CallbackQuery, state: FSMContext):
     """Shows a menu of marketing tools."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.admin_menu)
 
     text = (
-        "📣 <b>Маркетинг</b>\n\n"
-        "Выберите инструмент:"
+        _tr('main.show_marketing_menu.1')
     )
 
     await safe_edit_or_send(
@@ -109,7 +110,7 @@ async def admin_placeholder(callback: CallbackQuery):
         await callback.answer()
         return
 
-    await callback.answer("Скоро будет больше полезных функций ;)")
+    await callback.answer(_tr('main.admin_placeholder.1'))
 
 
 # ============================================================================
@@ -120,7 +121,7 @@ async def admin_placeholder(callback: CallbackQuery):
 async def show_author_support(callback: CallbackQuery):
     """Shows the author support screen."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
         
     await callback.answer()
@@ -129,14 +130,7 @@ async def show_author_support(callback: CallbackQuery):
     seller_link = build_telegram_link('Ya_SellerBot', 'item-40')
     
     text = (
-        "👤 <b>Автор и поддержка</b>\n\n"
-        f"<b>Разработчик</b>: <a href=\"{developer_link}\">Plushkin Blog</a>\n\n"
-        "Я собираю деньги на разработку игры в жанре MMORTS с честной экономикой и никакого pay2win. Т.е. нельзя будет ничего купить у автора игры, никаких эксклюзивных вещей или бесконечных ресурсов для богатых.\n\n"
-        "Очень нужна ваша поддержка, даже 100р уже вперед. как говорится с мира по нитке ;)\n"
-        "💳 <b>Карты РФ</b>: https://yoomoney.ru/fundraise/1GJ73GGRJBC.260318\n"
-        f"💰 <b>USDT (TON/BSC/ARBITRUM)</b>: {seller_link}\n\n"
-        "‼️Другие полезные для тебя боты\n\n"
-        "@Ya_FooterBot - <i>сделай автоматическую подпись ко всем постам в своем канале, добавь туда ссылку на свой VPN</i>"
+        _tr('main.show_author_support.1', p0=f'{developer_link}', p1=f'{seller_link}')
     )
     
     try:

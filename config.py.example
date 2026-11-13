@@ -1,5 +1,8 @@
 import os
 
+# Initial language for a NEW database only. Existing databases retain their language.
+INSTALLATION_LANGUAGE = "ru"
+
 # Telegram Bot API Token
 # Получите у @BotFather
 BOT_TOKEN = "ВАШ_ТОКЕН_БОТА"

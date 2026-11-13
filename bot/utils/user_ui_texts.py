@@ -57,6 +57,8 @@ def _validate_row(row: Mapping[str, Any]) -> CachedUserUIText:
         raise RuntimeError(f"Effective value for {text_key!r} must be a string")
     if text_format == "button" and (not text.strip() or "\n" in text or "\r" in text):
         raise RuntimeError(f"Button template {text_key!r} must be a non-empty single line")
+    if text_key.startswith('command.') and not 1 <= len(text) <= 256:
+        raise RuntimeError(f"Command description {text_key!r} must contain 1 to 256 characters")
 
     placeholders = _template_placeholders(text)
     if (

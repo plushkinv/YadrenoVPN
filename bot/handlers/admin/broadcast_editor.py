@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import logging
 from typing import Any
@@ -48,13 +50,11 @@ def _state_error_text(state: dict[str, Any]) -> str:
     status = str(state.get("status") or "")
     if status in {"conflict", "stage_conflict", "config_conflict"}:
         return (
-            "⚠️ <b>Черновик изменился</b>\n\n"
-            "Рабочий материал или версия черновика уже обновлены. "
-            "Попросите редактора перечитать состояние и повторить правку."
+            _tr('broadcast_editor.state_error_text.1')
         )
     return (
-        "❌ <b>Не удалось сохранить черновик</b>\n\n"
-        + escape_html(str(state.get("error") or state.get("validation_error") or "Проверьте материал."))
+        _tr('broadcast_editor.state_error_text.2')
+        + escape_html(str(state.get("error") or state.get("validation_error") or _tr('broadcast_editor.state_error_text.3')))
     )
 
 
@@ -104,14 +104,14 @@ async def _finish_exit(callback: CallbackQuery, state: FSMContext) -> None:
     await asyncio.to_thread(discard_broadcast_editor_stage, telegram_id)
     await state.set_state(AdminStates.broadcast_menu)
     await render_broadcast_menu(callback.message)
-    await callback.answer("Редактор закрыт")
+    await callback.answer(_tr('broadcast_editor.finish_exit.1'))
 
 
 @router.callback_query(F.data == "broadcast_editor_preview")
 async def broadcast_editor_preview(callback: CallbackQuery, bot: Bot) -> None:
     """Preview the local stage without changing working settings."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     stage, _snapshot = await asyncio.to_thread(
         ensure_broadcast_editor_stage,
@@ -121,7 +121,7 @@ async def broadcast_editor_preview(callback: CallbackQuery, bot: Bot) -> None:
     state_payload = await asyncio.to_thread(get_broadcast_editor_state, callback.from_user.id)
     if not content or state_payload.get("validation_error"):
         await callback.answer(
-            str(state_payload.get("validation_error") or "Материал не подготовлен"),
+            str(state_payload.get("validation_error") or _tr('broadcast_editor.broadcast_editor_preview.1')),
             show_alert=True,
         )
         return
@@ -129,16 +129,16 @@ async def broadcast_editor_preview(callback: CallbackQuery, bot: Bot) -> None:
         await _send_content_preview(bot, callback.message, content, telegram_id=callback.from_user.id)
     except (TelegramAPIError, ValueError, TypeError) as error:
         logger.warning("Broadcast editor preview failed: %s", error)
-        await callback.answer("Не удалось показать превью. Проверьте материал.", show_alert=True)
+        await callback.answer(_tr('broadcast_editor.broadcast_editor_preview.2'), show_alert=True)
         return
-    await callback.answer("Превью отправлено")
+    await callback.answer(_tr('broadcast_editor.broadcast_editor_preview.3'))
 
 
 @router.callback_query(F.data == "broadcast_editor_save")
 async def broadcast_editor_save(callback: CallbackQuery) -> None:
     """Atomically apply the stage while keeping the editor dialogue open."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     result = await asyncio.to_thread(save_broadcast_editor_stage, callback.from_user.id)
     if result.get("status") != "saved":
@@ -147,26 +147,24 @@ async def broadcast_editor_save(callback: CallbackQuery) -> None:
             _state_error_text(result),
             reply_markup=broadcast_editor_kb(),
         )
-        await callback.answer("Не сохранено", show_alert=True)
+        await callback.answer(_tr('broadcast_editor.broadcast_editor_save.1'), show_alert=True)
         return
     await safe_edit_or_send(
         callback.message,
-        "💾 <b>Черновик сохранён</b>\n\n"
-        "Рабочий материал, фильтры и выбранный стиль обновлены. "
-        "Диалог с редактором остаётся открытым.",
+        _tr('broadcast_editor.broadcast_editor_save.2'),
         reply_markup=broadcast_editor_kb(),
     )
-    await callback.answer("Сохранено")
+    await callback.answer(_tr('broadcast_editor.broadcast_editor_save.3'))
 
 
 @router.callback_query(F.data == "broadcast_editor_launch")
 async def broadcast_editor_launch(callback: CallbackQuery, bot: Bot) -> None:
     """Save, preview, and create the second trusted launch confirmation."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     if is_broadcast_in_progress():
-        await callback.answer("Рассылка уже идёт", show_alert=True)
+        await callback.answer(_tr('broadcast_editor.broadcast_editor_launch.1'), show_alert=True)
         return
     saved = await asyncio.to_thread(save_broadcast_editor_stage, callback.from_user.id)
     if saved.get("status") != "saved":
@@ -175,7 +173,7 @@ async def broadcast_editor_launch(callback: CallbackQuery, bot: Bot) -> None:
             _state_error_text(saved),
             reply_markup=broadcast_editor_kb(),
         )
-        await callback.answer("Не готово к запуску", show_alert=True)
+        await callback.answer(_tr('broadcast_editor.broadcast_editor_launch.2'), show_alert=True)
         return
     stage, _snapshot = await asyncio.to_thread(
         ensure_broadcast_editor_stage,
@@ -193,30 +191,27 @@ async def broadcast_editor_launch(callback: CallbackQuery, bot: Bot) -> None:
         logger.warning("Broadcast editor launch preparation failed: %s", error)
         await safe_edit_or_send(
             callback.message,
-            "❌ <b>Не удалось подготовить запуск</b>\n\n" + escape_html(str(error)),
+            _tr('broadcast_editor.broadcast_editor_launch.3') + escape_html(str(error)),
             reply_markup=broadcast_editor_kb(),
         )
-        await callback.answer("Запуск не подготовлен", show_alert=True)
+        await callback.answer(_tr('broadcast_editor.broadcast_editor_launch.4'), show_alert=True)
         return
 
     filter_status = broadcast_filter_status(confirmation["filters"])
     count = int(confirmation["recipient_count"])
     await safe_edit_or_send(
         callback.message,
-        "🚀 <b>Проверьте настоящее превью выше</b>\n\n"
-        f"<b>{escape_html(filter_status)}</b>\n"
-        f"<b>Получателей:</b> {count}\n\n"
-        "Рассылка начнётся только после кнопки ниже.",
+        _tr('broadcast_editor.broadcast_editor_launch.5', p0=f'{escape_html(filter_status)}', p1=f'{count}'),
         reply_markup=broadcast_confirm_kb(count, str(confirmation["token"])),
     )
-    await callback.answer("Ожидаю подтверждение")
+    await callback.answer(_tr('broadcast_editor.broadcast_editor_launch.6'))
 
 
 @router.callback_query(F.data == "broadcast_editor_exit")
 async def broadcast_editor_exit(callback: CallbackQuery, state: FSMContext) -> None:
     """Exit immediately when clean, or ask how to handle unsaved edits."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     dirty = await asyncio.to_thread(broadcast_stage_is_dirty, callback.from_user.id)
     if not dirty:
@@ -224,7 +219,7 @@ async def broadcast_editor_exit(callback: CallbackQuery, state: FSMContext) -> N
         return
     await safe_edit_or_send(
         callback.message,
-        "⚠️ <b>Есть несохранённые правки</b>\n\nЧто сделать перед выходом?",
+        _tr('broadcast_editor.broadcast_editor_exit.1'),
         reply_markup=broadcast_editor_dirty_exit_kb(),
     )
     await callback.answer()
@@ -234,7 +229,7 @@ async def broadcast_editor_exit(callback: CallbackQuery, state: FSMContext) -> N
 async def broadcast_editor_exit_save(callback: CallbackQuery, state: FSMContext) -> None:
     """Save staged changes and leave the editor."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     result = await asyncio.to_thread(save_broadcast_editor_stage, callback.from_user.id)
     if result.get("status") != "saved":
@@ -243,7 +238,7 @@ async def broadcast_editor_exit_save(callback: CallbackQuery, state: FSMContext)
             _state_error_text(result),
             reply_markup=broadcast_editor_dirty_exit_kb(),
         )
-        await callback.answer("Не удалось сохранить", show_alert=True)
+        await callback.answer(_tr('broadcast_editor.broadcast_editor_exit_save.1'), show_alert=True)
         return
     await _finish_exit(callback, state)
 
@@ -252,7 +247,7 @@ async def broadcast_editor_exit_save(callback: CallbackQuery, state: FSMContext)
 async def broadcast_editor_exit_discard(callback: CallbackQuery, state: FSMContext) -> None:
     """Discard staged changes and leave the editor."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await _finish_exit(callback, state)
 
@@ -261,12 +256,11 @@ async def broadcast_editor_exit_discard(callback: CallbackQuery, state: FSMConte
 async def broadcast_editor_exit_continue(callback: CallbackQuery) -> None:
     """Return from the dirty-exit prompt to the editor controls."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await safe_edit_or_send(
         callback.message,
-        "✍️ <b>Продолжаем редактирование</b>\n\n"
-        "Напишите следующую правку обычным сообщением — повторять <code>/yaa</code> не нужно.",
+        _tr('broadcast_editor.broadcast_editor_exit_continue.1'),
         reply_markup=broadcast_editor_kb(),
     )
     await callback.answer()

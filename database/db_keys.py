@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 import sqlite3
 import logging
 import secrets
@@ -10,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 KEY_NAME_PREFIX_SETTING = 'key_name_prefix'
 MAX_KEY_CUSTOM_NAME_LENGTH = 30
+
+
+def _unnamed_key_display(key):
+    from bot.utils.user_ui_texts import render_ui_text
+    return render_ui_text('key.name.draft' if not key['server_id'] else 'key.name.default', key_id=key['id'])
 
 __all__ = [
     'get_user_vpn_keys',
@@ -650,7 +657,7 @@ def update_vpn_key_tariff_and_traffic_limit(
             # This explicit legacy plan change supersedes a previous snapshot.
             conn.execute('DELETE FROM key_entitlements WHERE key_id=?', (key_id,))
             limit_gb = new_limit / (1024 ** 3) if new_limit > 0 else 0
-            limit_text = f"{limit_gb:.1f} ГБ" if new_limit > 0 else "безлимит"
+            limit_text = _tr('key_plans.traffic_text.2', p0=f'{limit_gb:.1f}') if new_limit > 0 else _tr('db_keys.update_vpn_key_tariff_and_traffic_limit.1')
             added_gb = traffic_limit_bytes / (1024 ** 3) if traffic_limit_bytes > 0 else 0
             logger.info(
                 f"Ключ ID {key_id} переведён на тариф {tariff_id}, "
@@ -819,9 +826,9 @@ def get_user_keys_for_display(telegram_id: int) -> List[Dict[str, Any]]:
                 key['display_name'] = key['custom_name']
             else:
                 if not key['server_id']:
-                     key['display_name'] = f"Ключ #{key['id']} (Не настроен)"
+                     key['display_name'] = _unnamed_key_display(key)
                 else:
-                     key['display_name'] = f"Ключ #{key['id']}"
+                     key['display_name'] = _unnamed_key_display(key)
             keys.append(key)
         
         return keys
@@ -927,9 +934,9 @@ def _get_key_details(key_id, owner_id, *, by_account):
             key['display_name'] = key['custom_name']
         else:
             if not key['server_id']:
-                 key['display_name'] = f"Ключ #{key['id']} (Не настроен)"
+                 key['display_name'] = _unnamed_key_display(key)
             else:
-                 key['display_name'] = f"Ключ #{key['id']}"
+                 key['display_name'] = _unnamed_key_display(key)
         
         return key
 

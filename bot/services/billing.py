@@ -5,6 +5,8 @@ Verification of signatures, creation/renewal of keys after payment.
 Creating QR payments via YuKassa REST API.
 Referral accruals.
 """
+
+from localization import text as _tr
 import hmac
 import hashlib
 import logging
@@ -118,10 +120,10 @@ async def _payment_api_json_request(
                         response_data = await response.json(content_type=None)
                 except Exception as error:
                     raise PaymentApiResponseError(
-                        f'Некорректный JSON-ответ HTTP {response.status}'
+                        _tr('billing.request_once.1', p0=f'{response.status}')
                     ) from error
                 if response.status not in expected_statuses:
-                    error_text = 'Неизвестная ошибка'
+                    error_text = _tr('billing.request_once.2')
                     if isinstance(response_data, dict):
                         raw_error = response_data.get('error')
                         if isinstance(raw_error, dict):
@@ -500,7 +502,7 @@ async def create_yookassa_qr_payment(
     if not shop_id or not secret_key:
         raise _payment_configuration_error(
             'yookassa',
-            'ЮКасса: не настроены shop_id или secret_key',
+            _tr('billing.create_yookassa_qr_payment.1'),
         )
 
     # Basic Auth header: base64(shop_id:secret_key)
@@ -570,7 +572,7 @@ async def create_yookassa_qr_payment(
             'yookassa',
             'create',
             order_id,
-            'ЮКасса API не вернул id или confirmation_url',
+            _tr('billing.create_yookassa_qr_payment.2'),
         )
 
     qr = qrcode.QRCode(
@@ -623,7 +625,7 @@ async def check_yookassa_payment_status(
     if not shop_id or not secret_key:
         raise _payment_configuration_error(
             'yookassa',
-            'ЮКасса: не настроены shop_id или secret_key',
+            _tr('billing.create_yookassa_qr_payment.1'),
         )
 
     credentials = base64.b64encode(f"{shop_id}:{secret_key}".encode()).decode()
@@ -649,7 +651,7 @@ async def check_yookassa_payment_status(
             'yookassa',
             'check',
             order_id or yookassa_payment_id,
-            'ЮКасса API не вернул статус платежа',
+            _tr('billing.check_yookassa_payment_status.1'),
         )
     status = data['status']
     logger.debug("ЮКасса payment %s: status=%s", yookassa_payment_id, status)
@@ -690,7 +692,7 @@ async def create_wata_payment(
     """
     token = get_wata_token()
     if not token:
-        raise _payment_configuration_error('wata', 'WATA: JWT-токен не настроен')
+        raise _payment_configuration_error('wata', _tr('billing.create_wata_payment.1'))
 
     return_url = build_payment_return_url(bot_name, 'wata', order_id)
 
@@ -725,14 +727,14 @@ async def create_wata_payment(
     if not isinstance(data, dict):
         raise _payment_contract_error(
             'wata', 'create', order_id,
-            'WATA API вернул ответ неверного типа',
+            _tr('billing.create_wata_payment.2'),
         )
     wata_link_id = data.get('id') or data.get('linkId') or data.get('uuid')
     qr_url = data.get('url') or data.get('paymentUrl')
     if not wata_link_id or not qr_url:
         raise _payment_contract_error(
             'wata', 'create', order_id,
-            'WATA API не вернул id или URL платёжной ссылки',
+            _tr('billing.create_wata_payment.3'),
         )
 
     logger.info(
@@ -779,7 +781,7 @@ async def fetch_wata_transactions(order_id: str, *, cursor: dict | None = None) 
     """Fetch one page; the WATA service owns pacing, continuation and settlement."""
     token = get_wata_token()
     if not token:
-        raise _payment_configuration_error('wata', 'WATA: JWT-токен не настроен')
+        raise _payment_configuration_error('wata', _tr('billing.create_wata_payment.1'))
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -840,7 +842,7 @@ async def create_platega_payment(
     if not merchant_id or not secret:
         raise _payment_configuration_error(
             'platega',
-            'Platega: не настроены merchant_id или secret',
+            _tr('billing.create_platega_payment.1'),
         )
 
     return_url = build_payment_return_url(bot_name, 'platega', order_id)
@@ -885,7 +887,7 @@ async def create_platega_payment(
     if not isinstance(data, dict):
         raise _payment_contract_error(
             'platega', 'create', order_id,
-            'Platega API вернул ответ неверного типа',
+            _tr('billing.create_platega_payment.2'),
         )
     transaction_id = data.get('id') or data.get('transactionId') or data.get('uuid')
     qr_url = (
@@ -895,7 +897,7 @@ async def create_platega_payment(
     if not transaction_id or not qr_url:
         raise _payment_contract_error(
             'platega', 'create', order_id,
-            'Platega API не вернул id или URL платёжной ссылки',
+            _tr('billing.create_platega_payment.3'),
         )
 
     qr = qrcode.QRCode(
@@ -954,7 +956,7 @@ async def check_platega_payment_status(
     if not merchant_id or not secret:
         raise _payment_configuration_error(
             'platega',
-            'Platega: не настроены merchant_id или secret',
+            _tr('billing.create_platega_payment.1'),
         )
 
     headers = {
@@ -978,7 +980,7 @@ async def check_platega_payment_status(
     if not isinstance(data, dict) or not data.get('status'):
         raise _payment_contract_error(
             'platega', 'check', order_id or transaction_id,
-            'Platega API не вернул статус платежа',
+            _tr('billing.check_platega_payment_status.1'),
         )
     status = str(data['status']).upper()
     logger.debug("Platega transaction %s: status=%s", transaction_id, status)
@@ -1032,7 +1034,7 @@ async def create_cardlink_payment(
     if not shop_id or not api_token:
         raise _payment_configuration_error(
             'cardlink',
-            'Cardlink: не настроены shop_id или api_token',
+            _tr('billing.create_cardlink_payment.1'),
         )
 
     form = aiohttp.FormData()
@@ -1080,7 +1082,7 @@ async def create_cardlink_payment(
     if not bill_id or not qr_url:
         raise _payment_contract_error(
             'cardlink', 'create', order_id,
-            'Cardlink API не вернул bill_id или URL',
+            _tr('billing.create_cardlink_payment.2'),
         )
 
     qr = qrcode.QRCode(
@@ -1138,7 +1140,7 @@ async def check_cardlink_payment_status(
     if not shop_id or not api_token:
         raise _payment_configuration_error(
             'cardlink',
-            'Cardlink: не настроены shop_id или api_token',
+            _tr('billing.create_cardlink_payment.1'),
         )
 
     headers = {
@@ -1165,7 +1167,7 @@ async def check_cardlink_payment_status(
     if not isinstance(payload, dict) or not payload.get('status'):
         raise _payment_contract_error(
             'cardlink', 'check', order_id or bill_id,
-            'Cardlink API не вернул статус платежа',
+            _tr('billing.check_cardlink_payment_status.1'),
         )
     status = str(payload['status']).upper()
     logger.debug("Cardlink bill %s: status=%s", bill_id, status)
@@ -1287,7 +1289,7 @@ async def process_referral_reward(
                 referrer_id,
                 final_reward,
                 source='referral_reward',
-                reason=f'Реферальное вознаграждение, уровень {level_num}',
+                reason=_tr('billing.process_referral_reward.1', p0=f'{level_num}'),
                 reference_type=reference_type,
                 reference_id=reference_id,
                 metadata={
@@ -1310,7 +1312,7 @@ async def process_referral_reward(
                 referrer_id,
                 reward_days,
                 source='referral_reward',
-                reason=f'Реферальное вознаграждение, уровень {level_num}',
+                reason=_tr('billing.process_referral_reward.1', p0=f'{level_num}'),
                 reference_type=reference_type,
                 reference_id=reference_id,
                 metadata={

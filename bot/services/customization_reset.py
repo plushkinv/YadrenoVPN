@@ -1,6 +1,8 @@
 """Production-safe reset of local bot customization."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import logging
 import shutil
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BACKUP_DIR = PROJECT_ROOT / "backup"
-CUSTOM_RESET_CONFIRMATION_PHRASE = "СБРОСИТЬ КАСТОМЫ"
+CUSTOM_RESET_CONFIRMATION_PHRASE = _tr('customization_reset.module.1')
 
 PRESERVED_DATA_LABELS = (
     "users",
@@ -209,7 +211,7 @@ def run_customization_reset(
     backups_root = _resolve_inside(_coerce_path(backup_dir, root / "backup", root), root)
 
     report = CustomizationResetReport(dry_run=dry_run)
-    stage = "Подготовка сброса"
+    stage = _tr('customization_reset.run_customization_reset.1')
     try:
         from web_tools.customization_reset import prepare_reset, preview_reset
 
@@ -220,7 +222,7 @@ def run_customization_reset(
                 _assert_tree_inside(custom_extensions_dir, root)
         context = prepare_reset(root) if not dry_run and not skip_files else nullcontext(None)
         with context as web_reset:
-            stage = "Резервное копирование"
+            stage = _tr('customization_reset.run_customization_reset.2')
             if create_backup and not dry_run:
                 if not skip_db:
                     report.backup_paths.append(_create_database_backup(db, backups_root))
@@ -235,21 +237,21 @@ def run_customization_reset(
                         backup_local(destination, root)
                         report.backup_paths.append(destination / BACKUP_ARCHIVE)
 
-            stage = "Восстановление Web"
+            stage = _tr('customization_reset.run_customization_reset.3')
             if not skip_files:
                 report.web_actions = web_reset.apply() if web_reset is not None else preview_reset(root)
 
-        stage = "Сброс БД"
+        stage = _tr('customization_reset.run_customization_reset.4')
         if not skip_db:
             report.db_actions = reset_customization_database(db, dry_run=dry_run)
 
-        stage = "Очистка расширений"
+        stage = _tr('customization_reset.run_customization_reset.5')
         if not skip_files:
             report.file_actions, _ = reset_customization_files(
                 root, backups_root, dry_run=dry_run, create_backup=False,
             )
 
-        stage = "Обновление runtime"
+        stage = _tr('customization_reset.run_customization_reset.6')
         if reset_runtime and not dry_run:
             report.runtime_actions.extend(reset_customization_runtime())
     except Exception as exc:
@@ -294,7 +296,7 @@ async def run_customization_reset_for_bot(
         loaded = reload_user_ui_text_cache()
         report.runtime_actions.append(f"user UI text cache reloaded: {loaded} entries")
     except Exception as exc:
-        raise CustomizationResetError(report, "Обновление runtime", exc) from exc
+        raise CustomizationResetError(report, _tr('customization_reset.run_customization_reset.6'), exc) from exc
     if bot is not None:
         try:
             from bot.services.bot_commands import sync_bot_commands

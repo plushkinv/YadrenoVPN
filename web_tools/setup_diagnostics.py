@@ -1,6 +1,8 @@
 """Copyable operator instructions for bounded setup failures, without secrets."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import ipaddress
 import os
 from pathlib import Path
@@ -12,100 +14,75 @@ import uuid
 
 from web_api.settings import DEFAULT_TRUSTED_PROXIES
 
-HEADING = 'Автоматическая установка невозможна. Требуется дополнительная ручная настройка сервера'
+HEADING = _tr('setup_diagnostics.module.1')
 ADMIN_URL = 'https://t.me/YadrenoAdmin_Bot'
-COPY_START = '----- НАЧАЛО ИНСТРУКЦИИ ДЛЯ КОПИРОВАНИЯ -----'
-COPY_END = '----- КОНЕЦ ИНСТРУКЦИИ -----'
+COPY_START = _tr('setup_diagnostics.module.2')
+COPY_END = _tr('setup_diagnostics.module.3')
 
 
 def _steps(code, details, options):
     if code == 'public_port_conflict':
         port = details.get('port', options.https_port if options else 443)
         service = str(details.get('service', ''))
-        steps = [f'Проверьте владельца TCP-порта {port} командой ss -ltnp.']
+        steps = [_tr('setup_diagnostics.steps.1', p0=f'{port}')]
         if 'docker' in service:
-            steps.append('Исправьте публикацию порта в настройках соответствующего контейнера или его Compose-проекта.')
+            steps.append(_tr('setup_diagnostics.steps.2'))
         elif 'xray' in service or 'x-ui' in service:
-            steps.append('В панели найдите соответствующий inbound, порт панели или подписки. '
-                         'Для Reality или общего порта 443 сначала подготовьте полный план маршрутизации и возврата. '
-                         'Перенос listener и включение нового маршрута выполняйте согласованно, чтобы VPN оставался доступен. '
-                         'Не переносите работающий inbound отдельным предварительным шагом и не останавливайте весь Xray.')
+            steps.append(_tr('setup_diagnostics.steps.3'))
         else:
-            steps.append('Измените порт или привязку обнаруженной службы через её штатные настройки, сохранив её работу.')
-        steps.append('Если служба должна сохранить этот порт, подготовьте совместную маршрутизацию вручную '
-                     'и завершите подключение служебной командой для готового HTTPS-прокси ниже. '
-                     'Повторный запуск мастера сам порт не освободит.')
+            steps.append(_tr('setup_diagnostics.steps.4'))
+        steps.append(_tr('setup_diagnostics.steps.5'))
         return steps
     if code == 'renewal_conflict':
         port = details.get('port')
-        renewal = ('Проверьте совместимость дополнительных команд продления с Nginx. '
-                   'Сохраните совместимый способ подтверждения сертификата через DNS или webroot.')
+        renewal = (_tr('setup_diagnostics.steps.6'))
         if port in {80, 443}:
-            renewal = (f'Согласуйте использование TCP-порта {port} клиентом продления и Nginx. '
-                       'Настройте HTTP-проверку через работающий Nginx (webroot) либо другой совместимый способ, например DNS. '
-                       'Если выбрана HTTP-проверка, она должна быть доступна на порту 80 для всех имён/IP сертификата. '
-                       'Также проверьте дополнительные команды продления.')
-        return ['Определите, какой клиент и какое задание продлевают указанный сертификат: acme.sh, Certbot, cron или systemd.',
+            renewal = (_tr('setup_diagnostics.steps.7', p0=f'{port}'))
+        return [_tr('setup_diagnostics.steps.8'),
                 renewal,
-                'Сохраните сам сертификат на IP/домен, ключ, пути установки, CA, профиль и частоту продления, '
-                'а также команды обновления сертификата в панели. Не удаляйте сертификат и не отключайте его продление.',
-                'Проверьте продление штатными средствами найденного клиента и что панель/подписки используют обновлённый сертификат. '
-                'Не заменяйте рабочий сертификат тестовым.']
+                _tr('setup_diagnostics.steps.9'),
+                _tr('setup_diagnostics.steps.10')]
     if code in {'nginx_invalid', 'nginx_include_missing', 'nginx_complex_configuration', 'server_name_conflict'}:
-        return ['Проверьте существующую конфигурацию командами nginx -t и nginx -T, включая сайты и TCP/UDP-маршрутизацию.',
-                'Подготовьте отдельный сайт для указанного домена в корне /. '
-                'Для автоматического режима нужен include /etc/nginx/conf.d/*.conf внутри http и отсутствие '
-                'чужого сайта с тем же именем; существующие сайты, VPN и подписки должны продолжить работу.',
-                'Если требуется перестройка stream, контейнерного или другого прокси, настройте HTTPS-маршрут '
-                'к закрытому HTTP listener бота вручную и используйте служебную команду для готового прокси ниже.']
+        return [_tr('setup_diagnostics.steps.11'),
+                _tr('setup_diagnostics.steps.12'),
+                _tr('setup_diagnostics.steps.13')]
     if code in {'dns_unavailable', 'dns_address_mismatch', 'ipv6_unavailable'}:
-        return ['Проверьте A и AAAA указанного домена. В автоматическом режиме они должны вести на этот сервер.',
-                'Исправьте неверные записи. Если IPv6 не настроен, удалите лишнюю AAAA; затем дождитесь обновления DNS.',
-                'Проверьте доступность TCP 80 и выбранного HTTPS-порта извне, включая firewall сервера и хостинга.']
+        return [_tr('setup_diagnostics.steps.14'),
+                _tr('setup_diagnostics.steps.15'),
+                _tr('setup_diagnostics.steps.16')]
     if code in {'backend_port_conflict', 'invalid_saved_web_settings', 'backend_address_missing', 'listen_address_missing'}:
-        return ['Сопоставьте выбранные адреса и порты с ip -j address show и ss -ltnp.',
-                'Сохраните публичные порты панели/VPN. Для бота выберите свободный закрытый адрес/порт '
-                'через --backend-bind и --backend-port; согласуйте его с прокси. Не открывайте внутренний HTTP listener в Интернет.']
+        return [_tr('setup_diagnostics.steps.17'),
+                _tr('setup_diagnostics.steps.18')]
     if code in {'owned_file_collision', 'certificate_directory_collision', 'unsafe_owned_path'}:
-        return ['Определите владельца конфликтующего файла или каталога. Не удаляйте и не перезаписывайте чужую конфигурацию.',
-                'Устраните пересечение имён/путей с сохранением работающих служб либо подготовьте отдельный HTTPS-прокси.']
+        return [_tr('setup_diagnostics.steps.19'),
+                _tr('setup_diagnostics.steps.20')]
     if code in {'https_unavailable', 'unexpected_redirect', 'installation_mismatch', 'nginx_configuration_not_applied'}:
-        return ['Проверьте DNS, доступность HTTPS, соответствие сертификата домену и полный сертификатный chain.',
-                'Убедитесь, что корень / и /api/ ведут к этой установке бота, а не к панели, другому сайту или старому upstream.',
-                'Проверьте применение конфигурации Nginx и работу yadreno-vpn. Готовый прокси должен передавать запросы '
-                'без подмены страницы, дополнительной авторизации и неожиданных перенаправлений.']
+        return [_tr('setup_diagnostics.steps.21'),
+                _tr('setup_diagnostics.steps.22'),
+                _tr('setup_diagnostics.steps.23')]
     if code == 'upload_limit_too_small':
-        return ['Проверьте действующий лимит запроса на /api/v1/admin/ui/editor/uploads во всех HTTPS-прокси этого маршрута. '
-                'Перенесите правило загрузок из локального шаблона ниже, сохранив остальные сайты и маршруты.',
-                'После проверки и применения конфигурации повторите штатное подключение: итоговая приёмка проверит размер автоматически.']
+        return [_tr('setup_diagnostics.steps.24'),
+                _tr('setup_diagnostics.steps.25')]
     if code == 'upload_check_failed':
-        return ['Проверьте HTTPS, сертификат и маршрут /api/v1/admin/ui/editor/uploads к этой установке бота. '
-                'Прокси должен сохранять Origin и ответ API, без перенаправлений и дополнительной авторизации.',
-                'Проба намеренно не авторизована и должна получить 401 authentication_required. '
-                'Не добавляйте ей сессию администратора и не отключайте проверки доступа; устраните причину отказа и повторите подключение.']
+        return [_tr('setup_diagnostics.steps.26'),
+                _tr('setup_diagnostics.steps.27')]
     if code in {'certificate_unusable', 'renewal_not_ready', 'renewal_scheduler_unknown'}:
-        return ['Проверьте выдачу сертификата для выбранного домена, HTTP-проверку на порту 80 и срок сертификата.',
-                'Проверьте штатный certbot.timer либо расписание Snap Certbot, журнал клиента и reload Nginx после продления. '
-                'Собственные таймеры и обходные штампы готовности не создавайте. '
-                'Существующие сертификаты панели и подписок должны сохранить своё продление.']
+        return [_tr('setup_diagnostics.steps.28'),
+                _tr('setup_diagnostics.steps.29')]
     if code in {'setup_incomplete', 'setup_recovery_invalid'}:
-        return ['Восстановите прерванную настройку штатной командой recover из этой установки. '
-                'Не удаляйте журнал восстановления и файлы сертификатов вручную.',
-                'Если восстановление сообщает о конфликте, сначала сопоставьте текущие файлы с сохранённой конфигурацией '
-                'и устраните указанную причину. Затем повторите recover.']
+        return [_tr('setup_diagnostics.steps.30'),
+                _tr('setup_diagnostics.steps.31')]
     if code == 'ui_not_ready':
-        return ['Восстановите или обновите эту установку штатным установщиком до версии с готовым веб-интерфейсом.',
-                'Проверьте запуск бота и готовность интерфейса, затем повторите подключение домена.']
+        return [_tr('setup_diagnostics.steps.32'),
+                _tr('setup_diagnostics.steps.33')]
     if code in {'setup_busy', 'update_operation_busy'}:
-        return ['Дождитесь завершения уже запущенной установки, обновления или восстановления и повторите команду. '
-                'Не удаляйте lock-файлы и не запускайте несколько установок одновременно.']
+        return [_tr('setup_diagnostics.steps.34')]
     if code in {'command_missing', 'command_failed', 'listeners_unknown'}:
-        return ['Проверьте наличие и исправность указанной системной команды, права root и используемую ОС.',
-                'При ошибке пакетов проверьте apt; при ошибке Nginx — nginx -t и журнал nginx; '
-                'при ошибке сертификата — журнал соответствующего ACME-клиента и доступность HTTP-проверки.',
-                'Убедитесь, что после устранения ошибки продолжают работать панель, VPN и подписки.']
-    return ['Проверьте указанные код и этап ошибки, журнал службы yadreno-vpn и состояние Nginx/сертификатов.',
-            'Устраните конкретную причину, сохранив данные бота, панель, VPN, подписки и существующее продление сертификатов.']
+        return [_tr('setup_diagnostics.steps.35'),
+                _tr('setup_diagnostics.steps.36'),
+                _tr('setup_diagnostics.steps.37')]
+    return [_tr('setup_diagnostics.steps.38'),
+            _tr('setup_diagnostics.steps.39')]
 
 
 def _retry(root, options, *, prepared=False):
@@ -154,7 +131,7 @@ def _agent_commands(args, root):
                '--working-directory=' + str(root), '--property=StandardOutput=journal',
                '--property=StandardError=journal', '--',
                args[0], *(arg.replace('$', '$$') for arg in args[1:]), '--output', 'json']
-    return [_command(command), '', 'Журнал этой попытки (читать отдельной командой после перезапуска бота):',
+    return [_command(command), '', _tr('setup_diagnostics.agent_commands.1'),
             _command(['journalctl', '--unit=' + unit, '--no-pager', '--output=cat', '--lines=80'])]
 
 
@@ -162,15 +139,13 @@ def manual_setup_report(payload, options, root):
     """The same complete report is delivered as text and in the JSON message."""
     details = payload.get('details', {})
     issues = details.get('issues') or [{'code': payload['code'], 'message': payload.get('message', ''), 'details': details}]
-    lines = [HEADING, '', 'Вы можете выполнить настройку самостоятельно или полностью делегировать её Yadreno Admin:',
-             ADMIN_URL, '', 'Скопируйте весь блок между отметками НАЧАЛО и КОНЕЦ и передайте администратору.',
-             'SSH-доступ к нужному серверу передайте отдельно.', '', COPY_START, '',
-             'Задача: подключить сайт и Mini App, сохранив работу панели, VPN и подписок.',
-             'Каталог установленного бота: ' + str(root),
-             'Локальный образец конфигурации: ' + str(Path(root).absolute() / 'deploy/nginx/yadreno-web.conf.template'),
-             'При ручной настройке используйте этот шаблон установленной версии как образец обязательных правил '
-             'проксирования, включая заголовки и отдельный лимит загрузок. Адаптируйте домен, сертификат, listener '
-             'и адрес бота к существующей схеме; чужие сайты, VPN и продление сертификатов сохраняйте.']
+    lines = [HEADING, '', _tr('setup_diagnostics.manual_setup_report.1'),
+             ADMIN_URL, '', _tr('setup_diagnostics.manual_setup_report.2'),
+             _tr('setup_diagnostics.manual_setup_report.3'), '', COPY_START, '',
+             _tr('setup_diagnostics.manual_setup_report.4'),
+             _tr('setup_diagnostics.manual_setup_report.5') + str(root),
+             _tr('setup_diagnostics.manual_setup_report.6') + str(Path(root).absolute() / 'deploy/nginx/yadreno-web.conf.template'),
+             _tr('setup_diagnostics.manual_setup_report.7')]
     addresses = details.get('server_addresses') or details.get('server') or []
     visible = []
     for address in addresses:
@@ -180,63 +155,54 @@ def manual_setup_report(payload, options, root):
         except ValueError:
             pass
     if visible:
-        lines.append('Адреса сервера по результатам проверки: ' + ', '.join(visible))
+        lines.append(_tr('setup_diagnostics.manual_setup_report.8') + ', '.join(visible))
     if options:
-        lines.extend(['Домен: ' + options.domain, 'Публичный адрес: ' + options.public_url,
-                      'Подключение: ' + {'auto': 'автоматическое на этом сервере',
-                          'managed-nginx': 'Nginx на сервере бота', 'external': 'готовый HTTPS-прокси'}[options.proxy]])
+        lines.extend([_tr('setup_diagnostics.manual_setup_report.9') + options.domain, _tr('setup_diagnostics.manual_setup_report.10') + options.public_url,
+                      _tr('setup_diagnostics.manual_setup_report.11') + {'auto': _tr('setup_diagnostics.manual_setup_report.12'),
+                          'managed-nginx': _tr('setup_diagnostics.manual_setup_report.13'), 'external': _tr('setup_diagnostics.manual_setup_report.14')}[options.proxy]])
         retry = _retry(root, options)
-        lines += ['', 'Сначала повторите штатную проверку без изменений: отчёт отражает состояние на момент его создания.',
+        lines += ['', _tr('setup_diagnostics.manual_setup_report.15'),
                   '', _command([*retry, '--check-only']),
-                  '', 'Работайте только по актуальным причинам из новой проверки. Уже устранённые причины не расследуйте повторно.',
-                  'Проверяйте указанный порт, профиль сертификата или конфигурацию; расширяйте диагностику только '
-                  'при новой ошибке или обнаруженной зависимости. Если требуется recover, используйте команду ниже.']
-    lines += ['', 'Причины на момент составления отчёта и необходимые действия:']
+                  '', _tr('setup_diagnostics.manual_setup_report.16'),
+                  _tr('setup_diagnostics.manual_setup_report.17')]
+    lines += ['', _tr('setup_diagnostics.manual_setup_report.18')]
     actions = []
     for index, issue in enumerate(issues, 1):
         lines.append('')
-        lines.append(f'{index}. {issue["message"]} [код: {issue["code"]}]')
+        lines.append(_tr('setup_diagnostics.manual_setup_report.19', p0=f'{index}', p1=f"{issue['message']}", p2=f"{issue['code']}"))
         for field in ('path', 'file', 'address', 'log', 'service_log'):
             if issue.get('details', {}).get(field):
-                lines.append('   ' + {'path': 'Путь', 'file': 'Файл', 'address': 'Адрес',
-                                     'log': 'Диагностика', 'service_log': 'Журнал команды'}[field] + ': ' + str(issue['details'][field]))
+                lines.append('   ' + {'path': _tr('setup_diagnostics.manual_setup_report.20'), 'file': _tr('setup_diagnostics.manual_setup_report.21'), 'address': _tr('setup_diagnostics.manual_setup_report.22'),
+                                     'log': _tr('setup_diagnostics.manual_setup_report.23'), 'service_log': _tr('setup_diagnostics.manual_setup_report.24')}[field] + ': ' + str(issue['details'][field]))
         for step in _steps(issue['code'], issue.get('details', {}), options):
             if step not in actions:
                 lines.append('   — ' + step)
                 actions.append(step)
     if options:
-        lines += ['', 'После исправления повторите --check-only выше. При preflight_ready выполните установку одним из способов.',
-                  '', 'Из SSH:', '', _command(retry),
-                  '', 'Из ЯдреноАдмина: установка перезапускает бота, поэтому запускайте её вне его службы через systemd-run.',
-                  'Прямой запуск и nohup внутри службы бота прерываются вместе с ней. '
-                  'Команда ниже создаёт только временную службу, без таймера.', '', *_agent_commands(retry, root)]
+        lines += ['', _tr('setup_diagnostics.manual_setup_report.25'),
+                  '', _tr('setup_diagnostics.manual_setup_report.26'), '', _command(retry),
+                  '', _tr('setup_diagnostics.manual_setup_report.27'),
+                  _tr('setup_diagnostics.manual_setup_report.28'), '', *_agent_commands(retry, root)]
         if options.proxy != 'external':
-            lines += ['', 'Для администратора: если HTTPS-прокси настроен вручную, завершите подключение командой ниже.',
-                      'До её запуска подготовьте маршрут к закрытому адресу бота ' + options.backend_bind + ':' +
-                      str(options.backend_port or 18764) + '. Для удалённого прокси явно задайте --backend-bind, '
-                      '--backend-port и --trusted-proxy под подготовленную закрытую сеть.', '',
-                      'Из SSH:', '',
+            lines += ['', _tr('setup_diagnostics.manual_setup_report.29'),
+                      _tr('setup_diagnostics.manual_setup_report.30') + options.backend_bind + ':' +
+                      str(options.backend_port or 18764) + _tr('setup_diagnostics.manual_setup_report.31'), '',
+                      _tr('setup_diagnostics.manual_setup_report.26'), '',
                       _command(_retry(root, options, prepared=True) + ([] if options.backend_port else ['--backend-port', '18764'])),
-                      '', 'Из ЯдреноАдмина:', '',
+                      '', _tr('setup_diagnostics.manual_setup_report.32'), '',
                       *_agent_commands(_retry(root, options, prepared=True) + ([] if options.backend_port else ['--backend-port', '18764']), root)]
-        lines += ['', 'Критерий успеха: конечный результат мастера ready (в JSON: ok=true, code=ready) '
-                  'и доступный HTTPS-сайт именно этой установки. Приёмка также проверяет допуск размера загрузок '
-                  'анонимными запросами (до 50 МиБ + 64 КиБ); штатный ответ 401 authentication_required ожидаем. '
-                  'Сам запуск службы или результат --check-only не означает завершение установки.',
-                  'Если конечного результата ещё нет, проверьте журнал этой попытки; вторую установку одновременно не запускайте.',
-                  'После ошибки сначала установите причину и исправьте её. Для новой попытки используйте новое имя временной службы.',
-                  'Для затронутых соседних служб проверьте доступные серверные признаки: состояние, listener, '
-                  'сертификат и изменённое продление. Успешную проверку продления мастером повторяйте только '
-                  'после изменений, затрагивающих продление.',
-                  'Администратор при желании отдельно проверяет вход через Telegram и использование VPN/панели/подписок. '
-                  'Агент не выполняет эти пользовательские проверки и не ждёт их подтверждения для завершения серверной работы.']
+        lines += ['', _tr('setup_diagnostics.manual_setup_report.33'),
+                  _tr('setup_diagnostics.manual_setup_report.34'),
+                  _tr('setup_diagnostics.manual_setup_report.35'),
+                  _tr('setup_diagnostics.manual_setup_report.36'),
+                  _tr('setup_diagnostics.manual_setup_report.37')]
     if payload.get('stage') == 'recovery' or payload['code'] in {'setup_incomplete', 'setup_recovery_invalid', 'setup_failed'}:
         command = [str(Path(root) / 'venv/bin/python'), '-m', 'web_tools.setup_cli', '--project-root', str(root), 'recover']
-        lines += ['', 'Команда восстановления незавершённой настройки:',
-                  'Из SSH:', 'cd ' + shlex.quote(str(root)) + ' && ' + shlex.join(command),
-                  '', 'Из ЯдреноАдмина (восстановление также может перезапустить бота):', '',
+        lines += ['', _tr('setup_diagnostics.manual_setup_report.38'),
+                  _tr('setup_diagnostics.manual_setup_report.26'), 'cd ' + shlex.quote(str(root)) + ' && ' + shlex.join(command),
+                  '', _tr('setup_diagnostics.manual_setup_report.39'), '',
                   *_agent_commands(command, root),
-                  '', 'Дождитесь конечного recovered или nothing_to_recover с ok=true, затем повторите --check-only.']
+                  '', _tr('setup_diagnostics.manual_setup_report.40')]
     lines += ['', COPY_END]
     return '\n'.join(lines)
 

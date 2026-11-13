@@ -70,6 +70,9 @@ def _guard(work):
 class _CompilerSandbox:
     """One compilation's private snapshots and three sequential transient units."""
 
+    unit_prefix = 'yadreno-ui-compile'
+    unit_description = 'Yadreno UI compiler'
+
     def __init__(self, root, custom, toolchain):
         self.root, self.custom = root, custom
         self.toolchain = toolchain
@@ -197,7 +200,7 @@ class _CompilerSandbox:
 
     def _execute(self, args, environment, timeout):
         self.calls += 1
-        self.unit = f'yadreno-ui-compile-{self.token}-{self.calls}.service'
+        self.unit = f'{self.unit_prefix}-{self.token}-{self.calls}.service'
         # A previous DynamicUser may be reused. Reset only this protected scratch
         # root so RuntimeDirectory also chowns newly written root-owned files.
         os.chown(self.work, 0, 0)
@@ -207,7 +210,7 @@ class _CompilerSandbox:
         properties = self._properties(timeout)
         command = [self.commands['systemd-run'], '--system', '--quiet', '--wait', '--pipe',
                    '--no-ask-password', '--slice=system.slice',
-                   '--unit=' + self.unit, '--description=Yadreno UI compiler']
+                   '--unit=' + self.unit, '--description=' + self.unit_description]
         command += ['--property=' + name + '=' + value for name, value in properties.items()]
         # systemd 249 expands command arguments too. Its documented $$ escape
         # preserves literal values without the switch introduced in systemd 254.
@@ -233,7 +236,9 @@ class _CompilerSandbox:
                             buffers[key.data].extend(chunk)
                             self.output_bytes += len(chunk)
                             if self.output_bytes > STREAM_BYTES:
-                                raise ValueError('compiler diagnostic output exceeds resource limits')
+                                error = ValueError('compiler diagnostic output exceeds resource limits')
+                                error.output, error.stderr = bytes(buffers[0]), bytes(buffers[1])
+                                raise error
             returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
         finally:
             if process is not None:

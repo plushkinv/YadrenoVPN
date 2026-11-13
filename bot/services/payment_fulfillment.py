@@ -1,6 +1,8 @@
 """Closed, retryable fulfillment dispatcher for provider-confirmed intents."""
 from __future__ import annotations
 
+from bot.utils.user_ui_texts import get_ui_text
+
 import asyncio
 import logging
 from collections import defaultdict
@@ -281,7 +283,7 @@ async def _debit_internal_balance_once(order: dict[str, Any]) -> None:
             int(order['user_id']),
             amount,
             source='payment_balance',
-            reason='Списание баланса при оплате',
+            reason=get_ui_text('balance.reason.payment'),
             reference_type='payment_order',
             reference_id=reference,
             metadata={'payment_type': order.get('payment_type')},

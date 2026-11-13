@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { Check, CircleCheck, Clock3, LoaderCircle, XCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Catalog, Order, Quote } from '../api/contracts';
@@ -121,14 +122,14 @@ export function Checkout() {
   return <><Resource state={catalog}>{data => {
     if (!tariff) return <><PageHeading title={t.buy} back={back} /><p>{t.empty}</p>{recovery}<Failure error={action.error} /></>;
     const options = data.tariffs.map(item => ({ id: String(item.id), title: item.name,
-      price: money(item.payable_amount_minor, item.base_currency), caption: item.duration_days ? `${item.duration_days} дн.` : t.unlimited,
-      details: [item.traffic_limit_gb ? `${item.traffic_limit_gb} ГБ` : `${ru.traffic}: ${t.unlimited}`, item.max_ips ? `${ru.devices}: ${item.max_ips}` : `${ru.devices}: ${t.unlimited}`] }));
+      price: money(item.payable_amount_minor, item.base_currency), caption: item.duration_days ? _tr("Checkout.1", {p0: item.duration_days, count: item.duration_days}) : t.unlimited,
+      details: [item.traffic_limit_gb ? _tr("Checkout.2", {p0: item.traffic_limit_gb}) : `${ru.traffic}: ${t.unlimited}`, item.max_ips ? `${ru.devices}: ${item.max_ips}` : `${ru.devices}: ${t.unlimited}`] }));
     const selected = options.find(item => item.id === String(tariff.id))!;
     const balanceOnly = quote && quote.balance_deduct_minor > 0 && (quote.payment_type === 'balance' || quote.charge_minor === 0);
     const free = quote && quote.charge_minor === 0 && quote.balance_deduct_minor === 0;
     const locked = action.busy || Boolean(pending);
     return <Purchase quotes={options} selected={selected} included={[
-      tariff.traffic_limit_gb ? `${tariff.traffic_limit_gb} ГБ` : t.unlimited,
+      tariff.traffic_limit_gb ? _tr("Checkout.2", {p0: tariff.traffic_limit_gb}) : t.unlimited,
       tariff.max_ips ? `${t.devices}: ${tariff.max_ips}` : `${t.devices}: ${t.unlimited}`,
     ]} method={paymentMethodName(selectedMethod, tariff.payment_methods.find(item => item.id === selectedMethod)?.label)} renewalName={route === 'renewal' ? t.renew : undefined}
       onBack={back} onSelect={item => { setTariff(Number(item.id)); action.clear(); }}

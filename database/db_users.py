@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 import sqlite3
 import logging
 import secrets
@@ -456,7 +458,7 @@ def toggle_user_ban(telegram_id: int) -> Optional[bool]:
             "UPDATE users SET is_banned = ? WHERE telegram_id = ?",
             (new_status, telegram_id)
         )
-        status_text = "забанен" if new_status else "разбанен"
+        status_text = _tr('db_users.toggle_user_ban.1') if new_status else _tr('db_users.toggle_user_ban.2')
         logger.info(f"Пользователь {telegram_id}: {status_text}")
         return bool(new_status)
 

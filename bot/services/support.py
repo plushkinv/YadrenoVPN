@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -92,14 +94,14 @@ def _support_user_name(user: Dict[str, Any]) -> str:
         parts.append(str(user["last_name"]))
     if parts:
         return " ".join(parts)
-    return f"ID: {user['telegram_id']}" if user.get('telegram_id') is not None else f"Аккаунт: {user['id']}"
+    return f"ID: {user['telegram_id']}" if user.get('telegram_id') is not None else _tr('support.support_user_name.1', p0=f"{user['id']}")
 
 
 def support_identity_line(thread):
     """Show the real identity without inventing a Telegram account."""
     if thread.get('user_telegram_id') is not None:
         return f"📱 Telegram ID: <code>{thread['user_telegram_id']}</code>"
-    return f"🌐 Аккаунт сайта: <code>{thread['user_id']}</code>"
+    return _tr('support.support_identity_line.1', p0=f"{thread['user_id']}")
 
 
 async def _send_admin_support_card(
@@ -113,9 +115,9 @@ async def _send_admin_support_card(
 ) -> Message:
     """Render the shared card with the recipient as actor and a separate subject."""
     if assigned_admin_id:
-        assignment = f"👨‍💻 Закреплён за: <code>{int(assigned_admin_id)}</code>"
+        assignment = _tr('support.send_admin_support_card.1', p0=f'{int(assigned_admin_id)}')
     else:
-        assignment = "👨‍💻 Диалог пока не закреплён. Первый ответ закрепит его за вами."
+        assignment = _tr('support.send_admin_support_card.2')
     telegram_id = thread.get('user_telegram_id')
     prepared = await prepare_page_render(
         bot,
@@ -131,7 +133,7 @@ async def _send_admin_support_card(
                 'user_name': _support_user_name(user),
                 'assigned_admin_id': assigned_admin_id,
                 'title': title,
-                'identity_label': '📱 Telegram ID' if telegram_id is not None else '🌐 Аккаунт сайта',
+                'identity_label': '📱 Telegram ID' if telegram_id is not None else _tr('support.send_admin_support_card.3'),
                 'identity_id': telegram_id if telegram_id is not None else int(thread['user_id']),
                 'assignment': assignment,
             },
@@ -182,11 +184,11 @@ async def send_user_message_to_admins(
     assigned_admin_id = thread.get("assigned_admin_id")
     if assigned_admin_id:
         recipients = [int(assigned_admin_id)]
-        title = "Ответ пользователя"
+        title = _tr('support.send_user_message_to_admins.1')
         save_notification = False
     else:
         recipients = [int(admin_id) for admin_id in ADMIN_IDS]
-        title = "Новое обращение в поддержку"
+        title = _tr('support.send_user_message_to_admins.2')
         save_notification = True
 
     sent = 0
@@ -284,7 +286,7 @@ async def send_generated_user_message_to_admins(
                 card = await _send_admin_support_card(
                     bot,
                     admin_id=admin_id,
-                    title="Новое обращение в поддержку",
+                    title=_tr('support.send_user_message_to_admins.2'),
                     thread=thread,
                     user=user,
                     assigned_admin_id=assigned,

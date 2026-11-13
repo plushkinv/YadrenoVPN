@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 import logging
 
 from aiogram import F, Router
@@ -98,16 +100,14 @@ async def _show_admin_thread_state_error(
 ) -> None:
     if status == "assigned_other":
         text = (
-            "⚠️ <b>Диалог уже в работе</b>\n\n"
-            "Другой администратор уже взял это обращение."
+            _tr('support.show_admin_thread_state_error.1')
         )
     elif status == "closed":
         text = (
-            "❌ <b>Диалог закрыт</b>\n\n"
-            "Закрытая тикет-сессия больше не принимает сообщения."
+            _tr('support.show_admin_thread_state_error.2')
         )
     else:
-        text = "❌ <b>Диалог не найден</b>"
+        text = _tr('support.show_admin_thread_state_error.3')
     await safe_edit_or_send(
         message,
         text,
@@ -121,18 +121,18 @@ async def _show_admin_thread_state_error(
 async def admin_support_start(callback: CallbackQuery, state: FSMContext):
     """The admin starts a new support chain from the user's card."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     try:
         selector = callback.data.split(":", 1)[1]
     except (TypeError, ValueError, IndexError):
-        await callback.answer("❌ Некорректный пользователь", show_alert=True)
+        await callback.answer(_tr('support.admin_support_start.1'), show_alert=True)
         return
 
     user = selected_user(selector)
     if not user:
-        await callback.answer("❌ Пользователь не найден", show_alert=True)
+        await callback.answer(_tr('support.admin_support_start.2'), show_alert=True)
         return
 
     await state.set_state(AdminStates.support_waiting_message)
@@ -144,14 +144,10 @@ async def admin_support_start(callback: CallbackQuery, state: FSMContext):
     )
 
     text = (
-        "💬 <b>Сообщение пользователю</b>\n\n"
-        f"👤 Пользователь: {format_support_user_line(user)}\n"
-        f"{identity_line(user)}\n\n"
-        "Отправьте сообщение, которое нужно передать пользователю.\n\n"
-        "Можно отправить текст или файл любого формата."
+        _tr('support.admin_support_start.3', p0=f'{format_support_user_line(user)}', p1=f'{identity_line(user)}')
     )
     if user['telegram_id'] is None:
-        text += '\n\nСообщение будет доступно в веб-переписке через установленный модуль поддержки.'
+        text += _tr('support.admin_support_start.4')
     await safe_edit_or_send(
         callback.message,
         text,
@@ -164,36 +160,36 @@ async def admin_support_start(callback: CallbackQuery, state: FSMContext):
 async def admin_support_reply(callback: CallbackQuery, state: FSMContext):
     """The admin responds to the existing support chain."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     try:
         thread_id = int(callback.data.split(":", 1)[1])
     except (TypeError, ValueError, IndexError):
-        await callback.answer("❌ Некорректный диалог", show_alert=True)
+        await callback.answer(_tr('support.admin_support_reply.1'), show_alert=True)
         return
 
     thread = get_support_thread(thread_id)
     if not thread:
-        await callback.answer("❌ Диалог не найден", show_alert=True)
+        await callback.answer(_tr('support.admin_support_reply.2'), show_alert=True)
         return
 
     if thread.get("status") == "closed":
         await callback.answer(
-            "❌ Диалог закрыт и больше не принимает сообщения",
+            _tr('support.admin_support_reply.3'),
             show_alert=True,
         )
         return
 
     assigned_admin_id = thread.get("assigned_admin_id")
     if assigned_admin_id and int(assigned_admin_id) != callback.from_user.id:
-        await callback.answer("Диалог уже взял другой администратор", show_alert=True)
+        await callback.answer(_tr('support.admin_support_reply.4'), show_alert=True)
         return
 
     user = (get_user_by_telegram_id(int(thread["user_telegram_id"])) if thread.get('user_telegram_id') is not None
             else get_user_by_id(thread['user_id']))
     if not user:
-        await callback.answer("❌ Пользователь не найден", show_alert=True)
+        await callback.answer(_tr('support.admin_support_start.2'), show_alert=True)
         return
 
     await state.set_state(AdminStates.support_waiting_message)
@@ -205,17 +201,12 @@ async def admin_support_reply(callback: CallbackQuery, state: FSMContext):
     )
 
     note = (
-        "После отправки ответа диалог закрепится за вами."
+        _tr('support.admin_support_reply.5')
         if not assigned_admin_id else
-        "Ответ уйдёт пользователю в эту цепочку."
+        _tr('support.admin_support_reply.6')
     )
     text = (
-        "💬 <b>Ответ пользователю</b>\n\n"
-        f"👤 Пользователь: {format_support_user_line(user)}\n"
-        f"{support_identity_line(thread)}\n"
-        f"🧵 Диалог: <code>{thread_id}</code>\n\n"
-        f"{note}\n\n"
-        "Отправьте текст или файл любого формата."
+        _tr('support.admin_support_reply.7', p0=f'{format_support_user_line(user)}', p1=f'{support_identity_line(thread)}', p2=f'{thread_id}', p3=f'{note}')
     )
     await safe_edit_or_send(
         callback.message,
@@ -237,7 +228,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
         data = await state.get_data()
         await safe_edit_or_send(
             message,
-            "💬 <b>Сообщение пользователю</b>\n\nОтправьте текст или файл любого формата.",
+            _tr('support.process_admin_support_message.1'),
             reply_markup=support_admin_cancel_kb(data.get("support_back_callback", "admin_panel")),
             force_new=True,
         )
@@ -255,7 +246,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
         if not user:
             await safe_edit_or_send(
                 message,
-                "❌ <b>Пользователь не найден</b>",
+                _tr('support.process_admin_support_message.2'),
                 reply_markup=support_admin_home_kb(),
                 force_new=True,
             )
@@ -273,7 +264,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
         if not thread:
             await safe_edit_or_send(
                 message,
-                "❌ <b>Не удалось создать диалог</b>\n\nПопробуйте позже.",
+                _tr('support.process_admin_support_message.3'),
                 reply_markup=support_admin_home_kb(),
                 force_new=True,
             )
@@ -286,7 +277,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
         if not thread:
             await safe_edit_or_send(
                 message,
-                "❌ <b>Диалог не найден</b>",
+                _tr('support.show_admin_thread_state_error.3'),
                 reply_markup=support_admin_home_kb(),
                 force_new=True,
             )
@@ -296,7 +287,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
     else:
         await safe_edit_or_send(
             message,
-            "❌ <b>Ошибка состояния</b>\n\nПовторите действие заново.",
+            _tr('support.process_admin_support_message.4'),
             reply_markup=support_admin_home_kb(),
             force_new=True,
         )
@@ -319,8 +310,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
         if thread.get('user_telegram_id') is not None and is_bot_blocked_error(e):
             mark_user_bot_blocked(int(thread["user_telegram_id"]))
             text = (
-                "📵 <b>Сообщение не отправлено</b>\n\n"
-                "Пользователь заблокировал бота."
+                _tr('support.process_admin_support_message.5')
             )
         else:
             logger.warning(
@@ -329,8 +319,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
                 e,
             )
             text = (
-                "⚠️ <b>Сообщение не отправлено</b>\n\n"
-                "Telegram вернул ошибку доставки. Попробуйте позже."
+                _tr('support.process_admin_support_message.6')
             )
         await safe_edit_or_send(
             message,
@@ -351,8 +340,7 @@ async def process_admin_support_message(message: Message, state: FSMContext):
     await state.clear()
     await safe_edit_or_send(
         message,
-        "✅ <b>Сообщение отправлено</b>\n\n"
-        "Если пользователь ответит, сообщение придёт вам в эту цепочку.",
+        _tr('support.process_admin_support_message.7'),
         reply_markup=support_admin_home_kb(),
         force_new=True,
     )

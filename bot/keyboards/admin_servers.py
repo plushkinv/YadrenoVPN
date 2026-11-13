@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
@@ -14,8 +16,8 @@ def servers_list_kb(servers: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
     """
     from database.requests import get_groups_count, get_all_groups, get_server_group_ids
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🔄 Обновить', callback_data='admin_servers_refresh'))
-    builder.row(InlineKeyboardButton(text='➕ Добавить сервер', callback_data='admin_server_add'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_servers.servers_list_kb.1'), callback_data='admin_servers_refresh'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_servers.servers_list_kb.2'), callback_data='admin_server_add'))
     groups_count = get_groups_count()
     if groups_count > 1:
         all_groups_list = get_all_groups()
@@ -56,12 +58,12 @@ def server_view_kb(server_id: int, is_active: bool, show_group_button: bool=Fals
         show_group_button: Whether to show the "Edit Group" button
     """
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='✏️ Изменить настройки', callback_data=f'admin_server_edit:{server_id}'))
-    toggle_text = '⏸️ Деактивировать' if is_active else '🔄 Активировать'
+    builder.row(InlineKeyboardButton(text=_tr('admin_servers.server_view_kb.1'), callback_data=f'admin_server_edit:{server_id}'))
+    toggle_text = _tr('admin_servers.server_view_kb.2') if is_active else _tr('admin_servers.server_view_kb.3')
     builder.row(InlineKeyboardButton(text=toggle_text, callback_data=f'admin_server_toggle:{server_id}'))
     if show_group_button:
-        builder.row(InlineKeyboardButton(text='📂 Изменить тарифную группу', callback_data=f'admin_server_change_group:{server_id}'))
-    builder.row(InlineKeyboardButton(text='🗑️ Удалить сервер', callback_data=f'admin_server_delete:{server_id}'))
+        builder.row(InlineKeyboardButton(text=_tr('admin_servers.server_view_kb.4'), callback_data=f'admin_server_change_group:{server_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_servers.server_view_kb.5'), callback_data=f'admin_server_delete:{server_id}'))
     builder.row(back_button('admin_servers'), home_button())
     return builder.as_markup()
 
@@ -99,14 +101,14 @@ def add_server_step_kb(
     if allow_skip:
         builder.row(
             InlineKeyboardButton(
-                text='⏭ Пропустить',
+                text=_tr('admin_servers.add_server_step_kb.1'),
                 callback_data='admin_server_add_skip_inbound_group',
             )
         )
     buttons = []
     if step > 1:
-        buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_server_add_back'))
-    buttons.append(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_servers'))
+        buttons.append(InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data='admin_server_add_back'))
+    buttons.append(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_servers'))
     builder.row(*buttons)
     return builder.as_markup()
 
@@ -115,8 +117,8 @@ def add_server_auth_method_kb() -> InlineKeyboardMarkup:
     """Authentication method selector shown before server fields."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text='🔑 По API-ключу', callback_data='admin_server_auth_api_token'),
-        InlineKeyboardButton(text='👤 Логин и пароль', callback_data='admin_server_auth_login_password'),
+        InlineKeyboardButton(text=_tr('admin_servers.add_server_auth_method_kb.1'), callback_data='admin_server_auth_api_token'),
+        InlineKeyboardButton(text=_tr('admin_servers.add_server_auth_method_kb.2'), callback_data='admin_server_auth_login_password'),
     )
     builder.row(back_button('admin_servers'), home_button())
     return builder.as_markup()
@@ -124,15 +126,15 @@ def add_server_auth_method_kb() -> InlineKeyboardMarkup:
 def add_server_confirm_kb() -> InlineKeyboardMarkup:
     """Keyboard to confirm adding a server."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='✅ Сохранить', callback_data='admin_server_add_save'))
-    builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_server_add_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_servers'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_servers.add_server_confirm_kb.1'), callback_data='admin_server_add_save'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data='admin_server_add_back'), InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_servers'))
     return builder.as_markup()
 
 def add_server_test_failed_kb() -> InlineKeyboardMarkup:
     """Keyboard when the connection test fails."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='🔄 Проверить снова', callback_data='admin_server_add_test'))
-    builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_server_add_back'), InlineKeyboardButton(text='❌ Отмена', callback_data='admin_servers'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_servers.add_server_test_failed_kb.1'), callback_data='admin_server_add_test'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data='admin_server_add_back'), InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_servers'))
     return builder.as_markup()
 
 def edit_server_kb(
@@ -152,26 +154,26 @@ def edit_server_kb(
     if allow_clear_group:
         builder.row(
             InlineKeyboardButton(
-                text='🌐 Все inbound’ы',
+                text=_tr('admin_servers.edit_server_kb.1'),
                 callback_data='admin_server_edit_clear_inbound_group',
             )
         )
     nav_buttons = []
     if current_param > 0:
-        nav_buttons.append(InlineKeyboardButton(text='⬅️ Пред.', callback_data='admin_server_edit_prev'))
+        nav_buttons.append(InlineKeyboardButton(text=_tr('admin_payments.edit_crypto_kb.1'), callback_data='admin_server_edit_prev'))
     else:
         nav_buttons.append(InlineKeyboardButton(text='—', callback_data='noop'))
     if current_param < total_params - 1:
-        nav_buttons.append(InlineKeyboardButton(text='➡️ След.', callback_data='admin_server_edit_next'))
+        nav_buttons.append(InlineKeyboardButton(text=_tr('admin_payments.edit_crypto_kb.2'), callback_data='admin_server_edit_next'))
     else:
         nav_buttons.append(InlineKeyboardButton(text='—', callback_data='noop'))
     builder.row(*nav_buttons)
-    builder.row(InlineKeyboardButton(text='✅ Готово', callback_data='admin_server_edit_done'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_payments.edit_crypto_kb.3'), callback_data='admin_server_edit_done'))
     return builder.as_markup()
 
 def confirm_delete_kb(server_id: int) -> InlineKeyboardMarkup:
     """Server deletion confirmation keyboard."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='✅ Да, удалить', callback_data=f'admin_server_delete_confirm:{server_id}'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=f'admin_server_view:{server_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_groups.group_delete_confirm_kb.1'), callback_data=f'admin_server_delete_confirm:{server_id}'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data=f'admin_server_view:{server_id}'))
     return builder.as_markup()

@@ -4,6 +4,8 @@ Administrator notification service.
 Sends payment notifications to all admins,
 if the payment_notifications_enabled setting is enabled.
 """
+
+from localization import text as _tr
 import logging
 from typing import Optional, Dict, Any
 
@@ -19,19 +21,21 @@ logger = logging.getLogger(__name__)
 
 # Mapping payment_type → human-readable name.
 # payment_type='cards' - historical internal name for TG payments.
+from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
 PAYMENT_TYPE_LABELS: Dict[str, str] = {
+    **{pid: f'{icon} {title}' for pid, (title, icon, _) in INTERNATIONAL_PROVIDERS.items()},
     'stars': '⭐ Telegram Stars',
-    'crypto': '💰 Крипто (USDT)',
+    'crypto': _tr('notifications.module.1'),
     'cryptobot': '💎 CryptoBot',
     'cards': '💳 TG payments',
-    'yookassa_qr': '📱 ЮКасса',
+    'yookassa_qr': _tr('notifications.module.2'),
     'wata': '🌊 WATA',
     'platega': '💸 Platega',
     'cardlink': '🔗 Cardlink',
-    'balance': '💎 Баланс',
-    'trial': '🎁 Пробная подписка',
-    'demo': '🧪 Демо',
-    'promo_free': '🎟 Промокод 100%',
+    'balance': _tr('notifications.module.3'),
+    'trial': _tr('admin_payments.payments_menu_kb.7'),
+    'demo': _tr('notifications.module.4'),
+    'promo_free': _tr('notifications.module.5'),
 }
 
 
@@ -60,7 +64,7 @@ def _format_payment_amount(order: Dict[str, Any]) -> str:
     """
     payment_type = order.get('payment_type', '')
     if payment_type in ('trial', 'promo_free'):
-        return 'Бесплатно'
+        return _tr('notifications.format_payment_amount.1')
 
     from bot.services.money import format_money_minor, parse_major_to_minor
 
@@ -115,12 +119,12 @@ def _get_action_text(order: Dict[str, Any]) -> str:
     """
     action = _get_payment_notification_kind(order)
     if action == 'trial':
-        return '🎁 Пробная подписка'
+        return _tr('admin_payments.payments_menu_kb.7')
     if action == 'renewal':
-        return '🔄 Продление'
+        return _tr('notifications.get_action_text.1')
     if action == 'new_key':
-        return '🆕 Новый ключ'
-    return '💳 Платёж'
+        return _tr('notifications.get_action_text.2')
+    return _tr('notifications.get_action_text.3')
 
 
 def _format_user_name(user: Optional[Dict[str, Any]]) -> str:
@@ -356,7 +360,7 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
         tariff_name = order.get('tariff_name', '—')
 
         # Server data (from the key, if linked)
-        server_name = 'Не выбран'
+        server_name = _tr('notifications.notify_admins_payment.1')
         vpn_key_id = order.get('vpn_key_id')
         if vpn_key_id:
             key = get_vpn_key_by_id(vpn_key_id)
@@ -375,15 +379,15 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
 
         # Title - depends on the action
         if action == 'trial':
-            header = '🎁 <b>Пробная подписка</b>'
+            header = _tr('notifications.notify_admins_payment.2')
         elif action == 'renewal':
-            header = '🔄 <b>Продление</b>'
+            header = _tr('notifications.notify_admins_payment.3')
         elif action == 'balance_topup':
-            header = '💰 <b>Пополнение баланса</b>'
+            header = _tr('notifications.notify_admins_payment.4')
         elif action == 'new_key':
-            header = '💰 <b>Новая покупка</b>'
+            header = _tr('notifications.notify_admins_payment.5')
         else:
-            header = '💳 <b>Платёж</b>'
+            header = _tr('notifications.notify_admins_payment.6')
 
         # Forming the text
         lines = [header + '\n']
@@ -393,13 +397,13 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
             user_link = f'<a href="tg://user?id={telegram_id}">{telegram_id}</a>'
             if username:
                 user_link += f' (@{escape_html(username)})'
-            lines.append(f'👤 Пользователь: {user_link}')
+            lines.append(_tr('notifications.notify_admins_payment.7', p0=f'{user_link}'))
         else:
-            lines.append(f'👤 Пользователь: ID {user_id_internal or "?"}')
+            lines.append(_tr('notifications.notify_admins_payment.8', p0=f"{user_id_internal or '?'}"))
 
         # We show the host only for a real renewal of an existing key.
-        if action == 'renewal' and server_name != 'Не выбран':
-            lines.append(f'🌐 Хост: {escape_html(server_name)}')
+        if action == 'renewal' and server_name != _tr('notifications.notify_admins_payment.1'):
+            lines.append(_tr('notifications.notify_admins_payment.9', p0=f'{escape_html(server_name)}'))
         if action == 'balance_topup':
             from bot.services.money import format_money_minor
 
@@ -407,16 +411,15 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
                 order.get('nominal_amount_minor') or 0
             )
             lines.append(
-                f"💎 Зачислено: {format_money_minor(nominal, order.get('base_currency') or 'RUB')}"
+                _tr('notifications.notify_admins_payment.10', p0=f"{format_money_minor(nominal, order.get('base_currency') or 'RUB')}")
             )
         else:
-            lines.append(f'🎫 Тариф: {escape_html(tariff_name)}')
-        lines.append(f'💳 Метод: {payment_label}')
-        lines.append(f'💵 Сумма: {amount_str}')
+            lines.append(_tr('notifications.notify_admins_payment.11', p0=f'{escape_html(tariff_name)}'))
+        lines.append(_tr('notifications.notify_admins_payment.12', p0=f'{payment_label}'))
+        lines.append(_tr('notifications.notify_admins_payment.13', p0=f'{amount_str}'))
         if order.get('promo_code'):
             lines.append(
-                f"🎟 Промокод: {escape_html(str(order.get('promo_code')))} "
-                f"(-{int(order.get('discount_percent') or 0)}%)"
+                _tr('notifications.notify_admins_payment.14', p0=f"{escape_html(str(order.get('promo_code')))}", p1=f"{int(order.get('discount_percent') or 0)}")
             )
 
         text = '\n'.join(lines)
@@ -430,7 +433,7 @@ async def notify_admins_payment(bot: Bot, order: Dict[str, Any]) -> None:
             ]])
         elif user_id_internal:
             reply_markup = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=f'🌐 Аккаунт #{user_id_internal}', callback_data=f'admin_account_view:{user_id_internal}')
+                InlineKeyboardButton(text=_tr('admin_users.user_list_button_text.1', p0=f'{user_id_internal}'), callback_data=f'admin_account_view:{user_id_internal}')
             ]])
 
         # Sent to all admins

@@ -1,23 +1,25 @@
 """Persistent phone-account names, allocated in the caller's write transaction."""
 from __future__ import annotations
 
+from localization import legacy_text as _legacy
+
 import json
 import secrets
 
 
 DEFAULT_ACCOUNT_NAME_POOL = (
-    'Ядрёный енот',
-    'Реактивный боббер',
-    'Неуловимый кот',
-    'Ядрён батон',
-    'Ядрёный овощ',
-    'Турбированный хомяк',
-    'Шальной пельмень',
-    'Космический карась',
-    'Бронебойный кабачок',
-    'Атомный огурец',
-    'Сверхзвуковой гусь',
-    'Заряженный барсук',
+    _legacy('account_names.233'),
+    _legacy('account_names.234'),
+    _legacy('account_names.235'),
+    _legacy('account_names.236'),
+    _legacy('account_names.237'),
+    _legacy('account_names.238'),
+    _legacy('account_names.239'),
+    _legacy('account_names.240'),
+    _legacy('account_names.241'),
+    _legacy('account_names.242'),
+    _legacy('account_names.243'),
+    _legacy('account_names.244'),
 )
 
 

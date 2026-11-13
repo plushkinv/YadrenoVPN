@@ -105,12 +105,12 @@ def system_archive(root, *, system_root=Path('/')):
 def restore_system(source, root, *, system_root=Path('/'), check_only=False):
     """Validate everything before restoring absent/identical files; start no service."""
     backup, system = read_local_backup(Path(source))
+    if system is None:
+        raise ValueError('system backup is absent; restore the server environment separately')
     setup = json.loads(backup.get('web_runtime/setup.json', b'{}'))
     if setup.get('options', {}).get('proxy') != 'managed-nginx':
         return {'restored_system_files': 0, 'services_started': False}
     instance, owned, certificate = _identity_values(setup, json.loads(backup.get('web_runtime/identity.json', b'{}')))
-    if system is None:
-        raise ValueError('protected managed system backup is missing')
     installed = local_path(Path(root) / 'web_runtime', 'identity.json')
     if installed.exists() and json.loads(installed.read_bytes()).get('instance_id') != instance:
         raise ValueError('system restore belongs to another installation')

@@ -64,6 +64,7 @@ export interface Operation {
   result?: { state?: string; error?: string; composition?: Composition } | null;
 }
 export interface UiSettings {
+  readonly language?: string;
   title: string; logo: string | null; preset: 'clear' | 'signal' | 'friendly'; theme: 'light' | 'dark';
   sync_interval_seconds: number;
 }

@@ -1,12 +1,15 @@
 """Internal provider adapters for the common payment-intent lifecycle."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from dataclasses import dataclass, field
 import asyncio
 from weakref import WeakValueDictionary
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Any, Mapping
+from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
 
 from database.requests import (
     find_order_by_order_id,
@@ -14,6 +17,7 @@ from database.requests import (
     get_payment_check_status,
     record_payment_provider_check,
     get_setting,
+    is_gateway_configured,
     is_cardlink_configured,
     is_cards_configured,
     is_crypto_configured,
@@ -60,6 +64,8 @@ class ProviderInvoice:
 _ALL_PURPOSES = frozenset({'key_purchase', 'key_renewal', 'balance_topup'})
 _invoice_locks = WeakValueDictionary()
 _BUILTIN_ADAPTERS: Mapping[str, PaymentProviderAdapter] = MappingProxyType({
+    **{pid: PaymentProviderAdapter(pid, pid, title, f'{icon} {title}', 'link', _ALL_PURPOSES)
+       for pid, (title, icon, _) in INTERNATIONAL_PROVIDERS.items()},
     'crypto': PaymentProviderAdapter('crypto', 'crypto', 'USDT', '🪙 USDT', 'link', _ALL_PURPOSES),
     'cryptobot': PaymentProviderAdapter(
         'cryptobot',
@@ -71,15 +77,15 @@ _BUILTIN_ADAPTERS: Mapping[str, PaymentProviderAdapter] = MappingProxyType({
     ),
     'stars': PaymentProviderAdapter('stars', 'stars', 'Telegram Stars', '⭐ Telegram Stars', 'telegram_invoice', _ALL_PURPOSES),
     'cards': PaymentProviderAdapter('cards', 'cards', 'TG Payments', '💳 TG Payments', 'telegram_invoice', _ALL_PURPOSES),
-    'yookassa_qr': PaymentProviderAdapter('yookassa_qr', 'yookassa_qr', 'ЮКасса', '📱 ЮКасса', 'link', _ALL_PURPOSES),
+    'yookassa_qr': PaymentProviderAdapter('yookassa_qr', 'yookassa_qr', _tr('payment_provider_adapters.module.1'), _tr('notifications.module.2'), 'link', _ALL_PURPOSES),
     'wata': PaymentProviderAdapter('wata', 'wata', 'WATA', '🌊 WATA', 'link', _ALL_PURPOSES),
     'platega': PaymentProviderAdapter('platega', 'platega', 'Platega', '💸 Platega', 'link', _ALL_PURPOSES),
     'cardlink': PaymentProviderAdapter('cardlink', 'cardlink', 'Cardlink', '🔗 Cardlink', 'link', _ALL_PURPOSES),
     'demo': PaymentProviderAdapter(
         'demo',
         'demo',
-        'Демо оплата',
-        '🧪 Демо оплата',
+        _tr('payment_provider_adapters.module.2'),
+        _tr('payment_provider_adapters.module.3'),
         'placeholder',
         frozenset({'key_purchase', 'key_renewal'}),
     ),
@@ -88,7 +94,10 @@ _BUILTIN_ADAPTERS: Mapping[str, PaymentProviderAdapter] = MappingProxyType({
 
 def _builtin_provider_availability() -> dict[str, bool]:
     """Return current core-provider configuration without UI resolvers."""
+    from bot.utils.payment_provider_registry import list_payment_providers
+    custom_ids = {item.provider_id for item in list_payment_providers()}
     return {
+        **{pid: pid not in custom_ids and is_gateway_configured(pid) for pid in INTERNATIONAL_PROVIDERS},
         'crypto': is_crypto_configured(),
         'cryptobot': is_cryptobot_configured(),
         'stars': is_stars_enabled(),
@@ -227,7 +236,9 @@ def list_payment_provider_adapters(
 def get_payment_provider_adapter(provider_id: str) -> PaymentProviderAdapter | None:
     """Resolves a built-in or extension adapter without exposing fulfillment."""
     normalized = str(provider_id or '').strip().casefold()
-    builtin = _BUILTIN_ADAPTERS.get(normalized)
+    custom_type = normalized.startswith('ext_')
+    normalized = normalized.removeprefix('ext_')
+    builtin = None if custom_type else _BUILTIN_ADAPTERS.get(normalized)
     if builtin:
         return builtin
     try:
@@ -266,7 +277,7 @@ async def _create_provider_invoice_locked(intent, quote, *, telegram_id, bot_use
     from runtime.readiness import require_active
 
     require_active()
-    adapter = get_payment_provider_adapter(quote.payment_type.removeprefix('ext_'))
+    adapter = get_payment_provider_adapter(quote.payment_type)
     if adapter is None or adapter.payment_type != quote.payment_type:
         adapter = get_payment_provider_adapter(quote.payment_type)
     if adapter is None:
@@ -299,6 +310,13 @@ async def _create_provider_invoice_locked(intent, quote, *, telegram_id, bot_use
             )
     existing = get_payment_provider_order(intent.order_id)
     if existing is not None:
+        if not adapter.custom and adapter.provider_id in INTERNATIONAL_PROVIDERS and not existing.get('provider_payment_id'):
+            if (existing.get('provider_id') != adapter.provider_id or existing.get('payment_type') != quote.payment_type
+                    or existing.get('charge_amount') != _decimal_text(quote.charge_amount)
+                    or existing.get('charge_currency') != quote.charge_currency or existing.get('purpose') != intent.purpose):
+                raise ValueError('Persisted invoice snapshot is inconsistent')
+            return await _create_provider_invoice_bound(adapter, intent, quote,
+                telegram_id=telegram_id, bot_username=bot_username)
         return _existing_provider_invoice(adapter, intent, quote, existing)
     return await _create_provider_invoice_bound(
         adapter,
@@ -313,6 +331,8 @@ def _existing_provider_invoice(adapter, intent, quote, provider_order):
     if str(provider_order.get('provider_id') or '') != adapter.provider_id:
         raise ValueError('Payment intent is already bound to another provider')
     status = _normalize_status(provider_order.get('status'))
+    if not adapter.custom and adapter.provider_id in INTERNATIONAL_PROVIDERS and not provider_order.get('provider_payment_id'):
+        raise ValueError('Provider creation outcome is unknown; creation cannot be repeated safely')
     if (status == 'canceled' or provider_order.get('charge_amount') != _decimal_text(quote.charge_amount)
             or provider_order.get('charge_currency') != quote.charge_currency
             or provider_order.get('payment_type') != quote.payment_type
@@ -382,7 +402,8 @@ async def _create_provider_invoice_bound(
             'provider_payment_id': intent.order_id,
             'payment_url': None,
             'status': 'pending',
-            'metadata': {},
+            'metadata': ({'yookassa_receipt': get_setting('cards_yookassa_receipt', '1') == '1'}
+                         if adapter.provider_id == 'cards' else {}),
         }
     else:
         result = await _create_builtin_link_invoice(
@@ -446,7 +467,7 @@ def can_check_provider_invoice(order_id: str) -> bool:
     provider = get_payment_provider_order(order_id)
     if not provider or provider['provider_id'] in {'crypto', 'stars', 'cards'}:
         return False
-    adapter = get_payment_provider_adapter(provider['provider_id'])
+    adapter = get_payment_provider_adapter(provider.get('payment_type') or provider['provider_id'])
     try:
         return bool(adapter and get_payment_check_status(order_id, allow_canceled_recheck=True) is None)
     except ValueError:
@@ -478,7 +499,7 @@ async def _check_provider_invoice(intent: PaymentIntent, *, allow_canceled_reche
     if not provider_order:
         raise ValueError('Provider order does not exist')
     provider_id = str(provider_order.get('provider_id') or '')
-    adapter = get_payment_provider_adapter(provider_id)
+    adapter = get_payment_provider_adapter(provider_order.get('payment_type') or provider_id)
     if not adapter or intent.purpose not in adapter.supported_purposes:
         raise ValueError('Provider is not allowed for this payment purpose')
     external_id = str(provider_order.get('provider_payment_id') or '')
@@ -488,6 +509,15 @@ async def _check_provider_invoice(intent: PaymentIntent, *, allow_canceled_reche
         from bot.services.wata import check_wata_invoice
 
         return await check_wata_invoice(intent.order_id)
+    if not adapter.custom and adapter.provider_id in INTERNATIONAL_PROVIDERS:
+        from bot.services.payment_gateways import check_invoice
+        lock = _invoice_locks.setdefault(intent.order_id, asyncio.Lock())
+        async with lock:
+            known = get_payment_check_status(intent.order_id, allow_canceled_recheck=allow_canceled_recheck)
+            if known is not None:
+                return record_payment_provider_check(intent.order_id, known)
+            status = await check_invoice(adapter.provider_id, intent, provider_order)
+            return record_payment_provider_check(intent.order_id, status)
     if adapter.custom:
         from bot.services.custom_payments import check_custom_payment_order
 
@@ -580,6 +610,9 @@ async def _create_builtin_link_invoice(
     telegram_id: int,
     bot_username: str,
 ) -> dict[str, Any]:
+    if adapter.provider_id in INTERNATIONAL_PROVIDERS:
+        from bot.services.payment_gateways import create_invoice
+        return await create_invoice(adapter.provider_id, intent, quote, bot_username=bot_username)
     from bot.services.billing import (
         build_crypto_payment_url,
         create_cardlink_payment,

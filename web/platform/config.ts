@@ -1,5 +1,6 @@
 export interface PageDescriptor { id: string; title?: string; preview_parameter?: string; }
 export interface ApplicationDescriptor {
+  language?: string;
   entry: string; styles: string[]; pages: PageDescriptor[];
   version: string; build_version: string; instance_id: string; asset_base: string;
   platform_version: string; frame_url: string; mode?: 'live' | 'preview';

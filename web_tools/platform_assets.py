@@ -13,7 +13,7 @@ def platform_version(root):
     root = Path(root)
     files = list((root / 'web/platform').rglob('*'))
     files += [root / name for name in ('web/package.json', 'web/package-lock.json', 'web/tsconfig.json',
-                                     'web/vite.platform.config.ts', 'web_tools/service_worker.js')]
+                                     'web/vite.platform.config.ts', 'web_tools/service_worker.js', 'locales/languages.json')]
     result = hashlib.sha256()
     for path in sorted((file for file in files if file.is_file()), key=lambda file: file.relative_to(root).as_posix()):
         name = path.relative_to(root).as_posix()

@@ -401,15 +401,9 @@ async def payment_intent_provider_handler(
     if not intent:
         return
     provider_id = callback.data.rsplit(':', 1)[-1]
-    adapter = get_payment_provider_adapter(provider_id)
-    available_ids = {
-        item.provider_id
-        for item in list_payment_provider_adapters(
-            intent,
-            telegram_id=callback.from_user.id,
-        )
-    }
-    if not adapter or provider_id not in available_ids:
+    adapter = next((item for item in list_payment_provider_adapters(
+        intent, telegram_id=callback.from_user.id) if item.provider_id == provider_id), None)
+    if not adapter:
         await _render_callback_page(callback, "payment_unavailable")
         return
     if adapter.presentation == 'placeholder':
@@ -712,7 +706,7 @@ async def render_saved_link_invoice(message, intent, provider_order) -> None:
         charge_currency=intent.charge_currency, rate_snapshot=intent.rate_snapshot,
         discount_percent=int(pricing.get('discount_percent') or 0), promo_code=promo.get('code'),
     )
-    adapter = get_payment_provider_adapter(provider_order['provider_id'])
+    adapter = get_payment_provider_adapter(provider_order.get('payment_type') or provider_order['provider_id'])
     invoice = ProviderInvoice(
         order_id=intent.order_id, provider_id=adapter.provider_id, payment_type=adapter.payment_type,
         presentation=adapter.presentation, status=provider_order['status'],
@@ -861,23 +855,8 @@ def _has_any_payment_option(intent, *, telegram_id: int) -> bool:
 
 
 def _provider_minimum(adapter) -> int:
-    minimums = {
-        'crypto': 1,
-        'cryptobot': 1,
-        'stars': 1,
-        'cards': 10000,
-        'yookassa_qr': 100,
-        'wata': 1000,
-        'platega': 1000,
-        'cardlink': 1000,
-    }
-    minimum = minimums.get(adapter.provider_id, 0)
-    if adapter.custom:
-        from bot.utils.payment_provider_registry import get_payment_provider
-
-        provider = get_payment_provider(adapter.provider_id)
-        minimum = int(provider.minimum_amount_minor or 0) if provider else 0
-    return minimum
+    from bot.services.promotions import _payment_minimum
+    return _payment_minimum(adapter.payment_type)
 
 
 def _provider_minimum_satisfied(adapter, quote) -> bool:
@@ -889,18 +868,8 @@ def _provider_minimum_satisfied(adapter, quote) -> bool:
 def _format_provider_minimum(intent, quote, minimum: int, adapter) -> str:
     if adapter.custom:
         return format_base_minor(minimum, intent.base_currency)
-    currency = str(quote.charge_currency or intent.base_currency).upper()
-    if currency in {"RUB", "USD"}:
-        value = f"{minimum / 100:g}".replace(".", ",")
-    else:
-        value = str(minimum)
-    if currency == "RUB":
-        return f"{value} ₽"
-    if currency == "USD":
-        return f"${value}"
-    if currency == "XTR":
-        return f"{value} ⭐"
-    return f"{value} {currency}"
+    from bot.services.money import format_money_minor
+    return format_money_minor(minimum, quote.charge_currency or intent.base_currency)
 
 
 def _format_charge(quote) -> str:
@@ -914,7 +883,7 @@ def _format_charge(quote) -> str:
         return f'${value.replace(".", ",")}'
     if quote.charge_currency == 'XTR':
         return f'{value} ⭐'
-    return f'{value.replace(".", ",")} USDT'
+    return f'{value.replace(".", ",")} {quote.charge_currency}'
 
 
 __all__ = [

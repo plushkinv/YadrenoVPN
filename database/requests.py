@@ -21,6 +21,8 @@ from database.db_tariffs import *
 from database.db_stats import *
 from database.db_groups import *
 from database.db_settings import *
+from database.db_payment_settings import *
+from database.db_language import *
 from database.db_pages import *
 from database.db_page_routes import *
 from database.db_extensions import *

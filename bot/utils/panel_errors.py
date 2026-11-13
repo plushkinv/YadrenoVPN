@@ -1,4 +1,6 @@
 """Plain-text panel authentication diagnostics for administrator callbacks."""
+
+from localization import text as _tr
 from bot.services.panels.base import PanelErrorKind, PanelRequestError, VPNAPIError
 
 
@@ -14,16 +16,13 @@ def admin_panel_error(error: VPNAPIError, server: dict | None = None) -> str:
         )
         if not server.get('api_token') and not has_credentials:
             return (
-                '❌ API-ключ панели не указан. Откройте раздел «Сервера» '
-                'и сохраните API-ключ панели.'
+                _tr('panel_errors.admin_panel_error.1')
             )
         if error.kind == PanelErrorKind.UNAUTHORIZED:
             return (
-                '❌ Панель не принимает API-ключ. Повторите попытку позже '
-                'или проверьте подключение в разделе «Сервера».'
+                _tr('panel_errors.admin_panel_error.2')
             )
         return (
-            '❌ Не удалось войти в панель. Проверьте подключение '
-            'и данные входа в разделе «Сервера».'
+            _tr('panel_errors.admin_panel_error.3')
         )
-    return f'❌ Ошибка: {error}'
+    return _tr('system.do_clear_logs.2', p0=f'{error}')

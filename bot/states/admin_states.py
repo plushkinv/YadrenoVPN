@@ -3,6 +3,8 @@ FSM status for the admin panel.
 
 Managing multi-step administrator dialogs.
 """
+
+from localization import text as _tr
 from aiogram.fsm.state import State, StatesGroup
 
 from bot.utils.telegram_links import is_telegram_bot_start_link
@@ -41,7 +43,8 @@ class AdminStates(StatesGroup):
     
     # ========== Section “Payments” ==========
     payments_menu = State()          # Main payment screen
-    cards_setup_token = State()      # Entering the YuKassa token
+    cards_setup_token = State()      # Entering the Telegram Payments provider token
+    gateway_setting_value = State()  # Entering a hosted provider credential
     
     # ========== Setting up crypto payments ==========
     crypto_setup_url = State()       # Entering a link to a product
@@ -159,50 +162,50 @@ def _valid_inbound_group_id(value: str) -> bool:
 SERVER_COMMON_PARAMS = [
     {
         "key": "name",
-        "label": "Название",
-        "hint": "например: Server-DE, Германия-1",
+        "label": _tr('admin_states.module.1'),
+        "hint": _tr('admin_states.module.2'),
         "validate": lambda x: len(x) >= 2,
-        "error": "Название должно быть минимум 2 символа"
+        "error": _tr('admin_states.module.3')
     },
     {
         "key": "panel_url",
-        "label": "URL панели",
-        "hint": "например: https://192.168.1.1:2053/secretpath/ или просто 192.168.1.1:2053",
+        "label": _tr('admin_states.module.4'),
+        "hint": _tr('admin_states.module.5'),
         "validate": lambda x: len(x.strip()) >= 5 and ":" in x,
-        "error": "Введите корректную ссылку с портом, например: https://123.45.67.89:2053/api/"
+        "error": _tr('admin_states.module.6')
     },
     {
         "key": "inbound_group_id",
-        "label": "Виртуальная inbound-группа",
-        "hint": "отправьте только номер без --, например 1 или 2",
+        "label": _tr('admin_states.module.7'),
+        "hint": _tr('admin_states.module.8'),
         "validate": _valid_inbound_group_id,
         "convert": lambda x: int(str(x).strip()),
-        "error": "Введите целое положительное число без --, например 1 или 2",
+        "error": _tr('admin_states.module.9'),
     },
 ]
 
 SERVER_API_TOKEN_PARAM = {
     "key": "api_token",
-    "label": "API-ключ",
-    "hint": "создайте отдельный токен в настройках безопасности 3X-UI и отправьте его сюда",
+    "label": _tr('servers.build_server_view.6'),
+    "hint": _tr('admin_states.module.10'),
     "validate": lambda x: len(x.strip()) >= 8,
-    "error": "API-ключ должен содержать минимум 8 символов"
+    "error": _tr('admin_states.module.11')
 }
 
 SERVER_LOGIN_PARAMS = [
     {
         "key": "login",
-        "label": "Логин",
-        "hint": "логин для входа в панель",
+        "label": _tr('admin_states.module.12'),
+        "hint": _tr('admin_states.module.13'),
         "validate": lambda x: len(x) >= 1,
-        "error": "Введите логин"
+        "error": _tr('admin_states.module.14')
     },
     {
         "key": "password",
-        "label": "Пароль",
-        "hint": "пароль для входа в панель",
+        "label": _tr('admin_states.module.15'),
+        "hint": _tr('admin_states.module.16'),
         "validate": lambda x: len(x) >= 1,
-        "error": "Введите пароль"
+        "error": _tr('admin_states.module.17')
     },
 ]
 
@@ -258,54 +261,54 @@ def _format_base_price(value: int) -> str:
 TARIFF_PARAMS = [
     {
         "key": "name",
-        "label": "Название",
-        "hint": "например: Месяц, Полгода, Год",
+        "label": _tr('admin_states.module.1'),
+        "hint": _tr('admin_states.module.18'),
         "validate": lambda x: 1 <= len(x) <= 50,
-        "error": "Название от 1 до 50 символов"
+        "error": _tr('admin_states.module.19')
     },
     {
         "key": "price_minor",
-        "label": "Цена в базовой валюте",
-        "hint": "положительное число, не более двух знаков после запятой",
+        "label": _tr('admin_states.module.20'),
+        "hint": _tr('admin_states.module.21'),
         "validate": _valid_base_price,
-        "error": "Введите положительную цену не более чем с двумя знаками после запятой",
+        "error": _tr('admin_states.module.22'),
         "convert": _convert_base_price,
         "format": _format_base_price,
-        "help": "Курс Stars и USDT применяется автоматически в настройках оплаты."
+        "help": _tr('admin_states.module.23')
     },
     {
         "key": "duration_days",
-        "label": "Длительность",
-        "hint": "в днях (0 = без срока, максимум 99999)",
+        "label": _tr('admin_states.module.24'),
+        "hint": _tr('admin_states.module.25'),
         "validate": lambda x: x.isdigit() and 0 <= int(x) <= 99999,
-        "error": "Длительность от 0 до 99999 дней",
+        "error": _tr('admin_states.module.26'),
         "convert": int,
-        "format": lambda x: f"{x} дн." if x > 0 else "Без срока"
+        "format": lambda x: _tr('tariffs.admin_duration_text.1', p0=f'{x}', count=x) if x > 0 else _tr('key_plans.duration_text.1')
     },
     {
         "key": "traffic_limit_gb",
-        "label": "Лимит трафика (ГБ)",
-        "hint": "0 = безлимит, иначе число ГБ",
+        "label": _tr('admin_states.module.27'),
+        "hint": _tr('admin_states.module.28'),
         "validate": lambda x: x.isdigit() and 0 <= int(x) <= 99999,
-        "error": "Введите число от 0 до 99999 (0 = безлимит)",
+        "error": _tr('admin_states.module.29'),
         "convert": int,
-        "format": lambda x: f"{x} ГБ" if x > 0 else "Безлимит"
+        "format": lambda x: _tr('key_plans.traffic_text.2', p0=f'{x}') if x > 0 else _tr('key_plans.traffic_text.1')
     },
     {
         "key": "max_ips",
-        "label": "Лимит устройств",
-        "hint": "Минимум 1 устройство",
+        "label": _tr('admin_states.module.30'),
+        "hint": _tr('admin_states.module.31'),
         "validate": lambda x: x.isdigit() and 1 <= int(x) <= 999,
-        "error": "Введите число от 1 до 999",
+        "error": _tr('admin_states.module.32'),
         "convert": int,
-        "format": lambda x: f"{x} устр."
+        "format": lambda x: _tr('tariffs.render_tariff_view.6', p0=f'{x}')
     },
     {
         "key": "display_order",
-        "label": "Порядок отображения",
-        "hint": "меньше = выше в списке (0-99)",
+        "label": _tr('admin_states.module.33'),
+        "hint": _tr('admin_states.module.34'),
         "validate": lambda x: x.isdigit() and 0 <= int(x) <= 99,
-        "error": "Порядок от 0 до 99",
+        "error": _tr('admin_states.module.35'),
         "convert": int
     },
 ]
@@ -340,21 +343,21 @@ def get_total_tariff_params() -> int:
 CRYPTO_PARAMS = [
     {
         "key": "crypto_item_url",
-        "label": "Ссылка на товар",
-        "hint": "скопируйте из @Ya\\_SellerBot",
+        "label": _tr('admin_states.module.36'),
+        "hint": _tr('admin_states.module.37'),
         "validate": lambda x: is_telegram_bot_start_link(
             x,
             bot_username="Ya_SellerBot",
             start_prefix="item",
         ),
-        "error": "Ссылка должна вести на @Ya\\_SellerBot и содержать start=item"
+        "error": _tr('admin_states.module.38')
     },
     {
         "key": "crypto_secret_key",
-        "label": "Секретный ключ",
-        "hint": "Профиль → Ключ подписи в @Ya\\_SellerBot",
+        "label": _tr('admin_states.module.39'),
+        "hint": _tr('admin_states.module.40'),
         "validate": lambda x: len(x) >= 16,
-        "error": "Ключ должен быть минимум 16 символов"
+        "error": _tr('admin_states.module.41')
     },
 ]
 

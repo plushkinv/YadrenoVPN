@@ -7,6 +7,8 @@ Implements a three-layer button visibility system:
   2. buttons_custom (merge by id) - admin customization
   3. runtime - visibility dict by button id, system handlers and page/route transitions
 """
+
+from localization import text as _tr
 import logging
 import re
 from collections.abc import Mapping
@@ -688,7 +690,7 @@ def _normalize_context_mapping(context: Optional[Mapping[str, Any]], field_name:
     if context is None:
         return {}
     if not isinstance(context, Mapping):
-        raise ValueError(f"{field_name} должен быть mapping")
+        raise ValueError(_tr('page_renderer.normalize_context_mapping.1', p0=f'{field_name}'))
     return dict(context)
 
 
@@ -697,7 +699,7 @@ def _snapshot_page_key(context: Mapping[str, Any]) -> str:
     if page_key is None:
         return ''
     if not isinstance(page_key, str):
-        raise ValueError("context.page_key должен быть строкой")
+        raise ValueError(_tr('page_renderer.snapshot_page_key.1'))
     return page_key
 
 
@@ -705,7 +707,7 @@ def _normalize_snapshot_buttons(buttons: Optional[List[Dict[str, Any]]]) -> List
     if buttons is None:
         return []
     if not isinstance(buttons, list):
-        raise ValueError("buttons должен быть list или None")
+        raise ValueError(_tr('page_renderer.normalize_snapshot_buttons.1'))
     return buttons
 
 
@@ -713,7 +715,7 @@ def _normalize_snapshot_page_data(page_data: Optional[Mapping[str, Any]]) -> Dic
     if page_data is None:
         return {}
     if not isinstance(page_data, Mapping):
-        raise ValueError("page_data должен быть mapping или None")
+        raise ValueError(_tr('page_renderer.normalize_snapshot_page_data.1'))
     return dict(page_data)
 
 

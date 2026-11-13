@@ -1,6 +1,8 @@
 """Mini App control of the existing Satellite lane, without another task queue."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 from dataclasses import asdict
 
@@ -36,11 +38,11 @@ def public_error(error):
     current = diagnostics.current()
     operation = current.operation if current is not None else 'turns'
     details['message'] = {
-        'turns': 'Ошибка при отправке запроса', 'uploads': 'Ошибка при отправке запроса',
-        'state': 'Ошибка при обновлении состояния запроса',
-        'resume': 'Ошибка при возобновлении запроса', 'cancel': 'Ошибка при отмене запроса',
-        'new-chat': 'Ошибка при создании нового чата',
-    }.get(operation, 'Ошибка редактора')
+        'turns': _tr('yadreno_admin_web_dialog.public_error.1'), 'uploads': _tr('yadreno_admin_web_dialog.public_error.1'),
+        'state': _tr('yadreno_admin_web_dialog.public_error.2'),
+        'resume': _tr('yadreno_admin_web_dialog.public_error.3'), 'cancel': _tr('yadreno_admin_web_dialog.public_error.4'),
+        'new-chat': _tr('yadreno_admin_web_dialog.public_error.5'),
+    }.get(operation, _tr('yadreno_admin_web_dialog.public_error.6'))
     if error.cancel_button_text:
         details['cancel_button_text'] = error.cancel_button_text
     public = CoreError('action_unavailable', details=details,

@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 /** Bounded mono PCM WAV capture for the existing Hub upload/ASR contract. */
 export const maxVoiceBytes = 10 * 1024 * 1024;
 export interface VoiceProgress { duration: number; peaks: number[] }
@@ -7,12 +8,12 @@ export interface VoiceRecorder { finish: (keep: boolean) => VoiceClip | undefine
 export function microphoneError(reason: unknown): string {
   const name = reason instanceof Error ? reason.name : '';
   if (name === 'NotAllowedError' || name === 'SecurityError')
-    return 'Нет доступа к микрофону. Разрешите запись в настройках приложения или браузера либо напишите текстом.';
+    return _tr("voice.1");
   if (name === 'NotFoundError' || name === 'OverconstrainedError')
-    return 'Микрофон не найден. Подключите его и попробуйте снова либо напишите текстом.';
+    return _tr("voice.2");
   if (name === 'NotSupportedError')
-    return 'Запись звука недоступна в этом браузере. Откройте Mini App в поддерживаемом клиенте либо напишите текстом.';
-  return 'Не удалось записать звук. Проверьте, доступен ли микрофон, и попробуйте снова либо напишите текстом.';
+    return _tr("voice.3");
+  return _tr("voice.4");
 }
 
 export async function recordVoice({ signal, onProgress, onLimit, onInterrupted }: {

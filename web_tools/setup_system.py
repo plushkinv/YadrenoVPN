@@ -1,6 +1,8 @@
 """Injectable Linux commands and bounded I/O for the installation workflow."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import contextlib
 import ipaddress
 import json
@@ -23,7 +25,7 @@ NGINX_CONFIG_HEADER = 'X-Yadreno-Web-Config'
 
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, newurl):
-        raise SetupError('unexpected_redirect', 'Проверяемый адрес перенаправляет на другой URL.', stage='https', exit_code=4)
+        raise SetupError('unexpected_redirect', _tr('setup_system.redirect_request.1'), stage='https', exit_code=4)
 
 
 class System:
@@ -42,14 +44,14 @@ class System:
 
     def run(self, arguments, *, check=True, timeout=30):
         if not self.which(arguments[0]):
-            raise SetupError('command_missing', 'Не найдена необходимая команда: ' + arguments[0])
-        print('Выполняется: ' + ' '.join(arguments[:2]), file=sys.stderr)
+            raise SetupError('command_missing', _tr('setup_preflight.preflight.1') + arguments[0])
+        print(_tr('setup_system.run.1') + ' '.join(arguments[:2]), file=sys.stderr)
         try:
             completed = subprocess.run(arguments, stdin=subprocess.DEVNULL, capture_output=True,
                 text=True, encoding='utf-8', errors='replace', timeout=timeout,
                 env={**os.environ, 'LC_ALL': 'C', 'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_MODE': 'l'})
         except (OSError, subprocess.TimeoutExpired) as exc:
-            reason = 'Превышено время ожидания.' if isinstance(exc, subprocess.TimeoutExpired) else 'Не удалось запустить команду.'
+            reason = _tr('setup_system.run.2') if isinstance(exc, subprocess.TimeoutExpired) else _tr('setup_system.run.3')
             raise self.command_error(arguments, reason, None) from None
         if check and completed.returncode:
             raise self.command_error(arguments, completed.stderr, completed.returncode)
@@ -57,16 +59,16 @@ class System:
 
     def command_error(self, arguments, stderr, returncode):
         """Report bounded causes; never copy arbitrary command output into a handoff."""
-        reason = 'Подробности доступны в журнале системной команды.'
+        reason = _tr('setup_system.command_error.1')
         causes = (
-            ('unrecognized arguments', 'Установленная версия команды не поддерживает переданные параметры.'),
-            ('permission denied', 'Недостаточно прав для выполнения команды.'),
-            ('address already in use', 'Требуемый сетевой порт занят.'),
-            ('rate limit', 'Сервис ограничил частоту запросов.'),
-            ('unauthorized', 'Проверка владения доменом не пройдена.'),
-            ('nxdomain', 'Домен не найден в DNS.'),
-            ('connection refused', 'Не удалось подключиться к требуемому сервису.'),
-            ('timed out', 'Превышено время ожидания.'),
+            ('unrecognized arguments', _tr('setup_system.command_error.2')),
+            ('permission denied', _tr('setup_system.command_error.3')),
+            ('address already in use', _tr('setup_system.command_error.4')),
+            ('rate limit', _tr('setup_system.command_error.5')),
+            ('unauthorized', _tr('setup_system.command_error.6')),
+            ('nxdomain', _tr('setup_system.command_error.7')),
+            ('connection refused', _tr('setup_system.command_error.8')),
+            ('timed out', _tr('setup_system.run.2')),
         )
         for needle, message in causes:
             if needle in stderr.lower():
@@ -88,15 +90,15 @@ class System:
             details['service_log'] = '/var/log/letsencrypt/letsencrypt.log'
         elif Path(arguments[0]).name in {'nginx', 'systemctl'}:
             details['service_log'] = 'journalctl -u nginx -u certbot.service -u yadreno-vpn'
-        return SetupError('command_failed', 'Команда ' + details['command'] + ' завершилась с ошибкой'
-                          + (f' (код {returncode})' if returncode is not None else '') + '. ' + reason,
+        return SetupError('command_failed', _tr('setup_system.command_error.9') + details['command'] + _tr('setup_system.command_error.10')
+                          + (_tr('setup_system.command_error.11', p0=f'{returncode}') if returncode is not None else '') + '. ' + reason,
                           stage='apply', exit_code=4, details=details)
 
     def resolve(self, domain):
         try:
             return sorted({str(ipaddress.ip_address(item[4][0])) for item in socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)})
         except OSError:
-            raise SetupError('dns_unavailable', 'DNS не возвращает адреса домена. Проверьте A и AAAA.') from None
+            raise SetupError('dns_unavailable', _tr('setup_system.resolve.1')) from None
 
     def addresses(self):
         rows = json.loads(self.run(['ip', '-j', 'address', 'show']).stdout)
@@ -111,7 +113,7 @@ class System:
                 if (nginx_configuration is not None
                         and response.headers.get_all(NGINX_CONFIG_HEADER, []) != [nginx_configuration]):
                     raise SetupError('nginx_configuration_not_applied',
-                        'Nginx ещё не подтвердил применение выбранной конфигурации.', stage='https', exit_code=4)
+                        _tr('setup_system.fetch.1'), stage='https', exit_code=4)
                 content = response.read(limit + 1)
             if len(content) > limit:
                 raise ValueError('response too large')
@@ -119,7 +121,7 @@ class System:
         except SetupError:
             raise
         except (OSError, ValueError):
-            raise SetupError('https_unavailable', 'Адрес недоступен или HTTPS-сертификат не прошёл проверку.', stage='https', exit_code=4) from None
+            raise SetupError('https_unavailable', _tr('setup_system.fetch.2'), stage='https', exit_code=4) from None
 
     def verify_uploads(self, origin):
         import asyncio
@@ -149,14 +151,14 @@ def system_path(system, absolute):
     """Owned writes never follow symlinks, including a linked parent directory."""
     path = system.path(absolute)
     if any(parent.is_symlink() for parent in (path, *path.parents)):
-        raise SetupError('unsafe_owned_path', 'Управляемый системный путь содержит symbolic link.')
+        raise SetupError('unsafe_owned_path', _tr('setup_system.system_path.1'))
     return path
 
 
 def verify_owned_file(system, path, instance_id):
     target = system_path(system, path)
     if target.exists() and (not target.is_file() or not target.read_bytes().startswith(marker(instance_id).encode())):
-        raise SetupError('owned_file_collision', 'Управляемое имя занято чужим файлом; файл не изменён.', details={'path': path})
+        raise SetupError('owned_file_collision', _tr('setup_system.verify_owned_file.1'), details={'path': path})
     return target
 
 
@@ -172,7 +174,7 @@ def setup_lock(root, *, optional=False):
             if optional:
                 yield False
                 return
-            raise SetupError('setup_busy', 'Другая настройка веба ещё выполняется.') from None
+            raise SetupError('setup_busy', _tr('setup_system.setup_lock.1')) from None
         try:
             yield True
         finally:

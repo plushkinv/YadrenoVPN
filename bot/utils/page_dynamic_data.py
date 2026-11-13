@@ -1,6 +1,8 @@
 """Collection of dynamic data for placeholders of user pages."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -24,7 +26,7 @@ def _optional_int(value: Any) -> int | None:
 
 def _required_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{field_name} должен быть int")
+        raise ValueError(_tr('page_dynamic_data.required_int.1', p0=f'{field_name}'))
     return value
 
 

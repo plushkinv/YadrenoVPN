@@ -14,6 +14,7 @@ import { announceSessionChange, configureStorage, forgetAccounts, logoutPending,
 import { observeUiVersion, registerShell, updateShell } from './runtime/versions';
 import type { Preset, Theme } from './model';
 import { loginWithTelegram } from './runtime/telegram-login';
+import { bindInstallationLanguage } from './i18n/runtime';
 
 export function Runtime({ environment }: { environment: Environment }) {
   const preview = false;
@@ -28,6 +29,7 @@ export function Runtime({ environment }: { environment: Environment }) {
   const [session, setSession] = useState<Session | null>(null);
   const [bootstrap, setBootstrap] = useState<Bootstrap>();
   const [settings, setSettings] = useState<UiSettings>();
+  bindInstallationLanguage(settings?.language ?? customization.language ?? 'ru');
   const [error, setError] = useState<unknown>();
   const [loading, setLoading] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);

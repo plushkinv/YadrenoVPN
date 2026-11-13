@@ -1,6 +1,8 @@
 """Administrator flow for fully reissuing a VPN key tariff plan."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -28,11 +30,11 @@ router = Router()
 
 
 def _duration_text(days: int) -> str:
-    return 'Без срока' if int(days) == 0 else f'{int(days)} дней'
+    return _tr('key_plans.duration_text.1') if int(days) == 0 else _tr('key_plans.duration_text.2', p0=f'{int(days)}', count=int(days))
 
 
 def _traffic_text(gigabytes: int) -> str:
-    return 'Безлимит' if int(gigabytes) == 0 else f'{int(gigabytes)} ГБ'
+    return _tr('key_plans.traffic_text.1') if int(gigabytes) == 0 else _tr('key_plans.traffic_text.2', p0=f'{int(gigabytes)}')
 
 
 async def _input_target(
@@ -57,17 +59,17 @@ async def _input_target(
 async def start_key_plan_change(callback: CallbackQuery, state: FSMContext) -> None:
     """Shows all ordinary and protected custom plans in the key group."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     key_id = int(callback.data.split(':', 1)[1])
     key = get_vpn_key_by_id(key_id)
     if key is None:
-        await callback.answer('❌ Ключ не найден', show_alert=True)
+        await callback.answer(_tr('key_plans.start_key_plan_change.1'), show_alert=True)
         return
     groups = [group for group in get_all_groups() if is_key_tariff_group_allowed(key_id, group['id'])]
     custom_tariffs = [tariff for group in groups if (tariff := get_admin_custom_tariff(group['id']))]
     if not custom_tariffs:
-        await callback.answer('❌ Системный тариф группы не найден', show_alert=True)
+        await callback.answer(_tr('key_plans.start_key_plan_change.2'), show_alert=True)
         return
     tariffs = [tariff for group in groups for tariff in get_tariffs_by_group(
         group['id'], include_hidden=True, include_system=False)]
@@ -75,11 +77,7 @@ async def start_key_plan_change(callback: CallbackQuery, state: FSMContext) -> N
     await state.update_data(current_key_id=key_id)
     rendered = await safe_edit_or_send(
         callback.message,
-        '📋 <b>Изменение тарифного плана</b>\n\n'
-        'Выберите тариф из текущей группы ключа. Скрытые тарифы доступны '
-        'администратору.\n\n'
-        '⚠️ Применение полностью переоформит ключ: срок и пакет будут '
-        'назначены заново, а использованный трафик сброшен.',
+        _tr('key_plans.start_key_plan_change.3'),
         reply_markup=key_plan_select_kb(
             key_id,
             tariffs,
@@ -100,7 +98,7 @@ async def start_key_plan_change(callback: CallbackQuery, state: FSMContext) -> N
 async def select_key_plan(callback: CallbackQuery, state: FSMContext) -> None:
     """Prepares ordinary confirmation or starts custom plan input."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     _, key_id_raw, tariff_id_raw = callback.data.split(':', 2)
     key_id = int(key_id_raw)
@@ -108,10 +106,10 @@ async def select_key_plan(callback: CallbackQuery, state: FSMContext) -> None:
     key = get_vpn_key_by_id(key_id)
     tariff = get_tariff_by_id(tariff_id)
     if key is None or tariff is None:
-        await callback.answer('❌ Ключ или тариф не найден', show_alert=True)
+        await callback.answer(_tr('key_plans.select_key_plan.1'), show_alert=True)
         return
     if not is_key_tariff_group_allowed(key_id, int(tariff.get('group_id') or 1)):
-        await callback.answer('❌ Тариф относится к другой группе', show_alert=True)
+        await callback.answer(_tr('key_plans.select_key_plan.2'), show_alert=True)
         return
 
     if tariff.get('system_type') == 'admin_custom':
@@ -122,9 +120,7 @@ async def select_key_plan(callback: CallbackQuery, state: FSMContext) -> None:
         )
         rendered = await safe_edit_or_send(
             callback.message,
-            '🛠 <b>Произвольный тариф</b>\n\n'
-            'Введите пакет трафика от 0 до 99999 ГБ.\n'
-            '0 — безлимитный трафик.',
+            _tr('key_plans.select_key_plan.3'),
             reply_markup=key_action_cancel_kb(key_id, key.get('telegram_id')),
         )
         await state.update_data(
@@ -138,21 +134,15 @@ async def select_key_plan(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     if tariff.get('system_type') is not None:
-        await callback.answer('❌ Этот системный тариф недоступен', show_alert=True)
+        await callback.answer(_tr('key_plans.select_key_plan.4'), show_alert=True)
         return
 
     duration = int(tariff.get('duration_days') or 0)
     traffic = int(tariff.get('traffic_limit_gb') or 0)
-    hidden_line = '\n⚪ Тариф скрыт от пользователей.' if not tariff.get('is_active') else ''
+    hidden_line = _tr('key_plans.select_key_plan.5') if not tariff.get('is_active') else ''
     await safe_edit_or_send(
         callback.message,
-        f"📋 <b>Переоформление на «{escape_html(tariff['name'])}»</b>\n\n"
-        f'📊 Трафик: {_traffic_text(traffic)}\n'
-        f'📅 Срок: {_duration_text(duration)}\n'
-        f"💻 Устройств: {int(tariff.get('max_ips') or 1)}"
-        f'{hidden_line}\n\n'
-        '⚠️ Текущий срок, тариф и счётчик трафика будут заменены. '
-        'Это не накопительное платное продление.',
+        _tr('key_plans.select_key_plan.6', p0=f"{escape_html(tariff['name'])}", p1=f'{_traffic_text(traffic)}', p2=f'{_duration_text(duration)}', p3=f"{int(tariff.get('max_ips') or 1)}", p4=f'{hidden_line}'),
         reply_markup=key_plan_confirm_kb(key_id, tariff_id),
     )
     await callback.answer()
@@ -162,7 +152,7 @@ async def select_key_plan(callback: CallbackQuery, state: FSMContext) -> None:
 async def apply_key_plan(callback: CallbackQuery, state: FSMContext) -> None:
     """Applies an ordinary active or hidden plan after confirmation."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     _, key_id_raw, tariff_id_raw = callback.data.split(':', 2)
     await _apply_plan(
@@ -182,8 +172,7 @@ async def custom_plan_traffic(message: Message, state: FSMContext) -> None:
     if not value.isdigit() or not 0 <= int(value) <= 99999:
         await safe_edit_or_send(
             target,
-            '❌ <b>Некорректный пакет трафика</b>\n\n'
-            'Введите число от 0 до 99999. 0 — безлимит.',
+            _tr('key_plans.custom_plan_traffic.1'),
             reply_markup=key_action_cancel_kb(data.get('current_key_id', 0), 0),
         )
         return
@@ -191,8 +180,7 @@ async def custom_plan_traffic(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminStates.key_plan_custom_days)
     await safe_edit_or_send(
         target,
-        '📅 <b>Срок произвольного тарифа</b>\n\n'
-        'Введите срок от 0 до 99999 дней.\n0 — без ограничения времени.',
+        _tr('key_plans.custom_plan_traffic.2'),
         reply_markup=key_action_cancel_kb(data['current_key_id'], 0),
     )
 
@@ -206,8 +194,7 @@ async def custom_plan_days(message: Message, state: FSMContext) -> None:
     if not value.isdigit() or not 0 <= int(value) <= 99999:
         await safe_edit_or_send(
             target,
-            '❌ <b>Некорректный срок</b>\n\n'
-            'Введите число от 0 до 99999. 0 — без срока.',
+            _tr('key_plans.custom_plan_days.1'),
             reply_markup=key_action_cancel_kb(data.get('current_key_id', 0), 0),
         )
         return
@@ -215,7 +202,7 @@ async def custom_plan_days(message: Message, state: FSMContext) -> None:
     await state.set_state(AdminStates.key_plan_custom_devices)
     await safe_edit_or_send(
         target,
-        '💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999.',
+        _tr('key_plans.custom_plan_days.2'),
         reply_markup=key_action_cancel_kb(data['current_key_id'], 0),
     )
 
@@ -229,8 +216,7 @@ async def custom_plan_devices(message: Message, state: FSMContext) -> None:
     if not value.isdigit() or not 1 <= int(value) <= 999:
         await safe_edit_or_send(
             target,
-            '❌ <b>Некорректный лимит устройств</b>\n\n'
-            'Введите число от 1 до 999.',
+            _tr('key_plans.custom_plan_devices.1'),
             reply_markup=key_action_cancel_kb(data.get('current_key_id', 0), 0),
         )
         return
@@ -239,11 +225,7 @@ async def custom_plan_devices(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await safe_edit_or_send(
         target,
-        '🛠 <b>Подтверждение произвольного тарифа</b>\n\n'
-        f"📊 Трафик: {_traffic_text(data['key_plan_custom_traffic_gb'])}\n"
-        f"📅 Срок: {_duration_text(data['key_plan_custom_days'])}\n"
-        f"💻 Устройств: {data['key_plan_custom_devices']}\n\n"
-        '⚠️ Текущие параметры ключа будут полностью заменены.',
+        _tr('key_plans.custom_plan_devices.2', p0=f"{_traffic_text(data['key_plan_custom_traffic_gb'])}", p1=f"{_duration_text(data['key_plan_custom_days'])}", p2=f"{data['key_plan_custom_devices']}"),
         reply_markup=key_plan_custom_confirm_kb(data['current_key_id']),
     )
 
@@ -251,7 +233,7 @@ async def custom_plan_devices(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == 'admin_key_plan_custom_apply')
 async def apply_custom_key_plan(callback: CallbackQuery, state: FSMContext) -> None:
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     data = await state.get_data()
     required = (
@@ -262,7 +244,7 @@ async def apply_custom_key_plan(callback: CallbackQuery, state: FSMContext) -> N
         'key_plan_custom_devices',
     )
     if any(field not in data for field in required):
-        await callback.answer('❌ Данные формы устарели', show_alert=True)
+        await callback.answer(_tr('key_plans.apply_custom_key_plan.1'), show_alert=True)
         return
     await _apply_plan(
         callback,
@@ -282,7 +264,7 @@ async def _apply_plan(
     tariff_id: int,
     **custom_values: int,
 ) -> None:
-    await callback.answer('⏳ Переоформляю ключ…')
+    await callback.answer(_tr('key_plans.apply_plan.1'))
     result = await reissue_key_plan(
         key_id,
         tariff_id,
@@ -292,8 +274,7 @@ async def _apply_plan(
     if not result.get('ok'):
         await safe_edit_or_send(
             callback.message,
-            '❌ <b>Тарифный план не изменён</b>\n\n'
-            f"Причина: <code>{result.get('reason') or 'unknown'}</code>",
+            _tr('key_plans.apply_plan.2', p0=f"{result.get('reason') or 'unknown'}"),
             reply_markup=key_action_cancel_kb(key_id, 0),
         )
         return
@@ -301,16 +282,11 @@ async def _apply_plan(
     suffix = ''
     if not result.get('panel_synced'):
         suffix = (
-            '\n\n⚠️ В БД план изменён, но панель синхронизирована не полностью. '
-            'Фоновая сверка сможет повторить обновление.'
+            _tr('key_plans.apply_plan.3')
         )
     await safe_edit_or_send(
         callback.message,
-        '✅ <b>Тарифный план изменён</b>\n\n'
-        f"📊 Трафик: {_traffic_text(result['traffic_limit'] // (1024 ** 3))}\n"
-        f"📅 Срок: {_duration_text(result['duration_days'])}\n"
-        f"💻 Устройств: {result['max_ips']}"
-        f'{suffix}',
+        _tr('key_plans.apply_plan.4', p0=f"{_traffic_text(result['traffic_limit'] // 1024 ** 3)}", p1=f"{_duration_text(result['duration_days'])}", p2=f"{result['max_ips']}", p3=f'{suffix}'),
         reply_markup=key_action_cancel_kb(key_id, 0),
     )
 

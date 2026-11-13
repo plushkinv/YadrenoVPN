@@ -1,6 +1,8 @@
 """Idempotency log core commands available with custom extensions via facade."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import hashlib
 import json
 import logging
@@ -327,10 +329,10 @@ def _request_matches(
 
 def _normalize_idempotency_key(value: Any) -> str:
     if not isinstance(value, str):
-        raise ValueError('idempotency_key должен быть строкой')
+        raise ValueError(_tr('db_extension_core.normalize_idempotency_key.1'))
     key = value.strip()
     if not _IDEMPOTENCY_KEY_RE.fullmatch(key):
-        raise ValueError('idempotency_key содержит недопустимые символы')
+        raise ValueError(_tr('db_extension_core.normalize_idempotency_key.2'))
     return key
 
 
@@ -341,10 +343,10 @@ def normalize_extension_core_idempotency_key(value: Any) -> str:
 
 def _normalize_operation(value: Any) -> str:
     if not isinstance(value, str):
-        raise ValueError('operation должен быть строкой')
+        raise ValueError(_tr('db_extension_core.normalize_operation.1'))
     op = value.strip()
     if op not in _ALLOWED_OPERATIONS:
-        raise ValueError(f"operation {op!r} не разрешена")
+        raise ValueError(_tr('db_extension_core.normalize_operation.2', p0=f'{op!r}'))
     return op
 
 
@@ -359,7 +361,7 @@ def _normalize_request_fingerprint(value: Any) -> str:
 
 def _normalize_positive_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f'{field} должен быть положительным integer')
+        raise ValueError(_tr('rewards.positive_int.1', p0=f'{field}'))
     return value
 
 
@@ -381,12 +383,12 @@ def _normalize_operation_target(operation: str, value: Any) -> int | None:
 
 def _normalize_reason(value: Any) -> str:
     if not isinstance(value, str):
-        raise ValueError('reason должен быть строкой')
+        raise ValueError(_tr('db_extension_core.normalize_reason.1'))
     reason = value.strip()
     if not reason:
-        raise ValueError('reason не может быть пустым')
+        raise ValueError(_tr('db_extension_core.normalize_reason.2'))
     if len(reason) > 256:
-        raise ValueError('reason не может быть длиннее 256 символов')
+        raise ValueError(_tr('db_extension_core.normalize_reason.3'))
     return reason
 
 
@@ -397,10 +399,10 @@ def normalize_extension_core_reason(value: Any) -> str:
 
 def _normalize_status(value: Any) -> str:
     if not isinstance(value, str):
-        raise ValueError('status должен быть строкой')
+        raise ValueError(_tr('db_extension_core.normalize_status.1'))
     status = value.strip()
     if status not in _PUBLIC_STATUSES:
-        raise ValueError(f"status {status!r} не разрешён")
+        raise ValueError(_tr('db_extension_core.normalize_status.2', p0=f'{status!r}'))
     return status
 
 

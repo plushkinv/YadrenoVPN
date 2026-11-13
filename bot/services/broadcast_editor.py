@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from localization import text as _tr
+
 import copy
 import hashlib
 import json
@@ -94,24 +96,24 @@ def _safe_int(value: Any, default: int = 0) -> int:
 def validate_style_profile(data: Any, *, partial: bool = False) -> dict[str, Any]:
     """Validate a complete style profile or an agent-authored patch."""
     if not isinstance(data, dict):
-        raise BroadcastEditorError("Профиль стиля должен быть объектом")
+        raise BroadcastEditorError(_tr('broadcast_editor.validate_style_profile.1'))
     unknown = set(data) - _STYLE_KEYS
     if unknown:
-        raise BroadcastEditorError("Неизвестные поля стиля: " + ", ".join(sorted(unknown)))
+        raise BroadcastEditorError(_tr('broadcast_editor.validate_style_profile.2') + ", ".join(sorted(unknown)))
     profile = dict(data) if partial else {**DEFAULT_BROADCAST_STYLE_PROFILE, **data}
     for key, allowed in _STYLE_ENUMS.items():
         if key in profile and profile[key] not in allowed:
-            raise BroadcastEditorError(f"Недопустимое значение style.{key}")
+            raise BroadcastEditorError(_tr('broadcast_editor.validate_style_profile.3', p0=f'{key}'))
     if "schema_version" in profile and profile["schema_version"] != 1:
-        raise BroadcastEditorError("Поддерживается только schema_version=1")
+        raise BroadcastEditorError(_tr('broadcast_editor.validate_style_profile.4'))
     if "use_lists" in profile and not isinstance(profile["use_lists"], bool):
-        raise BroadcastEditorError("style.use_lists должен быть boolean")
+        raise BroadcastEditorError(_tr('broadcast_editor.validate_style_profile.5'))
     if "custom_instructions" in profile:
         instructions = profile["custom_instructions"]
         if not isinstance(instructions, str):
-            raise BroadcastEditorError("style.custom_instructions должен быть строкой")
+            raise BroadcastEditorError(_tr('broadcast_editor.validate_style_profile.6'))
         if len(instructions) > 1000:
-            raise BroadcastEditorError("style.custom_instructions длиннее 1000 символов")
+            raise BroadcastEditorError(_tr('broadcast_editor.validate_style_profile.7'))
     return profile
 
 
@@ -128,15 +130,15 @@ def load_broadcast_style_profile(raw: Optional[str] = None) -> dict[str, Any]:
 
 def style_profile_summary(profile: dict[str, Any]) -> str:
     """Return a short Russian description for the admin broadcast screen."""
-    emoji_labels = {"none": "без эмодзи", "low": "мало эмодзи", "medium": "эмодзи умеренно", "high": "много эмодзи"}
-    length_labels = {"compact": "кратко", "standard": "средняя длина", "detailed": "подробно"}
+    emoji_labels = {"none": _tr('broadcast_editor.style_profile_summary.1'), "low": _tr('broadcast_editor.style_profile_summary.2'), "medium": _tr('broadcast_editor.style_profile_summary.3'), "high": _tr('broadcast_editor.style_profile_summary.4')}
+    length_labels = {"compact": _tr('broadcast_editor.style_profile_summary.5'), "standard": _tr('broadcast_editor.style_profile_summary.6'), "detailed": _tr('broadcast_editor.style_profile_summary.7')}
     tone_labels = {
-        "friendly_professional": "дружелюбно и профессионально",
-        "professional": "профессионально",
-        "friendly": "дружелюбно",
-        "empathetic": "эмпатично",
-        "formal": "формально",
-        "informal": "неформально",
+        "friendly_professional": _tr('broadcast_editor.style_profile_summary.8'),
+        "professional": _tr('broadcast_editor.style_profile_summary.9'),
+        "friendly": _tr('broadcast_editor.style_profile_summary.10'),
+        "empathetic": _tr('broadcast_editor.style_profile_summary.11'),
+        "formal": _tr('broadcast_editor.style_profile_summary.12'),
+        "informal": _tr('broadcast_editor.style_profile_summary.13'),
     }
     return ", ".join((
         tone_labels.get(str(profile.get("tone")), str(profile.get("tone"))),
@@ -262,7 +264,7 @@ def _effective_style(stage: dict[str, Any], snapshot: dict[str, Optional[str]]) 
 
 def _validate_stage_content(content: Optional[dict[str, Any]]) -> None:
     if not content:
-        raise BroadcastEditorError("Материал рассылки не подготовлен")
+        raise BroadcastEditorError(_tr('broadcast_editor.validate_stage_content.1'))
     if content.get("kind") == BROADCAST_KIND_MESSAGE:
         validate_broadcast_message(
             content.get("text"),
@@ -274,9 +276,9 @@ def _validate_stage_content(content: Optional[dict[str, Any]]) -> None:
             validate_generated_poll(content)
             return
         if not content.get("draft_chat_id") or not content.get("draft_message_id"):
-            raise BroadcastEditorError("Импортированный опрос больше недоступен")
+            raise BroadcastEditorError(_tr('broadcast_editor.validate_stage_content.2'))
         return
-    raise BroadcastEditorError("Неизвестный тип материала рассылки")
+    raise BroadcastEditorError(_tr('broadcast_editor.validate_stage_content.3'))
 
 
 def _material_state(content: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -316,8 +318,7 @@ def _state_payload(
     except BroadcastFilterError:
         if "filter" not in dirty_fields:
             audience_error = (
-                "Рабочая настройка фильтров повреждена. "
-                "Задайте аудиторию заново."
+                _tr('broadcast_editor.state_payload.1')
             )
     recipient_count = (
         0
@@ -420,7 +421,7 @@ def execute_broadcast_editor_action(telegram_id: int, args: dict[str, Any]) -> s
             payload = get_broadcast_editor_state(telegram_id)
         else:
             if "expected_stage_revision" not in args:
-                raise BroadcastEditorError("expected_stage_revision обязателен для изменения")
+                raise BroadcastEditorError(_tr('broadcast_editor.execute_broadcast_editor_action.1'))
             expected = int(args["expected_stage_revision"])
             if action == "stage_message":
                 payload = _stage_message(telegram_id, expected, args)
@@ -431,7 +432,7 @@ def execute_broadcast_editor_action(telegram_id: int, args: dict[str, Any]) -> s
             elif action == "stage_style":
                 payload = _stage_style(telegram_id, expected, args)
             else:
-                raise BroadcastEditorError("Неизвестное действие редактора рассылок")
+                raise BroadcastEditorError(_tr('broadcast_editor.execute_broadcast_editor_action.2'))
     except (BroadcastEditorError, BroadcastValidationError, TypeError, ValueError) as error:
         payload = {"status": "error", "error": str(error)}
     return _json_dumps(payload)
@@ -441,7 +442,7 @@ def stage_local_broadcast_photo(telegram_id: int, photo_file_id: str) -> dict[st
     """Stage a Telegram-owned photo locally without exposing its file id to the hub."""
     file_id = str(photo_file_id or "").strip()
     if not 1 <= len(file_id) <= 2048:
-        raise BroadcastEditorError("Некорректный Telegram file_id фотографии")
+        raise BroadcastEditorError(_tr('broadcast_editor.stage_local_broadcast_photo.1'))
     stage, _snapshot = ensure_broadcast_editor_stage(telegram_id)
 
     def mutate(updated: dict[str, Any]) -> list[str]:
@@ -467,7 +468,7 @@ def stage_local_broadcast_photo(telegram_id: int, photo_file_id: str) -> dict[st
 def _stage_message(telegram_id: int, expected: int, args: dict[str, Any]) -> dict[str, Any]:
     media_action = str(args.get("media_action") or "keep")
     if media_action not in {"keep", "remove"}:
-        raise BroadcastEditorError("media_action должен быть keep или remove")
+        raise BroadcastEditorError(_tr('broadcast_editor.stage_message.1'))
 
     def mutate(stage: dict[str, Any]) -> list[str]:
         current = stage.get("content") or {}
@@ -512,14 +513,14 @@ def _stage_filter(telegram_id: int, expected: int, args: dict[str, Any]) -> dict
     if "audience_filters" in args:
         raw_filters = args.get("audience_filters")
         if not isinstance(raw_filters, list):
-            raise BroadcastEditorError("audience_filters должен быть массивом")
+            raise BroadcastEditorError(_tr('broadcast_editor.stage_filter.1'))
     else:
         legacy_filter = str(args.get("audience_filter") or "")
         raw_filters = [] if legacy_filter == "all" else [legacy_filter]
     try:
         filter_keys = normalize_broadcast_filters(raw_filters)
     except BroadcastFilterError as error:
-        raise BroadcastEditorError("Неизвестный фильтр получателей") from error
+        raise BroadcastEditorError(_tr('broadcast_editor.stage_filter.2')) from error
 
     def mutate(stage: dict[str, Any]) -> list[str]:
         stage["filters"] = list(filter_keys)
@@ -534,10 +535,10 @@ def _stage_filter(telegram_id: int, expected: int, args: dict[str, Any]) -> dict
 def _stage_style(telegram_id: int, expected: int, args: dict[str, Any]) -> dict[str, Any]:
     scope = str(args.get("style_scope") or "")
     if scope not in {"default", "one_off"}:
-        raise BroadcastEditorError("style_scope должен быть default или one_off")
+        raise BroadcastEditorError(_tr('broadcast_editor.stage_style.1'))
     patch = validate_style_profile(args.get("style_patch"), partial=True)
     if not patch:
-        raise BroadcastEditorError("style_patch не должен быть пустым")
+        raise BroadcastEditorError(_tr('broadcast_editor.stage_style.2'))
 
     def mutate(stage: dict[str, Any]) -> list[str]:
         key = "default_style_patch" if scope == "default" else "one_off_style_override"
@@ -579,8 +580,7 @@ def save_broadcast_editor_stage(telegram_id: int) -> dict[str, Any]:
             return {
                 "status": "error",
                 "error": (
-                    "Рабочая настройка фильтров повреждена. "
-                    "Задайте аудиторию заново."
+                    _tr('broadcast_editor.state_payload.1')
                 ),
             }
     if stage.get("content") is not None or "material" in dirty_fields:
@@ -591,7 +591,7 @@ def save_broadcast_editor_stage(telegram_id: int) -> dict[str, Any]:
     if stage.get("style_rewrite_required"):
         return {
             "status": "error",
-            "error": "После изменения стиля нужно переработать текущий текст",
+            "error": _tr('broadcast_editor.save_broadcast_editor_stage.1'),
         }
 
     current_style = load_broadcast_style_profile(snapshot.get("style"))
@@ -637,12 +637,12 @@ def create_broadcast_confirmation(telegram_id: int) -> dict[str, Any]:
         filter_keys = _working_filter_keys(snapshot)
     except BroadcastFilterError as error:
         raise BroadcastEditorError(
-            "Рабочая настройка фильтров повреждена"
+            _tr('broadcast_editor.create_broadcast_confirmation.1')
         ) from error
     recipient_count = count_users_for_broadcast(filter_keys)
     if recipient_count <= 0:
         raise BroadcastEditorError(
-            "По выбранным условиям нет получателей. Рассылка не запущена."
+            _tr('broadcast.broadcast_empty_audience.1')
         )
     now = int(time.time())
     if not filter_keys:

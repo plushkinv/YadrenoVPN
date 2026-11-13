@@ -8,6 +8,8 @@ Processes:
 - Deleting a group (with transfer of tariffs/servers to “Main”)
 - Sorting (⬆️ swap with previous)
 """
+
+from localization import text as _tr
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -76,34 +78,28 @@ def _build_group_view_text(
     from bot.services.money import format_money_minor
 
     group_id = int(group['id'])
-    is_default = " <i>(по умолчанию)</i>" if group_id == 1 else ""
+    is_default = _tr('groups.build_group_view_text.1') if group_id == 1 else ""
     parent_name = _group_subscription_parent_name(group, groups)
     parent_text = (
         escape_html(parent_name)
         if parent_name is not None
-        else "нет"
+        else _tr('groups.build_group_view_text.2')
     )
     text = ""
     if notice:
         text += f"{notice}\n\n"
     text += (
-        f"📂 <b>{escape_html(str(group.get('name') or group_id))}</b>{is_default}\n\n"
-        f"🔢 Порядок: {int(group.get('sort_order') or 0)}\n"
-        f"📋 Активных тарифов: {len(tariffs)}\n"
-        f"🖥️ Активных серверов: {len(servers)}\n"
-        f"🔄 Автосброс 1-го числа: "
-        f"{'включён' if group.get('monthly_traffic_reset_enabled') else 'выключен'}\n"
-        f"🔗 Привязывать к подписке из группы: <b>{parent_text}</b>\n"
+        _tr('groups.build_group_view_text.5', p0=f"{escape_html(str(group.get('name') or group_id))}", p1=f'{is_default}', p2=f"{int(group.get('sort_order') or 0)}", p3=f'{len(tariffs)}', p4=f'{len(servers)}', p5=f"{(_tr('groups.build_group_view_text.3') if group.get('monthly_traffic_reset_enabled') else _tr('groups.build_group_view_text.4'))}", p6=f'{parent_text}')
     )
     if tariffs:
-        text += "\n<b>Тарифы:</b>\n"
+        text += _tr('groups.build_group_view_text.6')
         for tariff in tariffs:
             text += (
                 f"  • {escape_html(str(tariff.get('name') or tariff['id']))} — "
                 f"{format_money_minor(tariff.get('price_minor', 0), tariff.get('base_currency', 'RUB'))}\n"
             )
     if servers:
-        text += "\n<b>Серверы:</b>\n"
+        text += _tr('groups.build_group_view_text.7')
         for server in servers:
             text += f"  • {escape_html(str(server.get('name') or server['id']))}\n"
     return text
@@ -145,7 +141,7 @@ async def _render_group_view(
 async def show_groups_list(callback: CallbackQuery, state: FSMContext):
     """Shows a list of tariff groups."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.payments_menu)
@@ -164,23 +160,20 @@ async def show_groups_list(callback: CallbackQuery, state: FSMContext):
         })
     
     text = (
-        "📂 <b>Группы тарифов</b>\n\n"
-        "Группы ограничивают доступ: ключи можно продлевать и переносить "
-        "только в рамках своей группы.\n\n"
+        _tr('groups.show_groups_list.1')
     )
     
     if len(groups) == 1:
         text += (
-            "ℹ️ Сейчас одна группа — ограничения не действуют.\n"
-            "Добавьте вторую группу, чтобы разделить тарифы и серверы.\n"
+            _tr('groups.show_groups_list.2')
         )
     
     for g in groups_info:
-        is_default = " <i>(по умолчанию)</i>" if g['id'] == 1 else ""
+        is_default = _tr('groups.build_group_view_text.1') if g['id'] == 1 else ""
         text += f"\n📂 <b>{escape_html(str(g['name']))}</b>{is_default}\n"
-        text += f"   Тарифов: {g['tariffs_count']} | Серверов: {g['servers_count']}\n"
-        reset_text = "включён" if g['monthly_traffic_reset_enabled'] else "выключен"
-        text += f"   Автосброс: {reset_text}\n"
+        text += _tr('groups.show_groups_list.3', p0=f"{g['tariffs_count']}", p1=f"{g['servers_count']}")
+        reset_text = _tr('groups.build_group_view_text.3') if g['monthly_traffic_reset_enabled'] else _tr('groups.build_group_view_text.4')
+        text += _tr('groups.show_groups_list.4', p0=f'{reset_text}')
     
     await safe_edit_or_send(callback.message, 
         text,
@@ -197,16 +190,13 @@ async def show_groups_list(callback: CallbackQuery, state: FSMContext):
 async def group_add_start(callback: CallbackQuery, state: FSMContext):
     """Starts adding a new group."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.group_add_name)
     
     sent = await safe_edit_or_send(callback.message, 
-        "📂 <b>Новая группа</b>\n\n"
-        "⚠️ После добавления второй группы у пользователей появится "
-        "разделение тарифов и серверов по группам.\n\n"
-        "Введите название группы (макс. 30 символов):",
+        _tr('groups.group_add_start.1'),
         reply_markup=back_and_home_kb("admin_groups")
     )
     await state.update_data(add_group_chat_id=callback.message.chat.id, add_group_message_id=callback.message.message_id)
@@ -224,7 +214,7 @@ async def group_add_name_handler(message: Message, state: FSMContext):
     
     if not name or len(name) > 30:
         await safe_edit_or_send(message,
-            "⚠️ Название должно быть от 1 до 30 символов."
+            _tr('groups.group_add_name_handler.1')
         )
         return
     
@@ -256,22 +246,18 @@ async def group_add_name_handler(message: Message, state: FSMContext):
         })
     
     text = (
-        f"✅ Группа <b>{name}</b> создана!\n\n"
-        "📂 <b>Группы тарифов</b>\n\n"
-        "Группы ограничивают доступ: ключи можно продлевать и переносить "
-        "только в рамках своей группы.\n\n"
+        _tr('groups.group_add_name_handler.2', p0=f'{name}')
     )
     
     if len(groups) == 1:
         text += (
-            "ℹ️ Сейчас одна группа — ограничения не действуют.\n"
-            "Добавьте вторую группу, чтобы разделить тарифы и серверы.\n"
+            _tr('groups.show_groups_list.2')
         )
     
     for g in groups_info:
-        is_default = " _(по умолчанию)_" if g['id'] == 1 else ""
+        is_default = _tr('groups.group_add_name_handler.3') if g['id'] == 1 else ""
         text += f"\n📂 <b>{g['name']}</b>{is_default}\n"
-        text += f"   Тарифов: {g['tariffs_count']} | Серверов: {g['servers_count']}\n"
+        text += _tr('groups.show_groups_list.3', p0=f"{g['tariffs_count']}", p1=f"{g['servers_count']}")
     
     # Editing the original message with the form
     if add_chat_id and add_msg_id:
@@ -299,12 +285,12 @@ async def group_add_name_handler(message: Message, state: FSMContext):
 async def group_view_handler(callback: CallbackQuery, state: FSMContext):
     """Shows information about the group."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     group_id = int(callback.data.split(":")[1])
     if not await _render_group_view(callback, group_id):
-        await callback.answer("❌ Группа не найдена", show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
     await state.set_state(AdminStates.payments_menu)
     await callback.answer()
@@ -317,16 +303,16 @@ async def group_subscription_parent_start(
 ) -> None:
     """Open the optional subscription host group selector."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     try:
         group_id = int(str(callback.data).split(':', 1)[1])
     except (TypeError, ValueError, IndexError):
-        await callback.answer("❌ Группа не найдена", show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
     group = get_group_by_id(group_id)
     if not group:
-        await callback.answer("❌ Группа не найдена", show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
 
     groups = get_all_groups()
@@ -340,20 +326,10 @@ async def group_subscription_parent_start(
     current_text = (
         f"<b>{escape_html(current_parent_name)}</b>"
         if current_parent_name is not None
-        else "<b>не настроено</b>"
+        else _tr('groups.group_subscription_parent_start.1')
     )
     text = (
-        "🔗 <b>Привязка к подписке</b>\n\n"
-        f"Группа ключа: <b>{escape_html(str(group.get('name') or group_id))}</b>\n"
-        f"Искать подписку в группе: {current_text}\n\n"
-        "После покупки ключа из этой группы бот ищет у пользователя подходящие "
-        "активные подписки в выбранной группе. Если подписка одна, ключ привязывается "
-        "автоматически; если несколько — бот предложит пользователю выбрать. Если "
-        "подходящей подписки нет, покупка всё равно завершится, а ключ останется "
-        "отдельным.\n\n"
-        "⚠️ Подписка для привязки должна находиться на сервере с 3X-UI 3.4.0 "
-        "или новее; ключи на 3.3.x не участвуют в автоматическом выборе.\n\n"
-        "Выберите группу, в которой бот будет искать подписку для привязки:"
+        _tr('groups.group_subscription_parent_start.2', p0=f"{escape_html(str(group.get('name') or group_id))}", p1=f'{current_text}')
     )
 
     await state.set_state(AdminStates.group_subscription_parent)
@@ -380,19 +356,19 @@ async def group_subscription_parent_set(
 ) -> None:
     """Persist the selected subscription host group through the DB facade."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     data = await state.get_data()
     try:
         group_id = int(data.get('subscription_parent_group_id') or 0)
         selected_id = int(str(callback.data).rsplit(':', 1)[1])
     except (TypeError, ValueError, IndexError):
-        await callback.answer("❌ Некорректный выбор", show_alert=True)
+        await callback.answer(_tr('groups.group_subscription_parent_set.1'), show_alert=True)
         return
     parent_group_id = selected_id if selected_id > 0 else None
     if group_id <= 0 or not get_group_by_id(group_id):
         await state.set_state(AdminStates.payments_menu)
-        await callback.answer("❌ Группа не найдена", show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
 
     try:
@@ -410,19 +386,19 @@ async def group_subscription_parent_set(
         success = False
     if not success:
         await callback.answer(
-            "❌ Нельзя создать такую связь между группами",
+            _tr('groups.group_subscription_parent_set.2'),
             show_alert=True,
         )
         return
 
     await state.set_state(AdminStates.payments_menu)
     notice = (
-        "✅ Привязка к подписке настроена"
+        _tr('groups.group_subscription_parent_set.3')
         if parent_group_id is not None
-        else "✅ Привязка к подписке отключена"
+        else _tr('groups.group_subscription_parent_set.4')
     )
     if not await _render_group_view(callback, group_id, notice=notice):
-        await callback.answer("❌ Группа не найдена", show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
     await callback.answer()
 
@@ -431,23 +407,21 @@ async def group_subscription_parent_set(
 async def group_edit_start(callback: CallbackQuery, state: FSMContext):
     """Starts renaming the group."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     group_id = int(callback.data.split(":")[1])
     group = get_group_by_id(group_id)
     
     if not group:
-        await callback.answer("❌ Группа не найдена", show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.group_edit_name)
     await state.update_data(edit_group_id=group_id, edit_message_id=callback.message.message_id)
     
     await safe_edit_or_send(callback.message, 
-        f"✏️ <b>Переименование группы</b>\n\n"
-        f"Текущее название: <b>{escape_html(str(group['name']))}</b>\n\n"
-        "Введите новое название (макс. 30 символов):",
+        _tr('groups.group_edit_start.1', p0=f"{escape_html(str(group['name']))}"),
         reply_markup=back_and_home_kb(f"admin_group_view:{group_id}")
     )
     await callback.answer()
@@ -463,7 +437,7 @@ async def group_edit_name_handler(message: Message, state: FSMContext):
     name = get_message_text_for_storage(message, 'plain').strip()
     
     if not name or len(name) > 30:
-        await safe_edit_or_send(message, "⚠️ Название должно быть от 1 до 30 символов.")
+        await safe_edit_or_send(message, _tr('groups.group_add_name_handler.1'))
         return
     
     data = await state.get_data()
@@ -472,7 +446,7 @@ async def group_edit_name_handler(message: Message, state: FSMContext):
     
     if not group_id:
         await state.clear()
-        await safe_edit_or_send(message, "❌ Ошибка состояния.")
+        await safe_edit_or_send(message, _tr('groups.group_edit_name_handler.1'))
         return
     
     # Deleting a user's message
@@ -497,7 +471,7 @@ async def group_edit_name_handler(message: Message, state: FSMContext):
             tariffs,
             servers,
             get_all_groups(),
-            notice="✅ Группа переименована!",
+            notice=_tr('groups.group_edit_name_handler.2'),
         )
         
         try:
@@ -523,7 +497,7 @@ async def group_edit_name_handler(message: Message, state: FSMContext):
     else:
         await safe_edit_or_send(
             message,
-            f"✅ Группа переименована в <b>{escape_html(name)}</b>",
+            _tr('groups.group_edit_name_handler.3', p0=f'{escape_html(name)}'),
         )
 
 
@@ -535,33 +509,31 @@ async def group_edit_name_handler(message: Message, state: FSMContext):
 async def group_delete_start(callback: CallbackQuery, state: FSMContext):
     """Group deletion confirmation."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     group_id = int(callback.data.split(":")[1])
     
     if group_id == 1:
-        await callback.answer("❌ Группу «Основная» нельзя удалить", show_alert=True)
+        await callback.answer(_tr('groups.group_delete_start.1'), show_alert=True)
         return
     
     group = get_group_by_id(group_id)
     if not group:
-        await callback.answer("❌ Группа не найдена", show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
     
     tariffs = get_tariffs_by_group(group_id)
     servers = get_active_servers_by_group(group_id)
     
     text = (
-        f"⚠️ <b>Удаление группы «{group['name']}»</b>\n\n"
-        f"📋 Тарифов: {len(tariffs)}\n"
-        f"🖥️ Серверов: {len(servers)}\n\n"
+        _tr('groups.group_delete_start.2', p0=f"{group['name']}", p1=f'{len(tariffs)}', p2=f'{len(servers)}')
     )
     
     if tariffs or servers:
-        text += "❗ Все тарифы и серверы будут перенесены в группу «Основная».\n\n"
+        text += _tr('groups.group_delete_start.3')
     
-    text += "Вы уверены?"
+    text += _tr('groups.group_delete_start.4')
     
     await safe_edit_or_send(callback.message, 
         text,
@@ -574,7 +546,7 @@ async def group_delete_start(callback: CallbackQuery, state: FSMContext):
 async def group_delete_confirm(callback: CallbackQuery, state: FSMContext):
     """Performs deletion of a group."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     group_id = int(callback.data.split(":")[1])
@@ -582,9 +554,9 @@ async def group_delete_confirm(callback: CallbackQuery, state: FSMContext):
     success = delete_group(group_id)
     
     if success:
-        await callback.answer("✅ Группа удалена, содержимое перенесено в «Основная»")
+        await callback.answer(_tr('groups.group_delete_confirm.1'))
     else:
-        await callback.answer("❌ Не удалось удалить группу", show_alert=True)
+        await callback.answer(_tr('groups.group_delete_confirm.2'), show_alert=True)
     
     # Returning to the list of groups
     await show_groups_list(callback, state)
@@ -598,13 +570,13 @@ async def group_delete_confirm(callback: CallbackQuery, state: FSMContext):
 async def group_move_up_handler(callback: CallbackQuery, state: FSMContext):
     """Moves the group up in the sorting."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     group_id = int(callback.data.split(":")[1])
     
     move_group_up(group_id)
-    await callback.answer("🔄 Порядок обновлён")
+    await callback.answer(_tr('groups.group_move_up_handler.1'))
     
     # Updating the list
     await show_groups_list(callback, state)
@@ -614,13 +586,13 @@ async def group_move_up_handler(callback: CallbackQuery, state: FSMContext):
 async def group_monthly_reset_toggle(callback: CallbackQuery, state: FSMContext):
     """Toggles monthly traffic reset for one tariff group."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     group_id = int(callback.data.split(":", 1)[1])
     enabled = toggle_group_monthly_traffic_reset(group_id)
     if enabled is None:
-        await callback.answer("❌ Группа не найдена", show_alert=True)
+        await callback.answer(_tr('groups.group_view_handler.1'), show_alert=True)
         return
     forwarded = callback.model_copy(
         update={'data': f'admin_group_view:{group_id}'},

@@ -1,6 +1,8 @@
 """Apply only owned web configuration, with a durable rollback journal."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import base64
 from dataclasses import asdict
 import json
@@ -127,7 +129,7 @@ def recover_interrupted_setup(root=PROJECT_ROOT, *, system=None, store=None, sta
         else:
             _restore(root, journal, paths, system, store, startup=startup)
     except (ValueError, KeyError, TypeError, OSError):
-        raise SetupError('setup_recovery_invalid', 'Журнал настройки повреждён; произвольные файлы не восстанавливались.', stage='recovery', exit_code=4) from None
+        raise SetupError('setup_recovery_invalid', _tr('setup_apply.recover_interrupted_setup.1'), stage='recovery', exit_code=4) from None
     return True
 
 
@@ -221,7 +223,7 @@ def _managed(root, options, system, trust, paths, facts, configuration):
                 '--cert-name', facts['certificate_name'], '--domain', options.domain, '--email', options.email,
                 '--agree-tos', '--keep-until-expiring', '--deploy-hook', deploy_hook(system)], timeout=300)
         if not usable_certificate(system, paths, options.domain, min_days=0):
-            raise SetupError('certificate_unusable', 'Сертификат не соответствует домену или сроку.', stage='certificate', exit_code=4)
+            raise SetupError('certificate_unusable', _tr('setup_apply.managed.1'), stage='certificate', exit_code=4)
     write_owned(system, paths['nginx'], configuration, trust['instance_id'])
     _reload_nginx(system)
     system.run(['snap', 'start', '--enable', 'certbot.renew'] if timer.startswith('snap.')
@@ -232,7 +234,7 @@ def _managed(root, options, system, trust, paths, facts, configuration):
     # Validate the same two commands explicitly, without version-specific flags.
     _reload_nginx(system)
     if not system.active(timer) or not system.enabled(timer):
-        raise SetupError('renewal_not_ready', 'Штатное автопродление Certbot не включено или не работает.', stage='renewal', exit_code=4)
+        raise SetupError('renewal_not_ready', _tr('setup_apply.managed.2'), stage='renewal', exit_code=4)
 
 
 def re_domain_present(text, domain):

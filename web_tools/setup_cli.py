@@ -1,6 +1,8 @@
 """Local installer entry point; no public HTTP administration or second runtime."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import argparse
 import json
 from pathlib import Path
@@ -18,15 +20,15 @@ class Parser(argparse.ArgumentParser):
 
 
 def parser():
-    value = Parser(description='Подключить сайт и Mini App: отдельный домен, HTTPS и общий runtime.')
+    value = Parser(description=_tr('setup_cli.parser.1'))
     value.add_argument('--project-root', type=Path, default=PROJECT_ROOT)
     commands = value.add_subparsers(dest='command', required=True, parser_class=Parser)
     setup = commands.add_parser('setup')
     setup.add_argument('--proxy', default='auto', choices=('auto', 'managed-nginx', 'external'),
-                       help='По умолчанию подключение определяется автоматически; явный режим — для администратора.')
+                       help=_tr('setup_cli.parser.2'))
     setup.add_argument('--domain')
     setup.add_argument('--public-url')
-    setup.add_argument('--email', help='Контакт для сертификата; по умолчанию admin@<домен>.')
+    setup.add_argument('--email', help=_tr('setup_cli.parser.3'))
     setup.add_argument('--agree-tos', action='store_true')
     setup.add_argument('--backend-port', type=int)
     setup.add_argument('--backend-bind', default='127.0.0.1')
@@ -46,7 +48,7 @@ def perform_setup(root, options, *, system=None, store=None):
     journal = local_path(Path(root) / 'web_runtime', 'secrets/setup-transaction.json')
     if options.check_only:
         if journal.exists():
-            raise SetupError('setup_incomplete', 'Сначала восстановите незавершённую настройку командой recover.')
+            raise SetupError('setup_incomplete', _tr('setup_cli.perform_setup.1'))
         checked = preflight(root, options, system, store)
         options, signed, trust, _, _, facts = checked
         return result(options, ok=True, code='preflight_ready', stage='preflight', **facts,
@@ -69,7 +71,7 @@ def main(argv=None):
         output_json = args.output == 'json'
         root = args.project_root.absolute()
         if root.resolve() != PROJECT_ROOT:
-            raise SetupError('installation_mismatch', 'Запустите management из выбранной установленной версии.', stage='arguments', exit_code=2)
+            raise SetupError('installation_mismatch', _tr('setup_cli.main.1'), stage='arguments', exit_code=2)
         if args.command == 'setup':
             options = SetupOptions.parse(args)
             payload = perform_setup(root, options)
@@ -85,7 +87,7 @@ def main(argv=None):
     except Exception as exc:
         # Exception details may contain local paths or external service output.
         payload = result(options, code='setup_failed', stage='apply', changed=True,
-                         message='Настройка не завершена; повтор восстановит сохранённую конфигурацию.',
+                         message=_tr('setup_cli.main.2'),
                          details={'error_type': type(exc).__name__})
         status = 4
     manual = not payload['ok'] and payload['stage'] not in {'arguments', 'complete'}
@@ -99,14 +101,14 @@ def main(argv=None):
             from web_tools.setup_diagnostics import terminal_report
             print(terminal_report(payload['message']))
         else:
-            print(payload.get('message') or ('Сайт и Mini App готовы: ' + str(payload['public_url']) if payload['code'] == 'ready'
-                  else 'Результат: ' + payload['code']))
+            print(payload.get('message') or (_tr('setup_cli.main.3') + str(payload['public_url']) if payload['code'] == 'ready'
+                  else _tr('setup_cli.main.4') + payload['code']))
         if payload.get('upstream'):
-            print('Закрытый upstream: ' + payload['upstream'])
+            print(_tr('setup_cli.main.5') + payload['upstream'])
         if payload.get('existing_local_proxy'):
-            print('Найдено готовое локальное подключение домена. Конфигурация Nginx и сертификат сохраняются.')
+            print(_tr('setup_cli.main.6'))
         if payload.get('tls_renewal') == 'external_owner':
-            print('Продление сертификата остаётся в существующей конфигурации HTTPS; будущая выдача здесь не проверяется.')
+            print(_tr('setup_cli.main.7'))
     return status
 
 

@@ -1,7 +1,11 @@
 """Declarative catalog of core user UI fragments stored outside editable pages."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from localization import legacy_text as _legacy
+
+from dataclasses import dataclass, replace
+import json
+from localization import CATALOG_ROOT, seed_text
 
 
 @dataclass(frozen=True)
@@ -22,116 +26,111 @@ class UserUITextDefinition:
 
 
 USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
-    UserUITextDefinition('account.merge.balance_reason', 'Перенос баланса при объединении аккаунтов',
+    UserUITextDefinition('account.merge.balance_reason', _legacy('user_ui_text_catalog.191'),
                          'plain', 'Balance history description of an account transfer.'),
     UserUITextDefinition(
         'account.link.merge_prompt',
-        '🔗 <b>Объединение аккаунтов</b>\n\nОсновным станет ваш Telegram-аккаунт №%target_account_id%. '
-        'В него будут перенесены баланс, подписки и телефон %phone%. '
-        'Телефон и пароль переносимого аккаунта заменят прежние данные входа. '
-        'Подтвердите объединение, затем завершите его в исходной вкладке сайта.',
+        _legacy('user_ui_text_catalog.192'),
         'html', 'Confirm transfer into the existing Telegram owner.',
         frozenset({'target_account_id', 'phone'})),
     UserUITextDefinition(
         'account.link.prompt',
-        '🔗 <b>Привязка Telegram</b>\n\nПодтвердите привязку к аккаунту №%account_id%. '
-        'Затем вернитесь на сайт и завершите привязку там.',
+        _legacy('user_ui_text_catalog.193'),
         'html', 'Explicit Telegram confirmation for an existing site account.',
         frozenset({'account_id'}),
     ),
-    UserUITextDefinition('account.link.button.confirm', '✅ Привязать Telegram', 'button',
+    UserUITextDefinition('account.link.button.confirm', _legacy('user_ui_text_catalog.194'), 'button',
                          'Confirm the Telegram side of an account link.'),
-    UserUITextDefinition('account.link.button.cancel', '❌ Отмена', 'button',
+    UserUITextDefinition('account.link.button.cancel', _legacy('user_ui_text_catalog.195'), 'button',
                          'Cancel this account link request.'),
     UserUITextDefinition(
         'account.link.confirmed',
-        '🔗 <b>Telegram подтверждён</b>\n\nВернитесь в исходную вкладку сайта и завершите привязку.',
+        _legacy('user_ui_text_catalog.196'),
         'html', 'Telegram confirmation succeeded; the originating web session must finish.'),
-    UserUITextDefinition('account.link.cancelled', '🔗 <b>Привязка отменена</b>\n\nАккаунты не изменены.',
+    UserUITextDefinition('account.link.cancelled', _legacy('user_ui_text_catalog.197'),
                          'html', 'The unused account link was cancelled.'),
     UserUITextDefinition(
         'account.link.invalid',
-        '🔗 <b>Ссылка недействительна</b>\n\nНачните привязку заново на сайте.',
+        _legacy('user_ui_text_catalog.198'),
         'html', 'An expired, consumed or invalid account link.'),
     UserUITextDefinition(
         'account.link.conflict',
-        '🔗 <b>Не удалось привязать Telegram</b>\n\nДанные привязки изменились. '
-        'Начните привязку заново на сайте. Аккаунты не изменены.',
+        _legacy('user_ui_text_catalog.199'),
         'html', 'The link no longer matches the confirmed accounts.'),
     UserUITextDefinition(
         'account.link.unavailable',
-        '🔗 <b>Привязка временно недоступна</b>\n\nПопробуйте ещё раз позднее.',
+        _legacy('user_ui_text_catalog.200'),
         'html', 'The account link service is temporarily unavailable.'),
     UserUITextDefinition(
         "payment.invoice.purchase_description",
-        "Оплата тарифа «%tariff_name%» (%days%).",
+        _legacy('user_ui_text_catalog.201'),
         "plain",
         "Telegram invoice description for a new key purchase.",
         frozenset({"tariff_name", "days"}),
     ),
     UserUITextDefinition(
         "payment.invoice.renewal_description",
-        "Продление ключа «%key_name%»: «%tariff_name%».",
+        _legacy('user_ui_text_catalog.202'),
         "plain",
         "Telegram invoice description for an existing key renewal.",
         frozenset({"key_name", "tariff_name"}),
     ),
     UserUITextDefinition(
         "payment.invoice.topup_description",
-        "Пополнение баланса на %amount% %currency%.",
+        _legacy('user_ui_text_catalog.203'),
         "plain",
         "Telegram invoice description for a balance top-up.",
         frozenset({"amount", "currency"}),
     ),
     UserUITextDefinition(
         "payment.invoice.pay_button",
-        "💳 Оплатить %amount%",
+        _legacy('user_ui_text_catalog.204'),
         "button",
         "Native Telegram invoice pay button label.",
         frozenset({"amount"}),
     ),
     UserUITextDefinition(
         "payment.invoice.change_method_button",
-        "🔄 Сменить способ",
+        _legacy('user_ui_text_catalog.205'),
         "button",
         "Button label for returning from an invoice to payment methods.",
     ),
     UserUITextDefinition(
         "payment.invoice.stale_error",
-        "Счёт устарел или не соответствует выбранной оплате.",
+        _legacy('user_ui_text_catalog.206'),
         "plain",
         "Pre-checkout error shown for an obsolete or mismatched invoice.",
     ),
     UserUITextDefinition(
         "format.days_short",
-        "%days% дн.",
+        _legacy('user_ui_text_catalog.207'),
         "plain",
         "Compact day-count format shared by user-facing runtime data.",
         frozenset({"days"}),
     ),
     UserUITextDefinition(
         "format.time_left",
-        "%days% дн., %hours% ч., %minutes% мин.",
+        _legacy('user_ui_text_catalog.208'),
         "plain",
         "Remaining key duration in complete days, hours and minutes.",
         frozenset({"days", "hours", "minutes"}),
     ),
     UserUITextDefinition(
         "format.duration_unlimited",
-        "Без срока",
+        _legacy('user_ui_text_catalog.209'),
         "plain",
         "Display value shared by user-facing screens for an unlimited duration.",
     ),
     UserUITextDefinition(
         "format.traffic_gb",
-        "%gb% ГБ",
+        _legacy('user_ui_text_catalog.210'),
         "plain",
         "Compact gigabyte limit shared by user-facing runtime data.",
         frozenset({"gb"}),
     ),
     UserUITextDefinition(
         "tariff.price_unset",
-        "Цена не установлена",
+        _legacy('user_ui_text_catalog.211'),
         "plain",
         "Fallback display value when an administrator did not configure a tariff price.",
     ),
@@ -155,44 +154,40 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
     ),
     UserUITextDefinition(
         "key.traffic.needs_setup",
-        "⚠️ Требует настройки",
+        _legacy('user_ui_text_catalog.212'),
         "plain",
         "Traffic display before a VPN key is configured on a server.",
     ),
     UserUITextDefinition(
         "key.traffic.unlimited",
-        "Безлимит",
+        _legacy('user_ui_text_catalog.213'),
         "plain",
         "Traffic limit display for an unlimited VPN key.",
     ),
     UserUITextDefinition(
         "key.traffic.used_unlimited",
-        "%used% (безлимит)",
+        _legacy('user_ui_text_catalog.214'),
         "plain",
         "Used traffic display for an unlimited VPN key.",
         frozenset({"used"}),
     ),
     UserUITextDefinition(
         "key.traffic.limited",
-        "%used% из %limit% (%percent%%)",
+        _legacy('user_ui_text_catalog.215'),
         "plain",
         "Used traffic display for a limited VPN key.",
         frozenset({"used", "limit", "percent"}),
     ),
     UserUITextDefinition(
         "key.tariff.custom",
-        "Индивидуальный тариф",
+        _legacy('user_ui_text_catalog.216'),
         "plain",
         "User-facing tariff name for a key issued through the protected admin plan.",
     ),
     UserUITextDefinition(
         "key.devices.item",
         (
-            "<b>%index%. %model%</b>\n"
-            "ОС: %os%\n"
-            "Приложение: %user_agent%\n"
-            "Первое подключение: %first_seen%\n"
-            "Последнее подключение: %last_seen%"
+            _legacy('user_ui_text_catalog.217')
         ),
         "html",
         "One registered device row on the key devices page.",
@@ -202,42 +197,38 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
     ),
     UserUITextDefinition(
         "key.devices.empty",
-        "К этому ключу пока не привязано ни одного устройства.",
+        _legacy('user_ui_text_catalog.218'),
         "html",
         "Empty state on the key devices page.",
     ),
     UserUITextDefinition(
         "key.devices.load_error",
-        "⚠️ Не удалось получить список устройств. Попробуйте позже.",
+        _legacy('user_ui_text_catalog.219'),
         "html",
         "Panel read error shown on the key devices page.",
     ),
     UserUITextDefinition(
         "key.devices.unknown",
-        "не указано",
+        _legacy('user_ui_text_catalog.220'),
         "plain",
         "Fallback for absent device metadata.",
     ),
     UserUITextDefinition(
         "key.devices.deleted",
-        "Устройство удалено",
+        _legacy('user_ui_text_catalog.221'),
         "plain",
         "Callback notice after deleting one registered device.",
     ),
     UserUITextDefinition(
         "key.devices.delete_error",
-        "Не удалось удалить устройство",
+        _legacy('user_ui_text_catalog.222'),
         "plain",
         "Callback error after a failed device deletion.",
     ),
     UserUITextDefinition(
         "trial.offer.summary",
         (
-            "📋 <b>%tariff%</b>\n"
-            "📂 Группа: %group%\n"
-            "⏳ Срок: %duration%\n"
-            "📊 Трафик: %traffic%\n"
-            "📱 Устройства: %device_limit%"
+            _legacy('user_ui_text_catalog.223')
         ),
         "html",
         "User-facing summary of the selected trial offer.",
@@ -245,13 +236,13 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
     ),
     UserUITextDefinition(
         "trial.eligibility.once_per_user",
-        "<i>Пробный период предоставляется один раз на аккаунт.</i>",
+        _legacy('user_ui_text_catalog.224'),
         "html",
         "Eligibility note when only one trial is allowed per user.",
     ),
     UserUITextDefinition(
         "trial.eligibility.once_per_group",
-        "<i>В каждой группе тарифов можно активировать один пробный период.</i>",
+        _legacy('user_ui_text_catalog.225'),
         "html",
         "Eligibility note when one trial is allowed in every tariff group.",
     ),
@@ -292,56 +283,65 @@ USER_UI_TEXT_DEFINITIONS: tuple[UserUITextDefinition, ...] = (
     ),
     UserUITextDefinition(
         "key.deleted_list.more",
-        "• … и ещё <b>%count%</b>",
+        _legacy('user_ui_text_catalog.226'),
         "html",
         "Overflow row in the grouped expired-key deletion notification.",
         frozenset({"count"}),
     ),
     UserUITextDefinition(
         "referral.no_levels",
-        "Пока нет активных уровней реферальной программы.",
+        _legacy('user_ui_text_catalog.227'),
         "html",
         "Referral page fragment shown when no reward levels are configured.",
     ),
     UserUITextDefinition(
         "referral.level_row",
-        "✅ Уровень %level% (%percent%%): %referrals_count% чел. — %earned%",
+        _legacy('user_ui_text_catalog.228'),
         "html",
         "One repeated reward-level row on the referral page.",
         frozenset({"level", "percent", "referrals_count", "earned"}),
     ),
     UserUITextDefinition(
         "referral.balance_line",
-        "💰 <b>Ваш баланс:</b> %balance%",
+        _legacy('user_ui_text_catalog.229'),
         "html",
         "Optional current-balance line on the referral page.",
         frozenset({"balance"}),
     ),
     UserUITextDefinition(
         "payment.quote.promo_line",
-        "🎟 Промокод: <b>%promo_code%</b> (-%discount%%)",
+        _legacy('user_ui_text_catalog.230'),
         "html",
         "Promo discount line shared by payment quote screens.",
         frozenset({"promo_code", "discount"}),
     ),
     UserUITextDefinition(
         "payment.quote.price_line",
-        "💵 Цена: <s>%old_price%</s> → <b>%new_price%</b>",
+        _legacy('user_ui_text_catalog.231'),
         "html",
         "Original and discounted price line shared by payment quote screens.",
         frozenset({"old_price", "new_price"}),
     ),
     UserUITextDefinition(
         "promo.auto_coupon",
-        "🎫 <b>Купон на следующую покупку</b>\n\n"
-        "Скидка: <b>%discount_percent%%</b>\n"
-        "<pre>%promo_code%</pre>",
+        _legacy('user_ui_text_catalog.232'),
         "html",
         "Coupon fragment generated automatically after an eligible payment.",
         frozenset({"promo_code"}),
         frozenset({"discount_percent"}),
     ),
 )
+
+HISTORICAL_USER_UI_TEXT_DEFINITIONS = USER_UI_TEXT_DEFINITIONS
+LOCALIZED_USER_UI_TEXT_DEFINITIONS = tuple(
+    UserUITextDefinition(item['key'], seed_text('ui.' + item['key'], 'ru'),
+                         item['format'], item['description'], frozenset(item['placeholders']))
+    for item in json.loads((CATALOG_ROOT / 'user-fragments.json').read_text(encoding='utf-8'))
+)
+USER_UI_TEXT_DEFINITIONS = tuple(
+    replace(item, text_default=seed_text('ui.' + item.text_key, 'ru'))
+    for item in HISTORICAL_USER_UI_TEXT_DEFINITIONS
+) + LOCALIZED_USER_UI_TEXT_DEFINITIONS
 
 USER_UI_TEXT_CATALOG = {
     definition.text_key: definition for definition in USER_UI_TEXT_DEFINITIONS
@@ -350,8 +350,8 @@ USER_UI_TEXT_CATALOG = {
 if len(USER_UI_TEXT_CATALOG) != len(USER_UI_TEXT_DEFINITIONS):
     raise RuntimeError("Duplicate text_key in USER_UI_TEXT_DEFINITIONS")
 
-if len(USER_UI_TEXT_CATALOG) != 50:
-    raise RuntimeError("The core user UI text catalog must contain exactly 50 entries")
+if len(HISTORICAL_USER_UI_TEXT_DEFINITIONS) != 50:
+    raise RuntimeError("The historical v132 UI catalog must contain exactly 50 entries")
 
 
 __all__ = [

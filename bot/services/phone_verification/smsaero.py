@@ -1,4 +1,6 @@
 """SMS Aero SMS delivery and operator-owned Mobile ID confirmation."""
+
+from localization import text as _tr
 import aiohttp
 
 from .http import InvalidProviderCode, ProviderResult, failed_response, post, request_id
@@ -51,7 +53,7 @@ async def verify_mobile(*, configuration: dict, phone: str, identifier: str, cod
 async def send_sms(*, configuration: dict, phone: str, code: str, title: str, **_) -> ProviderResult:
     status, result = await _request(configuration, 'sms/send',
         {'number': phone.lstrip('+'), 'sign': configuration['smsaero_sms_sign'],
-         'text': f'{title}: код подтверждения {code}. Никому не сообщайте код.'})
+         'text': _tr('smsaero.send_sms.1', p0=f'{title}', p1=f'{code}')})
     failure = failed_response(status, result)
     if failure is not None:
         return failure

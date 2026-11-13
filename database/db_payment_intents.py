@@ -1,6 +1,8 @@
 """Persistent storage for core-owned payment intents and fulfillment effects."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 import sqlite3
 from collections.abc import Mapping
@@ -1000,7 +1002,7 @@ def fulfill_balance_topup_once(
                 operation_currency,
                 before,
                 after,
-                'Пополнение баланса по оплаченному счёту',
+                _tr('db_payment_intents.fulfill_balance_topup_once.1'),
                 str(order_id),
                 _json_object({
                     'base_currency': operation_currency,

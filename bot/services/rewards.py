@@ -1,6 +1,8 @@
 """Domain rewards applied by the kernel."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import logging
 from typing import Any
 
@@ -170,13 +172,13 @@ async def grant_days_to_first_active_key(
 
 def _positive_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f'{field} должен быть положительным integer')
+        raise ValueError(_tr('rewards.positive_int.1', p0=f'{field}'))
     return int(value)
 
 
 def _required_text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f'{field} должен быть непустой строкой')
+        raise ValueError(_tr('rewards.required_text.1', p0=f'{field}'))
     return value.strip()
 
 

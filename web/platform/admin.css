@@ -16,7 +16,7 @@
 .admin-preview-toggle[aria-checked="true"] .admin-preview-switch { background: var(--accent); border-color: var(--accent); }
 .admin-preview-toggle[aria-checked="true"] .admin-preview-switch > span { background: var(--on-accent); transform: translateX(14px); }
 .system-ui .admin-editor-page { display: block; max-width: 100%; min-height: 24px; font-size: .875rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.admin-editor-open { text-align: left; border: 0; background: transparent; padding: 0; }
+.admin-editor-open { text-align: start; border: 0; background: transparent; padding: 0; }
 .admin-editor-version { display: flex; align-items: center; flex-wrap: wrap; gap: 0 4px; font-size: .75rem; color: var(--muted); }
 .admin-editor-candidate { display: inline-flex; align-items: center; gap: 4px; }
 .admin-editor-draft { background: var(--warning-tint); color: var(--warning); border-radius: 5px; padding: 0 5px; }
@@ -26,7 +26,7 @@
 .admin-icon svg { width: 21px; height: 21px; }
 .admin-editor-connection { flex: 0 0 48px; }
 .system-ui .admin-connection-icon { display: flex; align-items: center; justify-content: center; color: var(--warning); background: transparent; border: 0; box-shadow: none; cursor: pointer; }
-.admin-connection-tooltip { position: absolute; z-index: 4; right: 12px; bottom: calc(100% + 8px); width: 280px; max-width: calc(100% - 24px); padding: 10px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 16px #0002; font-size: .875rem; overflow-wrap: anywhere; }
+.admin-connection-tooltip { position: absolute; z-index: 4; inset-inline-end: 12px; bottom: calc(100% + 8px); width: 280px; max-width: calc(100% - 24px); padding: 10px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 16px #0002; font-size: .875rem; overflow-wrap: anywhere; }
 .admin-editor--expanded .admin-connection-tooltip { top: var(--admin-editor-header-height, 64px); bottom: auto; }
 .admin-editor-content { padding-inline: 16px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
 .admin-editor-content p { margin-block: 8px; }
@@ -44,7 +44,7 @@
 .admin-editor-task, .admin-editor-apply { padding-block: 4px 12px; }
 .admin-editor-apply { display: flex; justify-content: flex-end; }
 .admin-editor-apply .button { min-height: 48px; padding: 8px 18px; }
-.admin-editor-error { margin-block: 8px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--warning); border-radius: 10px; background: var(--warning-tint); font-size: .875rem; white-space: pre-wrap; }
+.admin-editor-error { margin-block: 8px; padding: 10px 12px; border: 1px solid var(--line); border-inline-start: 3px solid var(--warning); border-radius: 10px; background: var(--warning-tint); font-size: .875rem; white-space: pre-wrap; }
 .admin-editor-error .button { background: var(--surface); color: var(--text); }
 .admin-editor-compose { padding: 6px 10px 8px; flex-shrink: 0; min-width: 0; max-height: max(48px, calc(var(--admin-viewport-height, 100dvh) - var(--admin-safe-top, 0px) - var(--admin-safe-bottom, 0px) - var(--admin-editor-header-height, 64px) - 16px)); overflow-y: auto; overscroll-behavior: contain; }
 .admin-editor-input-well { padding: 8px 6px 4px; border: 1px solid var(--line); border-radius: 14px; background: var(--canvas); }
@@ -67,12 +67,12 @@
 .admin-voice-wave { display: flex; flex: 1; min-width: 0; height: 32px; align-items: center; justify-content: center; gap: 2px; overflow: hidden; color: var(--muted); }
 .admin-voice-wave i { display: block; flex: 1; min-width: 1px; max-width: 4px; border-radius: 2px; background: currentColor; }
 .admin-voice-wave i.played { background: var(--accent); }
-.admin-record-dot { width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
+.admin-record-dot { width: 8px; height: 8px; margin-inline-start: 6px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
 .admin-voice-caption { font-size: .75rem; color: var(--muted); margin: 4px 6px; }
 .admin-voice-request { display: flex; align-items: center; gap: 8px; justify-content: space-between; font-size: .875rem; }
 .admin-editor-input-error { margin: 6px 4px; color: var(--danger); font-size: .875rem; }
 .admin-editor-input-error .button { color: var(--text); }
-.admin-editor-menu { position: absolute; z-index: 3; right: 12px; bottom: 74px; width: max-content; max-width: calc(100% - 24px); max-height: min(60dvh, 340px); overflow-y: auto; padding: 6px; display: grid; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 4px 24px #0003; }
+.admin-editor-menu { position: absolute; z-index: 3; inset-inline-end: 12px; bottom: 74px; width: max-content; max-width: calc(100% - 24px); max-height: min(60dvh, 340px); overflow-y: auto; padding: 6px; display: grid; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 4px 24px #0003; }
 .admin-editor-menu .button { justify-content: flex-start; min-height: 48px; padding: 8px 12px; font-size: .875rem; }
 .admin-settings-backdrop { position: absolute; inset: var(--admin-safe-top) 0 0; display: flex; align-items: flex-end; justify-content: center; background: #0007; }
 .admin-settings { width: 100%; max-width: 760px; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; background: var(--surface); border-radius: 18px 18px 0 0; box-shadow: 0 -8px 24px #0003; padding-bottom: var(--admin-safe-bottom); }
@@ -87,3 +87,5 @@
 .admin-settings-actions svg { flex-shrink: 0; width: 20px; height: 20px; }
 .system-ui .admin-settings-actions .admin-settings-cancel { background: transparent; border-color: var(--muted); }
 @media (max-width: 480px) { .admin-preview-fields { grid-template-columns: 1fr; gap: 16px; } }
+.system-ui input:is([type="tel"], [type="email"], [type="url"], [type="number"]),
+.system-ui code, .system-ui pre { direction: ltr; unicode-bidi: isolate; }

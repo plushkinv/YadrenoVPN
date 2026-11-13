@@ -2,7 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { pageTitles } from './page-titles.mjs';
 import { readCustomization } from './customization.mjs';
 import { developmentApplication } from './platform/development.mjs';
 
@@ -14,6 +15,7 @@ const output = process.env.YADRENO_UI_OUT ?? resolve(platform, '../tests/.tmp/we
 const sdk = [
   ['@ui/context', 'runtime/context.tsx'], ['@ui/client', 'api/client.ts'], ['@ui/contracts', 'api/contracts.ts'],
   ['@ui/environment', 'runtime/environment.ts'], ['@ui/storage', 'runtime/application-storage.ts'],
+  ['@ui/i18n', 'i18n/catalog.ts'],
 ].map(([find, name]) => ({ find, replacement: resolve(platform, 'platform', name) }));
 
 export default defineConfig({
@@ -30,11 +32,8 @@ export default defineConfig({
       const collect = (item: any) => { for (const key of item.imports ?? []) collect(manifest[key]); for (const file of item.css ?? []) styles.add(file); };
       collect(entry);
       const registry = JSON.parse(readFileSync(resolve(source, 'src/runtime/view-registry.json'), 'utf8'));
-      const labelPath = resolve(source, 'src/i18n/app.ts');
-      const labels = existsSync(labelPath) ? readFileSync(labelPath, 'utf8') : '';
-      const pages = registry.pages.map((page: any) => ({ id: page.id,
-        title: page.title ?? (page.title_key ? new RegExp('\\b' + page.title_key + ":\\s*'([^']*)'").exec(labels)?.[1] : undefined) ?? page.id,
-        ...(page.preview_parameter ? { preview_parameter: page.preview_parameter } : {}) }));
+      const { pages, localized } = pageTitles(source, registry);
+      if (localized) writeFileSync(resolve(output, 'page-titles.json'), JSON.stringify(localized));
       writeFileSync(resolve(output, 'application.json'), JSON.stringify({ format_version: 1, entry: entry.file, styles: [...styles], pages }));
       unlinkSync(path);
     },

@@ -1,6 +1,8 @@
 """Administrator backup creation and confirmation-driven restoration."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import logging
 
@@ -22,10 +24,10 @@ _restore_lock = asyncio.Lock()
 
 async def _authorized(callback: CallbackQuery) -> bool:
     if not is_admin(callback.from_user.id):
-        await callback.answer('Доступно только администратору', show_alert=True)
+        await callback.answer(_tr('backups.authorized.1'), show_alert=True)
         return False
     if not isinstance(callback.message, Message):
-        await callback.answer('Сообщение недоступно. Откройте чат с ботом.', show_alert=True)
+        await callback.answer(_tr('backups.authorized.2'), show_alert=True)
         return False
     return True
 
@@ -35,33 +37,29 @@ async def create_backup(callback: CallbackQuery, bot: Bot) -> None:
     if not await _authorized(callback):
         return
     if _creation_lock.locked():
-        await callback.answer('Бэкап уже создаётся', show_alert=True)
+        await callback.answer(_tr('backups.create_backup.1'), show_alert=True)
         return
     async with _creation_lock:
         await callback.answer()
-        status = await safe_edit_or_send(callback.message, '📦 <b>Создание бэкапа</b>\n\nСобираю данные…')
+        status = await safe_edit_or_send(callback.message, _tr('backups.create_backup.2'))
         delivered = await send_backup_archive(bot, recipient_id=callback.from_user.id)
-        text = ('📦 <b>Бэкап создан</b>\n\nАрхив отправлен вам в личный чат.' if delivered else
-                '❌ <b>Бэкап не отправлен</b>\n\nНе удалось создать или отправить архив. Подробности в логах.')
+        text = (_tr('backups.create_backup.3') if delivered else
+                _tr('backups.create_backup.4'))
         await safe_edit_or_send(status, text, reply_markup=backup_settings_kb())
 
 
 def _preview(job: dict) -> str:
-    composition = ['• База бота: пользователи, настройки, шаблоны, страницы и данные расширений.']
+    composition = [_tr('backups.preview.1')]
     if 'custom_extensions' in job['trees']:
-        composition.append('• Файлы расширений.')
+        composition.append(_tr('backups.preview.2'))
     if 'custom_web' in job['trees'] or 'web_runtime' in job['trees']:
-        composition.append('• Файлы веб-интерфейса и Mini App.')
+        composition.append(_tr('backups.preview.3'))
     if job['signing_key']:
-        composition.append('• Ключ подписи Mini App и его публичная идентичность.')
-    text = (f'📥 <b>Восстановление бэкапа</b>\n\nАрхив: <code>{escape_html(job["filename"])}</code>\n\n'
-            'Будут восстановлены:\n' + '\n'.join(composition))
+        composition.append(_tr('backups.preview.4'))
+    text = (_tr('backups.preview.5', p0=f"{escape_html(job['filename'])}") + '\n'.join(composition))
     if job['source_schema'] != job['schema']:
-        text += '\n\nКопия базы обновлена до версии этой установки.'
-    text += ('\n\n⚠️ Текущие данные из перечисленных разделов будут заменены. '
-             'Изменения после создания бэкапа будут потеряны. Бот перезапустится.\n\n'
-             'Копии VPN-панелей останутся в архиве. Код и config.py сохранятся. '
-             'После переноса подключите домен и HTTPS через установщик.')
+        text += _tr('backups.preview.6')
+    text += (_tr('backups.preview.7'))
     return text
 
 
@@ -72,16 +70,16 @@ async def download_backup(callback: CallbackQuery, bot: Bot) -> None:
     document = callback.message.document
     sender = callback.message.from_user
     if document is None or sender is None or sender.id != bot.id:
-        await callback.answer('Откройте сообщение с архивом, отправленное этим ботом.', show_alert=True)
+        await callback.answer(_tr('backups.download_backup.1'), show_alert=True)
         return
     if _restore_lock.locked():
-        await callback.answer('Бэкап уже обрабатывается. Дождитесь результата.', show_alert=True)
+        await callback.answer(_tr('backups.download_backup.2'), show_alert=True)
         return
     async with _restore_lock:
         await callback.answer()
         # Keep the original Telegram document and its reusable file_id intact.
         status = await safe_edit_or_send(
-            callback.message, '📥 <b>Загрузка бэкапа</b>\n\nСкачиваю и проверяю архив…', force_new=True,
+            callback.message, _tr('backups.download_backup.3'), force_new=True,
         )
         folder = None
         downloaded = False
@@ -99,10 +97,9 @@ async def download_backup(callback: CallbackQuery, bot: Bot) -> None:
             logger.exception('Cannot prepare Telegram backup')
             if folder is not None:
                 backup_restore.fail_job(folder, exc)
-            text = ('❌ <b>Не удалось подготовить бэкап</b>\n\n' + escape_html(str(exc)[:1000]) if downloaded else
-                    '❌ <b>Не удалось скачать бэкап</b>\n\nTelegram не выдал файл. '
-                    'Стандартный Bot API позволяет скачивать файлы до 20 МБ.')
-            text += '\n\nРабочие данные не изменены.'
+            text = (_tr('backups.download_backup.4') + escape_html(str(exc)[:1000]) if downloaded else
+                    _tr('backups.download_backup.5'))
+            text += _tr('backups.download_backup.6')
             await safe_edit_or_send(status, text, reply_markup=backup_settings_kb())
             return
         await safe_edit_or_send(status, _preview(job), reply_markup=backup_confirmation_kb(job_id))
@@ -113,7 +110,7 @@ async def confirm_backup(callback: CallbackQuery) -> None:
     if not await _authorized(callback):
         return
     if _restore_lock.locked():
-        await callback.answer('Бэкап уже обрабатывается. Дождитесь результата.', show_alert=True)
+        await callback.answer(_tr('backups.download_backup.2'), show_alert=True)
         return
     async with _restore_lock:
         await callback.answer()
@@ -123,11 +120,11 @@ async def confirm_backup(callback: CallbackQuery) -> None:
         except Exception as exc:
             logger.exception('Cannot schedule backup restore')
             await safe_edit_or_send(callback.message,
-                '❌ <b>Восстановление не запущено</b>\n\n' + escape_html(str(exc)[:1000]),
+                _tr('backups.confirm_backup.1') + escape_html(str(exc)[:1000]),
                 reply_markup=backup_settings_kb())
             return
         await safe_edit_or_send(callback.message,
-            '📥 <b>Восстановление запущено</b>\n\nБот перезапустится. Сообщу результат после проверки запуска.')
+            _tr('backups.confirm_backup.2'))
 
 
 @router.callback_query(F.data.startswith('backup_cancel:'))
@@ -135,7 +132,7 @@ async def cancel_backup(callback: CallbackQuery) -> None:
     if not await _authorized(callback):
         return
     if _restore_lock.locked():
-        await callback.answer('Дождитесь завершения текущей операции.', show_alert=True)
+        await callback.answer(_tr('backups.cancel_backup.1'), show_alert=True)
         return
     async with _restore_lock:
         await callback.answer()
@@ -143,9 +140,9 @@ async def cancel_backup(callback: CallbackQuery) -> None:
             backup_restore.cancel_restore(callback.data.split(':', 1)[1], callback.from_user.id)
         except Exception as exc:
             await safe_edit_or_send(callback.message,
-                '⚠️ <b>Запрос уже обработан</b>\n\n' + escape_html(str(exc)[:1000]),
+                _tr('backups.cancel_backup.2') + escape_html(str(exc)[:1000]),
                 reply_markup=backup_settings_kb())
             return
         await safe_edit_or_send(callback.message,
-            '📥 <b>Восстановление отменено</b>\n\nРабочие данные не изменены. Архив сохранён.',
+            _tr('backups.cancel_backup.3'),
             reply_markup=backup_settings_kb())

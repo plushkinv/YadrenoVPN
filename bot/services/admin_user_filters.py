@@ -1,19 +1,21 @@
 """Administrator copy and visibility for the user-directory filter contract."""
+
+from localization import text as _tr
 from database.user_filters import (
     USER_CHANNEL_FILTERS, USER_FILTER_KEYS, normalize_user_filters,
 )
 
 
 USER_FILTER_LABELS = {
-    'active': 'С активными ключами',
-    'no_keys': 'Без ключей',
-    'never_paid': 'Никогда не покупали',
-    'expired': 'Ключ истёк',
-    'used_trial': 'Пробный период',
-    'banned': 'Забаненные',
-    'bot': 'В боте',
-    'site': 'На сайте',
-    'bot_blocked': 'Заблокировали бота',
+    'active': _tr('admin_user_filters.module.1'),
+    'no_keys': _tr('admin_user_filters.module.2'),
+    'never_paid': _tr('admin_user_filters.module.3'),
+    'expired': _tr('admin_user_filters.module.4'),
+    'used_trial': _tr('admin_user_filters.module.5'),
+    'banned': _tr('admin_user_filters.module.6'),
+    'bot': _tr('admin_user_filters.module.7'),
+    'site': _tr('admin_user_filters.module.8'),
+    'bot_blocked': _tr('admin_user_filters.module.9'),
 }
 
 
@@ -31,13 +33,13 @@ def visible_user_filters(value: object, web_enabled: bool) -> tuple[str, ...]:
 
 def user_filter_status(value: object) -> str:
     labels = [USER_FILTER_LABELS[key] for key in normalize_user_filters(value)]
-    return 'Фильтры (И): ' + ' И '.join(labels) if labels else 'Фильтры не выбраны — все пользователи'
+    return _tr('admin_user_filters.user_filter_status.1') + _tr('admin_user_filters.user_filter_status.2').join(labels) if labels else _tr('admin_user_filters.user_filter_status.3')
 
 
 def users_menu_text(stats: dict[str, int], *, web_enabled: bool) -> str:
     lines = [
-        '👥 <b>Пользователи</b>', '', '📊 <b>Статистика:</b>',
-        f"👤 Всего: <b>{stats['total']}</b>",
+        _tr('admin_user_filters.users_menu_text.1'), '', _tr('servers.build_server_view.18'),
+        _tr('admin_user_filters.users_menu_text.2', p0=f"{stats['total']}"),
     ]
     lines.extend(
         f'{USER_FILTER_LABELS[key]}: <b>{stats[key]}</b>'

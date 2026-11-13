@@ -45,9 +45,10 @@ def source_version(root, *, include_commit=True):
                 for name in subdirs:
                     local_path(root, (Path(directory) / name).relative_to(root).as_posix(), hidden=True)
                 names.extend(Path(directory) / name for name in files)
-    names.extend(web / item for item in ('package.json', 'package-lock.json', 'vite.app.config.ts', 'vite.platform.config.ts', 'customization.mjs', 'manifest.json'))
+    names.extend(web / item for item in ('package.json', 'package-lock.json', 'vite.app.config.ts', 'vite.platform.config.ts', 'customization.mjs', 'page-titles.mjs', 'manifest.json'))
     names.extend(web.glob('tsconfig*.json'))
     names.extend(root / 'web_tools' / item for item in ('service_worker.js', 'compatibility.json', 'toolchain.json'))
+    names.append(root / 'locales/languages.json')
     inputs = []
     # Path ordering differs between Windows (case-folded) and POSIX. The shipped
     # source identity uses one explicit portable relative-name order.
@@ -166,7 +167,8 @@ def compile_files(root, runtime, custom, stage, *, build_id, instance_id, toolch
     paths = {key: [str((web / value).resolve()) for value in values] for key, values in paths.items()}
     paths['@ui/*'] = [str(custom / 'src' / '*')]
     for alias, name in {'context': 'runtime/context.tsx', 'client': 'api/client.ts', 'contracts': 'api/contracts.ts',
-                        'environment': 'runtime/environment.ts', 'storage': 'runtime/application-storage.ts'}.items():
+                        'environment': 'runtime/environment.ts', 'storage': 'runtime/application-storage.ts',
+                        'i18n': 'i18n/catalog.ts'}.items():
         paths['@ui/' + alias] = [str(web / 'platform' / name)]
     paths['@application/*'] = [str(custom / 'src' / '*')]
     # Stock web/ also contains Node-only build configs, outside its UI source tree.

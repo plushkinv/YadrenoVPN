@@ -33,7 +33,7 @@ def public_settings():
             values[key] = validate_setting(key, values[key])
         except CoreError:
             values[key] = DEFAULTS[key]
-    return {**values, **presentation(),
+    return {**values, **presentation(), 'language': db.get_installation_language(),
             'sync_interval_seconds': int(values['sync_interval_seconds'])}
 
 

@@ -1,4 +1,6 @@
 """Private setup dialogs for the three built-in phone verification methods."""
+
+from localization import text as _tr
 from aiogram import F, Router
 
 from bot.keyboards.admin import back_and_home_kb
@@ -16,55 +18,37 @@ from database import requests as db
 router = Router()
 _REGISTRATION = {
     'ucaller': (
-        'Зарегистрируйтесь в ⭐ Ucaller по реферальной ссылке автора:\n'
-        '<a href="https://ucaller.ru/?invite=26951">https://ucaller.ru/?invite=26951</a>.'
+        _tr('web_verification.module.1')
     ),
-    'smsaero': 'Зарегистрируйтесь на <a href="https://smsaero.ru/">smsaero.ru</a> и войдите в личный кабинет.',
+    'smsaero': _tr('web_verification.module.2'),
 }
 _INSTRUCTIONS = {
     'ucaller': (
-        '⭐ <b>Основной вариант — звонки Ucaller</b>\n\n' + _REGISTRATION['ucaller'] + '\n'
-        'В разделе «Мои сервисы» создайте сервис и перенесите его идентификатор и секретный ключ сюда.\n\n'
-        'Пользователь вводит последние четыре цифры номера входящего звонка. Отвечать не нужно. '
-        'Это бюджетный вариант подтверждения; актуальную стоимость проверьте в кабинете Ucaller.'
+        _tr('web_verification.module.3') + _REGISTRATION['ucaller'] + _tr('web_verification.module.4')
     ),
     'smsaero_mobile': (
-        '📱 <b>Мобильная авторизация SMS Aero</b>\n\n' + _REGISTRATION['smsaero'] + '\n'
-        'API-ключ находится в «Настройки → API и SMPP». Подключите активное имя отправителя для мобильной авторизации.\n\n'
-        'Укажите email, API-ключ и это имя. Пользователь подтверждает SIM-PUSH; если он недоступен, '
-        'SMS Aero отправляет SMS-код. Адрес обратного уведомления настраивается автоматически после подключения сайта.\n\n'
-        'Email и API-ключ общие с обычными SMS; имя отправителя задаётся отдельно.'
+        _tr('web_verification.module.5') + _REGISTRATION['smsaero'] + _tr('web_verification.module.6')
     ),
     'smsaero_sms': (
-        '💬 <b>SMS-коды через SMS Aero</b>\n\n' + _REGISTRATION['smsaero'] + '\n'
-        'API-ключ находится в «Настройки → API и SMPP». Укажите email, API-ключ и одобренное имя отправителя.\n\n'
-        'Для своевременной доставки кодов отключите ручную модерацию, оформив договор в кабинете SMS Aero. '
-        'Название сайта включается в текст SMS.\n\n'
-        'Email и API-ключ общие с мобильной авторизацией; имя отправителя задаётся отдельно.'
+        _tr('web_verification.module.7') + _REGISTRATION['smsaero'] + _tr('web_verification.module.8')
     ),
 }
 _FIELD_INSTRUCTIONS = {
     'ucaller_service_id': (
-        'Откройте «Мои сервисы», создайте сервис или выберите существующий '
-        'и скопируйте его идентификатор (ID).'
+        _tr('web_verification.module.9')
     ),
-    'ucaller_secret_key': 'Откройте нужный сервис в разделе «Мои сервисы» и скопируйте его секретный ключ.',
+    'ucaller_secret_key': _tr('web_verification.module.10'),
     'smsaero_email': (
-        'Укажите email, с которым вы входите в этот кабинет SMS Aero. '
-        'Логин общий для мобильной авторизации и обычных SMS.'
+        _tr('web_verification.module.11')
     ),
     'smsaero_api_key': (
-        'Откройте «Настройки → API и SMPP» и скопируйте API-ключ. '
-        'Ключ общий для мобильной авторизации и обычных SMS.'
+        _tr('web_verification.module.12')
     ),
     'smsaero_mobile_sign': (
-        'В кабинете SMS Aero подключите имя отправителя для мобильной авторизации. '
-        'После одобрения укажите его точно так же, как в кабинете. '
-        'Для обычных SMS имя задаётся отдельно.'
+        _tr('web_verification.module.13')
     ),
     'smsaero_sms_sign': (
-        'В кабинете SMS Aero выберите одобренное имя отправителя обычных SMS и скопируйте его сюда. '
-        'Для мобильной авторизации имя задаётся отдельно.'
+        _tr('web_verification.module.14')
     ),
 }
 
@@ -72,7 +56,7 @@ _FIELD_INSTRUCTIONS = {
 async def _allowed(callback):
     if is_admin(callback.from_user.id):
         return True
-    await callback.answer('⛔ Доступ запрещён', show_alert=True)
+    await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
     return False
 
 
@@ -80,10 +64,7 @@ def _prompt(field):
     emoji, label = FIELD_LABELS[field].split(' ', 1)
     provider = field.split('_', 1)[0]
     return (
-        f'{emoji} <b>{escape_html(label)}</b>\n\n'
-        f'{_REGISTRATION[provider]}\n\n{_FIELD_INSTRUCTIONS[field]}\n\n'
-        'Введите значение. Чтобы удалить его, отправьте «-».\n'
-        'Без полного набора реквизитов подтверждение телефона не работает.'
+        _tr('web_verification.prompt.1', p0=f'{emoji}', p1=f'{escape_html(label)}', p2=f'{_REGISTRATION[provider]}', p3=f'{_FIELD_INSTRUCTIONS[field]}')
     )
 
 
@@ -101,11 +82,11 @@ async def switch_verification(callback, state):
             raise ValueError()
         set_verification_option(name, value)
     except (ValueError, CoreError):
-        await callback.answer('Не удалось изменить настройку.', show_alert=True)
+        await callback.answer(_tr('web_verification.switch_verification.1'), show_alert=True)
         return
     from bot.handlers.admin.web import _screen
     await _screen(callback, state)
-    await callback.answer('Настройка применена')
+    await callback.answer(_tr('web.switch_web.2'))
 
 
 @router.callback_query(F.data == 'admin_web_verification_config')
@@ -120,10 +101,10 @@ async def configuration(callback, state):
         await callback.answer()
         return
     lines = [_INSTRUCTIONS[method], '',
-             'Подтверждение работает.' if settings['available'] else 'Подтверждение пока выключено: заполните настройки.', '']
+             _tr('web_verification.configuration.1') if settings['available'] else _tr('web_verification.configuration.2'), '']
     for field in METHOD_FIELDS[method]:
         value = db.get_setting(PREFIX + field, '') or ''
-        shown = ('задан' if value else 'не задан') if field in SECRET_FIELDS else value or 'не задано'
+        shown = (_tr('web_verification.configuration.3') if value else _tr('broadcast.render_broadcast_menu.1')) if field in SECRET_FIELDS else value or _tr('web_verification.configuration.4')
         lines.append(FIELD_LABELS[field] + ': ' + escape_html(shown))
     await state.clear()
     await render_admin_dialog(callback.message, state, '\n'.join(lines), reply_markup=verification_configuration_kb(method))
@@ -137,7 +118,7 @@ async def edit_field(callback, state):
     field = callback.data.split(':', 1)[1]
     settings = admin_verification_settings()
     if not settings['enabled'] or field not in METHOD_FIELDS.get(settings['method'], ()):
-        await callback.answer('Откройте текущие настройки службы.', show_alert=True)
+        await callback.answer(_tr('web_verification.edit_field.1'), show_alert=True)
         return
     await render_admin_dialog(callback.message, state, _prompt(field),
                               reply_markup=back_and_home_kb('admin_web_verification_config'))
@@ -159,13 +140,13 @@ async def save_field(message, state):
     try:
         set_verification_option(field, value)
     except CoreError:
-        await render_admin_dialog_from_input(message, state, '❌ Некорректное значение.\n\n' + _prompt(field),
+        await render_admin_dialog_from_input(message, state, _tr('web_verification.save_field.1') + _prompt(field),
                                             reply_markup=back_and_home_kb('admin_web_verification_config'))
         return
     current = db.get_setting(PREFIX + field, '') or ''
     active = admin_verification_settings()['available']
-    text = ('✅ <b>Настройка сохранена</b>' if current != old else '✅ <b>Настройка не изменилась</b>') + '\n\n'
-    text += ('Значение задано.' if current else 'Значение удалено.') if field in SECRET_FIELDS else escape_html(current or 'Значение удалено.')
-    text += '\n\n' + ('Подтверждение телефона работает.' if active else 'Подтверждение телефона пока выключено.')
+    text = (_tr('web_verification.save_field.2') if current != old else _tr('web_verification.save_field.3')) + '\n\n'
+    text += (_tr('web_verification.save_field.4') if current else _tr('web_verification.save_field.5')) if field in SECRET_FIELDS else escape_html(current or _tr('web_verification.save_field.5'))
+    text += '\n\n' + (_tr('web_verification.save_field.6') if active else _tr('web_verification.save_field.7'))
     await render_admin_dialog_from_input(message, state, text, reply_markup=back_and_home_kb('admin_web_verification_config'))
     await state.clear()

@@ -7,6 +7,10 @@ Processes:
 - Setting up crypto payments
 - Editing crypto settings
 """
+
+from localization import text as _tr
+from core.payment_provider_specs import INTERNATIONAL_PROVIDERS, REGIONAL_CURRENCY_EXPONENTS
+from database.requests import is_payment_admin_visible, is_gateway_enabled
 import logging
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from aiogram import Router, F
@@ -111,7 +115,7 @@ def parse_item_id_from_url(url: str) -> str:
 async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
     """Shows the main screen of the payment section."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.payments_menu)
@@ -127,59 +131,25 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
     cardlink = is_cardlink_enabled()
 
     text = (
-        "💳 <b>Настройки оплаты</b>\n\n"
-        "Здесь можно включить/выключить способы оплаты и настроить их.\n\n"
+        _tr('payments.show_payments_menu.1')
     )
 
-    if stars:
-        text += "🟢 <b>Telegram Stars</b>\n"
-    else:
-        text += "⚪ <b>Telegram Stars</b>\n"
-
-    if cryptobot:
-        text += "🟢 <b>Crypto Pay (@CryptoBot)</b>\n"
-    else:
-        text += "⚪ <b>Crypto Pay (@CryptoBot)</b>\n"
-
-    if crypto:
-        item_url = get_setting('crypto_item_url', '')
-        if item_url:
-            text += f"🟢 <b>Крипто (@Ya_SellerBot)</b>\n<a href=\"{item_url}\">Ссылка на товар</a>\n"
-        else:
-            text += "🟢 <b>Крипто (@Ya_SellerBot)</b>\n"
-    else:
-        text += "⚪ <b>Крипто (@Ya_SellerBot)</b>\n"
-
-    if cards:
-        text += "🟢 <b>TG payments</b>\n"
-    else:
-        text += "⚪ <b>TG payments</b>\n"
-
-    if qr:
-        shop_id = get_setting('yookassa_shop_id', '')
-        text += f"🟢 <b>ЮКасса</b> | Shop ID: <code>{shop_id or '—'}</code>\n"
-    else:
-        text += "⚪ <b>ЮКасса</b>\n"
-
-    if wata:
-        text += "🟢 <b>WATA</b>\n"
-    else:
-        text += "⚪ <b>WATA</b>\n"
-
-    if platega:
-        text += "🟢 <b>Platega</b>\n"
-    else:
-        text += "⚪ <b>Platega</b>\n"
-
-    if cardlink:
-        text += "🟢 <b>Cardlink</b>\n"
-    else:
-        text += "⚪ <b>Cardlink</b>\n"
-
-    if demo:
-        text += "🟢 <b>Демо оплата (РФ)</b>\n"
-    else:
-        text += "⚪ <b>Демо оплата (РФ)</b>\n"
+    rows = [
+        ('stars', stars, 'Telegram Stars'), ('cryptobot', cryptobot, 'Crypto Pay (@CryptoBot)'),
+        ('crypto', crypto, 'Ya.Seller'), ('cards', cards, 'TG Payments'),
+        ('yookassa_qr', qr, _tr('payment_provider_adapters.module.1')),
+        ('wata', wata, 'WATA'), ('platega', platega, 'Platega'), ('cardlink', cardlink, 'Cardlink'),
+        ('demo', demo, _tr('payment_provider_adapters.module.2')),
+        *((pid, is_gateway_enabled(pid), title) for pid, (title, _, _) in INTERNATIONAL_PROVIDERS.items()),
+    ]
+    for pid, enabled, title in rows:
+        if is_payment_admin_visible(pid):
+            if pid == 'crypto' and enabled and get_setting('crypto_item_url', ''):
+                text += _tr('payments.show_payments_menu.2', p0=escape_html(get_setting('crypto_item_url', '')))
+            elif pid == 'yookassa_qr' and enabled:
+                text += _tr('payments.show_payments_menu.5', p0=escape_html(get_setting('yookassa_shop_id', '') or '—'))
+            else:
+                text += f'{"🟢" if enabled else "⚪"} <b>{escape_html(title)}</b>\n'
 
     notify = get_setting('payment_notifications_enabled', '0') == '1'
 
@@ -205,7 +175,7 @@ async def show_payments_menu(callback: CallbackQuery, state: FSMContext):
 async def show_payment_rates(callback: CallbackQuery, state: FSMContext):
     """Shows the global base currency and fixed rates for new invoices."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await state.set_state(AdminStates.payments_menu)
     await _render_payment_rates(callback.message)
@@ -216,10 +186,11 @@ async def show_payment_rates(callback: CallbackQuery, state: FSMContext):
 async def edit_payment_rate(callback: CallbackQuery, state: FSMContext):
     """Starts one Decimal rate edit while keeping the source message id."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     target_currency = callback.data.split(':', 1)[1].upper()
     labels = {
+        **{currency: currency for currency in REGIONAL_CURRENCY_EXPONENTS},
         'RUB': 'RUB',
         'USD': 'USD',
         'USDT': 'USDT',
@@ -227,7 +198,7 @@ async def edit_payment_rate(callback: CallbackQuery, state: FSMContext):
     }
     base_currency = get_base_currency()
     if target_currency not in labels or target_currency == base_currency:
-        await callback.answer('⚠️ Неизвестный курс', show_alert=True)
+        await callback.answer(_tr('payments.edit_payment_rate.1'), show_alert=True)
         return
     _RATE_MESSAGES[callback.from_user.id] = callback.message
     await state.set_state(AdminStates.payment_rate_value)
@@ -239,10 +210,7 @@ async def edit_payment_rate(callback: CallbackQuery, state: FSMContext):
     await safe_edit_or_send(
         callback.message,
         (
-            f"💱 <b>Курс {labels[target_currency]}</b>\n\n"
-            f"Введите, сколько {labels[target_currency]} приходится на 1 {base_currency}.\n"
-            "Можно использовать точку или запятую.\n\n"
-            "Например: <code>1,05</code>"
+            _tr('payments.edit_payment_rate.2', p0=f'{labels[target_currency]}', p1=f'{labels[target_currency]}', p2=f'{base_currency}')
         ),
         reply_markup=back_and_home_kb('admin_payment_rates'),
     )
@@ -267,8 +235,7 @@ async def payment_rate_value_input(message: Message, state: FSMContext):
         await safe_edit_or_send(
             source_message or message,
             (
-                "⚠️ <b>Некорректный курс</b>\n\n"
-                "Введите положительное число, например <code>1,05</code>."
+                _tr('payments.payment_rate_value_input.1')
             ),
             reply_markup=back_and_home_kb('admin_payment_rates'),
             force_new=source_message is None,
@@ -282,25 +249,26 @@ async def payment_rate_value_input(message: Message, state: FSMContext):
 
 async def _render_payment_rates(message: Message, *, force_new: bool = False) -> None:
     base = get_base_currency()
-    rows = [f"💵 Базовая валюта: <code>{base}</code>", ""]
+    rows = [_tr('payments.render_payment_rates.1', p0=f'{base}'), ""]
     for target, icon, label in (
         ('RUB', '₽', 'RUB'),
         ('USD', '💵', 'USD'),
         ('USDT', '🪙', 'USDT'),
         ('XTR', '⭐', 'Stars'),
+        *((currency, '💱', currency) for currency in REGIONAL_CURRENCY_EXPONENTS),
     ):
         if target == base:
             continue
         rate = get_currency_rate(target, base_currency=base)
         rendered = (
-            escape_html(_format_rate_for_display(rate)) if rate else 'не настроен'
+            escape_html(_format_rate_for_display(rate)) if rate else _tr('payments.render_payment_rates.2')
         )
         rows.append(f"{icon} 1 {base} = <code>{rendered} {label}</code>")
     await safe_edit_or_send(
         message,
-        "💱 <b>Валюта и курсы</b>\n\n"
+        _tr('payments.render_payment_rates.3')
         + "\n".join(rows)
-        + "\n\nНовый курс применяется только к новым счетам. Уже созданные счета не меняются.",
+        + _tr('payments.render_payment_rates.4'),
         reply_markup=payment_rates_kb(base),
         force_new=force_new,
     )
@@ -310,12 +278,12 @@ async def _render_payment_rates(message: Message, *, force_new: bool = False) ->
 async def select_base_currency(callback: CallbackQuery, state: FSMContext):
     """Starts the protected base-currency conversion wizard."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     target = callback.data.split(':', 1)[1].upper()
     source = get_base_currency()
     if target not in {'RUB', 'USD'} or target == source:
-        await callback.answer('⚠️ Некорректная валюта', show_alert=True)
+        await callback.answer(_tr('payments.select_base_currency.1'), show_alert=True)
         return
     _RATE_MESSAGES[callback.from_user.id] = callback.message
     await state.set_state(AdminStates.base_currency_transition_rate)
@@ -326,10 +294,7 @@ async def select_base_currency(callback: CallbackQuery, state: FSMContext):
     await safe_edit_or_send(
         callback.message,
         (
-            f"💵 <b>Переход {source} → {target}</b>\n\n"
-            f"Введите, сколько {source} стоит 1 {target}.\n"
-            f"Пример: <code>1 {target} = 90 {source}</code> — введите <code>90</code>.\n\n"
-            "Перед применением бот покажет точный предварительный расчёт."
+            _tr('payments.select_base_currency.2', p0=f'{source}', p1=f'{target}', p2=f'{source}', p3=f'{target}', p4=f'{target}', p5=f'{source}')
         ),
         reply_markup=base_currency_switch_input_kb(),
     )
@@ -355,8 +320,7 @@ async def base_currency_transition_rate_input(message: Message, state: FSMContex
             pass
         await safe_edit_or_send(
             prompt or message,
-            "⚠️ <b>Некорректный переходный курс</b>\n\n"
-            "Введите положительное число не более 1 000 000.",
+            _tr('payments.base_currency_transition_rate_input.1'),
             reply_markup=base_currency_switch_input_kb(),
             force_new=prompt is None,
         )
@@ -374,25 +338,17 @@ async def base_currency_transition_rate_input(message: Message, state: FSMContex
             f"{format_money_minor(tariff['after_minor'], target)}"
         )
     if len(preview.get('tariffs', [])) > 12:
-        tariff_lines.append(f"• …ещё {len(preview['tariffs']) - 12}")
+        tariff_lines.append(_tr('payments.base_currency_transition_rate_input.2', p0=f"{len(preview['tariffs']) - 12}"))
     blocking = int(preview.get('blocking_intents') or 0)
     warning = (
-        f"\n\n❌ В обработке платежей: <b>{blocking}</b>. Сначала дождитесь их завершения."
+        _tr('payments.base_currency_transition_rate_input.3', p0=f'{blocking}')
         if blocking
         else ''
     )
     text = (
-        f"💵 <b>Предварительный расчёт {source} → {target}</b>\n\n"
-        f"Курс: <code>1 {target} = {escape_html(preview['old_units_per_new'])} {source}</code>\n\n"
-        + ("\n".join(tariff_lines) or "Тарифов нет")
-        + "\n\n"
-        f"👥 Балансы: {format_money_minor(preview['balance_before_minor'], source)} → "
-        f"{format_money_minor(preview['balance_after_minor'], target)}\n"
-        f"🎁 Реферальные накопления: {format_money_minor(preview['referral_before_minor'], source)} → "
-        f"{format_money_minor(preview['referral_after_minor'], target)}\n"
-        f"🧾 Неоплаченных счетов будет отменено: <b>{preview['cancelable_intents']}</b>"
-        f"{warning}\n\n"
-        "Перед переключением будет создана проверенная резервная копия БД."
+        _tr('payments.base_currency_transition_rate_input.4', p0=f'{source}', p1=f'{target}', p2=f'{target}', p3=f"{escape_html(preview['old_units_per_new'])}", p4=f'{source}')
+        + ("\n".join(tariff_lines) or _tr('payments.base_currency_transition_rate_input.5'))
+        + _tr('payments.base_currency_transition_rate_input.6', p0=f"{format_money_minor(preview['balance_before_minor'], source)}", p1=f"{format_money_minor(preview['balance_after_minor'], target)}", p2=f"{format_money_minor(preview['referral_before_minor'], source)}", p3=f"{format_money_minor(preview['referral_after_minor'], target)}", p4=f"{preview['cancelable_intents']}", p5=f'{warning}')
     )
     await state.set_state(AdminStates.base_currency_switch_confirm)
     await state.update_data(base_currency_transition_rate=preview['old_units_per_new'])
@@ -412,7 +368,7 @@ async def base_currency_transition_rate_input(message: Message, state: FSMContex
 async def confirm_base_currency_switch(callback: CallbackQuery, state: FSMContext):
     """Creates a backup and commits the confirmed accounting conversion."""
     if not is_admin(callback.from_user.id):
-        await callback.answer('⛔ Доступ запрещён', show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     data = await state.get_data()
     source = str(data.get('base_currency_from') or '')
@@ -420,7 +376,7 @@ async def confirm_base_currency_switch(callback: CallbackQuery, state: FSMContex
     rate = data.get('base_currency_transition_rate')
     await safe_edit_or_send(
         callback.message,
-        "⏳ <b>Переключаю базовую валюту</b>\n\nСоздаю резервную копию и выполняю пересчёт.",
+        _tr('payments.confirm_base_currency_switch.1'),
         reply_markup=base_currency_switch_input_kb(),
     )
     try:
@@ -433,9 +389,7 @@ async def confirm_base_currency_switch(callback: CallbackQuery, state: FSMContex
     except BaseCurrencySwitchBlocked:
         await safe_edit_or_send(
             callback.message,
-            "⚠️ <b>Переключение отложено</b>\n\n"
-            "Не удалось безопасно завершить проверку незакрытых платежей. "
-            "Базовая валюта не изменена — повторите действие позже.",
+            _tr('payments.confirm_base_currency_switch.2'),
             reply_markup=base_currency_switch_input_kb(),
         )
         await callback.answer()
@@ -444,7 +398,7 @@ async def confirm_base_currency_switch(callback: CallbackQuery, state: FSMContex
         logger.exception('Base currency switch failed: %s', error)
         await safe_edit_or_send(
             callback.message,
-            "❌ <b>Не удалось переключить валюту</b>\n\nИзменения не применены. Подробности записаны в лог.",
+            _tr('payments.confirm_base_currency_switch.3'),
             reply_markup=base_currency_switch_input_kb(),
         )
         await callback.answer()
@@ -454,16 +408,11 @@ async def confirm_base_currency_switch(callback: CallbackQuery, state: FSMContex
     await safe_edit_or_send(
         callback.message,
         (
-            f"✅ <b>Базовая валюта переключена на {target}</b>\n\n"
-            f"📋 Пересчитано тарифов: <b>{result['converted_tariffs']}</b>\n"
-            f"👥 Балансов: <b>{result['converted_balances']}</b>\n"
-            f"🎁 Реферальных строк: <b>{result['converted_referral_rows']}</b>\n"
-            f"🧾 Отменено счетов: <b>{result['canceled_intents']}</b>\n"
-            f"💾 Резервная копия: <code>{escape_html(result['backup_path'])}</code>"
+            _tr('payments.confirm_base_currency_switch.4', p0=f'{target}', p1=f"{result['converted_tariffs']}", p2=f"{result['converted_balances']}", p3=f"{result['converted_referral_rows']}", p4=f"{result['canceled_intents']}", p5=f"{escape_html(result['backup_path'])}")
         ),
         reply_markup=payment_rates_kb(target),
     )
-    await callback.answer('✅ Базовая валюта переключена')
+    await callback.answer(_tr('payments.confirm_base_currency_switch.5'))
 
 
 def _normalize_positive_decimal(value: str) -> str | None:
@@ -502,15 +451,15 @@ def _format_rate_for_display(value: object, *, significant_digits: int = 6) -> s
 async def toggle_payment_notify(callback: CallbackQuery, state: FSMContext):
     """Switch payment notifications."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     current = get_setting('payment_notifications_enabled', '0')
     new_val = '0' if current == '1' else '1'
     set_setting('payment_notifications_enabled', new_val)
     
-    status = "включены 🔔" if new_val == '1' else "выключены"
-    await callback.answer(f"Уведомления об оплатах {status}")
+    status = _tr('payments.toggle_payment_notify.1') if new_val == '1' else _tr('payments.toggle_payment_notify.2')
+    await callback.answer(_tr('payments.toggle_payment_notify.3', p0=f'{status}'))
     
     # Redrawing the payment menu
     await show_payments_menu(callback, state)
@@ -524,14 +473,14 @@ async def toggle_payment_notify(callback: CallbackQuery, state: FSMContext):
 async def toggle_stars(callback: CallbackQuery, state: FSMContext):
     """Switches Telegram Stars."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     current = is_stars_enabled()
     new_value = '0' if current else '1'
     set_setting('stars_enabled', new_value)
     
-    status = "включены ⭐" if new_value == '1' else "выключены"
+    status = _tr('payments.toggle_stars.1') if new_value == '1' else _tr('payments.toggle_payment_notify.2')
     await callback.answer(f"Telegram Stars {status}")
     
     # Refresh the screen
@@ -546,15 +495,15 @@ async def toggle_stars(callback: CallbackQuery, state: FSMContext):
 async def toggle_demo(callback: CallbackQuery, state: FSMContext):
     """Switches demo payment by RF card."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     current = is_demo_payment_enabled()
     new_value = '0' if current else '1'
     set_setting('demo_payment_enabled', new_value)
     
-    status = "включена" if new_value == '1' else "выключена"
-    await callback.answer(f"Демо оплата {status}")
+    status = _tr('payments.toggle_demo.1') if new_value == '1' else _tr('payments.toggle_demo.2')
+    await callback.answer(_tr('payments.toggle_demo.3', p0=f'{status}'))
     
     # Refresh the screen
     await show_payments_menu(callback, state)
@@ -568,7 +517,7 @@ async def toggle_demo(callback: CallbackQuery, state: FSMContext):
 async def toggle_crypto(callback: CallbackQuery, state: FSMContext):
     """Opens the settings or menu for managing crypto payments."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     # Checking if there is data in the database
@@ -594,20 +543,11 @@ async def start_crypto_setup(callback: CallbackQuery, state: FSMContext):
     callback_url = build_telegram_link(bot_username)
     
     instructions = (
-        "1️⃣ В @Ya_SellerBot выберите «Управление» → «Товары» → «Добавить»\n"
-        "2️⃣ Выберите тип позиции: <b>Счет</b>\n\n"
-        "🎬 <b>Актуальная инструкция как добавлять:</b>\n"
-        "<a href=\"https://youtu.be/cK0wX2LKxcs\">Смотреть видео</a>\n\n"
-        "⚠️ <b>ВАЖНО:</b>\n"
-        "• Тип позиции — именно <b>Счет</b>, а НЕ <b>Товар</b>!\n"
-        "• Тарифы добавлять к позиции <b>НЕ нужно</b> — бот сам сформирует сумму оплаты.\n\n"
+        _tr('payments.start_crypto_setup.1')
     )
 
     text = (
-        "💰 <b>Настройка крипто-платежей</b>\n\n"
-        "Для приёма криптовалюты мы используем @Ya_SellerBot.\n\n"
-        f"{instructions}"
-        "🔗 *Теперь скопируйте ссылку на позицию из бота и отправьте её мне:*"
+        _tr('payments.start_crypto_setup.2', p0=f'{instructions}')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -627,7 +567,7 @@ async def process_crypto_url(message: Message, state: FSMContext):
     param = get_crypto_param_by_index(0)
     if not param['validate'](url):
         await safe_edit_or_send(message,
-            f"❌ {param['error']}\n\nПопробуйте ещё раз:"
+            _tr('payments.process_crypto_url.1', p0=f"{param['error']}")
         )
         return
     
@@ -647,7 +587,7 @@ async def process_crypto_url(message: Message, state: FSMContext):
         await state.update_data(edit_mode=False)
         
         await safe_edit_or_send(message,
-            f"✅ Ссылка обновлена!\n<a href=\"{url}\">{escape_html(url)}</a>",
+            _tr('payments.process_crypto_url.2', p0=f'{url}', p1=f'{escape_html(url)}'),
             force_new=True
         )
         
@@ -675,12 +615,7 @@ async def process_crypto_url(message: Message, state: FSMContext):
         callback_url = build_telegram_link(bot_username)
 
         await safe_edit_or_send(message,
-            f"✅ Ссылка принята!\n<a href=\"{url}\">{escape_html(url)}</a>\n\n"
-            "🔔 <b>Настройка уведомлений:</b>\n"
-            "В @Ya_SellerBot зайдите в настройки вашей созданной позиции → <code>Уведомления</code> → <code>Обратная ссылка</code> и укажите этот адрес:\n"
-            f"<code>{callback_url}</code>\n\n"
-            "🔑 <b>Ожидаю ввода секретного ключа:</b>\n"
-            "Найти его можно в @Ya_SellerBot: <code>Профиль</code> → <code>Ключ подписи</code>.",
+            _tr('payments.process_crypto_url.3', p0=f'{url}', p1=f'{escape_html(url)}', p2=f'{callback_url}'),
             reply_markup=crypto_setup_kb(2),
             force_new=True
         )
@@ -697,7 +632,7 @@ async def process_crypto_secret(message: Message, state: FSMContext):
     param = get_crypto_param_by_index(1)
     if not param['validate'](secret):
         await safe_edit_or_send(message,
-            f"❌ {param['error']}\n\nПопробуйте ещё раз:"
+            _tr('payments.process_crypto_url.1', p0=f"{param['error']}")
         )
         return
     
@@ -715,7 +650,7 @@ async def process_crypto_secret(message: Message, state: FSMContext):
         # Editing mode - save and return to the menu
         set_setting('crypto_secret_key', secret)
         await state.update_data(edit_mode=False)
-        await safe_edit_or_send(message, "✅ Секретный ключ обновлён!", force_new=True)
+        await safe_edit_or_send(message, _tr('payments.process_crypto_secret.1'), force_new=True)
         
         # Create a fake callback to display the menu
         class FakeCallback:
@@ -740,10 +675,7 @@ async def process_crypto_secret(message: Message, state: FSMContext):
         item_url = crypto_data.get('crypto_item_url', '')
         
         await safe_edit_or_send(message,
-            "✅ <b>Все данные введены!</b>\n\n"
-            f"📦 Товар: <a href=\"{item_url}\">{escape_html(item_url)}</a>\n"
-            f"🔐 Ключ: <code>{'•' * 16}</code>\n\n"
-            "Сохранить и включить крипто-платежи?",
+            _tr('payments.process_crypto_secret.2', p0=f'{item_url}', p1=f'{escape_html(item_url)}', p2=f"{'•' * 16}"),
             reply_markup=crypto_setup_confirm_kb(),
             force_new=True
         )
@@ -753,7 +685,7 @@ async def process_crypto_secret(message: Message, state: FSMContext):
 async def crypto_setup_back(callback: CallbackQuery, state: FSMContext):
     """Return to the previous crypto setup step."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -775,14 +707,14 @@ async def crypto_setup_back(callback: CallbackQuery, state: FSMContext):
 async def crypto_setup_save(callback: CallbackQuery, state: FSMContext):
     """Saves crypto settings and enables them."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
     crypto_data = data.get('crypto_data', {})
     
     if not crypto_data.get('crypto_item_url') or not crypto_data.get('crypto_secret_key'):
-        await callback.answer("❌ Данные не полные", show_alert=True)
+        await callback.answer(_tr('payments.crypto_setup_save.1'), show_alert=True)
         return
     
     # Save
@@ -790,11 +722,10 @@ async def crypto_setup_save(callback: CallbackQuery, state: FSMContext):
     set_setting('crypto_secret_key', crypto_data['crypto_secret_key'])
     set_setting('crypto_enabled', '1')
     
-    await callback.answer("✅ Крипто-платежи включены!")
+    await callback.answer(_tr('payments.crypto_setup_save.2'))
     
     await safe_edit_or_send(callback.message, 
-        "✅ <b>Крипто-платежи настроены и включены!</b>\n\n"
-        "Теперь пользователи смогут оплачивать криптовалютой."
+        _tr('payments.crypto_setup_save.3')
     )
     
     # Showing the payment menu
@@ -813,30 +744,20 @@ async def show_crypto_management_menu(callback: CallbackQuery, state: FSMContext
     item_url = get_setting('crypto_item_url', '')
     
     status_emoji = "🟢" if is_enabled else "⚪"
-    status_text = "включены" if is_enabled else "выключены"
+    status_text = _tr('payments.show_crypto_management_menu.1') if is_enabled else _tr('payments.toggle_payment_notify.2')
     
     info_text = (
-        "ℹ️ Бот генерирует ссылку на оплату с указанием точной суммы в долларах (из настроек тарифа).\n\n"
-        "⚠️ <b>ВАЖНО:</b> В Ya.Seller позиция обязательно должна иметь тип <b>«Счет»</b>. "
-        "Тарифы к позиции добавлять не нужно — бот сам указывает сумму.\n\n"
+        _tr('payments.show_crypto_management_menu.2')
     )
     
     if item_url:
         safe_url = escape_html(item_url)
         text = (
-            "💰 <b>Управление крипто-платежами</b>\n\n"
-            f"{status_emoji} Статус: <b>{status_text}</b>\n"
-            f"📦 Ссылка: <a href=\"{item_url}\">{safe_url}</a>\n\n"
-            f"{info_text}"
-            "Выберите действие:"
+            _tr('payments.show_crypto_management_menu.3', p0=f'{status_emoji}', p1=f'{status_text}', p2=f'{item_url}', p3=f'{safe_url}', p4=f'{info_text}')
         )
     else:
         text = (
-            "💰 <b>Управление крипто-платежами</b>\n\n"
-            f"{status_emoji} Статус: <b>{status_text}</b>\n"
-            "📦 Ссылка: —\n\n"
-            f"{info_text}"
-            "Выберите действие:"
+            _tr('payments.show_crypto_management_menu.4', p0=f'{status_emoji}', p1=f'{status_text}', p2=f'{info_text}')
         )
     
     await safe_edit_or_send(callback.message, 
@@ -851,24 +772,24 @@ async def show_crypto_management_menu(callback: CallbackQuery, state: FSMContext
 async def _set_crypto_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
     """Sets the status of crypto payments without data loss."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     current = is_crypto_enabled()
     if current == target_enabled:
-        status = "уже включены" if target_enabled else "уже выключены"
-        await callback.answer(f"Крипто-платежи {status}")
+        status = _tr('payments.set_crypto_enabled.1') if target_enabled else _tr('payments.set_crypto_enabled.2')
+        await callback.answer(_tr('payments.set_crypto_enabled.3', p0=f'{status}'))
         return
 
     if target_enabled and not has_crypto_data():
-        await callback.answer("❌ Сначала укажите ссылку на товар и секретный ключ!", show_alert=True)
+        await callback.answer(_tr('payments.set_crypto_enabled.4'), show_alert=True)
         return
 
     new_value = '1' if target_enabled else '0'
     set_setting('crypto_enabled', new_value)
 
-    status = "включены ✅" if new_value == '1' else "выключены"
-    await callback.answer(f"Крипто-платежи {status}")
+    status = _tr('payments.set_crypto_enabled.5') if new_value == '1' else _tr('payments.toggle_payment_notify.2')
+    await callback.answer(_tr('payments.set_crypto_enabled.3', p0=f'{status}'))
     await show_crypto_management_menu(callback, state)
 
 
@@ -889,7 +810,7 @@ async def crypto_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
 async def crypto_mgmt_edit_url(callback: CallbackQuery, state: FSMContext):
     """Starts editing the product link."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.crypto_setup_url)
@@ -901,29 +822,17 @@ async def crypto_mgmt_edit_url(callback: CallbackQuery, state: FSMContext):
     callback_url = build_telegram_link(bot_username)
     
     instructions = (
-        "1️⃣ В @Ya_SellerBot выберите «Управление» → «Товары» → «Добавить»\n"
-        "2️⃣ Выберите тип позиции: <b>Счет</b>\n\n"
-        "🎬 <b>Актуальная инструкция как добавлять:</b>\n"
-        "<a href=\"https://youtu.be/cK0wX2LKxcs\">Смотреть видео</a>\n\n"
-        "⚠️ <b>ВАЖНО:</b>\n"
-        "• Тип позиции — именно <b>Счет</b>, а НЕ <b>Товар</b>!\n"
-        "• Тарифы добавлять к позиции <b>НЕ нужно</b> — бот сам сформирует сумму оплаты.\n\n"
+        _tr('payments.start_crypto_setup.1')
     )
     
     if current_url:
         safe_url = escape_html(current_url)
         text = (
-            "🔗 <b>Изменение ссылки</b>\n\n"
-            f"{instructions}"
-            f"Текущая ссылка: <a href=\"{current_url}\">{safe_url}</a>\n\n"
-            "🔗 <b>Введите новую ссылку из @Ya_SellerBot:</b>"
+            _tr('payments.crypto_mgmt_edit_url.1', p0=f'{instructions}', p1=f'{current_url}', p2=f'{safe_url}')
         )
     else:
         text = (
-            "🔗 <b>Изменение ссылки</b>\n\n"
-            f"{instructions}"
-            "Текущая ссылка: —\n\n"
-            "🔗 <b>Введите новую ссылку из @Ya_SellerBot:</b>"
+            _tr('payments.crypto_mgmt_edit_url.2', p0=f'{instructions}')
         )
     
     await safe_edit_or_send(callback.message, 
@@ -937,7 +846,7 @@ async def crypto_mgmt_edit_url(callback: CallbackQuery, state: FSMContext):
 async def crypto_mgmt_edit_secret(callback: CallbackQuery, state: FSMContext):
     """Begins editing the secret key."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.crypto_setup_secret)
@@ -947,12 +856,7 @@ async def crypto_mgmt_edit_secret(callback: CallbackQuery, state: FSMContext):
     callback_url = build_telegram_link(bot_username)
 
     text = (
-        "🔐 <b>Изменение секретного ключа</b>\n\n"
-        "🔔 <b>Настройка уведомлений:</b>\n"
-        "В @Ya_SellerBot зайдите в настройки вашей созданной позиции → <code>Уведомления</code> → <code>Обратная ссылка</code> и укажите этот адрес:\n"
-        f"<code>{callback_url}</code>\n\n"
-        "🔑 <b>Ожидаю ввода нового секретного ключа:</b>\n"
-        "Найти его можно в @Ya_SellerBot: <code>Профиль</code> → <code>Ключ подписи</code>."
+        _tr('payments.crypto_mgmt_edit_secret.1', p0=f'{callback_url}')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -966,7 +870,7 @@ async def crypto_mgmt_edit_secret(callback: CallbackQuery, state: FSMContext):
 async def back_to_crypto_management(callback: CallbackQuery, state: FSMContext):
     """Return to the crypto payment management menu."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await show_crypto_management_menu(callback, state)
@@ -980,7 +884,7 @@ async def back_to_crypto_management(callback: CallbackQuery, state: FSMContext):
 async def start_edit_crypto(callback: CallbackQuery, state: FSMContext):
     """Starts editing crypto settings."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.edit_crypto)
@@ -1003,11 +907,7 @@ async def show_crypto_edit_screen(callback: CallbackQuery, state: FSMContext, pa
         display_value = current_value or '—'
     
     text = (
-        f"⚙️ <b>Настройки крипто-платежей</b> ({param_index + 1}/{total})\n\n"
-        f"📌 Параметр: <b>{param['label']}</b>\n"
-        f"📝 Текущее значение: <code>{display_value}</code>\n\n"
-        f"Введите новое значение или используйте кнопки навигации:\n"
-        f"({param['hint']})"
+        _tr('payments.show_crypto_edit_screen.1', p0=f'{param_index + 1}', p1=f'{total}', p2=f"{param['label']}", p3=f'{display_value}', p4=f"{param['hint']}")
     )
     
     await safe_edit_or_send(callback.message, 
@@ -1020,7 +920,7 @@ async def show_crypto_edit_screen(callback: CallbackQuery, state: FSMContext, pa
 async def crypto_edit_prev(callback: CallbackQuery, state: FSMContext):
     """Previous crypto settings parameter."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -1036,7 +936,7 @@ async def crypto_edit_prev(callback: CallbackQuery, state: FSMContext):
 async def crypto_edit_next(callback: CallbackQuery, state: FSMContext):
     """The next parameter is crypto settings."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -1081,7 +981,7 @@ async def edit_crypto_value(message: Message, state: FSMContext):
     
     # Showing the updated screen
     await safe_edit_or_send(message,
-        f"✅ <b>{param['label']}</b> обновлено!",
+        _tr('payments.edit_crypto_value.1', p0=f"{param['label']}"),
         force_new=True
     )
     
@@ -1104,10 +1004,10 @@ async def edit_crypto_value(message: Message, state: FSMContext):
 async def crypto_edit_done(callback: CallbackQuery, state: FSMContext):
     """Finish editing crypto settings."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
-    await callback.answer("✅ Настройки сохранены")
+    await callback.answer(_tr('payments.crypto_edit_done.1'))
     await show_payments_menu(callback, state)
 
 
@@ -1119,7 +1019,7 @@ async def crypto_edit_done(callback: CallbackQuery, state: FSMContext):
 async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext):
     """Shows the TG payments management menu."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.payments_menu)
@@ -1128,24 +1028,17 @@ async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext)
     token = get_setting('cards_provider_token', '')
     
     status_emoji = "🟢" if is_enabled else "⚪"
-    status_text = "включено" if is_enabled else "выключено"
+    status_text = _tr('coupons.render_purchase_settings.1') if is_enabled else _tr('coupons.render_purchase_settings.2')
     
     if token:
         # Masking the token: first 4 and last 4 characters
         masked_token = f"{token[:4]}...{token[-4:]}"
-        token_display = f"Установлен ✅ (<code>{masked_token}</code>)"
+        token_display = _tr('payments.show_cards_management_menu.1', p0=f'{masked_token}')
     else:
-        token_display = "Не установлен ❌"
+        token_display = _tr('payments.show_cards_management_menu.2')
     
     text = (
-        "💳 <b>TG payments</b>\n\n"
-        "Для работы этого способа необходимо настроить Telegram Payments через провайдера ЮКасса.\n\n"
-        "❗️ <b>ШАГ 1: РЕГИСТРАЦИЯ</b>\n"
-        "Обязательно <a href=\"https://yookassa.ru/joinups/?source=sva\">зарегистрируйте магазин в ЮКассе по этой ссылке</a>\n\n"
-        "После проверки документов ЮКассой переходите к настройке токена.\n\n"
-        f"{status_emoji} Статус: <b>{status_text}</b>\n"
-        f"🔑 Provider Token: <b>{token_display}</b>\n\n"
-        "Выберите действие:"
+        _tr('payments.show_cards_management_menu.3', p0=f'{status_emoji}', p1=f'{status_text}', p2=f'{token_display}')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -1158,24 +1051,24 @@ async def show_cards_management_menu(callback: CallbackQuery, state: FSMContext)
 async def _set_cards_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
     """Sets the status of TG payments."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     current = is_cards_enabled()
     if current == target_enabled:
-        status = "уже включены" if target_enabled else "уже выключены"
+        status = _tr('payments.set_crypto_enabled.1') if target_enabled else _tr('payments.set_crypto_enabled.2')
         await callback.answer(f"TG payments {status}")
         return
 
     # Cannot be enabled if there is no token
     if target_enabled and not get_setting('cards_provider_token', ''):
-        await callback.answer("❌ Сначала укажите Provider Token!", show_alert=True)
+        await callback.answer(_tr('payments.set_cards_enabled.1'), show_alert=True)
         return
 
     new_value = '1' if target_enabled else '0'
     set_setting('cards_enabled', new_value)
 
-    status = "включена ✅" if new_value == '1' else "выключена"
+    status = _tr('payments.set_cards_enabled.2') if new_value == '1' else _tr('payments.toggle_demo.2')
     await callback.answer(f"TG payments {status}")
     await show_cards_management_menu(callback, state)
 
@@ -1195,9 +1088,9 @@ async def cards_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_cards_mgmt_edit_token")
 async def cards_mgmt_edit_token(callback: CallbackQuery, state: FSMContext):
-    """Begins editing the YuKassa token."""
+    """Begins editing the Telegram Payments provider token."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.cards_setup_token)
@@ -1205,15 +1098,7 @@ async def cards_mgmt_edit_token(callback: CallbackQuery, state: FSMContext):
     await state.update_data(last_menu_msg_id=callback.message.message_id)
     
     text = (
-        "🔗 <b>Установка Provider Token</b>\n\n"
-        "❗️ <b>ШАГ 1: РЕГИСТРАЦИЯ В ЮКАССЕ</b>\n"
-        "Обязательно <a href=\"https://yookassa.ru/joinups/?source=sva\">зарегистрируйтесь по этой ссылке</a>\n\n"
-        "<b>ШАГ 2: ПОЛУЧЕНИЕ ТОКЕНА В @BotFather</b>\n"
-        "1. Отправьте команду <code>/mybots</code> и выберите бота.\n"
-        "2. Нажмите <code>Payments</code> → <code>YooKassa</code>.\n"
-        "3. Подключите магазин в боте провайдера и <b>обязательно вернитесь в @BotFather</b>.\n"
-        "4. В BotFather снова откройте <code>Payments</code>, там появится токен.\n\n"
-        "Отправьте полученный токен ответом на это сообщение:"
+        _tr('payments.cards_mgmt_edit_token.1')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -1225,7 +1110,7 @@ async def cards_mgmt_edit_token(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.cards_setup_token)
 async def cards_setup_token_value(message: Message, state: FSMContext):
-    """Processes the input of the YuKassa token."""
+    """Processes the input of the Telegram Payments provider token."""
     from bot.utils.text import get_message_text_for_storage
     
     data = await state.get_data()
@@ -1234,7 +1119,7 @@ async def cards_setup_token_value(message: Message, state: FSMContext):
     token = get_message_text_for_storage(message, 'plain')
     
     if len(token) < 20 or ':' not in token:
-        await safe_edit_or_send(message, "❌ Неверный формат токена. Попробуйте ещё раз:")
+        await safe_edit_or_send(message, _tr('payments.cards_setup_token_value.1'))
         return
     
     set_setting('cards_provider_token', token)
@@ -1252,11 +1137,11 @@ async def cards_setup_token_value(message: Message, state: FSMContext):
             menu_message = await message.bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=last_menu_msg_id,
-                text="⌛ Сохранение..."
+                text=_tr('payments.cards_setup_token_value.2')
             )
         except Exception:
             # If it doesn’t work out (for example, the message is deleted), we will respond with new ones
-            menu_message = await safe_edit_or_send(message, "⌛ Сохранение...", force_new=True)
+            menu_message = await safe_edit_or_send(message, _tr('payments.cards_setup_token_value.2'), force_new=True)
 
     # Returning to the menu via FakeCallback
     class FakeCallback:
@@ -1286,7 +1171,7 @@ async def cards_setup_token_value(message: Message, state: FSMContext):
 async def show_qr_management_menu(callback: CallbackQuery, state: FSMContext):
     """Shows the YuKassa QR payment management menu."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.payments_menu)
@@ -1297,23 +1182,13 @@ async def show_qr_management_menu(callback: CallbackQuery, state: FSMContext):
     secret_key = get_setting('yookassa_secret_key', '')
 
     status_emoji = "🟢" if is_enabled else "⚪"
-    status_text = "включено" if is_enabled else "выключено"
+    status_text = _tr('coupons.render_purchase_settings.1') if is_enabled else _tr('coupons.render_purchase_settings.2')
 
-    shop_display = f"<code>{shop_id}</code>" if shop_id else "❌ Не задан"
-    secret_display = f"Установлен ✅ (<code>{secret_key[:4]}...{secret_key[-4:]}</code>)" if len(secret_key) >= 8 else "❌ Не задан"
+    shop_display = f"<code>{shop_id}</code>" if shop_id else _tr('cryptobot.masked_token.1')
+    secret_display = _tr('cryptobot.masked_token.3', p0=f'{secret_key[:4]}', p1=f'{secret_key[-4:]}') if len(secret_key) >= 8 else _tr('cryptobot.masked_token.1')
 
     text = (
-        "📱 <b>ЮКасса</b>\n\n"
-        "Позволяет принимать оплату картами и через СБП по QR-коду,\n"
-        "без Telegram Payments.\n\n"
-        "📋 <b>Как получить доступ:</b>\n"
-        "1. Зарегистрируйте магазин: <a href=\"https://yookassa.ru/joinups/?source=sva\">yookassa.ru</a>\n"
-        "2. Перейдите: Настройки → API-интеграция\n"
-        "3. Скопируйте Shop ID и сгенерируйте новый Secret Key\n\n"
-        f"{status_emoji} Статус: <b>{status_text}</b>\n"
-        f"🏪 Shop ID: {shop_display}\n"
-        f"🔑 Secret Key: {secret_display}\n\n"
-        "Выберите действие:"
+        _tr('payments.show_qr_management_menu.1', p0=f'{status_emoji}', p1=f'{status_text}', p2=f'{shop_display}', p3=f'{secret_display}')
     )
 
     await safe_edit_or_send(callback.message, 
@@ -1326,15 +1201,15 @@ async def show_qr_management_menu(callback: CallbackQuery, state: FSMContext):
 async def _set_qr_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
     """Sets the status of the YuKass QR payment."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     from database.requests import is_yookassa_qr_enabled
 
     current = is_yookassa_qr_enabled()
     if current == target_enabled:
-        status = "уже включена" if target_enabled else "уже выключена"
-        await callback.answer(f"ЮКасса {status}")
+        status = _tr('coupons.set_coupon_scenario_enabled.3') if target_enabled else _tr('coupons.set_coupon_scenario_enabled.4')
+        await callback.answer(_tr('payments.set_qr_enabled.1', p0=f'{status}'))
         return
 
     # Cannot be enabled without details
@@ -1342,14 +1217,14 @@ async def _set_qr_enabled(callback: CallbackQuery, state: FSMContext, target_ena
         shop_id = get_setting('yookassa_shop_id', '')
         secret_key = get_setting('yookassa_secret_key', '')
         if not shop_id or not secret_key:
-            await callback.answer("❌ Сначала укажите Shop ID и Secret Key!", show_alert=True)
+            await callback.answer(_tr('payments.set_qr_enabled.2'), show_alert=True)
             return
 
     new_value = '1' if target_enabled else '0'
     set_setting('yookassa_qr_enabled', new_value)
 
-    status = "включена ✅" if new_value == '1' else "выключена"
-    await callback.answer(f"ЮКасса {status}")
+    status = _tr('payments.set_cards_enabled.2') if new_value == '1' else _tr('payments.toggle_demo.2')
+    await callback.answer(_tr('payments.set_qr_enabled.1', p0=f'{status}'))
     await show_qr_management_menu(callback, state)
 
 
@@ -1371,19 +1246,17 @@ async def qr_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
 async def qr_edit_shop_id(callback: CallbackQuery, state: FSMContext):
     """Requests YuKass Shop ID."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.qr_setup_shop_id)
     await state.update_data(last_menu_msg_id=callback.message.message_id)
 
     current = get_setting('yookassa_shop_id', '')
-    current_display = f"\nТекущий: <code>{current}</code>" if current else ""
+    current_display = _tr('payments.qr_edit_shop_id.1', p0=f'{current}') if current else ""
 
     await safe_edit_or_send(callback.message, 
-        f"🏪 <b>Введите Shop ID ЮКасса</b>{current_display}\n\n"
-        "Найдите в разделе: <b>Настройки → API-интеграция</b> вашего магазина.\n"
-        "(Это числовой ID, например: <code>123456</code>)",
+        _tr('payments.qr_edit_shop_id.2', p0=f'{current_display}'),
         reply_markup=back_and_home_kb("admin_payments_qr")
     )
     await callback.answer()
@@ -1397,7 +1270,7 @@ async def qr_setup_shop_id_handler(message: Message, state: FSMContext):
     shop_id = get_message_text_for_storage(message, 'plain')
 
     if not shop_id.isdigit() or len(shop_id) < 3:
-        await safe_edit_or_send(message, "❌ Некорректный Shop ID. Должен быть числом (например, <code>123456</code>).")
+        await safe_edit_or_send(message, _tr('payments.qr_setup_shop_id_handler.1'))
         return
 
     try:
@@ -1438,16 +1311,14 @@ async def qr_setup_shop_id_handler(message: Message, state: FSMContext):
 async def qr_edit_secret(callback: CallbackQuery, state: FSMContext):
     """UKassa requests Secret Key."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.qr_setup_secret_key)
     await state.update_data(last_menu_msg_id=callback.message.message_id)
 
     await safe_edit_or_send(callback.message, 
-        "🔐 <b>Введите Secret Key ЮКасса</b>\n\n"
-        "Найдите в разделе: <b>Настройки → API-интеграция</b> вашего магазина.\n"
-        "_(Секретный ключ будет скрыт после сохранения)_",
+        _tr('payments.qr_edit_secret.1'),
         reply_markup=back_and_home_kb("admin_payments_qr")
     )
     await callback.answer()
@@ -1461,7 +1332,7 @@ async def qr_setup_secret_key_handler(message: Message, state: FSMContext):
     secret_key = get_message_text_for_storage(message, 'plain')
 
     if len(secret_key) < 16:
-        await safe_edit_or_send(message, "❌ Слишком короткий ключ. Попробуйте ещё раз.")
+        await safe_edit_or_send(message, _tr('payments.qr_setup_secret_key_handler.1'))
         return
 
     try:
@@ -1505,7 +1376,7 @@ async def qr_setup_secret_key_handler(message: Message, state: FSMContext):
 async def show_wata_management_menu(callback: CallbackQuery, state: FSMContext):
     """Shows the WATA payment management menu."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.payments_menu)
@@ -1514,39 +1385,17 @@ async def show_wata_management_menu(callback: CallbackQuery, state: FSMContext):
     token = get_setting('wata_jwt_token', '') or ''
 
     status_emoji = "🟢" if is_enabled else "⚪"
-    status_text = "включено" if is_enabled else "выключено"
+    status_text = _tr('coupons.render_purchase_settings.1') if is_enabled else _tr('coupons.render_purchase_settings.2')
 
     if len(token) >= 12:
-        token_display = f"Установлен ✅ (<code>{escape_html(token[:6])}...{escape_html(token[-4:])}</code>)"
+        token_display = _tr('cryptobot.masked_token.3', p0=f'{escape_html(token[:6])}', p1=f'{escape_html(token[-4:])}')
     elif token:
-        token_display = "Установлен ✅"
+        token_display = _tr('cryptobot.masked_token.2')
     else:
-        token_display = "❌ Не задан"
+        token_display = _tr('cryptobot.masked_token.1')
 
     text = (
-        "🌊 <b>WATA</b>\n\n"
-        "Приём платежей через WATA — российский эквайринг (карты + СБП).\n"
-        "Минимальная сумма платежа: <b>10 ₽</b>.\n\n"
-        "📋 <b>Инструкция по подключению:</b>\n\n"
-        "<b>1. Что добавить в бот перед подачей на проверку:</b>\n"
-        "• <b>Документы:</b> Пользовательское соглашение и Политику конфиденциальности (ссылки доступны в руководстве пользователя ADMIN_GUIDE.md).\n"
-        "• <b>Техподдержка:</b> Кнопка поддержки должна вести в личку (вашу или саппорта), а не в канал.\n"
-        "• <b>Тарифы:</b> Прописать тарифы в рублях (можно просто текстом в описании бота).\n"
-        "• <b>Новостной канал:</b> Убрать ссылку на канал Плюшкина или заменить на свой новостной канал.\n\n"
-        "<b>2. Верификационный платёж (разовый):</b>\n"
-        "• Стандарт: 500$ (50.000₽)\n"
-        "• <b>По рекомендации YadrenoVPN: 150$ (15.000₽)</b>\n"
-        "• <i>Платить только после одобрения проекта!</i>\n\n"
-        "<b>3. Какие документы нужны:</b>\n"
-        "• Никаких. Паспорта, ИП, самозанятость, банковские счета - не требуются.\n"
-        "• Достаточно: Email и кошелёк TRC20 (USDT).\n\n"
-        "<b>4. Подключение:</b>\n"
-        "• Сайт: <a href=\"https://wata.pro/\">wata.pro</a>\n"
-        "• Менеджер в Telegram: @Nikita_WATA (напишите, что вы от <b>YadrenoVPN</b> для снижения платежа до 150$).\n"
-        "• В личном кабинете создайте JWT-токен (Профиль → API) и укажите его здесь.\n\n"
-        f"{status_emoji} Статус: <b>{status_text}</b>\n"
-        f"🔑 JWT-токен: {token_display}\n\n"
-        "Выберите действие:"
+        _tr('payments.show_wata_management_menu.1', p0=f'{status_emoji}', p1=f'{status_text}', p2=f'{token_display}')
     )
 
     await safe_edit_or_send(
@@ -1560,26 +1409,26 @@ async def show_wata_management_menu(callback: CallbackQuery, state: FSMContext):
 async def _set_wata_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
     """Sets the payment status via WATA."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     current = is_wata_enabled()
     if current == target_enabled:
-        status = "уже включена" if target_enabled else "уже выключена"
-        await callback.answer(f"WATA-оплата {status}")
+        status = _tr('coupons.set_coupon_scenario_enabled.3') if target_enabled else _tr('coupons.set_coupon_scenario_enabled.4')
+        await callback.answer(_tr('payments.set_wata_enabled.1', p0=f'{status}'))
         return
 
     if target_enabled:
         token = get_setting('wata_jwt_token', '')
         if not token or not token.strip():
-            await callback.answer("❌ Сначала укажите JWT-токен!", show_alert=True)
+            await callback.answer(_tr('payments.set_wata_enabled.2'), show_alert=True)
             return
 
     new_value = '1' if target_enabled else '0'
     set_setting('wata_enabled', new_value)
 
-    status = "включена ✅" if new_value == '1' else "выключена"
-    await callback.answer(f"WATA-оплата {status}")
+    status = _tr('payments.set_cards_enabled.2') if new_value == '1' else _tr('payments.toggle_demo.2')
+    await callback.answer(_tr('payments.set_wata_enabled.1', p0=f'{status}'))
     await show_wata_management_menu(callback, state)
 
 
@@ -1600,7 +1449,7 @@ async def wata_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
 async def wata_edit_token(callback: CallbackQuery, state: FSMContext):
     """Requests a WATA JWT token."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.wata_setup_token)
@@ -1608,10 +1457,7 @@ async def wata_edit_token(callback: CallbackQuery, state: FSMContext):
 
     await safe_edit_or_send(
         callback.message,
-        "🔑 <b>Введите JWT-токен WATA</b>\n\n"
-        "Найдите в личном кабинете <a href=\"https://wata.pro\">wata.pro</a>: "
-        "<b>Профиль → API</b>.\n\n"
-        "<i>Токен будет частично скрыт после сохранения.</i>",
+        _tr('payments.wata_edit_token.1'),
         reply_markup=back_and_home_kb("admin_payments_wata"),
     )
     await callback.answer()
@@ -1625,7 +1471,7 @@ async def wata_setup_token_handler(message: Message, state: FSMContext):
     token = get_message_text_for_storage(message, 'plain').strip()
 
     if len(token) < 20:
-        await safe_edit_or_send(message, "❌ Слишком короткий токен. Попробуйте ещё раз.")
+        await safe_edit_or_send(message, _tr('payments.wata_setup_token_handler.1'))
         return
 
     try:
@@ -1669,7 +1515,7 @@ async def wata_setup_token_handler(message: Message, state: FSMContext):
 async def show_platega_management_menu(callback: CallbackQuery, state: FSMContext):
     """Shows the payment management menu through Platega."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.payments_menu)
@@ -1679,42 +1525,26 @@ async def show_platega_management_menu(callback: CallbackQuery, state: FSMContex
     secret = get_setting('platega_secret', '') or ''
 
     status_emoji = "🟢" if is_enabled else "⚪"
-    status_text = "включено" if is_enabled else "выключено"
+    status_text = _tr('coupons.render_purchase_settings.1') if is_enabled else _tr('coupons.render_purchase_settings.2')
 
     if merchant_id:
         if len(merchant_id) >= 8:
-            merchant_display = f"Установлен ✅ (<code>{escape_html(merchant_id[:4])}...{escape_html(merchant_id[-4:])}</code>)"
+            merchant_display = _tr('cryptobot.masked_token.3', p0=f'{escape_html(merchant_id[:4])}', p1=f'{escape_html(merchant_id[-4:])}')
         else:
-            merchant_display = "Установлен ✅"
+            merchant_display = _tr('cryptobot.masked_token.2')
     else:
-        merchant_display = "❌ Не задан"
+        merchant_display = _tr('cryptobot.masked_token.1')
 
     if secret:
         if len(secret) >= 12:
-            secret_display = f"Установлен ✅ (<code>{escape_html(secret[:4])}...{escape_html(secret[-4:])}</code>)"
+            secret_display = _tr('cryptobot.masked_token.3', p0=f'{escape_html(secret[:4])}', p1=f'{escape_html(secret[-4:])}')
         else:
-            secret_display = "Установлен ✅"
+            secret_display = _tr('cryptobot.masked_token.2')
     else:
-        secret_display = "❌ Не задан"
+        secret_display = _tr('cryptobot.masked_token.1')
 
     text = (
-        "💸 <b>Platega</b>\n\n"
-        "Приём платежей через Platega.\n"
-        "Минимальная сумма платежа: <b>10 ₽</b>.\n\n"
-        "🎁 <b>Снижение комиссии на 1% по каждому методу оплаты</b>\n"
-        "Для получения скидки <b>обязательно укажите промокод</b> <code>PLUSHKIN</code> "
-        "при обращении к менеджеру.\n\n"
-        "📋 <b>Как получить доступ:</b>\n"
-        "1. Напишите менеджеру <b>@platega_connect_manager</b>\n"
-        "2. Отправьте: <code>Хочу подключить Platega по промокоду PLUSHKIN</code>.\n"
-        "3. По умолчанию подключается <b>SBP</b>; другие методы оплаты подключаются через менеджера Platega.\n"
-        "4. После подключения скопируйте <b>Merchant ID</b> и <b>API-ключ</b> из ЛК.\n"
-        "5. Поле <b>Callback URL</b> в панели Platega заполнять не нужно.\n"
-        "6. Укажите Merchant ID и API-ключ в кнопках ниже.\n\n"
-        f"{status_emoji} Статус: <b>{status_text}</b>\n"
-        f"🆔 Merchant ID: {merchant_display}\n"
-        f"🔐 API-ключ: {secret_display}\n\n"
-        "Выберите действие:"
+        _tr('payments.show_platega_management_menu.1', p0=f'{status_emoji}', p1=f'{status_text}', p2=f'{merchant_display}', p3=f'{secret_display}')
     )
 
     await safe_edit_or_send(
@@ -1728,27 +1558,27 @@ async def show_platega_management_menu(callback: CallbackQuery, state: FSMContex
 async def _set_platega_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
     """Sets the payment status through Platega."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     current = is_platega_enabled()
     if current == target_enabled:
-        status = "уже включена" if target_enabled else "уже выключена"
-        await callback.answer(f"Platega-оплата {status}")
+        status = _tr('coupons.set_coupon_scenario_enabled.3') if target_enabled else _tr('coupons.set_coupon_scenario_enabled.4')
+        await callback.answer(_tr('payments.set_platega_enabled.1', p0=f'{status}'))
         return
 
     if target_enabled:
         merchant_id = get_setting('platega_merchant_id', '')
         secret = get_setting('platega_secret', '')
         if not merchant_id or not merchant_id.strip() or not secret or not secret.strip():
-            await callback.answer("❌ Сначала укажите Merchant ID и API-ключ!", show_alert=True)
+            await callback.answer(_tr('payments.set_platega_enabled.2'), show_alert=True)
             return
 
     new_value = '1' if target_enabled else '0'
     set_setting('platega_enabled', new_value)
 
-    status = "включена ✅" if new_value == '1' else "выключена"
-    await callback.answer(f"Platega-оплата {status}")
+    status = _tr('payments.set_cards_enabled.2') if new_value == '1' else _tr('payments.toggle_demo.2')
+    await callback.answer(_tr('payments.set_platega_enabled.1', p0=f'{status}'))
     await show_platega_management_menu(callback, state)
 
 
@@ -1769,7 +1599,7 @@ async def platega_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
 async def platega_edit_merchant(callback: CallbackQuery, state: FSMContext):
     """Requests Merchant ID Platega."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.platega_setup_merchant)
@@ -1777,9 +1607,7 @@ async def platega_edit_merchant(callback: CallbackQuery, state: FSMContext):
 
     await safe_edit_or_send(
         callback.message,
-        "🆔 <b>Введите Merchant ID Platega</b>\n\n"
-        "Найдите его в личном кабинете Platega после подключения.\n\n"
-        "<i>Значение будет частично скрыто после сохранения.</i>",
+        _tr('payments.platega_edit_merchant.1'),
         reply_markup=back_and_home_kb("admin_payments_platega"),
     )
     await callback.answer()
@@ -1793,7 +1621,7 @@ async def platega_setup_merchant_handler(message: Message, state: FSMContext):
     merchant_id = get_message_text_for_storage(message, 'plain').strip()
 
     if len(merchant_id) < 4:
-        await safe_edit_or_send(message, "❌ Слишком короткий Merchant ID. Попробуйте ещё раз.")
+        await safe_edit_or_send(message, _tr('payments.platega_setup_merchant_handler.1'))
         return
 
     try:
@@ -1833,7 +1661,7 @@ async def platega_setup_merchant_handler(message: Message, state: FSMContext):
 async def platega_edit_secret(callback: CallbackQuery, state: FSMContext):
     """Requests the Platega API key."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.platega_setup_secret)
@@ -1841,9 +1669,7 @@ async def platega_edit_secret(callback: CallbackQuery, state: FSMContext):
 
     await safe_edit_or_send(
         callback.message,
-        "🔐 <b>Введите API-ключ Platega</b>\n\n"
-        "Найдите его в личном кабинете Platega после подключения.\n\n"
-        "<i>Значение будет частично скрыто после сохранения.</i>",
+        _tr('payments.platega_edit_secret.1'),
         reply_markup=back_and_home_kb("admin_payments_platega"),
     )
     await callback.answer()
@@ -1857,7 +1683,7 @@ async def platega_setup_secret_handler(message: Message, state: FSMContext):
     secret = get_message_text_for_storage(message, 'plain').strip()
 
     if len(secret) < 8:
-        await safe_edit_or_send(message, "❌ Слишком короткий API-ключ. Попробуйте ещё раз.")
+        await safe_edit_or_send(message, _tr('payments.platega_setup_secret_handler.1'))
         return
 
     try:
@@ -1901,7 +1727,7 @@ async def platega_setup_secret_handler(message: Message, state: FSMContext):
 async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMContext):
     """Shows the Cardlink payment management menu."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.payments_menu)
@@ -1911,23 +1737,23 @@ async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMConte
     api_token = get_setting('cardlink_api_token', '') or ''
 
     status_emoji = "🟢" if is_enabled else "⚪"
-    status_text = "включено" if is_enabled else "выключено"
+    status_text = _tr('coupons.render_purchase_settings.1') if is_enabled else _tr('coupons.render_purchase_settings.2')
 
     if shop_id:
         if len(shop_id) >= 8:
-            shop_display = f"Установлен ✅ (<code>{escape_html(shop_id[:4])}...{escape_html(shop_id[-4:])}</code>)"
+            shop_display = _tr('cryptobot.masked_token.3', p0=f'{escape_html(shop_id[:4])}', p1=f'{escape_html(shop_id[-4:])}')
         else:
-            shop_display = "Установлен ✅"
+            shop_display = _tr('cryptobot.masked_token.2')
     else:
-        shop_display = "❌ Не задан"
+        shop_display = _tr('cryptobot.masked_token.1')
 
     if api_token:
         if len(api_token) >= 12:
-            token_display = f"Установлен ✅ (<code>{escape_html(api_token[:4])}...{escape_html(api_token[-4:])}</code>)"
+            token_display = _tr('cryptobot.masked_token.3', p0=f'{escape_html(api_token[:4])}', p1=f'{escape_html(api_token[-4:])}')
         else:
-            token_display = "Установлен ✅"
+            token_display = _tr('cryptobot.masked_token.2')
     else:
-        token_display = "❌ Не задан"
+        token_display = _tr('cryptobot.masked_token.1')
 
     # bot_name for return links
     try:
@@ -1937,25 +1763,7 @@ async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMConte
         bot_username = "your_bot"
 
     text = (
-        "🔗 <b>Cardlink</b>\n\n"
-        "Приём платежей картой и через СБП по прямой интеграции с "
-        "<a href=\"https://cardlink.link/\">cardlink.link</a> "
-        "(без webhook — проверка по кнопке «Я оплатил» и через возвратные ссылки).\n"
-        "Минимальная сумма платежа: <b>10 ₽</b>.\n\n"
-        "👉 <b>Почему это рекомендуемый метод:</b> Ниже комиссии и максимально нативная интеграция "
-        "с обратным переходом в бота после оплаты и автоматической проверкой платежа.\n\n"
-        "📋 <b>Как получить доступ:</b>\n"
-        "1. Зарегистрируйтесь на <a href=\"https://cardlink.link/\">cardlink.link</a>.\n"
-        "2. После одобрения скопируйте <b>Shop ID</b> и <b>API-токен</b> из ЛК.\n"
-        "3. Укажите их в кнопках ниже.\n\n"
-        "🔁 <b>Возврат в бота</b>\n"
-        f"• В каждый счёт бот передаёт точную ссылку вида "
-        f"<code>{build_telegram_link(bot_username, 'pay_cardlink_ORDER_ID')}</code>\n"
-        "• Статические ссылки без идентификатора заказа больше не поддерживаются.\n\n"
-        f"{status_emoji} Статус: <b>{status_text}</b>\n"
-        f"🆔 Shop ID: {shop_display}\n"
-        f"🔐 API-токен: {token_display}\n\n"
-        "Выберите действие:"
+        _tr('payments.show_cardlink_management_menu.1', p0=f"{build_telegram_link(bot_username, 'pay_cardlink_ORDER_ID')}", p1=f'{status_emoji}', p2=f'{status_text}', p3=f'{shop_display}', p4=f'{token_display}')
     )
 
     await safe_edit_or_send(
@@ -1969,27 +1777,27 @@ async def show_cardlink_management_menu(callback: CallbackQuery, state: FSMConte
 async def _set_cardlink_enabled(callback: CallbackQuery, state: FSMContext, target_enabled: bool):
     """Sets the payment status via Cardlink."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     current = is_cardlink_enabled()
     if current == target_enabled:
-        status = "уже включена" if target_enabled else "уже выключена"
-        await callback.answer(f"Cardlink-оплата {status}")
+        status = _tr('coupons.set_coupon_scenario_enabled.3') if target_enabled else _tr('coupons.set_coupon_scenario_enabled.4')
+        await callback.answer(_tr('payments.set_cardlink_enabled.1', p0=f'{status}'))
         return
 
     if target_enabled:
         shop_id = get_setting('cardlink_shop_id', '')
         api_token = get_setting('cardlink_api_token', '')
         if not shop_id or not shop_id.strip() or not api_token or not api_token.strip():
-            await callback.answer("❌ Сначала укажите Shop ID и API-токен!", show_alert=True)
+            await callback.answer(_tr('payments.set_cardlink_enabled.2'), show_alert=True)
             return
 
     new_value = '1' if target_enabled else '0'
     set_setting('cardlink_enabled', new_value)
 
-    status = "включена ✅" if new_value == '1' else "выключена"
-    await callback.answer(f"Cardlink-оплата {status}")
+    status = _tr('payments.set_cards_enabled.2') if new_value == '1' else _tr('payments.toggle_demo.2')
+    await callback.answer(_tr('payments.set_cardlink_enabled.1', p0=f'{status}'))
     await show_cardlink_management_menu(callback, state)
 
 
@@ -2010,7 +1818,7 @@ async def cardlink_mgmt_toggle(callback: CallbackQuery, state: FSMContext):
 async def cardlink_edit_shop_id(callback: CallbackQuery, state: FSMContext):
     """Requests Shop ID Cardlink."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.cardlink_setup_shop_id)
@@ -2018,9 +1826,7 @@ async def cardlink_edit_shop_id(callback: CallbackQuery, state: FSMContext):
 
     await safe_edit_or_send(
         callback.message,
-        "🆔 <b>Введите Shop ID Cardlink</b>\n\n"
-        "Найдите его в личном кабинете на <a href=\"https://cardlink.link/\">cardlink.link</a>.\n\n"
-        "<i>Значение будет частично скрыто после сохранения.</i>",
+        _tr('payments.cardlink_edit_shop_id.1'),
         reply_markup=back_and_home_kb("admin_payments_cardlink"),
     )
     await callback.answer()
@@ -2034,7 +1840,7 @@ async def cardlink_setup_shop_id_handler(message: Message, state: FSMContext):
     shop_id = get_message_text_for_storage(message, 'plain').strip()
 
     if len(shop_id) < 4:
-        await safe_edit_or_send(message, "❌ Слишком короткий Shop ID. Попробуйте ещё раз.")
+        await safe_edit_or_send(message, _tr('payments.cardlink_setup_shop_id_handler.1'))
         return
 
     try:
@@ -2074,7 +1880,7 @@ async def cardlink_setup_shop_id_handler(message: Message, state: FSMContext):
 async def cardlink_edit_api_token(callback: CallbackQuery, state: FSMContext):
     """Requests a Cardlink API token."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.cardlink_setup_api_token)
@@ -2082,9 +1888,7 @@ async def cardlink_edit_api_token(callback: CallbackQuery, state: FSMContext):
 
     await safe_edit_or_send(
         callback.message,
-        "🔐 <b>Введите API-токен Cardlink</b>\n\n"
-        "Сгенерируйте токен в личном кабинете на <a href=\"https://cardlink.link/\">cardlink.link</a>.\n\n"
-        "<i>Значение будет частично скрыто после сохранения.</i>",
+        _tr('payments.cardlink_edit_api_token.1'),
         reply_markup=back_and_home_kb("admin_payments_cardlink"),
     )
     await callback.answer()
@@ -2098,7 +1902,7 @@ async def cardlink_setup_api_token_handler(message: Message, state: FSMContext):
     api_token = get_message_text_for_storage(message, 'plain').strip()
 
     if len(api_token) < 8:
-        await safe_edit_or_send(message, "❌ Слишком короткий токен. Попробуйте ещё раз.")
+        await safe_edit_or_send(message, _tr('payments.wata_setup_token_handler.1'))
         return
 
     try:

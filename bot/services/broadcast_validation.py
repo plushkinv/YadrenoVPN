@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from localization import text as _tr
+
 import html.entities
 import re
 from html import unescape
@@ -54,57 +56,57 @@ class _TelegramHtmlParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
         if tag not in _ALLOWED_TAGS:
-            raise BroadcastValidationError(f"Telegram HTML: тег <{tag}> не поддерживается")
+            raise BroadcastValidationError(_tr('broadcast_validation.handle_starttag.1', p0=f'{tag}'))
         self._validate_attrs(tag, attrs)
         self.stack.append(tag)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        raise BroadcastValidationError(f"Telegram HTML: самозакрывающийся тег <{tag}/> не поддерживается")
+        raise BroadcastValidationError(_tr('broadcast_validation.handle_startendtag.1', p0=f'{tag}'))
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         if not self.stack or self.stack[-1] != tag:
-            raise BroadcastValidationError(f"Telegram HTML: нарушено закрытие тега </{tag}>")
+            raise BroadcastValidationError(_tr('broadcast_validation.handle_endtag.1', p0=f'{tag}'))
         self.stack.pop()
 
     def handle_data(self, data: str) -> None:
         if any(char in data for char in "<>&"):
             raise BroadcastValidationError(
-                "Telegram HTML: символы <, > и & в тексте нужно экранировать"
+                _tr('broadcast_validation.handle_data.1')
             )
         self.parts.append(data)
 
     def handle_comment(self, data: str) -> None:
-        raise BroadcastValidationError("Telegram HTML: комментарии не поддерживаются")
+        raise BroadcastValidationError(_tr('broadcast_validation.handle_comment.1'))
 
     def handle_decl(self, decl: str) -> None:
-        raise BroadcastValidationError("Telegram HTML: декларации не поддерживаются")
+        raise BroadcastValidationError(_tr('broadcast_validation.handle_decl.1'))
 
     def handle_pi(self, data: str) -> None:
-        raise BroadcastValidationError("Telegram HTML: инструкции обработки не поддерживаются")
+        raise BroadcastValidationError(_tr('broadcast_validation.handle_pi.1'))
 
     def unknown_decl(self, data: str) -> None:
-        raise BroadcastValidationError("Telegram HTML: неизвестная декларация")
+        raise BroadcastValidationError(_tr('broadcast_validation.unknown_decl.1'))
 
     def handle_entityref(self, name: str) -> None:
         if name not in html.entities.html5 and f"{name};" not in html.entities.html5:
-            raise BroadcastValidationError(f"Telegram HTML: неизвестная сущность &{name};")
+            raise BroadcastValidationError(_tr('broadcast_validation.handle_entityref.1', p0=f'{name}'))
         self.parts.append(f"&{name};")
 
     def handle_charref(self, name: str) -> None:
         try:
             value = int(name[1:], 16) if name.lower().startswith("x") else int(name)
         except ValueError as error:
-            raise BroadcastValidationError("Telegram HTML: некорректная числовая сущность") from error
+            raise BroadcastValidationError(_tr('broadcast_validation.handle_charref.1')) from error
         if not 0 <= value <= 0x10FFFF:
-            raise BroadcastValidationError("Telegram HTML: числовая сущность вне Unicode")
+            raise BroadcastValidationError(_tr('broadcast_validation.handle_charref.2'))
         self.parts.append(f"&#{name};")
 
     def close_and_validate(self) -> str:
         self.close()
         if self.stack:
             raise BroadcastValidationError(
-                f"Telegram HTML: не закрыт тег <{self.stack[-1]}>"
+                _tr('broadcast_validation.close_and_validate.1', p0=f'{self.stack[-1]}')
             )
         return unescape("".join(self.parts))
 
@@ -112,32 +114,32 @@ class _TelegramHtmlParser(HTMLParser):
     def _validate_attrs(tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_map = {str(key).lower(): value for key, value in attrs}
         if len(attr_map) != len(attrs):
-            raise BroadcastValidationError("Telegram HTML: атрибут тега указан дважды")
+            raise BroadcastValidationError(_tr('broadcast_validation.validate_attrs.1'))
         if tag == "a":
             if set(attr_map) != {"href"} or not attr_map.get("href"):
-                raise BroadcastValidationError("Telegram HTML: ссылка требует один атрибут href")
+                raise BroadcastValidationError(_tr('broadcast_validation.validate_attrs.2'))
             parsed = urlparse(str(attr_map["href"]))
             if parsed.scheme.lower() not in _ALLOWED_LINK_SCHEMES:
-                raise BroadcastValidationError("Telegram HTML: разрешены только http, https и tg ссылки")
+                raise BroadcastValidationError(_tr('broadcast_validation.validate_attrs.3'))
             return
         if tag == "span":
             if attr_map != {"class": "tg-spoiler"}:
-                raise BroadcastValidationError("Telegram HTML: span разрешён только для tg-spoiler")
+                raise BroadcastValidationError(_tr('broadcast_validation.validate_attrs.4'))
             return
         if tag == "tg-emoji":
             emoji_id = attr_map.get("emoji-id")
             if set(attr_map) != {"emoji-id"} or not str(emoji_id or "").isdigit():
-                raise BroadcastValidationError("Telegram HTML: tg-emoji требует числовой emoji-id")
+                raise BroadcastValidationError(_tr('broadcast_validation.validate_attrs.5'))
             return
         if tag == "code" and attr_map:
             class_name = str(attr_map.get("class") or "")
             if set(attr_map) != {"class"} or not _LANGUAGE_CLASS_RE.fullmatch(class_name):
-                raise BroadcastValidationError("Telegram HTML: некорректный class у code")
+                raise BroadcastValidationError(_tr('broadcast_validation.validate_attrs.6'))
             return
         if tag == "blockquote" and attr_map == {"expandable": None}:
             return
         if attr_map:
-            raise BroadcastValidationError(f"Telegram HTML: атрибуты тега <{tag}> не поддерживаются")
+            raise BroadcastValidationError(_tr('broadcast_validation.validate_attrs.7', p0=f'{tag}'))
 
 
 def _placeholder_test_value(name: str) -> str:
@@ -159,24 +161,24 @@ def _placeholder_test_value(name: str) -> str:
         "key_traffic_remaining_percent": "100",
         "referral_level": "999",
         "no_tariffs": "",
-    }.get(name, "Я" * 64)
+    }.get(name, _tr('broadcast_validation.placeholder_test_value.1') * 64)
 
 
 def validate_broadcast_message(text: Any, *, has_photo: bool = False) -> str:
     """Validate Telegram HTML/placeholders and return normalized message text."""
     if not isinstance(text, str) or not text.strip():
-        raise BroadcastValidationError("Текст рассылки не должен быть пустым")
+        raise BroadcastValidationError(_tr('broadcast_validation.validate_broadcast_message.1'))
     normalized = text.strip()
     specs = get_template_placeholder_specs(normalized, event_type="broadcast")
     unknown = sorted(token for token, spec in specs.items() if spec is None)
     if unknown:
         raise BroadcastValidationError(
-            "Неизвестные плейсхолдеры: " + ", ".join(unknown[:5])
+            _tr('broadcast_validation.validate_broadcast_message.2') + ", ".join(unknown[:5])
         )
     replacements = {}
     for token, (name, params) in specs.items():
         if not valid_placeholder_parameters(name, params):
-            raise BroadcastValidationError(f"Некорректные параметры плейсхолдера: {token}")
+            raise BroadcastValidationError(_tr('broadcast_validation.validate_broadcast_message.3', p0=f'{token}'))
         replacements[token] = escape_html(_placeholder_test_value(name))
     rendered = apply_page_placeholders(
         normalized, replacements=replacements, event_type="broadcast",
@@ -189,13 +191,13 @@ def validate_broadcast_message(text: Any, *, has_photo: bool = False) -> str:
     except BroadcastValidationError:
         raise
     except (ValueError, TypeError) as error:
-        raise BroadcastValidationError(f"Некорректный Telegram HTML: {error}") from error
+        raise BroadcastValidationError(_tr('broadcast_validation.validate_broadcast_message.4', p0=f'{error}')) from error
 
     limit = TELEGRAM_CAPTION_LIMIT if has_photo else TELEGRAM_TEXT_LIMIT
     if len(visible_text) > limit:
-        kind = "подписи к фото" if has_photo else "сообщения"
+        kind = _tr('broadcast_validation.validate_broadcast_message.5') if has_photo else _tr('broadcast_validation.validate_broadcast_message.6')
         raise BroadcastValidationError(
-            f"Текст длиннее лимита Telegram для {kind}: {len(visible_text)} из {limit}"
+            _tr('broadcast_validation.validate_broadcast_message.7', p0=f'{kind}', p1=f'{len(visible_text)}', p2=f'{limit}')
         )
     return normalized
 
@@ -203,23 +205,23 @@ def validate_broadcast_message(text: Any, *, has_photo: bool = False) -> str:
 def validate_generated_poll(data: Any) -> dict[str, Any]:
     """Validate and normalize a newly generated Telegram poll or quiz."""
     if not isinstance(data, dict):
-        raise BroadcastValidationError("Параметры опроса должны быть объектом")
+        raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.1'))
     question = str(data.get("question") or "").strip()
     if not 1 <= len(question) <= 300:
-        raise BroadcastValidationError("Вопрос опроса должен содержать от 1 до 300 символов")
+        raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.2'))
 
     raw_options = data.get("options")
     if not isinstance(raw_options, list) or not 2 <= len(raw_options) <= 12:
-        raise BroadcastValidationError("В опросе должно быть от 2 до 12 вариантов ответа")
+        raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.3'))
     options = [str(option).strip() for option in raw_options]
     if any(not 1 <= len(option) <= 100 for option in options):
-        raise BroadcastValidationError("Каждый вариант ответа должен содержать от 1 до 100 символов")
+        raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.4'))
     if len({option.casefold() for option in options}) != len(options):
-        raise BroadcastValidationError("Варианты ответа не должны повторяться")
+        raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.5'))
 
     poll_type = str(data.get("type") or data.get("poll_type") or "regular").lower()
     if poll_type not in {"regular", "quiz"}:
-        raise BroadcastValidationError("Тип опроса должен быть regular или quiz")
+        raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.6'))
     is_anonymous = bool(data.get("is_anonymous", True))
     allows_multiple = bool(data.get("allows_multiple_answers", False))
     normalized: dict[str, Any] = {
@@ -236,12 +238,12 @@ def validate_generated_poll(data: Any) -> dict[str, Any]:
         try:
             correct_option_id = int(data.get("correct_option_id"))
         except (TypeError, ValueError) as error:
-            raise BroadcastValidationError("Для викторины нужен correct_option_id") from error
+            raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.7')) from error
         if not 0 <= correct_option_id < len(options):
-            raise BroadcastValidationError("correct_option_id не соответствует вариантам ответа")
+            raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.8'))
         explanation = str(data.get("explanation") or "").strip()
         if len(explanation) > 200:
-            raise BroadcastValidationError("Пояснение викторины не должно превышать 200 символов")
+            raise BroadcastValidationError(_tr('broadcast_validation.validate_generated_poll.9'))
         normalized["correct_option_id"] = correct_option_id
         if explanation:
             normalized["explanation"] = explanation

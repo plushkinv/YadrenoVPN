@@ -37,7 +37,7 @@ def label_payment_methods(methods, page_key, buttons, *, account, tariff, price,
         raw = button.get('label')
         label = apply_page_placeholders(raw, context=context, mode='button_label').strip() if isinstance(raw, str) else ''
         if not label or contains_placeholder(label):
-            adapter = get_payment_provider_adapter(method['id'].removeprefix('ext_'))
+            adapter = get_payment_provider_adapter(method['id'])
             label = adapter.label if adapter else method['id']
         result.append({**method, 'label': label})
     return result

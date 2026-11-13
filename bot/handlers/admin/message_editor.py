@@ -6,6 +6,8 @@ Processes:
 - Callback help buttons (msg_editor_show_help)
 - Callback buttons to return to preview (msg_editor_back_to_preview)
 """
+
+from localization import text as _tr
 import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
@@ -93,7 +95,7 @@ async def show_message_editor(
 async def show_editor_help(callback: CallbackQuery, state: FSMContext):
     """Shows editor help (if help_text is passed)."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -118,12 +120,11 @@ async def show_editor_help(callback: CallbackQuery, state: FSMContext):
 async def show_editor_noop_alert(callback: CallbackQuery):
     """Shows a pop-up explanation if there is no separate help."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
         
     await callback.answer(
-        "📝 Чтобы изменить текст, просто отправьте боту новое сообщение.\n\n"
-        "Вы можете прикрепить фото, видео или GIF. Если медиа уже есть, новый текст сохранит его.",
+        _tr('message_editor.show_editor_noop_alert.1'),
         show_alert=True
     )
 
@@ -132,7 +133,7 @@ async def show_editor_noop_alert(callback: CallbackQuery):
 async def delete_editor_media(callback: CallbackQuery, state: FSMContext):
     """Removes media from the currently edited message."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     data = await state.get_data()
@@ -142,7 +143,7 @@ async def delete_editor_media(callback: CallbackQuery, state: FSMContext):
     allowed_types = data.get('allowed_types', ['text', 'photo', 'video', 'animation'])
 
     if not key:
-        await callback.answer("❌ Ошибка состояния", show_alert=True)
+        await callback.answer(_tr('message_editor.delete_editor_media.1'), show_alert=True)
         return
 
     if not any(media_type in allowed_types for media_type in ['photo', 'video', 'animation']):
@@ -164,7 +165,7 @@ async def delete_editor_media(callback: CallbackQuery, state: FSMContext):
 async def back_to_preview(callback: CallbackQuery, state: FSMContext):
     """Return to preview from help."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     data = await state.get_data()
@@ -174,7 +175,7 @@ async def back_to_preview(callback: CallbackQuery, state: FSMContext):
     allowed_types = data.get('allowed_types')
     
     if not key:
-        await callback.answer("❌ Ошибка состояния", show_alert=True)
+        await callback.answer(_tr('message_editor.delete_editor_media.1'), show_alert=True)
         return
     
     # Redrawing the preview
@@ -214,7 +215,7 @@ async def handle_editor_input(message: Message, state: FSMContext):
     
     if not key:
         await state.clear()
-        await safe_edit_or_send(message, "❌ Ошибка состояния.")
+        await safe_edit_or_send(message, _tr('groups.group_edit_name_handler.1'))
         return
     
     # Checking the message type

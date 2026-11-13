@@ -1,4 +1,6 @@
 """Local UI commands. Draft build/validation never activate a publication."""
+
+from localization import text as _tr
 import argparse
 import json
 import sys
@@ -11,19 +13,19 @@ from web_tools.publication import activate, publication_lock
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Локальные build/validate/preview и подписанные пакеты UI')
+    parser = argparse.ArgumentParser(description=_tr('__main__.main.1'))
     parser.add_argument('--root', type=Path, default=PROJECT_ROOT)
     parser.add_argument('--runtime', type=Path)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('build')
-    commands.add_parser('build-base', help='Собрать готовую базовую поставку на машине разработчика')
-    commands.add_parser('install-base', help='Подготовить подписанный кандидат из готовой поставки без Node')
-    restore = commands.add_parser('restore-local', help='Восстановить UI из защищённой локальной копии в чистые каталоги')
+    commands.add_parser('build-base', help=_tr('__main__.main.2'))
+    commands.add_parser('install-base', help=_tr('__main__.main.3'))
+    restore = commands.add_parser('restore-local', help=_tr('__main__.main.4'))
     restore.add_argument('backup', type=Path)
-    restore.add_argument('--system', action='store_true', help='Также восстановить собственные системные настройки без запуска сервисов')
+    restore.add_argument('--system', action='store_true', help=_tr('__main__.main.5'))
     commands.add_parser('trust')
-    reset = commands.add_parser('restore', help='Восстановить исходники; --publish также проверит и применит их')
-    reset.add_argument('source', help='published или идентификатор web-… из архива запроса')
+    reset = commands.add_parser('restore', help=_tr('__main__.main.6'))
+    reset.add_argument('source', help=_tr('__main__.main.7'))
     reset.add_argument('--publish', action='store_true')
     for name in ('validate', 'publish', 'preview'):
         child = commands.add_parser(name)

@@ -1,4 +1,9 @@
 @layer base {
+.application-language { min-width: 0; }
+.application-language input:is([type="tel"], [type="email"], [type="url"], [type="number"], [autocomplete="one-time-code"]),
+.application-language code, .application-language pre { direction: ltr; unicode-bidi: isolate; }
+.application-language [dir="rtl"] { text-align: start; }
+.application-language svg.lucide-chevron-right:dir(rtl), .application-language svg.lucide-arrow-left:dir(rtl) { transform: scaleX(-1); }
 .app { padding-top: max(env(safe-area-inset-top, 0px), var(--tg-safe-area-inset-top, 0px)); padding-bottom: var(--tg-content-safe-area-inset-bottom, 0px); }
 .form-panel { padding: 20px; display: grid; gap: 20px; }
 .app-form, .app-form fieldset { display: grid; gap: 20px; }

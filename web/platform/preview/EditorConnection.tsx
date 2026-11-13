@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { useEffect, useId, useRef, useState } from 'react';
 import { WifiOff } from 'lucide-react';
 
@@ -22,7 +23,7 @@ export function EditorConnection() {
     };
   }, [open]);
   return <div ref={root} className="admin-editor-connection">
-    <button type="button" className="admin-icon admin-connection-icon" aria-label="Связь с редактором недоступна"
+    <button type="button" className="admin-icon admin-connection-icon" aria-label={_tr("EditorConnection.1")}
       aria-describedby={open ? id : undefined} aria-expanded={open}
       onPointerEnter={event => { if (event.pointerType === 'mouse') { setHovered(true); setDismissed(false); } }}
       onPointerLeave={() => setHovered(false)}
@@ -32,7 +33,6 @@ export function EditorConnection() {
       <WifiOff aria-hidden="true" />
     </button>
     {open && <div id={id} role="tooltip" className="admin-connection-tooltip">
-      Не удаётся обновить данные редактора. После восстановления связи они обновятся автоматически.
-    </div>}
+      {_tr("EditorConnection.2")}</div>}
   </div>;
 }

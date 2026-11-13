@@ -30,6 +30,7 @@ def load_tariff_price_display_config() -> TariffPriceDisplayConfig:
     """Loads the base and distinct currencies currently available to users."""
     from database.requests import (
         is_cardlink_configured,
+        get_cards_currency,
         is_cards_enabled,
         is_crypto_configured,
         is_demo_payment_enabled,
@@ -42,7 +43,7 @@ def load_tariff_price_display_config() -> TariffPriceDisplayConfig:
     crypto_enabled = is_crypto_configured()
     stars_enabled = is_stars_enabled()
     rub_enabled = (
-        is_cards_enabled()
+        (is_cards_enabled() and get_cards_currency() == 'RUB')
         or is_yookassa_qr_configured()
         or is_wata_configured()
         or is_platega_configured()
@@ -58,6 +59,11 @@ def load_tariff_price_display_config() -> TariffPriceDisplayConfig:
         )
     except (ImportError, ValueError):
         extra_payment_types = ()
+    from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
+    from database.requests import is_gateway_configured
+    extra_payment_types += tuple(pid for pid in INTERNATIONAL_PROVIDERS if is_gateway_configured(pid))
+    if is_cards_enabled():
+        extra_payment_types += ('cards',)
     base = get_base_currency()
     return TariffPriceDisplayConfig(
         crypto_enabled=crypto_enabled,
@@ -89,7 +95,7 @@ def format_tariff_price_display(
     if display_config.stars_enabled:
         payment_types.append('stars')
     if display_config.rub_enabled:
-        payment_types.append('cards')
+        payment_types.append('yookassa_qr')
     payment_types.extend(display_config.extra_payment_types)
 
     prices: list[str] = []

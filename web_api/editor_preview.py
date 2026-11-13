@@ -95,8 +95,8 @@ class EditorPreviews:
                 raise ValueError('candidate preview inventory unavailable')
             if folder == 'publications/' and proof['custom_fingerprint'] != revision:
                 raise StaleRevision('Working files changed after restoration; the restored preview is no longer current.')
-            from web_tools.application import read_application
-            pages = read_application(bundle[2])['pages']
+            from web_tools.application import localized_pages
+            pages = localized_pages(bundle[2], db.get_installation_language())
             published = read_pointer(binding.project_root / 'web_runtime')['current'] == bundle[0]['build_id']
             return request_id, binding.task_id, viewed, bundle, pages, published
 

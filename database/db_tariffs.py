@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 import sqlite3
 import logging
 import secrets
@@ -271,7 +273,7 @@ def toggle_tariff_active(tariff_id: int) -> Optional[bool]:
             SET is_active = ?
             WHERE id = ?
         """, (new_status, tariff_id))
-        status_text = "активирован" if new_status else "скрыт"
+        status_text = _tr('db_tariffs.toggle_tariff_active.1') if new_status else _tr('db_tariffs.toggle_tariff_active.2')
         logger.info(f"Тариф ID {tariff_id}: {status_text}")
         return bool(new_status)
 

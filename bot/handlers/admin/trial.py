@@ -6,6 +6,8 @@ Trial feature management:
 - Editing page text
 - Select a tariff (including inactive ones, except Admin Tariff)
 """
+
+from localization import text as _tr
 import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
@@ -40,22 +42,14 @@ async def show_trial_menu(callback: CallbackQuery):
         tariff = get_tariff_by_id(tariff_id)
         if tariff:
             status = "🟢" if tariff['is_active'] else "⚪"
-            duration = 'Без срока' if int(tariff['duration_days']) == 0 else f"{tariff['duration_days']} дн."
+            duration = _tr('key_plans.duration_text.1') if int(tariff['duration_days']) == 0 else _tr('tariffs.admin_duration_text.1', p0=f"{tariff['duration_days']}", count=int(tariff['duration_days']))
             tariff_name = f"{status} {tariff['name']} ({duration})"
 
-    status_text = "🟢 Включена" if enabled else "⚪ Выключена"
-    tariff_text = escape_html(tariff_name) if tariff_name else "<i>не задан</i>"
+    status_text = _tr('trial.show_trial_menu.1') if enabled else _tr('trial.show_trial_menu.2')
+    tariff_text = escape_html(tariff_name) if tariff_name else _tr('trial.show_trial_menu.3')
 
     text = (
-        "🎁 <b>Пробная подписка</b>\n\n"
-        "Настройки основного пробного предложения.\n\n"
-        f"📌 <b>Статус:</b> {escape_html(status_text)}\n"
-        f"📋 <b>Тариф:</b> {tariff_text}\n\n"
-        "❓ <b>Как работает:</b>\n"
-        "• Если предложение включено и тариф задан — штатная кнопка появляется у пользователей, которым оно доступно.\n"
-        "• При активации — пользователю выдаётся ключ с выбранным тарифом.\n"
-        "• Переключатель управляет только основным предложением; дополнительные настраиваются через Yadreno Admin.\n"
-        "• Редактируемая страница подтверждения общая для всех пробных предложений."
+        _tr('trial.show_trial_menu.4', p0=f'{escape_html(status_text)}', p1=f'{tariff_text}')
     )
 
     await safe_edit_or_send(callback.message,
@@ -90,13 +84,13 @@ async def _set_trial_enabled(callback: CallbackQuery, target_enabled: bool):
 
     current = is_trial_enabled()
     if current == target_enabled:
-        status = "уже включена" if target_enabled else "уже выключена"
-        await callback.answer(f"Пробная подписка {status}")
+        status = _tr('coupons.set_coupon_scenario_enabled.3') if target_enabled else _tr('coupons.set_coupon_scenario_enabled.4')
+        await callback.answer(_tr('trial.set_trial_enabled.1', p0=f'{status}'))
         return
 
     set_primary_trial_enabled(target_enabled)
 
-    action = "включена" if target_enabled else "выключена"
+    action = _tr('payments.toggle_demo.1') if target_enabled else _tr('payments.toggle_demo.2')
     logger.info(f"Пробная подписка {action} (admin: {callback.from_user.id})")
 
     await show_trial_menu(callback)
@@ -158,15 +152,11 @@ async def admin_trial_select_tariff(callback: CallbackQuery):
     available = [t for t in tariffs if t.get('system_type') is None]
 
     if not available:
-        await callback.answer("❌ Нет доступных тарифов", show_alert=True)
+        await callback.answer(_tr('trial.admin_trial_select_tariff.1'), show_alert=True)
         return
 
     await safe_edit_or_send(callback.message,
-        "📋 <b>Выбор тарифа для пробной подписки</b>\n\n"
-        "Выберите тариф, который будет выдаваться пользователям.\n"
-        "Отображаются все тарифы, включая неактивные для покупки.\n\n"
-        "🟢 — активный тариф  |  ⚪ — неактивный тариф\n"
-        "🔘 — текущий выбор",
+        _tr('trial.admin_trial_select_tariff.2'),
         reply_markup=trial_tariff_select_kb(available, selected_id)
     )
     await callback.answer()
@@ -184,7 +174,7 @@ async def admin_trial_set_tariff(callback: CallbackQuery):
     tariff = get_tariff_by_id(tariff_id)
 
     if not tariff or tariff.get('system_type') is not None:
-        await callback.answer("❌ Тариф не найден", show_alert=True)
+        await callback.answer(_tr('tariffs.show_tariff_view.1'), show_alert=True)
         return
 
     set_primary_trial_tariff(tariff_id)
@@ -193,5 +183,5 @@ async def admin_trial_set_tariff(callback: CallbackQuery):
         f"({tariff['name']}) (admin: {callback.from_user.id})"
     )
 
-    await callback.answer(f"✅ Тариф «{tariff['name']}» выбран", show_alert=False)
+    await callback.answer(_tr('trial.admin_trial_set_tariff.1', p0=f"{tariff['name']}"), show_alert=False)
     await show_trial_menu(callback)

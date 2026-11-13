@@ -1,6 +1,8 @@
 """Best-effort administrator notices for rejected, preserved panel tokens."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import logging
 import time
 from functools import partial
@@ -64,12 +66,7 @@ def record_token_rejection(panel_key: str, server_id: int | None) -> None:
             for server in servers
         )
         text = (
-            '⚠️ <b>Панель не принимает API-ключ</b>\n\n'
-            f"Панель: {escape_html(str(panel['host']))}:{int(panel['port'])}\n"
-            f'Серверы с ошибкой:\n{names}\n\n'
-            'Токен сохранён. Бот продолжит использовать его при следующих обращениях. '
-            'Если ошибка сохраняется, проверьте API-ключ в панели 3X-UI и обновите '
-            'его в карточках перечисленных серверов в разделе «Сервера».'
+            _tr('panel_auth_notifications.record_token_rejection.1', p0=f"{escape_html(str(panel['host']))}", p1=f"{int(panel['port'])}", p2=f'{names}')
         )
         for admin_id in recipients:
             delivery.dispatch(partial(_send, admin_id=admin_id, text=text), bot=bot)

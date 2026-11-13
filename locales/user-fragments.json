@@ -1,0 +1,138 @@
+[
+  {
+    "key": "interface.action_dispatcher.dispatch_core_action.1",
+    "format": "plain",
+    "description": "Core interface: action_dispatcher / dispatch_core_action",
+    "placeholders": []
+  },
+  {
+    "key": "interface.action_dispatcher.dispatch_core_action.2",
+    "format": "plain",
+    "description": "Core interface: action_dispatcher / dispatch_core_action",
+    "placeholders": []
+  },
+  {
+    "key": "interface.action_dispatcher.dispatch_core_action.3",
+    "format": "plain",
+    "description": "Core interface: action_dispatcher / dispatch_core_action",
+    "placeholders": []
+  },
+  {
+    "key": "interface.action_dispatcher.redirect_to_extension_action.1",
+    "format": "plain",
+    "description": "Core interface: action_dispatcher / _redirect_to_extension_action",
+    "placeholders": []
+  },
+  {
+    "key": "interface.action_dispatcher.apply_extension_callback_result.1",
+    "format": "plain",
+    "description": "Core interface: action_dispatcher / apply_extension_callback_result",
+    "placeholders": []
+  },
+  {
+    "key": "interface.action_dispatcher.apply_extension_callback_result.2",
+    "format": "plain",
+    "description": "Core interface: action_dispatcher / apply_extension_callback_result",
+    "placeholders": []
+  },
+  {
+    "key": "interface.page_flow.run_page_guards.1",
+    "format": "plain",
+    "description": "Core interface: page_flow / run_page_guards",
+    "placeholders": []
+  },
+  {
+    "key": "interface.page_flow.not_banned_guard.1",
+    "format": "plain",
+    "description": "Core interface: page_flow / _not_banned_guard",
+    "placeholders": []
+  },
+  {
+    "key": "interface.page_flow.referral_enabled_guard.1",
+    "format": "plain",
+    "description": "Core interface: page_flow / _referral_enabled_guard",
+    "placeholders": []
+  },
+  {
+    "key": "interface.policy_registry.apply_pricing_policies.1",
+    "format": "plain",
+    "description": "Core interface: policy_registry / apply_pricing_policies",
+    "placeholders": []
+  },
+  {
+    "key": "support.button.contact",
+    "format": "button",
+    "description": "Open the configured support link.",
+    "placeholders": []
+  },
+  {
+    "key": "support.button.reply",
+    "format": "button",
+    "description": "Reply in the support conversation.",
+    "placeholders": []
+  },
+  {
+    "key": "navigation.home",
+    "format": "button",
+    "description": "Return to the user home page.",
+    "placeholders": []
+  },
+  {
+    "key": "navigation.cancel",
+    "format": "button",
+    "description": "Cancel user input.",
+    "placeholders": []
+  },
+  {
+    "key": "tariff.missing",
+    "format": "html",
+    "description": "The selected tariff is no longer available.",
+    "placeholders": []
+  },
+  {
+    "key": "key.name.draft",
+    "format": "plain",
+    "description": "Default display name for an unnamed key.",
+    "placeholders": [
+      "key_id"
+    ]
+  },
+  {
+    "key": "key.name.default",
+    "format": "plain",
+    "description": "Default display name for an unnamed key.",
+    "placeholders": [
+      "key_id"
+    ]
+  },
+  {
+    "key": "balance.reason.payment",
+    "format": "plain",
+    "description": "Default history reason for a payment-funded balance top-up.",
+    "placeholders": []
+  },
+  {
+    "key": "reward.reason.promotion",
+    "format": "plain",
+    "description": "Default history reason for an unlabeled promotion reward.",
+    "placeholders": []
+  },
+  {
+    "key": "command.start",
+    "format": "plain",
+    "description": "Telegram menu description for /start.",
+    "placeholders": []
+  },
+  {
+    "key": "command.mykeys",
+    "format": "plain",
+    "description": "Telegram menu description for /mykeys.",
+    "placeholders": []
+  },
+  {
+    "key": "command.help",
+    "format": "plain",
+    "description": "Telegram menu description for /help.",
+    "placeholders": []
+  }
+]

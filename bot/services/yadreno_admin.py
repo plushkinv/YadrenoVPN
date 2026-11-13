@@ -6,6 +6,8 @@ process → poll → tool_result → final, as well as local execution of tool_c
 """
 from __future__ import annotations
 
+from localization import text as _tr, language as installation_language
+
 import asyncio
 import json
 import logging
@@ -23,6 +25,9 @@ import aiohttp
 
 from bot.services import yadreno_admin_web_diagnostics as web_diagnostics
 from bot.knowledge_version import KNOWLEDGE_VERSION
+from bot.services.yadreno_admin_secret_inputs import (
+    SECRET_INPUTS_CAPABILITY, sqlite_parameters, subprocess_secret_environment,
+)
 from bot.services.yadreno_admin_broadcast_context import (
     BroadcastRuntimeContextError,
     build_broadcast_runtime_context,
@@ -111,12 +116,10 @@ SATELLITE_CAPABILITIES: tuple[str, ...] = (
     RICH_MESSAGES_CAPABILITY,
 )
 HUB_MAINTENANCE_FALLBACK_MESSAGE = (
-    "Сервис временно на техническом обслуживании. "
-    "Попробуйте снова через несколько минут."
+    _tr('yadreno_admin.module.1')
 )
 HUB_TEMPORARILY_UNAVAILABLE_MESSAGE = (
-    "Хаб Yadreno Admin временно недоступен. Возможно, идёт техническое "
-    "обслуживание или обновление. Попробуйте снова через несколько минут."
+    _tr('yadreno_admin.module.2')
 )
 _YADRENO_ADMIN_API_KEY_RE = re.compile(
     r"[A-Za-z0-9\-._~+/]+=*",
@@ -166,15 +169,15 @@ _hub_endpoint_selector = _HubEndpointSelector(HUB_URLS)
 _dangerous_shell_patterns: tuple[tuple[str, str], ...] = (
     (
         r"(^|[;&|]\s*)(sudo\s+)?rm\s+([^\n;&|]*\s)?-(?=[^\s\n;&|]*r)(?=[^\s\n;&|]*f)[^\s\n;&|]*\s+(?:-[^\s\n;&|]+\s+)*(--\s+)?(/|\*/|/\*|~|\$HOME)(\s|$)",
-        "опасное рекурсивное удаление",
+        _tr('yadreno_admin.module.3'),
     ),
     (
         r"\bmkfs(\.[a-z0-9_-]+)?\b",
-        "форматирование файловой системы",
+        _tr('yadreno_admin.module.4'),
     ),
     (
         r"\bdd\b[^\n;&|]*\bof\s*=\s*/dev/",
-        "прямая запись dd в /dev",
+        _tr('yadreno_admin.module.5'),
     ),
     (
         r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:",
@@ -182,11 +185,11 @@ _dangerous_shell_patterns: tuple[tuple[str, str], ...] = (
     ),
     (
         r"\b(chmod|chown|chgrp)\b[^\n;&|]*\s-[^\n;&|]*R[^\n;&|]*(\s/|\s/\*)",
-        "рекурсивная смена прав/владельца от корня",
+        _tr('yadreno_admin.module.6'),
     ),
     (
         r"\b(curl|wget)\b[^\n]*(\|\s*(sudo\s+)?(ba)?sh\b)",
-        "pipe curl/wget в shell",
+        _tr('yadreno_admin.module.7'),
     ),
 )
 _guard_integrity_shell_patterns: tuple[tuple[str, str], ...] = (
@@ -257,9 +260,12 @@ def _capabilities_for_skill(
     customization_tools_supported: bool = False,
     customization_tools_v3_supported: bool = False,
     file_edits_supported: bool = False,
+    secret_inputs_supported: bool = False,
 ) -> list[str]:
     """Advertise confirmed optional capabilities; keep broadcast tools isolated."""
     capabilities = [*SATELLITE_CAPABILITIES, KNOWLEDGE_VERSION_CAPABILITY]
+    if secret_inputs_supported:
+        capabilities.append(SECRET_INPUTS_CAPABILITY)
     if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
         capabilities.append(BROADCAST_EDITOR_CAPABILITY)
     elif file_edits_supported:
@@ -317,8 +323,7 @@ def _application_identity_fields(capabilities: list[str]) -> dict[str, str]:
             "Missing or invalid Satellite application_id",
             kind="local",
             user_message=(
-                "Постоянный идентификатор проекта отсутствует или повреждён. "
-                "Обратитесь к разработчику."
+                _tr('yadreno_admin.application_identity_fields.1')
             ),
         )
     return {"application_id": application_id}
@@ -367,6 +372,7 @@ def build_agent_runtime_context(
 ) -> dict[str, Any]:
     """Build request-scoped runtime data for structured and legacy hubs."""
     context: dict[str, Any] = {
+        "installation_language": installation_language(),
         "bot_release": BOT_RELEASE,
         "bot_commit": BOT_COMMIT,
         "environment": build_agent_env_context(),
@@ -450,16 +456,14 @@ def _build_runtime_context_or_error(
         raise YadrenoAdminError(
             f"Failed to build active /yaa page context: {exc}",
             user_message=(
-                "Не удалось заново собрать контекст закреплённой страницы. "
-                "Запрос агенту не отправлен; попробуйте ещё раз."
+                _tr('yadreno_admin.build_runtime_context_or_error.1')
             ),
         ) from exc
     except BroadcastRuntimeContextError as exc:
         raise YadrenoAdminError(
             "Failed to build broadcast editor context",
             user_message=(
-                "Не удалось прочитать состояние редактора рассылки. "
-                "Запрос агенту не отправлен; попробуйте ещё раз."
+                _tr('yadreno_admin.build_runtime_context_or_error.2')
             ),
         ) from exc
 
@@ -470,9 +474,7 @@ def _with_agent_runtime_context(
 ) -> str:
     """Prefix a request for a legacy hub without structured context support."""
     return (
-        "Служебный контекст:\n"
-        f"{json.dumps(runtime_context, ensure_ascii=False, separators=(',', ':'))}\n\n"
-        f"{message}"
+        _tr('yadreno_admin.with_agent_runtime_context.1', p0=f"{json.dumps(runtime_context, ensure_ascii=False, separators=(',', ':'))}", p1=f'{message}')
     )
 
 
@@ -1197,9 +1199,7 @@ def _incompatible_broadcast_hub(detail: str) -> YadrenoAdminError:
     return YadrenoAdminError(
         f"incompatible broadcast editor hub: {detail}",
         user_message=(
-            "Редактор рассылок пока несовместим с хабом. "
-            "Сначала обновите Yadreno Admin на хабе, затем повторите /yaa. "
-            "Обычная рассылка при этом продолжает работать."
+            _tr('yadreno_admin.incompatible_broadcast_hub.1')
         ),
     )
 
@@ -1210,8 +1210,7 @@ def _incompatible_customization_hub(detail: str) -> YadrenoAdminError:
     return YadrenoAdminError(
         f"incompatible customization hub: {detail}",
         user_message=(
-            "Не удалось безопасно согласовать режим /yaa с хабом. "
-            "Проверьте подключение и API-ключ типа YadrenoVPN, затем повторите запрос."
+            _tr('yadreno_admin.incompatible_customization_hub.1')
         ),
     )
 
@@ -1383,7 +1382,7 @@ def _require_knowledge_version_support(capabilities: set[str]) -> None:
         web_diagnostics.failure_reason('knowledge_version_capability_missing')
         raise YadrenoAdminError(
             "Hub lacks knowledge_version_v1",
-            user_message="Hub не поддерживает выбор версии БЗ. Обратитесь к администратору Hub для обновления.",
+            user_message=_tr('yadreno_admin.require_knowledge_version_support.1'),
             kind="protocol",
         )
 
@@ -1565,8 +1564,9 @@ async def _execute_shell(
 
     timeout = _get_timeout(args)
     try:
+        child_environment = subprocess_secret_environment(args)
         _reject_dangerous_shell(command)
-    except DangerousShellCommandError as e:
+    except (DangerousShellCommandError, ValueError) as e:
         return {"result": "", "error": str(e)}
 
     try:
@@ -1574,6 +1574,7 @@ async def _execute_shell(
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(PROJECT_ROOT),
+                **({"env": child_environment} if child_environment is not None else {}),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -1583,6 +1584,7 @@ async def _execute_shell(
                 "-c",
                 command,
                 cwd=str(PROJECT_ROOT),
+                **({"env": child_environment} if child_environment is not None else {}),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -1673,8 +1675,9 @@ async def _run_script(
 
     timeout = _get_timeout(args)
     try:
+        child_environment = subprocess_secret_environment(args)
         _reject_dangerous_shell(script_body)
-    except DangerousShellCommandError as e:
+    except (DangerousShellCommandError, ValueError) as e:
         return {"result": "", "error": str(e)}
 
     script_path: Optional[Path] = None
@@ -1696,6 +1699,7 @@ async def _run_script(
         process = await asyncio.create_subprocess_exec(
             *runner,
             cwd=str(PROJECT_ROOT),
+            **({"env": child_environment} if child_environment is not None else {}),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -1750,6 +1754,11 @@ async def _execute_sqlite(
     if not query:
         return {"result": "", "error": "empty query"}
 
+    try:
+        params = sqlite_parameters(args)
+    except ValueError as exc:
+        return {"result": "", "error": str(exc)}
+
     def _run() -> dict[str, Any]:
         statement_match = re.match(r"^\s*([A-Za-z]+)", query)
         statement_type = (
@@ -1792,7 +1801,7 @@ async def _execute_sqlite(
                 if not foreign_keys_row or int(foreign_keys_row[0]) != 1:
                     raise RuntimeError("sqlite foreign_keys could not be enabled")
                 conn.set_authorizer(_authorizer)
-                cursor = conn.execute(query)
+                cursor = conn.execute(query) if params is None else conn.execute(query, params)
                 if cursor.description:
                     columns = [item[0] for item in cursor.description]
                     rows = cursor.fetchall()
@@ -1832,6 +1841,8 @@ async def _execute_sql_cli(
     Credentials are deliberately not stored in the code: mysql/psql use it themselves
     environment and local process user configs.
     """
+    if "params" in args:
+        return {"result": "", "error": "CLI parameters must be prepared by the Hub; separate params are SQLite-only"}
     binary = shutil.which(binary_name)
     if not binary:
         return {"result": "", "error": f"{binary_name} is not installed or not in PATH"}
@@ -2251,7 +2262,7 @@ async def _poll_until_final(
             if status_code == 204:
                 continue
             if not event:
-                raise YadrenoAdminError("Хаб вернул пустое событие")
+                raise YadrenoAdminError(_tr('yadreno_admin.poll_until_final.1'))
 
             if event.get("event") == "tool_call":
                 tool_call_id = str(event.get("tool_call_id") or "")
@@ -2274,10 +2285,7 @@ async def _poll_until_final(
                     tool_result = interrupted_tool_result(request_id, tool_call_id) or {
                         "result": "",
                         "error": (
-                            "Локальный сателлит был перезапущен во время выполнения "
-                            "этого tool_call. Результат неизвестен; проверь состояние "
-                            "новыми read-only командами и продолжай без повторения "
-                            "опасного действия."
+                            _tr('yadreno_admin.poll_until_final.2')
                         ),
                     }
                 else:
@@ -2353,7 +2361,7 @@ async def _poll_until_final(
                     request_id=request_id,
                 )
 
-            raise YadrenoAdminError(f"Неизвестное событие хаба: {event}")
+            raise YadrenoAdminError(_tr('yadreno_admin.poll_until_final.3', p0=f'{event}'))
     finally:
         if final_received:
             _clear_active_request(
@@ -2450,6 +2458,7 @@ async def run_dialog(
                     CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities
                 ),
                 file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
+                secret_inputs_supported=SECRET_INPUTS_CAPABILITY in negotiated_capabilities,
             ),
         }
         payload.update(_application_identity_fields(payload["capabilities"]))
@@ -2469,7 +2478,7 @@ async def run_dialog(
             json_payload=payload,
         )
         if not process_data:
-            raise YadrenoAdminError("Хаб вернул пустой ответ на /process")
+            raise YadrenoAdminError(_tr('yadreno_admin.run_dialog.1'))
 
         _validate_specialized_hub_response(process_data, effective_skill_id)
         _raise_for_hub_rejection(process_data, "process request")
@@ -2606,6 +2615,7 @@ async def run_dialog_with_uploads(
                 CUSTOMIZATION_TOOLS_V3_CAPABILITY in negotiated_capabilities
             ),
             file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
+            secret_inputs_supported=SECRET_INPUTS_CAPABILITY in negotiated_capabilities,
         )
         fields: dict[str, str | int] = {
             "message": agent_message,
@@ -2648,7 +2658,7 @@ async def run_dialog_with_uploads(
             **({'voice_upload': voice_upload} if voice_upload is not None else {}),
         )
         if not upload_data:
-            raise YadrenoAdminError("Хаб вернул пустой ответ на upload")
+            raise YadrenoAdminError(_tr('yadreno_admin.run_dialog_with_uploads.1'))
 
         _validate_specialized_hub_response(upload_data, effective_skill_id)
         _raise_for_hub_rejection(upload_data, "upload request")
@@ -2710,7 +2720,7 @@ async def resume_active_dialog(
             if not hub_status.resume_allowed:
                 raise YadrenoAdminError(
                     hub_status.response_text
-                    or "Hub не подтвердил живую задачу для восстановления polling."
+                    or _tr('yadreno_admin.resume_active_dialog.1')
                 )
             runtime_context_factory = None
             web_binding = None
@@ -2988,7 +2998,7 @@ async def start_new_chat(
             json_payload=payload,
         )
     if not data:
-        raise YadrenoAdminError("Хаб вернул пустой ответ на /new_chat")
+        raise YadrenoAdminError(_tr('yadreno_admin.start_new_chat.1'))
 
     _validate_specialized_hub_response(data, effective_skill_id)
     result = YadrenoAdminNewChatResult(
@@ -3098,7 +3108,7 @@ async def cancel_active_dialog(
 
 def _format_recovered_final(content: str) -> str:
     """Formats the final delivered by background startup recovery."""
-    return content or "Готово."
+    return content or _tr('yadreno_admin.format_final_response.1')
 
 
 def _recovered_final_keyboard(topic_id: int, viewer_url: Optional[str]) -> Any:

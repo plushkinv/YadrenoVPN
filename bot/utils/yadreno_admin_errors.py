@@ -1,6 +1,8 @@
 """User-facing Yadreno Admin error messages."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from bot.services.yadreno_admin import YadrenoAdminError
 from bot.utils.telegram_links import build_telegram_link
 from bot.utils.text import escape_html
@@ -20,19 +22,16 @@ def yadreno_admin_error_alert(error: YadrenoAdminError) -> str:
     """Build a short plain-text error for a Telegram callback alert."""
     if error.kind == "configuration":
         return (
-            "Ключ Yadreno Admin повреждён. "
-            "Замените его в настройках Yadreno Admin."
+            _tr('yadreno_admin_errors.yadreno_admin_error_alert.1')
         )
     if _is_api_key_error(error):
         return (
-            "Текущий ключ Yadreno Admin больше не подходит. "
-            "Если вы меняли сервер, выпустите новый ключ в @YadrenoAdmin_Bot."
+            _tr('yadreno_admin_errors.yadreno_admin_error_alert.2')
         )
     if error.user_message:
         return error.user_message[:180]
     return (
-        "Хаб Yadreno Admin временно недоступен. Возможно, идёт техническое "
-        "обслуживание или обновление. Попробуйте ещё раз чуть позже."
+        _tr('yadreno_admin_errors.yadreno_admin_error_alert.3')
     )
 
 
@@ -43,48 +42,41 @@ def format_yadreno_admin_error(
 ) -> str:
     """Build a safe, actionable Telegram HTML error without hub internals."""
     if error.kind == "configuration":
-        default_title = "Ключ Yadreno Admin повреждён"
+        default_title = _tr('yadreno_admin_errors.format_yadreno_admin_error.1')
         icon = "❌"
         body = (
-            "Сохранённый ключ имеет некорректный формат и не может быть "
-            "отправлен в Yadreno Admin.\n\n"
-            "Замените его в настройках Yadreno Admin."
+            _tr('yadreno_admin_errors.format_yadreno_admin_error.2')
         )
     elif _is_api_key_error(error):
-        default_title = "Ключ Yadreno Admin не принят"
+        default_title = _tr('yadreno_admin_errors.format_yadreno_admin_error.3')
         icon = "❌"
         bot_link = build_telegram_link("YadrenoAdmin_Bot")
         body = (
-            "Текущий ключ доступа больше не подходит.\n\n"
-            "Возможно, вы меняли сервер. Выпустите новый ключ в "
-            f'<a href="{bot_link}">@YadrenoAdmin_Bot</a>, затем замените его '
-            "в настройках Yadreno Admin."
+            _tr('yadreno_admin_errors.format_yadreno_admin_error.4', p0=f'{bot_link}')
         )
     elif error.kind == "maintenance":
-        default_title = "Хаб на техническом обслуживании"
+        default_title = _tr('yadreno_admin_errors.format_yadreno_admin_error.5')
         icon = "⏳"
         body = escape_html(
             error.user_message
-            or "Сервис временно на обслуживании. Попробуйте снова чуть позже."
+            or _tr('yadreno_admin_errors.format_yadreno_admin_error.6')
         )
     elif error.kind == "service_unavailable":
-        default_title = "Хаб временно недоступен"
+        default_title = _tr('yadreno_admin_errors.format_yadreno_admin_error.7')
         icon = "⏳"
         body = escape_html(
             error.user_message
-            or "Возможно, идёт техническое обслуживание или обновление. "
-            "Попробуйте снова через несколько минут."
+            or _tr('yadreno_admin_errors.format_yadreno_admin_error.8')
         )
     elif error.user_message:
-        default_title = "Запрос не выполнен"
+        default_title = _tr('yadreno_admin_errors.format_yadreno_admin_error.9')
         icon = "⚠️"
         body = escape_html(error.user_message)
     else:
-        default_title = "Хаб временно недоступен"
+        default_title = _tr('yadreno_admin_errors.format_yadreno_admin_error.7')
         icon = "⏳"
         body = (
-            "Сервис временно не отвечает. Возможно, на хабе идёт техническое "
-            "обслуживание или обновление. Попробуйте ещё раз чуть позже."
+            _tr('yadreno_admin_errors.format_yadreno_admin_error.10')
         )
 
     return f"{icon} <b>{escape_html(title or default_title)}</b>\n\n{body}"

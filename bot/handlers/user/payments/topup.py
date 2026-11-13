@@ -140,6 +140,10 @@ def _balance_spending_enabled() -> bool:
 
 
 def _topup_provider_configured(telegram_id: int) -> bool:
+    from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
+    from database.requests import is_gateway_configured
+    if any(is_gateway_configured(pid) for pid in INTERNATIONAL_PROVIDERS):
+        return True
     if any((
         is_crypto_configured(),
         is_cryptobot_configured(),

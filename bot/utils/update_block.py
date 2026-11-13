@@ -10,6 +10,8 @@ Settings in settings:
 The message text is taken from bot.blocking_update.BLOCKING_MESSAGE,
 if not specified, DEFAULT_BLOCKED_MESSAGE is used.
 """
+
+from localization import text as _tr
 import logging
 import importlib
 
@@ -18,13 +20,7 @@ from database.requests import get_setting, set_setting
 logger = logging.getLogger(__name__)
 
 DEFAULT_BLOCKED_MESSAGE = (
-    "🔒 <b>Обновления приостановлены</b>\n\n"
-    "Для продолжения автоматических обновлений "
-    "необходимо выполнить определённые действия в боте.\n\n"
-    "Аварийные режимы восстановления:\n"
-    "• Команда /update — экстренное обновление\n"
-    "• Консольная команда bash install.sh reset — жёсткая перезапись\n\n"
-    "После выполнения требуемых действий блокировка снимется автоматически."
+    _tr('update_block.module.1')
 )
 
 

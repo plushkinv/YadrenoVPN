@@ -7,6 +7,8 @@ Setting up a referral program:
 - Setting levels (1-3)
 - Text of conditions
 """
+
+from localization import text as _tr
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -46,18 +48,15 @@ async def show_referral_menu(callback: CallbackQuery, state: FSMContext):
     levels = get_referral_levels()
     
     status_emoji = "🟢" if enabled else "⚪"
-    status_text = "включена" if enabled else "выключена"
+    status_text = _tr('payments.toggle_demo.1') if enabled else _tr('payments.toggle_demo.2')
     
     if reward_type == 'days':
-        type_text = "📅 Дни к ключу"
+        type_text = _tr('referral.show_referral_menu.1')
     else:
-        type_text = "💰 На баланс"
+        type_text = _tr('referral.show_referral_menu.2')
     
     text = (
-        f"🔗 <b>Реферальная система</b>\n\n"
-        f"{status_emoji} Статус: <b>{status_text}</b>\n"
-        f"📊 Режим начисления: <b>{type_text}</b>\n\n"
-        f"<b>Уровни:</b>\n"
+        _tr('referral.show_referral_menu.3', p0=f'{status_emoji}', p1=f'{status_text}', p2=f'{type_text}')
     )
     
     for level in levels:
@@ -65,9 +64,9 @@ async def show_referral_menu(callback: CallbackQuery, state: FSMContext):
         percent = level['percent']
         is_enabled = level['enabled']
         status = "✅" if is_enabled else "⚪"
-        text += f"{status} Уровень {level_num}: {percent}%\n"
+        text += _tr('referral.show_referral_menu.4', p0=f'{status}', p1=f'{level_num}', p2=f'{percent}')
     
-    text += "\nВыберите действие:"
+    text += _tr('referral.show_referral_menu.5')
     
     await safe_edit_or_send(callback.message, 
         text,
@@ -80,7 +79,7 @@ async def show_referral_menu(callback: CallbackQuery, state: FSMContext):
 async def admin_referral(callback: CallbackQuery, state: FSMContext):
     """Login to the referral system section."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     await show_referral_menu(callback, state)
@@ -93,14 +92,14 @@ async def _set_referral_enabled(
 ) -> None:
     """Set the referral system state and redraw its administrator screen."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     current = bool(is_referral_enabled())
     desired = not current if target_enabled is None else target_enabled
     if desired == current:
-        status = "уже включена" if desired else "уже выключена"
-        await callback.answer(f"Реферальная система {status}")
+        status = _tr('coupons.set_coupon_scenario_enabled.3') if desired else _tr('coupons.set_coupon_scenario_enabled.4')
+        await callback.answer(_tr('referral.set_referral_enabled.1', p0=f'{status}'))
         return
 
     update_referral_setting('referral_enabled', '1' if desired else '0')
@@ -124,7 +123,7 @@ async def referral_toggle(callback: CallbackQuery, state: FSMContext):
 async def referral_toggle_type(callback: CallbackQuery, state: FSMContext):
     """Switching the accrual mode."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     current = get_referral_reward_type()
@@ -132,9 +131,9 @@ async def referral_toggle_type(callback: CallbackQuery, state: FSMContext):
     update_referral_setting('referral_reward_type', new_value)
     
     if new_value == 'days':
-        await callback.answer("Режим: Дни к ключу")
+        await callback.answer(_tr('referral.referral_toggle_type.1'))
     else:
-        await callback.answer("Режим: На баланс")
+        await callback.answer(_tr('referral.referral_toggle_type.2'))
     
     await show_referral_menu(callback, state)
 
@@ -143,7 +142,7 @@ async def referral_toggle_type(callback: CallbackQuery, state: FSMContext):
 async def referral_level_view(callback: CallbackQuery, state: FSMContext):
     """View the level."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     level_num = int(callback.data.split(':')[1])
@@ -156,19 +155,16 @@ async def referral_level_view(callback: CallbackQuery, state: FSMContext):
             break
     
     if not level:
-        await callback.answer("Уровень не найден", show_alert=True)
+        await callback.answer(_tr('referral.referral_level_view.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.referral_level_edit)
     await state.update_data(current_level=level_num)
     
-    status = "включён" if level['enabled'] else "выключен"
+    status = _tr('groups.build_group_view_text.3') if level['enabled'] else _tr('groups.build_group_view_text.4')
     
     text = (
-        f"📊 <b>Уровень {level_num}</b>\n\n"
-        f"Процент: <b>{level['percent']}%</b>\n"
-        f"Статус: <b>{status}</b>\n\n"
-        "Выберите действие:"
+        _tr('referral.referral_level_view.2', p0=f'{level_num}', p1=f"{level['percent']}", p2=f'{status}')
     )
     
     await safe_edit_or_send(callback.message, 
@@ -187,7 +183,7 @@ async def _set_referral_level_enabled(
 ) -> None:
     """Set one referral level state and redraw its administrator screen."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     levels = get_referral_levels()
@@ -198,14 +194,14 @@ async def _set_referral_level_enabled(
             break
 
     if not level:
-        await callback.answer("Уровень не найден", show_alert=True)
+        await callback.answer(_tr('referral.referral_level_view.1'), show_alert=True)
         return
 
     current = bool(level['enabled'])
     desired = not current if target_enabled is None else target_enabled
     if desired == current:
-        status = "уже включён" if desired else "уже выключен"
-        await callback.answer(f"Уровень {level_num} {status}")
+        status = _tr('referral.set_referral_level_enabled.1') if desired else _tr('referral.set_referral_level_enabled.2')
+        await callback.answer(_tr('referral.set_referral_level_enabled.3', p0=f'{level_num}', p1=f'{status}'))
         return
 
     update_referral_level(level_num, level['percent'], desired)
@@ -240,7 +236,7 @@ async def referral_level_toggle(callback: CallbackQuery, state: FSMContext):
 async def referral_level_percent_start(callback: CallbackQuery, state: FSMContext):
     """Request a new percentage for a level."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     level_num = int(callback.data.split(':')[1])
@@ -253,7 +249,7 @@ async def referral_level_percent_start(callback: CallbackQuery, state: FSMContex
             break
     
     if not level:
-        await callback.answer("Уровень не найден", show_alert=True)
+        await callback.answer(_tr('referral.referral_level_view.1'), show_alert=True)
         return
     
     await state.set_state(AdminStates.referral_level_edit)
@@ -263,9 +259,7 @@ async def referral_level_percent_start(callback: CallbackQuery, state: FSMContex
     )
     
     text = (
-        f"📊 <b>Уровень {level_num}</b>\n\n"
-        f"Текущий процент: <b>{level['percent']}%</b>\n\n"
-        "Введите новый процент (1-100):"
+        _tr('referral.referral_level_percent_start.1', p0=f'{level_num}', p1=f"{level['percent']}")
     )
     
     await safe_edit_or_send(callback.message, 
@@ -293,7 +287,7 @@ async def referral_level_percent_input(message: Message, state: FSMContext):
     text = get_message_text_for_storage(message, 'plain')
     
     if not text.isdigit() or not (1 <= int(text) <= 100):
-        await safe_edit_or_send(message, "❌ Введите число от 1 до 100:")
+        await safe_edit_or_send(message, _tr('referral.referral_level_percent_input.1'))
         return
     
     new_percent = int(text)
@@ -332,7 +326,7 @@ async def referral_level_percent_input(message: Message, state: FSMContext):
 async def referral_conditions_start(callback: CallbackQuery, state: FSMContext):
     """Editing the text of conditions using a universal editor."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     
     from bot.handlers.admin.message_editor import show_message_editor

@@ -28,6 +28,14 @@ def prepare_payment_provider_buttons(page_key: str | None, defaults: list[dict])
     """Add runtime defaults before merging saved whole-button overrides."""
     if page_key not in _METHOD_PAGES:
         return defaults
+    from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
+    # Existing extensions retain their provider IDs and labels when a new builtin
+    # has the same name. Saved whole-button customizations are merged afterwards.
+    custom_labels = {f'{_BUTTON_PREFIX}{item.provider_id}': item.label for item in list_payment_providers()
+                     if item.provider_id in INTERNATIONAL_PROVIDERS}
+    if custom_labels:
+        defaults = [{**item, 'label': custom_labels[item['id']]} if item.get('id') in custom_labels else item
+                    for item in defaults]
     existing_ids = {button.get('id') for button in defaults if isinstance(button.get('id'), str)}
     providers = [
         provider for provider in list_payment_providers()

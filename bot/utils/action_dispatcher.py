@@ -1,6 +1,8 @@
 """Runtime dispatcher for semantic user actions."""
 from __future__ import annotations
 
+from bot.utils.user_ui_texts import get_ui_text as _ui_text
+
 import inspect
 import logging
 from collections.abc import Awaitable, Callable, Mapping
@@ -95,12 +97,12 @@ async def dispatch_core_action(
             raise ValueError('semantic action target has no Telegram user')
     except Exception as exc:
         logger.warning('Rejected semantic action %r: %s', action, exc)
-        await _deny_action(target, '⚠️ Действие недоступно', show_alert=True)
+        await _deny_action(target, _ui_text('interface.action_dispatcher.dispatch_core_action.1'), show_alert=True)
         return False
 
     if action_name in _visited or len(_visited) >= MAX_ACTION_REDIRECT_DEPTH:
         logger.warning('Semantic action redirect loop: %s -> %s', _visited, action_name)
-        await _deny_action(target, '⚠️ Не удалось выполнить действие', show_alert=True)
+        await _deny_action(target, _ui_text('interface.action_dispatcher.dispatch_core_action.2'), show_alert=True)
         return False
 
     decision = await run_action_policies(
@@ -117,7 +119,7 @@ async def dispatch_core_action(
         executor = CORE_ACTION_EXECUTORS.get(action_name)
         if executor is None:
             logger.error("No executor registered for semantic action '%s'", action_name)
-            await _deny_action(target, '⚠️ Действие временно недоступно', show_alert=True)
+            await _deny_action(target, _ui_text('interface.action_dispatcher.dispatch_core_action.3'), show_alert=True)
             return False
         request = CoreActionRequest(
             target=target,
@@ -135,13 +137,13 @@ async def dispatch_core_action(
             return True
         except Exception as exc:
             logger.exception("Core semantic action '%s' failed: %s", action_name, exc)
-            await _deny_action(target, '⚠️ Не удалось выполнить действие', show_alert=True)
+            await _deny_action(target, _ui_text('interface.action_dispatcher.dispatch_core_action.2'), show_alert=True)
             return False
 
     if decision_name == 'deny':
         await _deny_action(
             target,
-            decision.get('message') or '⚠️ Действие недоступно',
+            decision.get('message') or _ui_text('interface.action_dispatcher.dispatch_core_action.1'),
             show_alert=bool(decision.get('show_alert', True)),
         )
         return False
@@ -173,7 +175,7 @@ async def dispatch_core_action(
     if target_kind == 'route':
         return await _redirect_to_route(target, decision, extension_id, action_name)
 
-    await _deny_action(target, '⚠️ Действие временно недоступно', show_alert=True)
+    await _deny_action(target, _ui_text('interface.action_dispatcher.dispatch_core_action.3'), show_alert=True)
     return False
 
 
@@ -267,7 +269,7 @@ async def _redirect_to_extension_action(
     action_name = str(decision['action'])
     action_key = f'{extension_id}.{action_name}'
     if not extension_id or action_key not in EXTENSION_CALLBACK_HANDLERS:
-        await _deny_action(target, '⚠️ Действие расширения недоступно', show_alert=True)
+        await _deny_action(target, _ui_text('interface.action_dispatcher.redirect_to_extension_action.1'), show_alert=True)
         return False
     payload = decision.get('payload')
     callback_data = build_extension_callback_data(extension_id, action_name, payload)
@@ -381,7 +383,7 @@ async def apply_extension_callback_result(
             await _answer_extension_result(
                 target,
                 result,
-                default_text=None if rendered else '⚠️ Страница недоступна',
+                default_text=None if rendered else _ui_text('interface.action_dispatcher.apply_extension_callback_result.1'),
             )
         return rendered
     if result.get('route_key'):
@@ -395,7 +397,7 @@ async def apply_extension_callback_result(
             await _answer_extension_result(
                 target,
                 result,
-                default_text=None if rendered else '⚠️ Маршрут недоступен',
+                default_text=None if rendered else _ui_text('interface.action_dispatcher.apply_extension_callback_result.2'),
             )
         return rendered
     await _answer_extension_result(target, result, default_text=None)
@@ -423,7 +425,7 @@ async def _redirect_to_page(
         force_new_for_message=True,
     )
     if not answered:
-        await _answer_callback_if_needed(target, None if rendered else '⚠️ Страница недоступна')
+        await _answer_callback_if_needed(target, None if rendered else _ui_text('interface.action_dispatcher.apply_extension_callback_result.1'))
     return rendered
 
 
@@ -448,7 +450,7 @@ async def _redirect_to_route(
         force_new_for_message=True,
     )
     if not answered:
-        await _answer_callback_if_needed(target, None if rendered else '⚠️ Маршрут недоступен')
+        await _answer_callback_if_needed(target, None if rendered else _ui_text('interface.action_dispatcher.apply_extension_callback_result.2'))
     return rendered
 
 

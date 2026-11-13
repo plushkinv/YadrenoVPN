@@ -6,6 +6,8 @@ and send it to the HTML renderers of this module.
 """
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import logging
 from datetime import datetime
@@ -204,21 +206,21 @@ def _panel_problem_line(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     if entry.get("panel_online"):
         return None
-    name = escape_html(str(server.get("name") or "Панель"))
-    error = escape_html(str(entry.get("error") or "нет подключения"))
-    return {"severity": 120, "text": f"🔴 {name} — панель недоступна: {error}"}
+    name = escape_html(str(server.get("name") or _tr('admin_monitoring.panel_problem_line.1')))
+    error = escape_html(str(entry.get("error") or _tr('admin_monitoring.panel_problem_line.2')))
+    return {"severity": 120, "text": _tr('admin_monitoring.panel_problem_line.3', p0=f'{name}', p1=f'{error}')}
 
 
 def _node_problem_line(server: Dict[str, Any], node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not node.get("problem"):
         return None
 
-    server_name = escape_html(str(server.get("name") or "Панель"))
-    node_name = escape_html(str(node.get("name") or "Нода"))
+    server_name = escape_html(str(server.get("name") or _tr('admin_monitoring.panel_problem_line.1')))
+    node_name = escape_html(str(node.get("name") or _tr('admin_monitoring.node_problem_line.1')))
     status = node.get("status")
 
     if status != "online":
-        detail = escape_html(str(node.get("lastError") or "нет связи"))
+        detail = escape_html(str(node.get("lastError") or _tr('admin_monitoring.node_problem_line.2')))
         text = f"🔴 {server_name} / {node_name} — {detail}"
     elif node.get("xray_problem"):
         xray_state = escape_html(str(node.get("xrayState") or "Xray"))
@@ -258,7 +260,7 @@ async def _collect_server_entry(server: Dict[str, Any], *, include_nodes=True) -
         entry["stats"] = stats
         entry["panel_online"] = bool(stats.get("online"))
         if not entry["panel_online"]:
-            entry["error"] = stats.get("error") or "нет подключения"
+            entry["error"] = stats.get("error") or _tr('admin_monitoring.panel_problem_line.2')
             return entry
 
         if not include_nodes:
@@ -271,7 +273,7 @@ async def _collect_server_entry(server: Dict[str, Any], *, include_nodes=True) -
             entry["nodes"] = []
     except Exception as e:
         logger.warning(f"Ошибка получения мониторинга панели {server.get('name')}: {e}")
-        entry["error"] = "ошибка подключения"
+        entry["error"] = _tr('admin_monitoring.collect_server_entry.1')
 
     return entry
 
@@ -412,9 +414,7 @@ def build_admin_summary_text(snapshot: Dict[str, Any]) -> str:
     entries = snapshot.get("servers", [])
     if not entries:
         return (
-            "⚙️ <b>Админ-панель</b>\n\n"
-            "🖥️ Серверов пока нет.\n"
-            "Добавьте первый сервер в разделе «Сервера»."
+            _tr('admin_monitoring.build_admin_summary_text.1')
         )
 
     counts = _snapshot_counts(snapshot)
@@ -424,43 +424,43 @@ def build_admin_summary_text(snapshot: Dict[str, Any]) -> str:
 
     if counts["active_panels"] == 0:
         health_icon = "⚠️"
-        health_text = "Мониторинг выключен"
+        health_text = _tr('admin_monitoring.build_admin_summary_text.2')
     elif counts["online_panels"] == 0:
         health_icon = "🔴"
-        health_text = "Все панели недоступны"
+        health_text = _tr('admin_monitoring.build_admin_summary_text.3')
     elif problems:
         health_icon = "⚠️"
-        health_text = "Есть проблемы"
+        health_text = _tr('admin_monitoring.build_admin_summary_text.4')
     else:
         health_icon = "🟢"
-        health_text = "Система работает"
+        health_text = _tr('admin_monitoring.build_admin_summary_text.5')
 
-    panel_suffix = f" | ⏸️ {counts['inactive_panels']} выкл." if counts["inactive_panels"] else ""
-    node_suffix = f" | ⏸️ {counts['disabled_nodes']} выкл." if counts["disabled_nodes"] else ""
+    panel_suffix = _tr('admin_monitoring.build_admin_summary_text.6', p0=f"{counts['inactive_panels']}") if counts["inactive_panels"] else ""
+    node_suffix = _tr('admin_monitoring.build_admin_summary_text.6', p0=f"{counts['disabled_nodes']}") if counts["disabled_nodes"] else ""
 
     lines = [
-        "⚙️ <b>Админ-панель</b>",
+        _tr('admin_monitoring.build_admin_summary_text.7'),
         "",
         f"{health_icon} <b>{health_text}</b>",
-        f"🖥️ Панели: {counts['online_panels']}/{counts['active_panels']} онлайн{panel_suffix}",
-        f"🌐 Ноды: {counts['online_nodes']}/{counts['nodes_total']} онлайн{node_suffix}",
-        f"🔑 Онлайн на панелях: {counts['panel_online_clients']}",
-        f"🕒 Обновлено: {updated}",
+        _tr('admin_monitoring.build_admin_summary_text.8', p0=f"{counts['online_panels']}", p1=f"{counts['active_panels']}", p2=f'{panel_suffix}'),
+        _tr('admin_monitoring.build_admin_summary_text.9', p0=f"{counts['online_nodes']}", p1=f"{counts['nodes_total']}", p2=f'{node_suffix}'),
+        _tr('admin_monitoring.build_admin_summary_text.10', p0=f"{counts['panel_online_clients']}"),
+        _tr('admin_monitoring.build_admin_summary_text.11', p0=f'{updated}'),
         "",
     ]
 
     if problems:
-        lines.append("⚠️ <b>Требуют внимания</b>")
+        lines.append(_tr('admin_monitoring.build_admin_summary_text.12'))
         for problem in problems[:MAX_SUMMARY_PROBLEMS]:
             lines.append(problem["text"])
         omitted = len(problems) - MAX_SUMMARY_PROBLEMS
         if omitted > 0:
-            lines.append(f"… ещё {omitted}")
+            lines.append(_tr('admin_monitoring.build_admin_summary_text.13', p0=f'{omitted}'))
     else:
-        lines.append("✅ Проблем не обнаружено")
+        lines.append(_tr('admin_monitoring.build_admin_summary_text.14'))
 
     if snapshot.get('loading'):
-        lines = ["⚙️ <b>Админ-панель</b>", "", "📊 Мониторинг: ⏳ Загружается"]
+        lines = [_tr('admin_monitoring.build_admin_summary_text.7'), "", _tr('admin_monitoring.build_admin_summary_text.15')]
 
     payments = snapshot.get("payments", {})
     users = snapshot.get("users", {})
@@ -469,18 +469,18 @@ def build_admin_summary_text(snapshot: Dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "💰 <b>За 24 часа</b>",
-            f"Оплат: {payments.get('paid_count', 0)}",
-            f"Сумма: {_format_payments_sum(payments)}",
+            _tr('admin_monitoring.build_admin_summary_text.16'),
+            _tr('admin_monitoring.build_admin_summary_text.17', p0=f"{payments.get('paid_count', 0)}"),
+            _tr('admin_monitoring.build_admin_summary_text.18', p0=f'{_format_payments_sum(payments)}'),
             "",
-            "👥 <b>Клиенты</b>",
-            f"Всего: {users.get('total', 0)}",
-            f"Активных: {users.get('active', 0)}",
-            f"Новых за 24 часа: {snapshot.get('new_users', 0)}",
+            _tr('admin_monitoring.build_admin_summary_text.19'),
+            _tr('admin_monitoring.build_admin_summary_text.20', p0=f"{users.get('total', 0)}"),
+            _tr('admin_monitoring.build_admin_summary_text.21', p0=f"{users.get('active', 0)}"),
+            _tr('admin_monitoring.build_admin_summary_text.22', p0=f"{snapshot.get('new_users', 0)}"),
             "",
-            "🔑 <b>Ключи</b>",
-            f"Активных: {keys.get('active', 0)}",
-            f"Истекают за 24 часа: {snapshot.get('expiring_24h', 0)}",
+            _tr('admin_monitoring.build_admin_summary_text.23'),
+            _tr('admin_monitoring.build_admin_summary_text.21', p0=f"{keys.get('active', 0)}"),
+            _tr('admin_monitoring.build_admin_summary_text.24', p0=f"{snapshot.get('expiring_24h', 0)}"),
         ]
     )
 
@@ -501,13 +501,13 @@ def _node_icon(node: Dict[str, Any]) -> str:
 
 def _format_node_line(node: Dict[str, Any], prefix: str) -> str:
     icon = _node_icon(node)
-    name = escape_html(str(node.get("name") or "Нода"))
+    name = escape_html(str(node.get("name") or _tr('admin_monitoring.node_problem_line.1')))
 
     if not node.get("enable", True):
-        return f"   {prefix} {icon} {name} | выключена"
+        return _tr('admin_monitoring.format_node_line.1', p0=f'{prefix}', p1=f'{icon}', p2=f'{name}')
 
     if node.get("status") != "online":
-        detail = escape_html(str(node.get("lastError") or "нет связи"))
+        detail = escape_html(str(node.get("lastError") or _tr('admin_monitoring.node_problem_line.2')))
         return f"   {prefix} {icon} {name} | {detail}"
 
     parts = [
@@ -542,27 +542,25 @@ def build_servers_monitoring_text(snapshot: Dict[str, Any]) -> str:
     entries = snapshot.get("servers", [])
     if not entries:
         return (
-            "🖥️ <b>Сервера</b>\n\n"
-            "Серверов пока нет.\n"
-            "Нажмите «➕ Добавить сервер» чтобы добавить первый!"
+            _tr('admin_monitoring.build_servers_monitoring_text.1')
         )
 
     collected_at = snapshot.get("collected_at")
     updated = collected_at.strftime("%H:%M") if isinstance(collected_at, datetime) else "—"
-    lines = ["🖥️ <b>Сервера</b>", f"🕒 Обновлено: {updated}", ""]
+    lines = [_tr('admin_monitoring.build_servers_monitoring_text.2'), _tr('admin_monitoring.build_admin_summary_text.11', p0=f'{updated}'), ""]
     if snapshot.get('loading'):
-        lines = ["🖥️ <b>Сервера</b>", "", "⏳ Загружается", ""]
+        lines = [_tr('admin_monitoring.build_servers_monitoring_text.2'), "", _tr('admin_monitoring.build_servers_monitoring_text.3'), ""]
 
     for entry in entries:
         server = entry["server"]
-        server_name = escape_html(str(server.get("name") or "Сервер"))
+        server_name = escape_html(str(server.get("name") or _tr('admin_monitoring.build_servers_monitoring_text.4')))
         host = escape_html(f"{server.get('host')}:{server.get('port')}")
 
         if not entry.get("is_active"):
             lines.extend(
                 [
                     f"🔴 <b>{server_name}</b> (<code>{host}</code>)",
-                    "   ⏸️ Деактивирован",
+                    _tr('admin_monitoring.build_servers_monitoring_text.5'),
                     "",
                 ]
             )
@@ -571,16 +569,16 @@ def build_servers_monitoring_text(snapshot: Dict[str, Any]) -> str:
         if snapshot.get('loading'):
             lines.extend([
                 f"🖥️ <b>{server_name}</b> (<code>{host}</code>)",
-                "   ⏳ Загружается", "",
+                _tr('servers.build_server_view.20'), "",
             ])
             continue
 
         if not entry.get("panel_online"):
-            error = escape_html(str(entry.get("error") or "нет подключения"))
+            error = escape_html(str(entry.get("error") or _tr('admin_monitoring.panel_problem_line.2')))
             lines.extend(
                 [
                     f"🔴 <b>{server_name}</b> (<code>{host}</code>)",
-                    f"   ⚠️ Панель недоступна: {error}",
+                    _tr('admin_monitoring.build_servers_monitoring_text.6', p0=f'{error}'),
                     "",
                 ]
             )
@@ -594,13 +592,12 @@ def build_servers_monitoring_text(snapshot: Dict[str, Any]) -> str:
 
         lines.append(f"🟢 <b>{server_name}</b> (<code>{host}</code>)")
         lines.append(
-            f"   Панель: онлайн | 🔑 {stats.get('online_clients', 0)} онлайн "
-            f"| 📊 {traffic}{cpu_text}"
+            _tr('admin_monitoring.build_servers_monitoring_text.7', p0=f"{stats.get('online_clients', 0)}", p1=f'{traffic}', p2=f'{cpu_text}')
         )
 
         nodes = entry.get("nodes", [])
         if not nodes:
-            lines.append("   🌐 Ноды: нет")
+            lines.append(_tr('admin_monitoring.build_servers_monitoring_text.8'))
             lines.append("")
             continue
 
@@ -609,10 +606,9 @@ def build_servers_monitoring_text(snapshot: Dict[str, Any]) -> str:
         disabled_nodes = [node for node in nodes if not node.get("enable", True)]
         node_online_clients = sum(_safe_int(node.get("onlineCount")) for node in enabled_nodes)
 
-        disabled_text = f" | ⏸️ {len(disabled_nodes)} выкл." if disabled_nodes else ""
+        disabled_text = _tr('admin_monitoring.build_admin_summary_text.6', p0=f'{len(disabled_nodes)}') if disabled_nodes else ""
         lines.append(
-            f"   🌐 Ноды: {len(online_nodes)}/{len(enabled_nodes)} онлайн "
-            f"| 🔑 {node_online_clients} онлайн{disabled_text}"
+            _tr('admin_monitoring.build_servers_monitoring_text.9', p0=f'{len(online_nodes)}', p1=f'{len(enabled_nodes)}', p2=f'{node_online_clients}', p3=f'{disabled_text}')
         )
 
         selected_nodes = _select_nodes_for_display(nodes)
@@ -622,7 +618,7 @@ def build_servers_monitoring_text(snapshot: Dict[str, Any]) -> str:
             prefix = "└" if is_last else "├"
             lines.append(_format_node_line(node, prefix))
         if omitted > 0:
-            lines.append(f"   └ … ещё {omitted}")
+            lines.append(_tr('admin_monitoring.build_servers_monitoring_text.10', p0=f'{omitted}'))
 
         lines.append("")
 

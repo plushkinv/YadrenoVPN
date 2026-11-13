@@ -451,6 +451,7 @@ def _extension_file_states(diagnostics: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _inspect_extensions(cursor: int, limit: int) -> dict[str, Any]:
+    from extension_tools.capabilities import inspection as extension_check_capabilities
     diagnostics = get_custom_extensions_diagnostics()
     core_events = dict(diagnostics.get('core_events') or {})
     deliveries = dict(core_events.get('deliveries') or {})
@@ -502,6 +503,7 @@ def _inspect_extensions(cursor: int, limit: int) -> dict[str, Any]:
             'task_capabilities': diagnostics.get('task_capabilities') or {},
             'account_capabilities': diagnostics.get('account_capabilities') or {},
             'shared_modules': diagnostics.get('shared_modules') or {},
+            'extension_check': extension_check_capabilities(),
             'messaging_capabilities': diagnostics.get('messaging_capabilities') or {},
             'input_capabilities': diagnostics.get('input_capabilities') or {},
             'sql_capabilities': diagnostics.get('sql_capabilities') or {},
@@ -536,10 +538,12 @@ def inspect_customization(args: dict[str, Any]) -> str:
             'extensions': lambda: _inspect_extensions(cursor, limit),
         }
         if scope == 'overview':
+            from localization.discovery import describe
             extension_state = get_custom_extensions_diagnostics()
             payload = {
                 'status': 'ok',
                 'scope': 'overview',
+                'localization': describe(),
                 'customization_contract': 'customization_tools_v2',
                 'customization_contracts': ['customization_tools_v2', 'customization_tools_v3'],
                 'apply_operations': sorted(APPLY_OPERATIONS),

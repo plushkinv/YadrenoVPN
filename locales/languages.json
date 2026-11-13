@@ -1,0 +1,15 @@
+{
+  "ru": {"name": "Русский", "direction": "ltr"},
+  "en": {"name": "English", "direction": "ltr"},
+  "fa": {"name": "فارسی", "direction": "rtl"},
+  "ar": {"name": "العربية", "direction": "rtl"},
+  "es": {"name": "Español", "direction": "ltr"},
+  "id": {"name": "Bahasa Indonesia", "direction": "ltr"},
+  "ja": {"name": "日本語", "direction": "ltr"},
+  "pt": {"name": "Português", "direction": "ltr"},
+  "sk": {"name": "Slovenčina", "direction": "ltr"},
+  "tr": {"name": "Türkçe", "direction": "ltr"},
+  "vi": {"name": "Tiếng Việt", "direction": "ltr"},
+  "zh-CN": {"name": "简体中文", "direction": "ltr"},
+  "zh-TW": {"name": "繁體中文", "direction": "ltr"}
+}

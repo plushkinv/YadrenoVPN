@@ -9,6 +9,8 @@ Rules:
 - action_value — contract, CANNOT be changed after release
 - button_id — contract, CANNOT be changed after release
 """
+
+from localization import text as _tr
 import logging
 from typing import Optional, Dict, Any, Callable, Mapping
 
@@ -47,22 +49,22 @@ def register_action_handler(action_value: str, callback_data: str, *, replace: b
     _require_bool(replace, 'replace')
 
     if not action_key:
-        raise ValueError("action_value не может быть пустым")
+        raise ValueError(_tr('action_registry.register_action_handler.1'))
     if action_key in ACTION_REGISTRY and not replace:
-        raise ValueError(f"action_value '{action_key}' уже зарегистрирован")
+        raise ValueError(_tr('action_registry.register_action_handler.2', p0=f'{action_key}'))
 
     ACTION_REGISTRY[action_key] = callback
 
 
 def _require_text(value: Any, field: str) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"{field} должен быть строкой")
+        raise ValueError(_tr('action_registry.require_text.1', p0=f'{field}'))
     return value
 
 
 def _require_bool(value: Any, field: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f"{field} должен быть bool")
+        raise ValueError(_tr('action_registry.require_bool.1', p0=f'{field}'))
     return value
 
 
@@ -70,9 +72,9 @@ def normalize_callback_data(value: Any, field: str = 'callback_data') -> str:
     """Checks callback_data against the Telegram InlineKeyboardButton contract."""
     callback = _require_text(value, field).strip()
     if not callback:
-        raise ValueError(f"{field} не может быть пустым")
+        raise ValueError(_tr('action_registry.normalize_callback_data.1', p0=f'{field}'))
     if len(callback.encode('utf-8')) > MAX_CALLBACK_DATA_BYTES:
-        raise ValueError(f"{field} не может быть длиннее {MAX_CALLBACK_DATA_BYTES} байт")
+        raise ValueError(_tr('action_registry.normalize_callback_data.2', p0=f'{field}', p1=f'{MAX_CALLBACK_DATA_BYTES}'))
     return callback
 
 
@@ -430,6 +432,11 @@ SYSTEM_BUTTONS: Dict[str, Callable[[dict], Optional[dict]]] = {
     "btn_intent_provider_wata": lambda ctx: _resolve_intent_provider(ctx, "wata"),
     "btn_intent_provider_platega": lambda ctx: _resolve_intent_provider(ctx, "platega"),
     "btn_intent_provider_cardlink": lambda ctx: _resolve_intent_provider(ctx, "cardlink"),
+    "btn_intent_provider_nowpayments": lambda ctx: _resolve_intent_provider(ctx, "nowpayments"),
+    "btn_intent_provider_stripe": lambda ctx: _resolve_intent_provider(ctx, "stripe"),
+    "btn_intent_provider_paypal": lambda ctx: _resolve_intent_provider(ctx, "paypal"),
+    "btn_intent_provider_paytabs": lambda ctx: _resolve_intent_provider(ctx, "paytabs"),
+    "btn_intent_provider_myfatoorah": lambda ctx: _resolve_intent_provider(ctx, "myfatoorah"),
     "btn_intent_provider_demo": lambda ctx: _resolve_intent_provider(ctx, "demo"),
     "btn_intent_balance": _resolve_intent_balance,
     "btn_intent_promo": _resolve_intent_promo,
@@ -477,7 +484,7 @@ def is_registered_system_button(button_id: str) -> bool:
 def resolve_system_button(button_id: str, context: Mapping[str, Any]) -> Optional[dict]:
     button_id = _require_text(button_id, 'button_id')
     if not isinstance(context, Mapping):
-        raise ValueError("context должен быть mapping")
+        raise ValueError(_tr('action_registry.resolve_system_button.1'))
     context = dict(context)
 
     handler = SYSTEM_BUTTONS.get(button_id)
@@ -549,23 +556,23 @@ def _normalize_system_button_result(button_id: str, result: Any) -> Optional[dic
     if result is None:
         return None
     if not isinstance(result, Mapping):
-        raise ValueError(f"system handler '{button_id}' должен вернуть dict или None")
+        raise ValueError(_tr('action_registry.normalize_system_button_result.1', p0=f'{button_id}'))
 
     normalized = dict(result)
     allowed = {'callback_data', 'url', 'label', 'hidden'}
     unknown = set(normalized.keys()) - allowed
     if unknown:
-        raise ValueError(f"system handler '{button_id}' вернул неподдерживаемые поля: {', '.join(sorted(unknown))}")
+        raise ValueError(_tr('action_registry.normalize_system_button_result.2', p0=f'{button_id}', p1=f"{', '.join(sorted(unknown))}"))
 
     for field in ('callback_data', 'url', 'label'):
         if field in normalized and normalized[field] is not None:
             value = normalized[field]
             if not isinstance(value, str):
-                raise ValueError(f"system handler '{button_id}' field {field} должен быть строкой")
+                raise ValueError(_tr('action_registry.normalize_system_button_result.3', p0=f'{button_id}', p1=f'{field}'))
             normalized[field] = value.strip()
 
     if normalized.get('callback_data') and normalized.get('url'):
-        raise ValueError(f"system handler '{button_id}' не может вернуть одновременно callback_data и url")
+        raise ValueError(_tr('action_registry.normalize_system_button_result.4', p0=f'{button_id}'))
 
     if normalized.get('callback_data'):
         normalized['callback_data'] = normalize_callback_data(
@@ -574,6 +581,6 @@ def _normalize_system_button_result(button_id: str, result: Any) -> Optional[dic
         )
 
     if 'hidden' in normalized and not isinstance(normalized['hidden'], bool):
-        raise ValueError(f"system handler '{button_id}' field hidden должен быть bool")
+        raise ValueError(_tr('action_registry.normalize_system_button_result.5', p0=f'{button_id}'))
 
     return normalized

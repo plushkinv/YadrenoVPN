@@ -190,9 +190,10 @@ def snapshot_sources(root, custom, work):
     for name, content in stock.items():
         atomic_write(web / 'src' / name, content, mode=0o644)
     for directory, names in (
-        ('web', ['package.json', 'package-lock.json', 'vite.app.config.ts', 'vite.platform.config.ts', 'customization.mjs',
+        ('web', ['package.json', 'package-lock.json', 'vite.app.config.ts', 'vite.platform.config.ts', 'customization.mjs', 'page-titles.mjs',
                  'manifest.json', *[p.name for p in (root / 'web').glob('tsconfig*.json')]]),
         ('web_tools', ['service_worker.js', 'compatibility.json', 'toolchain.json']),
+        ('locales', ['languages.json']),
     ):
         for name in names:
             path = local_path(root, directory + '/' + name)

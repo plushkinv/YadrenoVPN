@@ -1,6 +1,8 @@
 """Limited core facade for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 from typing import Any
 
 from bot.utils.extension_finance import ExtensionFinanceAPI
@@ -505,18 +507,18 @@ class ExtensionCoreAPI(ExtensionFinanceAPI):
 
 def _resolve_user_id(*, user_id: int | None, telegram_id: int | None) -> int:
     if user_id is not None and telegram_id is not None:
-        raise ValueError('передайте только user_id или только telegram_id')
+        raise ValueError(_tr('extension_core.resolve_user_id.1'))
     if user_id is not None:
         from database.requests import resolve_account_id
         return resolve_account_id(_normalize_positive_int(user_id, 'user_id'))
     if telegram_id is None:
-        raise ValueError('нужно передать user_id или telegram_id')
+        raise ValueError(_tr('extension_core.resolve_user_id.2'))
     telegram_id = _normalize_positive_int(telegram_id, 'telegram_id')
     from database.requests import get_user_internal_id
 
     resolved = get_user_internal_id(telegram_id)
     if not resolved:
-        raise ValueError('пользователь не найден')
+        raise ValueError(_tr('extension_core.resolve_user_id.3'))
     return int(resolved)
 
 
@@ -732,7 +734,7 @@ def _user_not_found_result(
 
 def _normalize_positive_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f'{field} должен быть положительным integer')
+        raise ValueError(_tr('rewards.positive_int.1', p0=f'{field}'))
     return value
 
 

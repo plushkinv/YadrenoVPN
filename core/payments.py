@@ -101,7 +101,11 @@ async def select_method(account, order_id, payment_type, *, _automatic=False):
         require_method(account, intent, payment_type)
         if intent.purpose == 'key_renewal':
             owned_key(account, intent.vpn_key_id, mutation=True)
-        if not db.get_payment_provider_order(order_id):
+        provider_binding = db.get_payment_provider_order(order_id)
+        from core.payment_provider_specs import INTERNATIONAL_PROVIDERS
+        pending_creation = (provider_binding and payment_type in INTERNATIONAL_PROVIDERS
+                            and not provider_binding.get('provider_payment_id'))
+        if not provider_binding or pending_creation:
             with bind_account_context(account):
                 if _automatic and intent.purpose == 'key_purchase':
                     from core.extension_key_terms import select_server
@@ -120,12 +124,14 @@ async def select_method(account, order_id, payment_type, *, _automatic=False):
                             balance_deduct_minor=prepared['balance_deduct_minor'], rate_snapshot=dict(price.rate_snapshot)):
                         raise CoreError('balance_insufficient' if payment_type == 'balance' else 'order_unavailable')
                 else:
-                    adapter = get_payment_provider_adapter(payment_type.removeprefix('ext_'))
+                    adapter = get_payment_provider_adapter(payment_type)
                     if adapter is None:
                         raise CoreError('payment_method_unavailable')
-                    # Only YooKassa CREATE has a documented provider idempotence key.
-                    # Crypto is a deterministic local URL; Telegram links do not charge.
+                    # Hosted adapters additionally enforce their persisted idempotency windows.
                     safe_create_retry = adapter.provider_id in {'yookassa_qr', 'crypto'} or adapter.presentation == 'telegram_invoice'
+                    if not adapter.custom and adapter.provider_id in INTERNATIONAL_PROVIDERS:
+                        from bot.services.payment_gateways import creation_is_idempotent
+                        safe_create_retry = creation_is_idempotent(adapter.provider_id, db.get_gateway_settings(adapter.provider_id))
                     automatic_attempt = _automatic or bool((operation or {}).get('request', {}).get('automatic_invoice_started'))
                     if automatic_attempt:
                         first_attempt = db.claim_automatic_invoice_start(order_id, account.account_id)

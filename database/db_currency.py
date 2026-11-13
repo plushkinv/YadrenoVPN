@@ -6,9 +6,10 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from .connection import get_db
+from core.payment_provider_specs import REGIONAL_CURRENCY_EXPONENTS
 
 SUPPORTED_BASE_CURRENCIES = frozenset({'RUB', 'USD'})
-SUPPORTED_PAYMENT_CURRENCIES = frozenset({'RUB', 'USD', 'USDT', 'XTR'})
+SUPPORTED_PAYMENT_CURRENCIES = frozenset({'RUB', 'USD', 'USDT', 'XTR', *REGIONAL_CURRENCY_EXPONENTS})
 
 __all__ = [
     'SUPPORTED_BASE_CURRENCIES',

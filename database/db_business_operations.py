@@ -1,6 +1,8 @@
 """Business history of key and balance transactions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 import logging
 import sqlite3
@@ -440,7 +442,7 @@ def apply_balance_operation(
         else:
             operation_currency = str(currency).upper()
         if operation_currency not in {'RUB', 'USD'}:
-            raise ValueError('currency должен быть RUB или USD')
+            raise ValueError(_tr('db_business_operations.apply_balance_operation.1'))
         if reference_type and reference_id:
             existing = conn.execute(
                 """
@@ -551,24 +553,24 @@ def apply_balance_operation(
 def _balance_operation_type(value: Any) -> str:
     operation = _text(value, 'operation_type')
     if operation not in _BALANCE_OPERATION_TYPES:
-        raise ValueError('operation_type должен быть credit или debit')
+        raise ValueError(_tr('db_business_operations.balance_operation_type.1'))
     return operation
 
 
 def _positive_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f'{field} должен быть положительным integer')
+        raise ValueError(_tr('rewards.positive_int.1', p0=f'{field}'))
     return int(value)
 
 
 def _text(value: Any, field: str) -> str:
     if not isinstance(value, str):
-        raise ValueError(f'{field} должен быть строкой')
+        raise ValueError(_tr('action_registry.require_text.1', p0=f'{field}'))
     text = value.strip()
     if not text:
-        raise ValueError(f'{field} не может быть пустым')
+        raise ValueError(_tr('action_registry.normalize_callback_data.1', p0=f'{field}'))
     if len(text) > 256:
-        raise ValueError(f'{field} не может быть длиннее 256 символов')
+        raise ValueError(_tr('db_business_operations.text.1', p0=f'{field}'))
     return text
 
 
@@ -576,7 +578,7 @@ def _optional_text(value: Any) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError('опциональное текстовое поле должно быть строкой')
+        raise ValueError(_tr('db_business_operations.optional_text.1'))
     text = value.strip()
     return text[:256] if text else None
 

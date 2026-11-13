@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from localization import text as _tr
+
 import html
 
 from aiogram import F, Router
@@ -40,15 +42,15 @@ async def admin_coupons_generate(
     state: FSMContext,
 ):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await state.set_state(AdminStates.coupon_generate_discount)
     await render_admin_dialog(
         callback.message,
         state,
         _coupon_generator_prompt(
-            "🎲 <b>Генератор купонов</b>",
-            "Введите размер скидки от 0 до 100%.",
+            _tr('coupon_generator.admin_coupons_generate.1'),
+            _tr('coupon_generator.admin_coupons_generate.2'),
         ),
         reply_markup=promotion_cancel_kb("admin_coupons"),
     )
@@ -72,9 +74,9 @@ async def admin_coupons_generate_discount(
             message,
             state,
             _coupon_generator_prompt(
-                "🎲 <b>Генератор купонов</b>",
-                "Введите размер скидки от 0 до 100%.",
-                error="Введите целое число от 0 до 100.",
+                _tr('coupon_generator.admin_coupons_generate.1'),
+                _tr('coupon_generator.admin_coupons_generate.2'),
+                error=_tr('coupon_generator.admin_coupons_generate_discount.1'),
             ),
             reply_markup=promotion_cancel_kb("admin_coupons"),
         )
@@ -85,8 +87,8 @@ async def admin_coupons_generate_discount(
         message,
         state,
         _coupon_generator_prompt(
-            "⏳ <b>Срок жизни</b>",
-            "Введите количество дней.",
+            _tr('coupon_generator.admin_coupons_generate_discount.2'),
+            _tr('coupon_generator.admin_coupons_generate_discount.3'),
         ),
         reply_markup=promotion_cancel_kb("admin_coupons"),
     )
@@ -109,9 +111,9 @@ async def admin_coupons_generate_lifetime(
             message,
             state,
             _coupon_generator_prompt(
-                "⏳ <b>Срок жизни</b>",
-                "Введите количество дней.",
-                error="Введите целое число больше 0.",
+                _tr('coupon_generator.admin_coupons_generate_discount.2'),
+                _tr('coupon_generator.admin_coupons_generate_discount.3'),
+                error=_tr('coupon_generator.admin_coupons_generate_lifetime.1'),
             ),
             reply_markup=promotion_cancel_kb("admin_coupons"),
         )
@@ -122,8 +124,8 @@ async def admin_coupons_generate_lifetime(
         message,
         state,
         _coupon_generator_prompt(
-            "🔢 <b>Количество</b>",
-            "Введите количество купонов. За один раз можно создать до 500.",
+            _tr('coupon_generator.admin_coupons_generate_lifetime.2'),
+            _tr('coupon_generator.admin_coupons_generate_lifetime.3'),
         ),
         reply_markup=promotion_cancel_kb("admin_coupons"),
     )
@@ -146,9 +148,9 @@ async def admin_coupons_generate_count(
             message,
             state,
             _coupon_generator_prompt(
-                "🔢 <b>Количество</b>",
-                "Введите количество купонов. За один раз можно создать до 500.",
-                error="Введите целое число от 1 до 500.",
+                _tr('coupon_generator.admin_coupons_generate_lifetime.2'),
+                _tr('coupon_generator.admin_coupons_generate_lifetime.3'),
+                error=_tr('coupon_generator.admin_coupons_generate_count.1'),
             ),
             reply_markup=promotion_cancel_kb("admin_coupons"),
         )
@@ -157,7 +159,7 @@ async def admin_coupons_generate_count(
     target = await render_admin_dialog_from_input(
         message,
         state,
-        "⏳ <b>Генерация купонов</b>\n\nСоздаю коды…",
+        _tr('coupon_generator.admin_coupons_generate_count.2'),
     )
     coupons = create_coupon_batch(
         discount_percent=data["coupon_generate_discount"],
@@ -168,11 +170,7 @@ async def admin_coupons_generate_count(
     )
     codes = "\n".join(coupon["code"] for coupon in coupons)
     text = (
-        "✅ <b>Купоны сгенерированы</b>\n\n"
-        f"Скидка: <b>{data['coupon_generate_discount']}%</b>\n"
-        f"Срок жизни: <b>{data['coupon_generate_lifetime']} дн.</b>\n"
-        f"Количество: <b>{len(coupons)}</b>\n\n"
-        f"<pre>{html.escape(codes)}</pre>"
+        _tr('coupon_generator.admin_coupons_generate_count.3', p0=f"{data['coupon_generate_discount']}", p1=f"{data['coupon_generate_lifetime']}", p2=f'{len(coupons)}', p3=f'{html.escape(codes)}')
     )
     try:
         await render_admin_dialog(

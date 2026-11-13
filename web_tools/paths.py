@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import contextlib
 import hashlib
+import io
 import os
 import re
 import shutil
@@ -11,6 +12,8 @@ import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
+
+from backup_io import read_verified_zip, supported_zip_entry, verified_content, write_zip_file
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PERSISTENT = ('custom_web', 'web_runtime')
@@ -193,18 +196,34 @@ def installation_files(root=PROJECT_ROOT, *, secrets=False):
                 yield checked, relative
 
 
+def application_files(root=PROJECT_ROOT):
+    """Collect application state and an existing signing key, never server secrets."""
+    yield from installation_files(root)
+    key_path = local_path(root, 'web_runtime/secrets/ed25519.key')
+    if key_path.exists():
+        if not stat.S_ISREG(key_path.stat().st_mode):
+            raise ValueError('UI backup requires regular files')
+        yield key_path, 'web_runtime/secrets/ed25519.key'
+
+
+def _application_contents(contents):
+    """Filter only after validating the entire historical backup generation."""
+    return {name: content for name, content in contents.items()
+            if name != 'web-system.zip' and (not name.startswith('web_runtime/secrets/')
+                                            or name == 'web_runtime/secrets/ed25519.key')}
+
+
 def backup_to_zip(archive, root=PROJECT_ROOT):
     """Capture an administrator backup, including the existing signing identity."""
     runtime = local_path(root, 'web_runtime')
     with publication_lock(runtime):
-        files = list(installation_files(root))
+        files = list(application_files(root))
         key_path = local_path(runtime, 'secrets/ed25519.key')
         if key_path.exists() or local_path(runtime, 'identity.json').exists():
             from web_tools.package import signing_identity
             signing_identity(runtime)
-            files.append((key_path, 'web_runtime/secrets/ed25519.key'))
         for path, relative in files:
-            archive.write(path, relative)
+            write_zip_file(archive, path, relative)
         # Preserve explicitly empty customization trees on another installation.
         if not any(name.startswith('custom_web/') for _, name in files):
             archive.writestr('custom_web/', b'')
@@ -212,7 +231,7 @@ def backup_to_zip(archive, root=PROJECT_ROOT):
 
 
 def backup_local(destination, root=PROJECT_ROOT):
-    """Atomically replace a complete protected UI/system backup generation."""
+    """Atomically replace a complete application UI backup generation."""
     # Snapshot directories may be hidden while the outer updater prepares them.
     # Validate their ancestors as a root, not as a public relative asset name.
     destination = local_path(destination, BACKUP_ARCHIVE)
@@ -222,24 +241,14 @@ def backup_local(destination, root=PROJECT_ROOT):
 
 
 def _capture_local_backup(destination, root):
-    from web_tools.system_backup import system_archive
-    system = system_archive(root)
-    files = list(installation_files(root, secrets=True))
+    files = list(application_files(root))
     descriptor, temporary = tempfile.mkstemp(prefix='.ui-backup-', suffix='.zip.tmp', dir=destination.parent)
     inventory = {}
     try:
         with os.fdopen(descriptor, 'w+b') as stream:
             with zipfile.ZipFile(stream, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path, relative in files:
-                    digest = hashlib.sha256()
-                    with path.open('rb') as source, archive.open(relative, 'w', force_zip64=True) as target:
-                        for chunk in iter(lambda: source.read(1024 * 1024), b''):
-                            digest.update(chunk)
-                            target.write(chunk)
-                    inventory[relative] = digest.hexdigest()
-                if system is not None:
-                    archive.writestr('web-system.zip', system)
-                    inventory['web-system.zip'] = hashlib.sha256(system).hexdigest()
+                    inventory[relative] = write_zip_file(archive, path, relative, metadata=False)
                 roots = [name for name in PERSISTENT if local_path(root, name).exists()]
                 archive.writestr(BACKUP_MANIFEST, canonical({'format_version': 2, 'files': inventory,
                                                             'roots': roots}))
@@ -279,6 +288,24 @@ def _backup_inventory(content, version, *, with_roots=False):
     return (value['files'], roots) if with_roots else value['files']
 
 
+def _validate_legacy_system(content):
+    """Check historical system bytes without consulting the server filesystem."""
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        for entry in archive.infolist():
+            relative_name(entry.filename)
+        manifest = json.loads(archive.read('manifest.json'))
+        if manifest.get('format_version') != 1 or not isinstance(manifest.get('files'), dict):
+            raise ValueError('invalid managed system backup')
+        inventory = {}
+        for name, info in manifest['files'].items():
+            relative_name(name)
+            if info.get('kind') == 'file':
+                inventory[name] = info.get('sha256')
+            elif info.get('kind') != 'link':
+                raise ValueError('invalid managed system entry')
+        read_verified_zip(archive, inventory, manifest_name='manifest.json')
+
+
 def _read_backup_contents(source, *, with_roots=False):
     """Read one complete generation; never fall back from a damaged new archive."""
     source = Path(source)
@@ -292,18 +319,12 @@ def _read_backup_contents(source, *, with_roots=False):
                     raise ValueError('duplicate UI backup file')
                 for entry in entries:
                     relative_name(entry.filename, hidden=_custom_source_path(entry.filename))
-                    if (entry.is_dir() or (entry.external_attr >> 16) & 0o170000 not in {0, 0o100000}
-                            or entry.flag_bits & 1):
+                    if not supported_zip_entry(entry):
                         raise ValueError('UI backup requires unencrypted regular files')
                 inventory, roots = _backup_inventory(archive.read(BACKUP_MANIFEST), 2, with_roots=True)
-                if set(names) != set(inventory) | {BACKUP_MANIFEST}:
-                    raise ValueError('incomplete or corrupted UI backup')
-                contents = {}
-                for name, digest in inventory.items():
-                    data = archive.read(name)
-                    if hashlib.sha256(data).hexdigest() != digest:
-                        raise ValueError('incomplete or corrupted UI backup')
-                    contents[name] = data
+                contents = read_verified_zip(archive, inventory, manifest_name=BACKUP_MANIFEST)
+                if 'web-system.zip' in contents:
+                    _validate_legacy_system(contents['web-system.zip'])
                 return (contents, roots) if with_roots else contents
         except (zipfile.BadZipFile, KeyError, UnicodeError) as exc:
             raise ValueError('incomplete or corrupted UI backup') from exc
@@ -312,15 +333,13 @@ def _read_backup_contents(source, *, with_roots=False):
     inventory, roots = _backup_inventory(local_path(source, BACKUP_MANIFEST).read_bytes(), 1, with_roots=True)
     contents = {}
     for path, relative in installation_files(source, secrets=True):
-        data = path.read_bytes()
-        if hashlib.sha256(data).hexdigest() != inventory.get(relative):
-            raise ValueError('incomplete or corrupted UI backup')
-        contents[relative] = data
+        contents[relative] = verified_content(path.read_bytes(), inventory.get(relative))
     if set(contents) != set(inventory):
         raise ValueError('incomplete or corrupted UI backup')
     system = local_path(source, 'web-system.zip')
     if system.exists():
         contents['web-system.zip'] = system.read_bytes()
+        _validate_legacy_system(contents['web-system.zip'])
     return (contents, roots) if with_roots else contents
 
 
@@ -372,7 +391,7 @@ def restore_local(source, destination):
     """Restore verified UI material into a clean installation; never touch its DB."""
     source, destination = Path(source), Path(destination)
     contents, roots = _read_backup_contents(source, with_roots=True)
-    contents.pop('web-system.zip', None)
+    contents = _application_contents(contents)
     for name in PERSISTENT:
         target = local_path(destination, name)
         if target.exists() and (not target.is_dir() or any(target.iterdir())):

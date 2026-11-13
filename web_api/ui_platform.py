@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from html import escape
 import mimetypes
 import re
 from pathlib import Path
@@ -9,7 +10,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from web_tools.application import read_application
+from web_tools.application import read_application, localized_pages
 from web_tools.package import digest
 from web_tools.paths import canonical, local_path
 from web_tools.platform_assets import current_platform, platform_resource
@@ -25,7 +26,14 @@ def descriptor(runtime, signed, files=None, *, prefix=None, mode=None, platform_
             raise ValueError('application descriptor changed')
         files = {name: b'' for name in manifest['files']}
         files['application.json'] = content
+        if 'page-titles.json' in files:
+            titles = local_path(folder, 'page-titles.json').read_bytes()
+            if digest(titles) != manifest['files']['page-titles.json']['sha256']:
+                raise ValueError('localized page titles changed')
+            files['page-titles.json'] = titles
     application = read_application(files)
+    from database.requests import get_installation_language
+    language = get_installation_language()
     base = prefix or '/ui/versions/' + build + '/'
     url = lambda name: base + quote(name, safe='/')
     version = platform_version or current_platform(runtime)['version']
@@ -33,7 +41,8 @@ def descriptor(runtime, signed, files=None, *, prefix=None, mode=None, platform_
         raise ValueError('invalid system version')
     platform_resource(runtime, version, 'frame.html')
     return {'entry': url(application['entry']), 'styles': [url(name) for name in application['styles']],
-            'pages': application['pages'], 'build_version': build, 'version': manifest['customization_version'],
+            'pages': localized_pages(files, language), 'language': language,
+            'build_version': build, 'version': manifest['customization_version'],
             'instance_id': manifest['instance_id'], 'asset_base': base, 'platform_version': version,
             'frame_url': url('frame.html') + '?platform=' + version, **({'mode': mode} if mode else {})}
 
@@ -43,7 +52,11 @@ def html(runtime, application, *, frame=False):
     template = platform_resource(runtime, application['platform_version'], name)
     # Non-executable JSON; no account or launch credentials are included in HTML.
     data = canonical(application).replace(b'<', b'\\u003c').replace(b'&', b'\\u0026')
-    return template.replace(b'__APPLICATION_DESCRIPTOR__', data)
+    from localization import LANGUAGES, normalize_language, text
+    language = normalize_language(application.get('language', 'ru'))
+    attributes = 'lang="' + language + '" dir="' + LANGUAGES[language]['direction'] + '"'
+    return (template.replace(b'__APPLICATION_DESCRIPTOR__', data).replace(b'lang="ru"', attributes.encode())
+            .replace(b'__PAGE_TITLE__', escape(text('web.page_title', locale=language)).encode('utf-8')))
 
 
 def html_headers(*, frame=False):

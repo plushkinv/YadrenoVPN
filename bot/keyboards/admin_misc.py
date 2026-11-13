@@ -1,3 +1,5 @@
+
+from localization import text as _tr
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
@@ -24,20 +26,20 @@ def state_pair_buttons(
 
 def back_button(callback: str='back') -> InlineKeyboardButton:
     """'Back' button."""
-    return InlineKeyboardButton(text='⬅️ Назад', callback_data=callback)
+    return InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data=callback)
 
 def home_button() -> InlineKeyboardButton:
     """'Home' button."""
-    return InlineKeyboardButton(text='🈴 На главную', callback_data='start')
+    return InlineKeyboardButton(text=_tr('system.extension_settings_kb.8'), callback_data='start')
 
 def cancel_button() -> InlineKeyboardButton:
     """'Cancel' button."""
-    return InlineKeyboardButton(text='❌ Отмена', callback_data='admin_servers')
+    return InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_servers')
 
 def cancel_kb(callback_data: str) -> InlineKeyboardMarkup:
     """Keyboard with 'Cancel' button."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data=callback_data))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data=callback_data))
     return builder.as_markup()
 
 def back_and_home_kb(back_callback: str='back') -> InlineKeyboardMarkup:
@@ -56,20 +58,20 @@ def admin_main_menu_kb() -> InlineKeyboardMarkup:
     """Main menu of the admin panel."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text='🖥️ Сервера', callback_data='admin_servers'),
-        InlineKeyboardButton(text='💳 Оплаты', callback_data='admin_payments')
+        InlineKeyboardButton(text=_tr('admin_misc.admin_main_menu_kb.1'), callback_data='admin_servers'),
+        InlineKeyboardButton(text=_tr('admin_misc.admin_main_menu_kb.2'), callback_data='admin_payments')
     )
     builder.row(
-        InlineKeyboardButton(text='👥 Пользователи', callback_data='admin_users'),
-        InlineKeyboardButton(text='📣 Маркетинг', callback_data='admin_marketing')
+        InlineKeyboardButton(text=_tr('admin_misc.admin_main_menu_kb.3'), callback_data='admin_users'),
+        InlineKeyboardButton(text=_tr('admin_misc.admin_main_menu_kb.4'), callback_data='admin_marketing')
     )
     builder.row(
-        InlineKeyboardButton(text='⚙️ Настройки бота', callback_data='admin_bot_settings'),
-        InlineKeyboardButton(text='🧩 Расширения', callback_data='admin_extensions_diagnostics')
+        InlineKeyboardButton(text=_tr('admin_misc.admin_main_menu_kb.5'), callback_data='admin_bot_settings'),
+        InlineKeyboardButton(text=_tr('admin_misc.admin_main_menu_kb.6'), callback_data='admin_extensions_diagnostics')
     )
     builder.row(
         InlineKeyboardButton(
-            text='🛠 Кастомизация YadrenoVPN',
+            text=_tr('admin_misc.admin_main_menu_kb.7'),
             callback_data='admin_yadreno_customization',
             style='primary',
         )
@@ -81,41 +83,41 @@ def admin_main_menu_kb() -> InlineKeyboardMarkup:
             style='primary',
         )
     )
-    builder.row(InlineKeyboardButton(text='🤍 Поддержка автора', callback_data='admin_author_support', style='success'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.admin_main_menu_kb.8'), callback_data='admin_author_support', style='success'))
     builder.row(home_button())
     return builder.as_markup()
 
 def marketing_menu_kb() -> InlineKeyboardMarkup:
     """Menu of marketing tools."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='📢 Рассылка', callback_data='admin_broadcast'))
-    builder.row(InlineKeyboardButton(text='🔗 Реферальная система', callback_data='admin_referral'))
-    builder.row(InlineKeyboardButton(text='🎟 Промокоды', callback_data='admin_promocodes'))
-    builder.row(InlineKeyboardButton(text='🎫 Купоны', callback_data='admin_coupons'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.marketing_menu_kb.1'), callback_data='admin_broadcast'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.marketing_menu_kb.2'), callback_data='admin_referral'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.marketing_menu_kb.3'), callback_data='admin_promocodes'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.marketing_menu_kb.4'), callback_data='admin_coupons'))
     builder.row(back_button('admin_panel'), home_button())
     return builder.as_markup()
 
 def admin_logs_menu_kb() -> InlineKeyboardMarkup:
     """Log download menu."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='📄 Полный лог', callback_data='admin_download_log_full'), InlineKeyboardButton(text='⚠️ Ошибки', callback_data='admin_download_log_errors'))
-    builder.row(InlineKeyboardButton(text='📤 Отправить в Ядрёно Админ', callback_data='admin_send_log_to_yadreno'))
-    builder.row(InlineKeyboardButton(text='🧹 Очистить логи', callback_data='admin_clear_logs_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.admin_logs_menu_kb.1'), callback_data='admin_download_log_full'), InlineKeyboardButton(text=_tr('admin_misc.admin_logs_menu_kb.2'), callback_data='admin_download_log_errors'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.admin_logs_menu_kb.3'), callback_data='admin_send_log_to_yadreno'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.admin_logs_menu_kb.4'), callback_data='admin_clear_logs_confirm'))
     builder.row(back_button('admin_bot_settings'), home_button())
     return builder.as_markup()
 
 def stop_bot_confirm_kb() -> InlineKeyboardMarkup:
     """Bot stop confirmation keyboard."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='✅ Точно остановить', callback_data='admin_stop_bot_confirm'))
-    builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_bot_settings'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.stop_bot_confirm_kb.1'), callback_data='admin_stop_bot_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_bot_settings'))
     return builder.as_markup()
 
 def force_overwrite_confirm_kb() -> InlineKeyboardMarkup:
     """Forced overwrite confirmation keypad."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text='✅ Да, перезаписать', callback_data='admin_force_overwrite_confirm'))
-    builder.row(InlineKeyboardButton(text='❌ Нет, отмена', callback_data='admin_bot_settings'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.force_overwrite_confirm_kb.1'), callback_data='admin_force_overwrite_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.force_overwrite_confirm_kb.2'), callback_data='admin_bot_settings'))
     return builder.as_markup()
 
 def update_confirm_kb(
@@ -135,32 +137,32 @@ def update_confirm_kb(
     builder = InlineKeyboardBuilder()
     if has_updates:
         if has_blocking:
-            button_text = '✅ Обновить и перезапустить'
+            button_text = _tr('admin_misc.update_confirm_kb.1')
             callback = 'admin_update_bot_confirm'
             builder.row(InlineKeyboardButton(text=button_text, callback_data=callback))
         elif is_beta_only:
-            button_text = '🧪 Накатить бета версию'
+            button_text = _tr('admin_misc.update_confirm_kb.2')
             callback = 'admin_update_bot_confirm'
             builder.row(InlineKeyboardButton(text=button_text, callback_data=callback))
         else:
-            button_text = '✅ Обновить и перезапустить'
+            button_text = _tr('admin_misc.update_confirm_kb.1')
             callback = 'admin_update_bot_confirm'
             builder.row(InlineKeyboardButton(text=button_text, callback_data=callback))
 
     if has_rollback_points:
         builder.row(
             InlineKeyboardButton(
-                text='↩️ Откатить обновление',
+                text=_tr('admin_misc.update_confirm_kb.3'),
                 callback_data='admin_update_rollback',
             )
         )
     
-    builder.row(InlineKeyboardButton(text='⚠️ Принудительно перезаписать', callback_data='admin_force_overwrite_confirm'))
+    builder.row(InlineKeyboardButton(text=_tr('admin_misc.update_confirm_kb.4'), callback_data='admin_force_overwrite_confirm'))
     
     if has_updates:
-        builder.row(InlineKeyboardButton(text='❌ Отмена', callback_data='admin_bot_settings'))
+        builder.row(InlineKeyboardButton(text=_tr('system.extension_setting_cancel_kb.1'), callback_data='admin_bot_settings'))
     else:
-        builder.row(InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_bot_settings'))
+        builder.row(InlineKeyboardButton(text=_tr('system.extension_settings_kb.7'), callback_data='admin_bot_settings'))
     return builder.as_markup()
 
 
@@ -174,7 +176,7 @@ def update_rollback_entry_kb(
     if has_rollback_points:
         builder.row(
             InlineKeyboardButton(
-                text='↩️ Откатить обновление',
+                text=_tr('admin_misc.update_confirm_kb.3'),
                 callback_data='admin_update_rollback',
             )
         )
@@ -205,7 +207,7 @@ def update_rollback_confirm_kb(snapshot_id: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text='↩️ Подтвердить откат',
+            text=_tr('admin_misc.update_rollback_confirm_kb.1'),
             callback_data=f'admin_rb_go:{snapshot_id}',
         )
     )
@@ -216,7 +218,7 @@ def author_support_kb() -> InlineKeyboardMarkup:
     """Keyboard for author support screen."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text='💳 Карты РФ', url='https://yoomoney.ru/fundraise/1GJ73GGRJBC.260318'),
+        InlineKeyboardButton(text=_tr('admin_misc.author_support_kb.1'), url='https://yoomoney.ru/fundraise/1GJ73GGRJBC.260318'),
         InlineKeyboardButton(text='💰 USDT', url=build_telegram_link('Ya_SellerBot', 'item-40'))
     )
     builder.row(back_button('admin_panel'), home_button())

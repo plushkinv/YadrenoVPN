@@ -5,6 +5,8 @@ Intercepts all calls to Telegram API methods and in case of parsing error
 automatically retry the request without parse_mode.
 Supports one or more Telegram Bot API addresses from the config.
 """
+
+from localization import text as _tr
 import asyncio
 import logging
 from typing import Any, Optional
@@ -83,7 +85,7 @@ def _format_api_server_url(api: TelegramAPIServer) -> str:
     base_url = getattr(api, 'base', None)
     if isinstance(base_url, str):
         return base_url.replace('/bot{token}/{method}', '').rstrip('/')
-    return 'передан через параметр api'
+    return _tr('parse_mode_fallback.format_api_server_url.1')
 
 
 class SafeParseSession(AiohttpSession):

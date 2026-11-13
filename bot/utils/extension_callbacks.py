@@ -1,6 +1,8 @@
 """Registry of declarative callback-actions for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import inspect
 import logging
 import re
@@ -39,12 +41,12 @@ def register_extension_callback_handler(
     if not isinstance(bypass_user_access_guard, bool):
         raise ValueError('bypass_user_access_guard must be bool')
     if not isinstance(replace, bool):
-        raise ValueError('replace должен быть bool')
+        raise ValueError(_tr('extension_callbacks.register_extension_callback_handler.1'))
     if not callable(handler):
-        raise ValueError('callback handler должен быть callable')
+        raise ValueError(_tr('extension_callbacks.register_extension_callback_handler.2'))
     key = f'{ext_id}.{action}'
     if key in EXTENSION_CALLBACK_HANDLERS and not replace:
-        raise ValueError(f"extension callback '{key}' уже зарегистрирован")
+        raise ValueError(_tr('extension_callbacks.register_extension_callback_handler.3', p0=f'{key}'))
     EXTENSION_CALLBACK_HANDLERS[key] = handler
     if bypass_user_access_guard:
         EXTENSION_ACCESS_CHECK_CALLBACKS.add(key)
@@ -119,12 +121,12 @@ def parse_extension_callback_data(callback_data: Any) -> dict[str, str] | None:
 async def dispatch_extension_callback(context: Mapping[str, Any], *, bot: Any = None) -> dict[str, Any]:
     """Calls the registered extension callback and normalizes the result."""
     if not isinstance(context, Mapping):
-        raise ValueError('context должен быть mapping')
+        raise ValueError(_tr('action_registry.resolve_system_button.1'))
     action_key = str(context.get('action_key') or '')
     handler = EXTENSION_CALLBACK_HANDLERS.get(action_key)
     if handler is None:
         return {
-            'answer_text': '⚠️ Действие расширения недоступно',
+            'answer_text': _tr('extension_callbacks.dispatch_extension_callback.1'),
             'show_alert': True,
         }
     try:
@@ -143,7 +145,7 @@ async def dispatch_extension_callback(context: Mapping[str, Any], *, bot: Any = 
     except Exception as exc:
         logger.exception("Ошибка extension callback '%s': %s", action_key, exc)
         return {
-            'answer_text': '⚠️ Действие расширения временно недоступно',
+            'answer_text': _tr('extension_callbacks.dispatch_extension_callback.2'),
             'show_alert': True,
         }
 
@@ -244,19 +246,19 @@ def normalize_extension_callback_result(raw_result: Mapping[str, Any] | None) ->
 
 def normalize_extension_action_name(action_name: Any) -> str:
     if not isinstance(action_name, str):
-        raise ValueError('action_name должен быть строкой')
+        raise ValueError(_tr('extension_callbacks.normalize_extension_action_name.1'))
     value = action_name.strip().casefold()
     if not _ACTION_NAME_RE.fullmatch(value):
-        raise ValueError("action_name должен соответствовать ^[a-z][a-z0-9_]{0,31}$")
+        raise ValueError(_tr('extension_callbacks.normalize_extension_action_name.2'))
     return value
 
 
 def normalize_extension_callback_payload(payload: Any) -> str:
     if not isinstance(payload, str):
-        raise ValueError('payload должен быть строкой')
+        raise ValueError(_tr('extension_callbacks.normalize_extension_callback_payload.1'))
     value = payload.strip()
     if not _PAYLOAD_RE.fullmatch(value):
-        raise ValueError('payload содержит недопустимые символы')
+        raise ValueError(_tr('extension_callbacks.normalize_extension_callback_payload.2'))
     return value
 
 

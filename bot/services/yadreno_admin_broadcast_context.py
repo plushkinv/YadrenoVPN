@@ -1,6 +1,8 @@
 """Request-local bot identity and snapshots of the existing broadcast editor."""
 from __future__ import annotations
 
+from localization import language as installation_language
+
 import asyncio
 import logging
 import sqlite3
@@ -51,6 +53,7 @@ def build_broadcast_runtime_context(
     except (sqlite3.Error, OSError, TypeError, ValueError) as error:
         raise BroadcastRuntimeContextError("Broadcast editor snapshot unavailable") from error
     return {
+        "installation_language": installation_language(),
         "surface": "admin.broadcast",
         "task_format": "telegram_html",
         "bot": dict(bot_identity or {"name": None, "username": None, "url": None}),

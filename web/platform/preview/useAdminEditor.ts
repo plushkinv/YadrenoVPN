@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import { admissionUnknown, connectionError, editorError, missingCandidate, previewError } from './editorErrors';
@@ -153,7 +154,7 @@ export function useAdminEditor({ viewed, onCandidate, onNewChat, recoverView, po
         if (checked.candidate.build_id !== turn.candidate.candidate.build_id || checked.task_id !== turn.candidate.task_id
           || viewed.ui_version !== checked.candidate.build_id) {
           lastTurn.current = { kind: 'apply', candidate: checked };
-          setNotice('Предпросмотр обновлён. Проверьте показанный вариант перед применением.'); return;
+          setNotice(_tr("useAdminEditor.1")); return;
         }
         if (checked.published) { setUncertain(false); return; }
         const result = await api.request<AppliedCandidate>(prefix + '/apply', 'POST', {
@@ -211,9 +212,9 @@ export function useAdminEditor({ viewed, onCandidate, onNewChat, recoverView, po
     const added = Array.from(selected);
     if (!added.length) return;
     if (files.length + added.length + (voice.clip ? 1 : 0) > maxFiles) {
-      setInputError('Можно отправить до пяти файлов, включая голосовую запись.'); return;
+      setInputError(_tr("useAdminEditor.2")); return;
     }
-    if (added.some(file => file.size > maxVoiceBytes)) { setInputError('Каждый файл должен быть не больше 10 МиБ.'); return; }
+    if (added.some(file => file.size > maxVoiceBytes)) { setInputError(_tr("useAdminEditor.3")); return; }
     setFiles(current => [...current, ...added]); setInputError('');
   }
   const canRecord = canAct && files.length < maxFiles;

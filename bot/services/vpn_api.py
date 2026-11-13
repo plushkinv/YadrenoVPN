@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import inspect
 import logging
@@ -141,7 +143,7 @@ async def get_client(server_id: int) -> XUIClient:
         return cached  # type: ignore[return-value]
     server = get_server_by_id(normalized_id)
     if not server:
-        raise ValueError(f"Сервер с ID {normalized_id} не найден")
+        raise ValueError(_tr('vpn_api.get_client.1', p0=f'{normalized_id}'))
     return get_client_from_server_data(server)  # type: ignore[return-value]
 
 
@@ -331,7 +333,7 @@ async def test_server_connection(server_data: Dict[str, Any]) -> Dict[str, Any]:
         stats = await client.get_stats()
         return {
             "success": True,
-            "message": "Подключение успешно!",
+            "message": _tr('vpn_api.test_server_connection.1'),
             "stats": stats,
         }
     except Exception:
@@ -342,7 +344,7 @@ async def test_server_connection(server_data: Dict[str, Any]) -> Dict[str, Any]:
         )
         return {
             "success": False,
-            "message": "Не удалось подключиться к панели",
+            "message": _tr('vpn_api.test_server_connection.2'),
             "stats": None,
         }
     finally:

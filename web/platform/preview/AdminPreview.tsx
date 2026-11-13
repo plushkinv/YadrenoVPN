@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 ﻿import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Check, ChevronDown, Settings } from 'lucide-react';
@@ -75,7 +76,7 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
     select({ route: nextRoute, ui_version: value.candidate.build_id, customization_version: value.candidate.customization_version });
     setCandidate(value);
     setViewError('');
-    setViewNotice(exists ? '' : 'Выбранной страницы больше нет в этой версии. Открыта доступная страница.');
+    setViewNotice(exists ? '' : _tr("AdminPreview.1"));
   }
   const editor = useAdminEditor({ viewed: visibleContext, onCandidate: showCandidate, onNewChat: async () => { await openPublished(); },
     recoverView: () => viewConnectionLost ? openPublished() : Promise.resolve(true),
@@ -173,39 +174,39 @@ function PreviewPanel({ configuration, onSettingsSaved, recheck }: { configurati
   }
   const pageId = (open ? visibleContext.route : route).split('/')[0];
   const pageTitle = (candidate?.pages ?? basePages).find(page => page.id === pageId)?.title ?? basePages.find(page => page.id === pageId)?.title ?? pageId;
-  const gear = <EditorIcon label="Настройки просмотра" onClick={() => activate('settings')}><Settings aria-hidden="true" /></EditorIcon>;
+  const gear = <EditorIcon label={_tr("AdminPreview.2")} onClick={() => activate('settings')}><Settings aria-hidden="true" /></EditorIcon>;
   const composer = (expanded: boolean) => <AdminEditor editor={editor} expanded={expanded} onActivate={() => activate('editor')}
     onAttach={() => { fileInput.current?.click(); activate('editor'); }} tools={gear} pageTitle={pageTitle} preview={open}
     onCollapse={() => setPanel('preview')} onExit={close} onTogglePreview={() => open ? close() : activate('preview')} viewNotice={viewNotice}
     onOpenPublished={() => void openPublished()} loadingPublished={pending} recoveryError={viewError} />;
   return <>
-    <input ref={fileInput} type="file" multiple hidden aria-label="Файлы для кастомизатора"
+    <input ref={fileInput} type="file" multiple hidden aria-label={_tr("AdminPreview.3")}
       onChange={event => { editor.selectFiles(event.target.files); event.target.value = ''; }} />
     <div ref={launch} className="admin-preview-launch" data-ui="admin.preview">{!open && composer(false)}</div>
-    <dialog ref={dialog} className="admin-preview-dialog" onCancel={event => { event.preventDefault(); close(); }} aria-label="Просмотр интерфейса">
+    <dialog ref={dialog} className="admin-preview-dialog" onCancel={event => { event.preventDefault(); close(); }} aria-label={_tr("AdminPreview.4")}>
       {previewStarted.current &&
         <div className="admin-preview-page" inert={panel === 'settings'}>
           <iframe ref={frame} src={candidate?.preview_url ?? publishedPreview ?? customization.asset_base + 'preview.html?platform=' + customization.platform_version} sandbox="allow-scripts allow-forms" title={t.preview} referrerPolicy="no-referrer" />
         </div>}
       {open && <>
         {panel === 'settings' ? <div className="admin-settings-backdrop">
-          <section className="admin-settings" aria-label="Настройки просмотра">
+          <section className="admin-settings" aria-label={_tr("AdminPreview.2")}>
             <header className="admin-settings-header">
-              <strong>Настройки просмотра</strong>
-              <EditorIcon label="Свернуть настройки" disabled={pending} onClick={() => setPanel('preview')}><ChevronDown aria-hidden="true" /></EditorIcon>
+              <strong>{_tr("AdminPreview.2")}</strong>
+              <EditorIcon label={_tr("AdminPreview.5")} disabled={pending} onClick={() => setPanel('preview')}><ChevronDown aria-hidden="true" /></EditorIcon>
             </header>
             <fieldset disabled={pending} className="admin-preview-fields">
               <Field label={t.page}><select value={visibleContext.route.split('/')[0]} onChange={e => selectDemo({ route: previewRoute(e.target.value, candidate?.pages ?? basePages) })}>{(candidate?.pages ?? basePages).map(page => <option value={page.id} key={page.id}>{page.title ?? basePages.find(base => base.id === page.id)?.title ?? page.id}</option>)}</select></Field>
               <Field label={t.scenario}><select value={visibleContext.scenario} onChange={e => selectDemo({ scenario: e.target.value as PreviewContext['scenario'] })}>{Object.entries(scenarios).map(([id, title]) => <option value={id} key={id}>{title}</option>)}</select></Field>
-              {customDesign ? <p className="admin-custom-design">Свой дизайн</p> : customDesign === false && <Field label={t.appearance}><select value={visibleContext.preset} onChange={e => { setError(''); selectDemo({ preset: e.target.value as PreviewContext['preset'] }); }}><option value="clear">Universal / Clear</option><option value="signal">Signal / Dark</option><option value="friendly">Friendly / Brand</option></select></Field>}
-              <Field label="Тема просмотра"><select value={visibleContext.theme} onChange={e => selectDemo({ theme: e.target.value as PreviewContext['theme'] })}><option value="light">{t.light}</option><option value="dark">{t.dark}</option></select></Field>
+              {customDesign ? <p className="admin-custom-design">{_tr("AdminPreview.6")}</p> : customDesign === false && <Field label={t.appearance}><select value={visibleContext.preset} onChange={e => { setError(''); selectDemo({ preset: e.target.value as PreviewContext['preset'] }); }}><option value="clear">Universal / Clear</option><option value="signal">Signal / Dark</option><option value="friendly">Friendly / Brand</option></select></Field>}
+              <Field label={_tr("AdminPreview.7")}><select value={visibleContext.theme} onChange={e => selectDemo({ theme: e.target.value as PreviewContext['theme'] })}><option value="light">{t.light}</option><option value="dark">{t.dark}</option></select></Field>
             </fieldset>
-            <p className="admin-settings-hint">Страница, состояние и тема меняют только предпросмотр.</p>
+            <p className="admin-settings-hint">{_tr("AdminPreview.8")}</p>
             {error && <p role="alert">{error}</p>}
             <footer className="admin-settings-actions">
-              <Button tone="secondary" className="admin-settings-cancel" disabled={pending} onClick={close}>Отменить и выйти</Button>
+              <Button tone="secondary" className="admin-settings-cancel" disabled={pending} onClick={close}>{_tr("AdminPreview.9")}</Button>
               <Button disabled={pending || customDesign === undefined} onClick={() => void save()}><Check aria-hidden="true" />
-                {!customDesign && visibleContext.preset !== settings.preset ? 'Сохранить оформление' : 'Готово'}
+                {!customDesign && visibleContext.preset !== settings.preset ? _tr("AdminPreview.10") : _tr("AdminPreview.11")}
               </Button>
             </footer>
           </section>

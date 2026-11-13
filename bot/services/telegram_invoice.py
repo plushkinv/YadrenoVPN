@@ -2,7 +2,7 @@
 import json
 from aiogram.types import LabeledPrice
 from bot.utils.payment_invoice import clamp_invoice_text
-from database.requests import get_setting
+from database.requests import get_setting, get_payment_provider_order
 
 
 def invoice_arguments(intent, quote, *, bot_name, provider_id):
@@ -16,6 +16,11 @@ def invoice_arguments(intent, quote, *, bot_name, provider_id):
     }
     if provider_id == 'cards':
         kwargs['provider_token'] = get_setting('cards_provider_token', '')
+        binding = get_payment_provider_order(intent.order_id)
+        receipt = ((binding.get('metadata') or {}).get('yookassa_receipt', True)
+                   if binding else get_setting('cards_yookassa_receipt', '1') == '1')
+        if quote.charge_currency != 'RUB' or not receipt:
+            return kwargs
         kwargs['provider_data'] = json.dumps({
             'receipt': {
                 'customer': {'email': f'user_{intent.order_id}@t.me'},

@@ -1,6 +1,8 @@
 """Custom page builder routes."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import logging
 import re
 from typing import Any, Optional
@@ -52,7 +54,7 @@ def upsert_page_route(
 ) -> None:
     """Creates or updates a page builder route."""
     if not _is_route_key(route_key):
-        raise ValueError(f"Некорректный route_key: {route_key!r}")
+        raise ValueError(_tr('db_page_routes.upsert_page_route.1', p0=f'{route_key!r}'))
 
     with get_db() as conn:
         conn.execute(

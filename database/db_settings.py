@@ -139,6 +139,8 @@ def set_setting(key: str, value: str) -> None:
         key: Setting key
         value: Setting value
     """
+    if key == 'installation_language':
+        raise ValueError('The installation language is immutable')
     with get_db() as conn:
         conn.execute("""
             INSERT INTO settings (key, value)

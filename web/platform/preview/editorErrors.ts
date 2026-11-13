@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { ApiError } from '../api/client';
 import { errorText } from '../i18n/app';
 
@@ -11,45 +12,45 @@ export function missingCandidate(value: unknown): boolean {
 }
 
 const messages: Record<EditorAction, string> = {
-  submit: 'Ошибка при отправке запроса', state: 'Ошибка при обновлении состояния запроса',
-  apply: 'Не удалось применить черновик',
-  cancel: 'Ошибка при отмене запроса', resume: 'Ошибка при возобновлении запроса',
-  'new-chat': 'Ошибка при создании нового чата',
+  get submit() { return _tr("editorErrors.1"); }, get state() { return _tr("editorErrors.2"); },
+  get apply() { return _tr("editorErrors.3"); },
+  get cancel() { return _tr("editorErrors.4"); }, get resume() { return _tr("editorErrors.5"); },
+  get 'new-chat'() { return _tr("editorErrors.6"); },
 };
 
 export function editorError(value: unknown, action: EditorAction): string {
   const details = value instanceof ApiError ? value.details : {};
   let message = messages[action];
   if (value instanceof ApiError && value.status === 413) {
-    message = 'Не удалось загрузить вложение: сервер отклонил размер запроса.';
+    message = _tr("editorErrors.7");
   } else if (details.reason === 'customizer_not_configured') {
-    message += '. Подключите кастомизатор в настройках Yadreno Admin.';
+    message += _tr("editorErrors.8");
   } else if (details.reason === 'ui_publication_changed' || details.reason === 'ui_source_changed') {
-    message += '. Интерфейс изменился после открытия. Откройте актуальную версию и повторите запрос.';
+    message += _tr("editorErrors.9");
   } else if (action === 'apply' && details.reason === 'editor_candidate_unavailable') {
-    message += '. Черновик недоступен или устарел. Обновите состояние и проверьте показанный вариант.';
+    message += _tr("editorErrors.10");
   } else if (value instanceof ApiError && ['authentication_required', 'reauthentication_required', 'access_denied', 'offline'].includes(value.code)) {
     message += '. ' + errorText(value);
   }
   // Older servers may return Hub prose in details.message. It is not an error classification.
   if (typeof details.diagnostic_id === 'string' && /^[a-f0-9]{16}$/.test(details.diagnostic_id)) {
-    message += '\nКод ошибки: ' + details.diagnostic_id;
+    message += _tr("editorErrors.11") + details.diagnostic_id;
   }
   return message;
 }
 
 export function previewError(value: unknown): string {
-  let message = 'Не удалось проверить черновик. Применение недоступно.';
+  let message = _tr("editorErrors.12");
   if (value instanceof ApiError) {
-    if (missingCandidate(value)) message = 'Черновик для применения недоступен. Попросите агента подготовить новый вариант.';
+    if (missingCandidate(value)) message = _tr("editorErrors.13");
     else if (value.details.code === 'web_candidate_expired')
-      message = 'Файлы этого черновика больше недоступны. Для применения нужен новый вариант.';
+      message = _tr("editorErrors.14");
     else if (value.details.code === 'web_source_changed')
-      message = 'Этот черновик устарел после изменений. Для применения нужен обновлённый вариант.';
+      message = _tr("editorErrors.15");
     else if (['authentication_required', 'reauthentication_required', 'access_denied'].includes(value.code))
       message += ' ' + errorText(value);
     const id = value.details.diagnostic_id;
-    if (typeof id === 'string' && /^[a-f0-9]{16}$/.test(id)) message += '\nКод ошибки: ' + id;
+    if (typeof id === 'string' && /^[a-f0-9]{16}$/.test(id)) message += _tr("editorErrors.11") + id;
   }
   return message;
 }

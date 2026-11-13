@@ -4,25 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Добавить подписку</title>
+  <title>__TEXT_title__</title>
   <link rel="stylesheet" href="/open-client/style.css">
   <script src="/open-client/app.js" defer></script>
 </head>
 <body>
+  <script id="messages" type="application/json">__MESSAGES__</script>
   <main>
-    <h1>Добавить подписку</h1>
-    <p id="status" role="status">Подготавливаем ссылку…</p>
+    <h1>__TEXT_title__</h1>
+    <p id="status" role="status">__TEXT_preparing__</p>
     <div id="actions" hidden>
-      <a id="open">Открыть приложение</a>
-      <p>Если приложение не открылось автоматически, нажмите кнопку. Браузер может запросить разрешение на открытие.</p>
-      <p>Приложение должно быть установлено. Подписку также можно добавить вручную:</p>
-      <label for="subscription">Ссылка подписки</label>
-      <input id="subscription" type="text" readonly spellcheck="false" autocomplete="off">
-      <button id="copy" type="button">Скопировать ссылку</button>
+      <a id="open">__TEXT_open_app__</a>
+      <p>__TEXT_open_hint__</p>
+      <p>__TEXT_manual_hint__</p>
+      <label for="subscription">__TEXT_link__</label>
+      <input id="subscription" type="text" dir="ltr" readonly spellcheck="false" autocomplete="off">
+      <button id="copy" type="button">__TEXT_copy__</button>
       <p id="copy-status" role="status"></p>
     </div>
-    <button id="retry" type="button" hidden>Повторить</button>
-    <noscript>Для открытия приложения включите JavaScript в браузере.</noscript>
+    <button id="retry" type="button" hidden>__TEXT_retry__</button>
+    <noscript>__TEXT_javascript__</noscript>
   </main>
 </body>
 </html>

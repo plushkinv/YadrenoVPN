@@ -1,6 +1,8 @@
 """Storage of connections between core orders and external payment providers."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import json
 import logging
 import sqlite3
@@ -350,7 +352,7 @@ def _mark_provider_confirmed(conn: sqlite3.Connection, order_id: str) -> None:
 def _normalize_status(status: str) -> str:
     value = str(status or '').strip().casefold()
     if value not in _ALLOWED_PROVIDER_ORDER_STATUSES:
-        raise ValueError('status должен быть pending, succeeded или canceled')
+        raise ValueError(_tr('db_payment_providers.normalize_status.1'))
     return value
 
 

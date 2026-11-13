@@ -27,7 +27,7 @@ export function Connect({ subscription, client, accessUrl, onBack, onClient, onO
         <li><span className="step-number">3</span><div><h2>{ru.stepConnect}</h2><p>{ru.stepConnectCaption}</p></div></li>
       </ol>
     </section><aside className="panel fallback-card"><h2>{ru.manualConnection}</h2><p>{ru.fallbackCaption}</p>
-      <label htmlFor="access-url">{ru.linkLabel}</label><input id="access-url" readOnly value={accessUrl} onFocus={event => event.target.select()} spellCheck={false} />
+      <label htmlFor="access-url">{ru.linkLabel}</label><input id="access-url" type="url" readOnly value={accessUrl} onFocus={event => event.target.select()} spellCheck={false} />
       <Button tone="secondary" onClick={async () => setCopied(await copy(accessUrl))}>{copied ? <Check size={18} /> : <Copy size={18} />}{copied ? ru.copied : ru.copy}</Button>
       <Button tone="secondary" onClick={() => setQr(true)}><QrCode size={19} />{ru.qr}</Button>
       {copied === false && <p role="status">{ru.copyFailed}</p>}

@@ -1,15 +1,15 @@
 """Static administrator help; placeholder resolution stays in placeholders.py."""
 
+from localization import text as _tr
+
 from bot.utils.text import escape_html
 
 
 _EXAMPLE_NOTE = (
-    "Примеры вымышленные, со стандартным оформлением. "
-    "У пользователя будут его данные; оформление может быть изменено.\n\n"
+    _tr('placeholder_help.module.1')
 )
 _COMPATIBILITY_NOTE = (
-    "\n\nСтарые поддерживаемые названия продолжают работать в сохранённых текстах. "
-    "Для новых текстов используйте формы выше."
+    _tr('placeholder_help.module.2')
 )
 
 
@@ -19,36 +19,34 @@ def _example(description: str, template: str, result_html: str) -> str:
 
 
 _KEY_FIELD_EXAMPLES = (
-    ("Номер ключа", "Номер: %key(field=id)%", "Номер: 42"),
-    ("Имя ключа", "Ключ: %key(field=name)%", "Ключ: Домашний"),
-    ("Индикатор состояния", "%key(field=status)%", "🟢"),
-    ("Использованный трафик и лимит", "%key(field=traffic)%", "10.00 GB из 100.00 GB (10.0%)"),
-    ("Дата окончания", "До: %key(field=expires_at)%", "До: 2030-01-03"),
-    ("Название сервера", "Сервер: %key(field=server)%", "Сервер: Германия"),
-    ("Название тарифа", "Тариф: %key(field=tariff)%", "Тариф: Месяц"),
-    ("Лимит устройств", "Устройств: %key(field=device_limit)%", "Устройств: 3"),
-    ("Число оставшихся дней", "Осталось дней: %key(field=days_left)%", "Осталось дней: 2"),
+    (_tr('placeholder_help.module.3'), _tr('placeholder_help.module.4'), _tr('placeholder_help.module.5')),
+    (_tr('placeholder_help.module.6'), _tr('placeholder_help.module.7'), _tr('placeholder_help.module.8')),
+    (_tr('placeholder_help.module.9'), "%key(field=status)%", "🟢"),
+    (_tr('placeholder_help.module.10'), "%key(field=traffic)%", _tr('placeholder_help.module.11')),
+    (_tr('placeholder_help.module.12'), _tr('placeholder_help.module.13'), _tr('placeholder_help.module.14')),
+    (_tr('placeholder_help.module.15'), _tr('placeholder_help.module.16'), _tr('placeholder_help.module.17')),
+    (_tr('placeholder_help.module.18'), _tr('placeholder_help.module.19'), _tr('placeholder_help.module.20')),
+    (_tr('admin_states.module.30'), _tr('placeholder_help.module.21'), _tr('placeholder_help.module.22')),
+    (_tr('placeholder_help.module.23'), _tr('placeholder_help.module.24'), _tr('placeholder_help.module.25')),
     (
-        "Остаток срока в днях, часах и минутах",
-        "Осталось времени: %key(field=time_left)%",
-        "Осталось времени: 2 дн., 13 ч., 29 мин.",
+        _tr('placeholder_help.module.26'),
+        _tr('placeholder_help.module.27'),
+        _tr('placeholder_help.module.28'),
     ),
 )
 _KEY_FIELDS_HELP = "\n\n".join(_example(*example) for example in _KEY_FIELD_EXAMPLES)
 _KEY_TIME_NOTE = (
-    "\n\nДата окончания — не остаток срока. Для ключа без срока дата и остаток времени "
-    "показывают «Без срока», число дней пустое. После истечения остаток равен нулю. "
-    "Время рассчитано при отправке: уже отправленное сообщение не обновляется."
+    _tr('placeholder_help.module.29')
 )
 
 _KEY_LINK_HELP = "\n\n".join((
-    _example("Ссылка моноширинным текстом для копирования", "%key_copy%",
+    _example(_tr('placeholder_help.module.30'), "%key_copy%",
              "<code>https://vpn.example/sub/demo</code>"),
-    _example("Обычная ссылка в тексте", "%key_link%", "https://vpn.example/sub/demo"),
-    _example("URL-кнопка добавления в INCY при включённом Web/Mini App",
+    _example(_tr('placeholder_help.module.31'), "%key_link%", "https://vpn.example/sub/demo"),
+    _example(_tr('placeholder_help.module.32'),
              "%client_import_url(client=incy)%", "https://vpn.example/open-client#token=…&client=incy"),
     _example(
-        "Ссылка внутри параметра URL-кнопки",
+        _tr('placeholder_help.module.33'),
         "https://app.example/import?url=%key_link_url%",
         "<code>https://app.example/import?url=https%3A%2F%2Fvpn.example%2Fsub%2Fdemo</code>",
     ),
@@ -56,88 +54,71 @@ _KEY_LINK_HELP = "\n\n".join((
 
 _COUPON_HELP = "\n\n".join((
     _example(
-        "Готовый блок купона", "%payment_coupon%",
-        "🎫 <b>Купон на следующую покупку</b>\n\nСкидка: <b>15%</b>\n<pre>GIFT15</pre>",
+        _tr('placeholder_help.module.34'), "%payment_coupon%",
+        _tr('placeholder_help.module.35'),
     ),
-    _example("Код купона", "Код: %payment_coupon(field=code)%", "Код: GIFT15"),
-    _example("Скидка числом; знак % добавьте в текст",
-             "Скидка: %payment_coupon(field=discount_percent)%%", "Скидка: 15%"),
-    _example("Срок действия купона в днях",
-             "Действует %payment_coupon(field=lifetime_days)% дней", "Действует 7 дней"),
+    _example(_tr('placeholder_help.module.36'), _tr('placeholder_help.module.37'), _tr('placeholder_help.module.38')),
+    _example(_tr('placeholder_help.module.39'),
+             _tr('placeholder_help.module.40'), _tr('placeholder_help.module.41')),
+    _example(_tr('placeholder_help.module.42'),
+             _tr('placeholder_help.module.43'), _tr('placeholder_help.module.44')),
 ))
 
 EDITOR_PLACEHOLDER_HELP = {
     'main': (
-        "📝 <b>Справка: Текст главной страницы</b>\n\n"
-        "Вернитесь в редактор и отправьте новый текст или фото/видео/GIF с подписью.\n\n"
+        _tr('placeholder_help.module.45')
         + _EXAMPLE_NOTE
-        + _example("Список тарифов с ценами, без заголовка", "%tariffs%",
-                   "• Месяц — 199 ₽\n• Год — 1990 ₽")
+        + _example(_tr('placeholder_help.module.46'), "%tariffs%",
+                   _tr('placeholder_help.module.47'))
         + "\n\n"
-        + _example("Тарифы одной группы (1 — номер нужной группы)", "%tariffs(group_id=1)%",
-                   "• Месяц — 199 ₽")
-        + "\n\nЕсли подходящих тарифов нет, список пустой. Цены зависят от настройки валют. "
-        "Чтобы не показывать список в тексте, не вставляйте эти подстановки.\n\n"
-        "Совместимость: <code>%no_tariffs%</code> и его старое русское имя "
-        "заменяются пустой строкой; они не скрывают тарифы или кнопки."
+        + _example(_tr('placeholder_help.module.48'), "%tariffs(group_id=1)%",
+                   _tr('placeholder_help.module.49'))
+        + _tr('placeholder_help.module.50')
         + _COMPATIBILITY_NOTE
     ),
     'key_delivery': (
-        "📝 <b>Справка: Текст выдачи ключа</b>\n\n"
-        "Редактор принимает только текст.\n\n"
+        _tr('placeholder_help.module.51')
         + _EXAMPLE_NOTE
-        + "<b>Ссылка подписки</b>\n" + _KEY_LINK_HELP
-        + "\n\nURL-форма кодируется именно в адресе кнопки; в тексте сообщения "
-        "она показывает обычный адрес.\n\n<b>Данные текущего ключа</b>\n"
+        + _tr('placeholder_help.module.52') + _KEY_LINK_HELP
+        + _tr('placeholder_help.module.53')
         + _KEY_FIELDS_HELP + _KEY_TIME_NOTE
-        + "\n\n<b>Купон за текущую оплату</b>\n" + _COUPON_HELP
-        + "\n\nБез связанной оплаты с выданным купоном его подстановки пустые. "
-        "Повторный показ не выдаёт новый купон. Без данных ключа его подстановки пустые."
+        + _tr('placeholder_help.module.54') + _COUPON_HELP
+        + _tr('placeholder_help.module.55')
         + _COMPATIBILITY_NOTE
     ),
     'notification_text': (
-        "📝 <b>Справка: Текст уведомления об истечении</b>\n\n"
+        _tr('placeholder_help.module.56')
         + _EXAMPLE_NOTE
-        + "<b>Данные ключа, о котором напоминает бот</b>\n"
+        + _tr('placeholder_help.module.57')
         + _KEY_FIELDS_HELP + _KEY_TIME_NOTE
-        + "\n\nЧисло дней берётся на момент проверки уведомлений; подробный остаток "
-        "времени — на момент подготовки сообщения. Без данных ключа подстановки пустые. "
-        "Русского аналога у <code>%key(field=time_left)%</code> нет."
+        + _tr('placeholder_help.module.58')
         + _COMPATIBILITY_NOTE
     ),
     'referral': (
-        "📝 <b>Справка: Реферальная страница</b>\n\n"
+        _tr('placeholder_help.module.59')
         + _EXAMPLE_NOTE
-        + _example("Личная ссылка пользователя", "Приглашайте друзей: %referral_link%",
-                   "Приглашайте друзей: https://t.me/ExampleBot?start=ref_demo")
+        + _example(_tr('placeholder_help.module.60'), _tr('placeholder_help.module.61'),
+                   _tr('placeholder_help.module.62'))
         + "\n\n"
         + _example(
-            "Личная ссылка внутри параметра URL-кнопки",
+            _tr('placeholder_help.module.63'),
             "https://app.example/share?url=%referral_link_url%",
             "<code>https://app.example/share?url=https%3A%2F%2Ft.me%2FExampleBot%3Fstart%3Dref_demo</code>",
         )
         + "\n\n"
-        + _example("Статистика включённых уровней; баланс при денежном вознаграждении",
-                   "%referral_stats%", "✅ Уровень 1 (10%): 3 чел. — 60 ₽\n\n💰 <b>Ваш баланс:</b> 150 ₽")
-        + "\n\nПри вознаграждении днями будет, например, «3 дн.» вместо суммы. "
-        "Реферальная программа должна быть включена, а пользователь — известен боту. "
-        "Без этих данных подстановки пустые. URL-форма кодируется в адресе кнопки, "
-        "а в тексте показывает обычную ссылку."
+        + _example(_tr('placeholder_help.module.64'),
+                   "%referral_stats%", _tr('placeholder_help.module.65'))
+        + _tr('placeholder_help.module.66')
         + _COMPATIBILITY_NOTE
     ),
 }
 
 BROADCAST_PLACEHOLDER_HINT = (
-    "<b>Подстановки в тексте и подписи</b>\n"
-    "<code>%user_name%</code> — имя получателя; "
-    "<code>%referral_link%</code> — его личная ссылка.\n\n"
+    _tr('placeholder_help.module.67')
     + _example(
-        "Вымышленный пример",
-        "Привет, %user_name%! Ваша ссылка: %referral_link%",
-        "Привет, Анна! Ваша ссылка: https://t.me/ExampleBot?start=ref_demo",
+        _tr('placeholder_help.module.68'),
+        _tr('placeholder_help.module.69'),
+        _tr('placeholder_help.module.70'),
     )
-    + "\n\nВ превью используются ваши данные, при отправке — данные каждого получателя. "
-    "Для личной ссылки нужна включённая реферальная программа. "
-    "Обычная рассылка не выбирает ключ или платёж: их данные без контекста пустые. "
-    "В опросах подстановки не работают."
+    + _tr('placeholder_help.module.71')
 )

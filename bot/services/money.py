@@ -5,9 +5,11 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from typing import Any, Mapping
 
 from database.requests import get_base_currency, get_currency_rate, list_currency_rates
+from core.payment_provider_specs import INTERNATIONAL_PROVIDERS, REGIONAL_CURRENCY_EXPONENTS
 
 BASE_CURRENCIES = frozenset({'RUB', 'USD'})
 CURRENCY_EXPONENTS: Mapping[str, int] = {
+    **REGIONAL_CURRENCY_EXPONENTS,
     'RUB': 2,
     'USD': 2,
     'USDT': 2,
@@ -94,6 +96,14 @@ def format_money_minor(
 def payment_type_currency(payment_type: str, *, base_currency: str | None = None) -> str:
     """Returns the native charge currency for a built-in or custom provider."""
     payment = str(payment_type or '').strip().casefold()
+    if payment == 'cards':
+        from database.requests import get_cards_currency
+        return get_cards_currency()
+    if payment == 'myfatoorah':
+        from database.requests import get_myfatoorah_currency
+        return normalize_currency(get_myfatoorah_currency())
+    if payment in INTERNATIONAL_PROVIDERS:
+        return 'USD'
     builtin = _BUILTIN_PAYMENT_CURRENCIES.get(payment)
     if builtin:
         return (

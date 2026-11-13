@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
+from core.payment_provider_specs import BUILTIN_PROVIDER_IDS, admin_visibility_key
 
 from core.web_ui import PRESENTATION_CONSTRAINTS, presentation_setting_contract, validate_setting
 from core.results import CoreError
@@ -19,6 +20,7 @@ _TEXT_KEYS = (
     'referral_purchase_notification_text',
 )
 _INTEGER_LIMITS = {
+    **{admin_visibility_key(pid): 1 for pid in BUILTIN_PROVIDER_IDS},
     'web_telegram_login_enabled': 1,
     'referral_attribution_window_hours': REFERRAL_ATTRIBUTION_WINDOW_HOURS_MAX,
     'expired_key_panel_cleanup_delay_days': EXPIRED_KEY_PANEL_CLEANUP_DELAY_DAYS_MAX,
@@ -52,7 +54,11 @@ def setting_contract(key: str) -> dict[str, Any]:
                 'allowed_commands': reply_keyboard.available_commands(), 'restart_required': False}
     if key in _INTEGER_LIMITS:
         constraints.update(ascii_digits=True, minimum=0, maximum=_INTEGER_LIMITS[key])
-        return {'value_type': 'integer_string', 'normalization': 'decimal', 'constraints': constraints}
+        contract = {'value_type': 'integer_string', 'normalization': 'decimal', 'constraints': constraints}
+        if key.startswith('payment_admin_visible_'):
+            contract.update(provider_id=key.removeprefix('payment_admin_visible_'),
+                            affects='admin_navigation_only', restart_required=False)
+        return contract
     if key == 'key_name_prefix':
         constraints.update(no_line_breaks=True, trimmed_max_length=MAX_KEY_PREFIX_LENGTH)
     if key == 'account_name_pool':

@@ -3,6 +3,8 @@ Dialogue with the Yadreno Admin agent and the /yaa context command.
 """
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import json
 import uuid
@@ -183,30 +185,14 @@ def _missing_key_text() -> str:
     """The text of the api_key setup screen."""
     yadreno_admin_link = build_telegram_link('YadrenoAdmin_Bot')
     return (
-        "🤖 <b>Yadreno Admin</b>\n\n"
-        "Чтобы начать диалог с агентом, сначала укажите свой <code>api_key</code>.\n\n"
-        "🔑 <b>Как получить ключ:</b>\n"
-        f"Получите его в <a href=\"{yadreno_admin_link}\">@YadrenoAdmin_Bot</a> в разделе «Профиль».\n\n"
-        "🎬 <b>Что умеет агент:</b>\n"
-        "Посмотрите <a href=\"https://www.youtube.com/watch?v=ACPu03aAJns\">видео с примерами возможностей</a>.\n\n"
-        "💬 <b>Остались вопросы?</b>\n"
-        f"Задайте их в <a href=\"{yadreno_admin_link}\">@YadrenoAdmin_Bot</a> — он бесплатно проконсультирует вас по любым вопросам YadrenoVPN."
+        _tr('yadreno_admin.missing_key_text.1', p0=f'{yadreno_admin_link}', p1=f'{yadreno_admin_link}')
     )
 
 
 def _chat_intro_text() -> str:
     """Agent chat screen text."""
     return (
-        "🤖 <b>Yadreno Admin</b>\n\n"
-        "Опишите задачу текстом или голосовым сообщением — агент поможет с администрированием "
-        "VPN-сервиса: пользователями, ключами, подписками, оплатами, серверами, "
-        "3x-UI, inbound, логами и диагностикой.\n\n"
-        "🔓 <b>Редактирование ядра</b>\n"
-        "Yadreno Admin игнорирует настройку «Редактирование ядра» "
-        "и может изменять системные файлы проекта для выполнения ваших задач.\n\n"
-        "🧭 <b>Для изменения страниц, кнопок, текстов, медиа и внешнего вида "
-        "используйте 🛠 Кастомизация YadrenoVPN.</b>\n\n"
-        "Чтобы остановить текущий запрос, отправьте <code>/cancel</code>."
+        _tr('yadreno_admin.chat_intro_text.1')
     )
 
 
@@ -214,39 +200,26 @@ def _customization_intro_text() -> str:
     """Build the intro text for the separate YadrenoVPN customization chat."""
     if is_yadreno_admin_core_changes_enabled():
         core_policy_text = (
-            "⚪ <b>Редактирование ядра: разрешено</b>\n"
-            "Кастомизатору разрешено менять файлы ядра. "
-            "Такие изменения могут затруднить обновление бота."
+            _tr('yadreno_admin.customization_intro_text.1')
         )
     else:
         core_policy_text = (
-            "🟢 <b>Редактирование ядра: запрещено</b>\n"
-            "Кастомизатор может менять интерфейс, настройки и пользовательские расширения. "
-            "Изменения файлов ядра автоматически отменяются."
+            _tr('yadreno_admin.customization_intro_text.2')
         )
     return (
-        "🛠 <b>Кастомизация YadrenoVPN</b>\n\n"
-        "Этот чат предназначен для настройки страниц, кнопок, текстов, медиа "
-        "и пользовательских расширений YadrenoVPN.\n\n"
-        "Опишите задачу текстом или голосовым сообщением. Можно приложить аудиозапись.\n\n"
-        "Опишите, что нужно изменить. Для редактирования конкретной страницы "
-        "удобнее открыть её в боте и вызвать <code>/yaa</code> прямо оттуда.\n\n"
-        f"{core_policy_text}\n\n"
-        "🧭 <b>Для управления пользователями, ключами, оплатами, серверами, "
-        "3x-UI и диагностики используйте 🤖 Yadreno Admin.</b>\n\n"
-        "Чтобы остановить текущий запрос, отправьте <code>/cancel</code>."
+        _tr('yadreno_admin.customization_intro_text.3', p0=f'{core_policy_text}')
     )
 
 
 def _progress_text(title: str, content: str) -> str:
     """Formats the hub progress event for a Telegram HTML message."""
-    body = escape_html(content.strip()) if content else "Обновляю статус..."
+    body = escape_html(content.strip()) if content else _tr('yadreno_admin.progress_text.1')
     return f"{title}\n\n{body}"
 
 
 def _format_final_response(content: str) -> str:
     """Formats the final agent response for Telegram."""
-    return content or "Готово."
+    return content or _tr('yadreno_admin.format_final_response.1')
 
 
 def _final_response_keyboard(
@@ -292,7 +265,7 @@ def _format_latest_event(latest: YadrenoAdminLatest) -> str | None:
         return _format_final_response(latest.final.content)
     if latest.progress is not None:
         title = (
-            "📋 <b>План работы</b>"
+            _tr('yadreno_admin.format_latest_event.1')
             if latest.progress.event == "task_update"
             else "🤖 <b>Yadreno Admin</b>"
         )
@@ -321,7 +294,7 @@ def _existing_message_html(message: Message) -> str:
     if formatted:
         return formatted
     plain = getattr(message, "text", None) or getattr(message, "caption", None)
-    return escape_html(plain) if plain else "ℹ️ <b>Активного запроса нет</b>"
+    return escape_html(plain) if plain else _tr('yadreno_admin.existing_message_html.1')
 
 
 async def _show_idle_agent_controls(message: Message, topic_id: int) -> None:
@@ -373,7 +346,7 @@ class _YadrenoProgressRenderer:
         self._task_message: Message | None = None
         self._last_live_status_text = _progress_text(
             "🤖 <b>Yadreno Admin</b>",
-            "⏳ Отправляю запрос...",
+            _tr('yadreno_admin.init.1'),
         )
 
     @property
@@ -428,7 +401,7 @@ class _YadrenoProgressRenderer:
         self._status_messages[slot] = updated
 
     async def _show_task_update(self, event: YadrenoAdminProgressEvent) -> None:
-        text = _progress_text("📋 <b>План работы</b>", event.content)
+        text = _progress_text(_tr('yadreno_admin.format_latest_event.1'), event.content)
         if self._task_message is not None:
             self._task_message = await safe_edit_or_send(
                 self._task_message,
@@ -531,7 +504,7 @@ async def _show_yadreno_customization_entry(
 async def show_yadreno_admin(callback: CallbackQuery, state: FSMContext):
     """Opens the Yadreno Admin section."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await callback.answer()
     await _show_yadreno_entry(callback, state)
@@ -541,7 +514,7 @@ async def show_yadreno_admin(callback: CallbackQuery, state: FSMContext):
 async def show_yadreno_customization(callback: CallbackQuery, state: FSMContext):
     """Open the separate YadrenoVPN customization section."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     await callback.answer()
     await _show_yadreno_customization_entry(callback, state)
@@ -551,7 +524,7 @@ async def show_yadreno_customization(callback: CallbackQuery, state: FSMContext)
 async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
     """Opens a new chat if the agent is not currently busy."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     api_key = get_yadreno_admin_api_key()
@@ -601,12 +574,12 @@ async def start_yadreno_new_chat(callback: CallbackQuery, state: FSMContext):
 async def cancel_yadreno_dialog_button(callback: CallbackQuery):
     """Cancels an active agent request from a button."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     api_key = get_yadreno_admin_api_key()
     if not api_key:
-        await callback.answer("Сначала укажите api_key", show_alert=True)
+        await callback.answer(_tr('yadreno_admin.cancel_yadreno_dialog_button.1'), show_alert=True)
         return
 
     topic_id = _callback_topic_id(callback.data, "admin_yadreno_cancel")
@@ -636,12 +609,12 @@ async def cancel_yadreno_dialog_button(callback: CallbackQuery):
 async def nudge_yadreno_dialog(callback: CallbackQuery):
     """Shows the latest snapshot via /latest without consuming polling."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     api_key = get_yadreno_admin_api_key()
     if not api_key:
-        await callback.answer("Сначала укажите api_key", show_alert=True)
+        await callback.answer(_tr('yadreno_admin.cancel_yadreno_dialog_button.1'), show_alert=True)
         return
 
     topic_id = _callback_topic_id(callback.data, "admin_yadreno_nudge")
@@ -657,12 +630,12 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
 
     if latest is None:
         await _show_idle_agent_controls(callback.message, topic_id)
-        await callback.answer("Активного запроса нет", show_alert=False)
+        await callback.answer(_tr('yadreno_admin.nudge_yadreno_dialog.1'), show_alert=False)
         return
 
     if latest.final is not None:
         await _deliver_final_response(callback.message, latest.final, topic_id)
-        await callback.answer("Обновил")
+        await callback.answer(_tr('yadreno_admin.nudge_yadreno_dialog.2'))
         return
 
     text = _format_latest_event(latest)
@@ -675,7 +648,7 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
             callback.from_user.id,
             topic_id=topic_id,
         ):
-            await callback.answer("Восстанавливаю связь")
+            await callback.answer(_tr('yadreno_admin.nudge_yadreno_dialog.3'))
             progress = _YadrenoProgressRenderer(
                 callback.message,
                 topic_id=topic_id,
@@ -705,7 +678,7 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
                     progress.final_target, final, topic_id,
                 )
                 return
-        await callback.answer("Пока свежих данных нет", show_alert=False)
+        await callback.answer(_tr('yadreno_admin.nudge_yadreno_dialog.4'), show_alert=False)
         return
 
     active_request_id = get_active_request_id(
@@ -716,7 +689,7 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
         callback.from_user.id,
         topic_id=topic_id,
     ):
-        await callback.answer("Восстанавливаю связь")
+        await callback.answer(_tr('yadreno_admin.nudge_yadreno_dialog.3'))
         progress = _YadrenoProgressRenderer(
             await safe_edit_or_send(
                 callback.message,
@@ -769,14 +742,14 @@ async def nudge_yadreno_dialog(callback: CallbackQuery):
         text,
         reply_markup=latest_keyboard,
     )
-    await callback.answer("Обновил")
+    await callback.answer(_tr('yadreno_admin.nudge_yadreno_dialog.2'))
 
 
 @router.callback_query(F.data == "admin_yadreno_set_key")
 async def start_yadreno_key_input(callback: CallbackQuery, state: FSMContext):
     """Switches the administrator to api_key input mode."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
 
     await state.set_state(AdminStates.yadreno_waiting_api_key)
@@ -787,9 +760,7 @@ async def start_yadreno_key_input(callback: CallbackQuery, state: FSMContext):
     yadreno_admin_link = build_telegram_link('YadrenoAdmin_Bot')
     await safe_edit_or_send(
         callback.message,
-        "🔑 <b>Ключ Yadreno Admin</b>\n\n"
-        "Отправьте свой <code>api_key</code> из раздела «Профиль» в "
-        f"<a href=\"{yadreno_admin_link}\">@YadrenoAdmin_Bot</a>.",
+        _tr('yadreno_admin.start_yadreno_key_input.1', p0=f'{yadreno_admin_link}'),
         reply_markup=yadreno_admin_cancel_key_kb(),
     )
     await callback.answer()
@@ -818,11 +789,7 @@ async def save_yadreno_key(message: Message, state: FSMContext):
     if api_key is None:
         await safe_edit_or_send(
             editing_message or message,
-            "❌ <b>Ключ Yadreno Admin повреждён</b>\n\n"
-            "В значении есть перенос строки, пробел или другой недопустимый "
-            "символ.\n\n"
-            "Отправьте только сам <code>api_key</code> одной строкой — без "
-            "кавычек, подписи и пояснений.",
+            _tr('yadreno_admin.save_yadreno_key.1'),
             reply_markup=yadreno_admin_cancel_key_kb(),
             force_new=editing_message is None,
         )
@@ -835,15 +802,13 @@ async def save_yadreno_key(message: Message, state: FSMContext):
     await _activate_yadreno_chat_lane(state, YADRENO_ADMIN_CHAT_TOPIC_ID)
     target = editing_message or message
     ip_line = (
-        f"\n\n🌐 IP сервера: <code>{escape_html(server_ip)}</code>"
+        _tr('yadreno_admin.save_yadreno_key.2', p0=f'{escape_html(server_ip)}')
         if server_ip
-        else "\n\n🌐 IP сервера автоматически определить не удалось."
+        else _tr('yadreno_admin.save_yadreno_key.3')
     )
     await safe_edit_or_send(
         target,
-        "✅ <b>Ключ сохранён</b>\n\n"
-        "Теперь можно писать задачи агенту обычными сообщениями."
-        f"{ip_line}",
+        _tr('yadreno_admin.save_yadreno_key.4', p0=f'{ip_line}'),
         reply_markup=yadreno_admin_chat_kb(YADRENO_ADMIN_CHAT_TOPIC_ID),
         force_new=editing_message is None,
     )
@@ -879,7 +844,7 @@ async def cancel_yadreno_dialog(message: Message, state: FSMContext):
                 title=(
                     None
                     if e.kind == "configuration"
-                    else "Не удалось отменить запрос"
+                    else _tr('yadreno_admin.cancel_yadreno_dialog.1')
                 ),
             ),
             reply_markup=(
@@ -927,7 +892,7 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
     text = _message_prompt_text(message, topic_id)
     thinking = await safe_edit_or_send(
         message,
-        "🤖 <b>Yadreno Admin</b>\n\n⏳ Отправляю запрос...",
+        _tr('yadreno_admin.handle_yadreno_chat_message.1'),
         reply_markup=None,
         force_new=True,
     )
@@ -1149,7 +1114,7 @@ def _message_upload_size(message: Message) -> int | None:
 
 def _format_upload_size(size_bytes: int) -> str:
     """Formats the file size for the message to the administrator."""
-    return f"{size_bytes / (1024 * 1024):.1f} МБ"
+    return _tr('yadreno_admin.format_upload_size.1', p0=f'{size_bytes / (1024 * 1024):.1f}')
 
 
 def _ensure_upload_size_allowed(message: Message, *, size_bytes: int | None = None) -> None:
@@ -1160,15 +1125,9 @@ def _ensure_upload_size_allowed(message: Message, *, size_bytes: int | None = No
         return
 
     raise YadrenoAdminError(
-        "Файл слишком большой для анализа: "
-        f"{_format_upload_size(size_bytes)}. "
-        f"Лимит загрузки в Yadreno Admin — {YADRENO_ADMIN_UPLOAD_MAX_MB} МБ. "
-        "Видео и GIF для медиа страницы передаются без скачивания через Telegram file_id; "
-        "для анализа отправьте фото/скриншот или файл меньшего размера.",
+        _tr('yadreno_admin.ensure_upload_size_allowed.1', p0=f'{_format_upload_size(size_bytes)}', p1=f'{YADRENO_ADMIN_UPLOAD_MAX_MB}'),
         user_message=(
-            "Файл слишком большой для анализа. "
-            f"Максимальный размер — {YADRENO_ADMIN_UPLOAD_MAX_MB} МБ. "
-            "Отправьте фото, скриншот или файл меньшего размера."
+            _tr('yadreno_admin.ensure_upload_size_allowed.2', p0=f'{YADRENO_ADMIN_UPLOAD_MAX_MB}')
         ),
     )
 
@@ -1216,32 +1175,27 @@ async def _download_yadreno_upload(message: Message) -> list[YadrenoAdminUpload]
     except TelegramBadRequest as e:
         if "file is too big" in str(e).lower():
             raise YadrenoAdminError(
-                "Файл слишком большой для загрузки через Telegram Bot API. "
-                f"Лимит анализа в Yadreno Admin — {YADRENO_ADMIN_UPLOAD_MAX_MB} МБ. "
-                "Видео и GIF для медиа страницы передаются без скачивания через Telegram file_id.",
+                _tr('yadreno_admin.download_yadreno_upload.1', p0=f'{YADRENO_ADMIN_UPLOAD_MAX_MB}'),
                 user_message=(
-                    "Telegram не позволяет скачать такой большой файл. "
-                    f"Отправьте файл размером до {YADRENO_ADMIN_UPLOAD_MAX_MB} МБ."
+                    _tr('yadreno_admin.download_yadreno_upload.2', p0=f'{YADRENO_ADMIN_UPLOAD_MAX_MB}')
                 ),
             ) from e
         raise YadrenoAdminError(
-            f"Telegram не дал скачать файл: {e}",
+            _tr('yadreno_admin.download_yadreno_upload.3', p0=f'{e}'),
             user_message=(
-                "Не удалось скачать файл из Telegram. "
-                "Попробуйте отправить его ещё раз."
+                _tr('yadreno_admin.download_yadreno_upload.4')
             ),
         ) from e
     except (TelegramAPIError, OSError, asyncio.TimeoutError) as error:
         raise YadrenoAdminError(
             "Telegram attachment lookup failed",
-            user_message="Не удалось скачать файл из Telegram. Попробуйте отправить его ещё раз.",
+            user_message=_tr('yadreno_admin.download_yadreno_upload.4'),
         ) from error
     if not telegram_file.file_path:
         raise YadrenoAdminError(
-            "Telegram не вернул путь к файлу",
+            _tr('yadreno_admin.download_yadreno_upload.5'),
             user_message=(
-                "Не удалось скачать файл из Telegram. "
-                "Попробуйте отправить его ещё раз."
+                _tr('yadreno_admin.download_yadreno_upload.4')
             ),
         )
     try:
@@ -1256,7 +1210,7 @@ async def _download_yadreno_upload(message: Message) -> list[YadrenoAdminUpload]
         if isinstance(error, (TelegramAPIError, OSError, asyncio.TimeoutError)):
             raise YadrenoAdminError(
                 "Telegram attachment download failed",
-                user_message="Не удалось скачать файл из Telegram. Попробуйте отправить его ещё раз.",
+                user_message=_tr('yadreno_admin.download_yadreno_upload.4'),
             ) from error
         raise
     return [
@@ -1291,11 +1245,11 @@ async def _download_yadreno_turn_uploads(
         raise errors[0]
     notes = ""
     if errors:
-        notes += "\n\nНекоторые файлы альбома не удалось скачать:\n" + "\n".join(
+        notes += _tr('yadreno_admin.download_yadreno_turn_uploads.1') + "\n".join(
             f"- {error.user_message or str(error)}" for error in errors[:3]
         )
     if overflow_count:
-        notes += f"\n\nНе скачано файлов сверх локального лимита: {overflow_count}."
+        notes += _tr('yadreno_admin.download_yadreno_turn_uploads.2', p0=f'{overflow_count}')
     return notes, overflow_count
 
 
@@ -1372,66 +1326,30 @@ def _extract_chat_attachment_context(message: Message) -> str:
     if message.photo:
         photo = message.photo[-1]
         return (
-            "\n\nК сообщению прикреплено изображение Telegram:\n"
-            "- media_type: photo\n"
-            f"- telegram_file_id: {photo.file_id}\n"
-            "- Если пользователь просит поставить или заменить медиа страницы, "
-            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='photo'. "
-            "Если пользователь просит анализ, анализируй загруженный файл.\n"
+            _tr('yadreno_admin.extract_chat_attachment_context.1', p0=f'{photo.file_id}')
         )
 
     if message.video:
         video = message.video
         return (
-            "\n\nК сообщению прикреплено видео Telegram:\n"
-            "- media_type: video\n"
-            f"- telegram_file_id: {video.file_id}\n"
-            f"- file_name: {getattr(video, 'file_name', None) or ''}\n"
-            f"- mime_type: {getattr(video, 'mime_type', None) or ''}\n"
-            "- analysis_supported: false\n"
-            "- Если пользователь просит поставить или заменить медиа страницы, "
-            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='video'. "
-            "Видео не скачивается и не загружается на анализ; если нужен анализ, попроси скриншот или текстовое описание.\n"
+            _tr('yadreno_admin.extract_chat_attachment_context.2', p0=f'{video.file_id}', p1=f"{getattr(video, 'file_name', None) or ''}", p2=f"{getattr(video, 'mime_type', None) or ''}")
         )
 
     if message.animation:
         animation = message.animation
         return (
-            "\n\nК сообщению прикреплена GIF/animation Telegram:\n"
-            "- media_type: animation\n"
-            f"- telegram_file_id: {animation.file_id}\n"
-            f"- file_name: {getattr(animation, 'file_name', None) or ''}\n"
-            f"- mime_type: {getattr(animation, 'mime_type', None) or ''}\n"
-            "- analysis_supported: false\n"
-            "- Если пользователь просит поставить или заменить медиа страницы, "
-            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='animation'. "
-            "GIF/animation не скачивается и не загружается на анализ; если нужен анализ, попроси скриншот или текстовое описание.\n"
+            _tr('yadreno_admin.extract_chat_attachment_context.3', p0=f'{animation.file_id}', p1=f"{getattr(animation, 'file_name', None) or ''}", p2=f"{getattr(animation, 'mime_type', None) or ''}")
         )
 
     document = message.document
     if document and _is_gif_document(document):
         return (
-            "\n\nК сообщению прикреплена GIF/animation Telegram как document:\n"
-            "- media_type: animation\n"
-            f"- telegram_file_id: {document.file_id}\n"
-            f"- file_name: {document.file_name or ''}\n"
-            f"- mime_type: {document.mime_type or ''}\n"
-            "- analysis_supported: false\n"
-            "- Если пользователь просит поставить или заменить медиа страницы, "
-            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='animation'. "
-            "GIF/animation не скачивается и не загружается на анализ; если нужен анализ, попроси скриншот или текстовое описание.\n"
+            _tr('yadreno_admin.extract_chat_attachment_context.4', p0=f'{document.file_id}', p1=f"{document.file_name or ''}", p2=f"{document.mime_type or ''}")
         )
 
     if document and (document.mime_type or "").startswith("image/"):
         return (
-            "\n\nК сообщению прикреплён image-документ Telegram:\n"
-            "- media_type: image_document\n"
-            f"- telegram_file_id: {document.file_id}\n"
-            f"- file_name: {document.file_name or ''}\n"
-            f"- mime_type: {document.mime_type or ''}\n"
-            "- Если пользователь просит поставить или заменить медиа страницы, "
-            "можно использовать этот telegram_file_id как готовое значение pages.image_custom и записать pages.media_type_custom='photo'. "
-            "Если пользователь просит анализ, анализируй загруженный файл.\n"
+            _tr('yadreno_admin.extract_chat_attachment_context.5', p0=f'{document.file_id}', p1=f"{document.file_name or ''}", p2=f"{document.mime_type or ''}")
         )
 
     return ""
@@ -1474,11 +1392,10 @@ def _build_yadreno_album_prompt(messages: list[Message], topic_id: int) -> str:
         "",
     )
     if not prompt and not any(message_audio_kind(msg) for msg in messages):
-        prompt = "Проанализируй приложенные изображения и файлы."
+        prompt = _tr('yadreno_admin.build_yadreno_album_prompt.1')
         if all(_is_metadata_only_media(msg) for msg in messages):
             prompt = (
-                "Пользователь прислал медиа без скачивания. "
-                "Используй только Telegram metadata ниже; содержимое видео/GIF не анализируется."
+                _tr('yadreno_admin.build_yadreno_album_prompt.2')
             )
 
     contexts: list[str] = []
@@ -1559,7 +1476,7 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
     )
     thinking = await safe_edit_or_send(
         buffer.first_message,
-        "🤖 <b>Yadreno Admin</b>\n\n⏳ Отправляю файлы...",
+        _tr('yadreno_admin.process_yadreno_album_buffer.1'),
         reply_markup=None,
         force_new=True,
     )
@@ -1596,8 +1513,8 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
             )
         else:
             raise YadrenoAdminError(
-                "В альбоме нет поддерживаемых файлов",
-                user_message="В альбоме нет файлов, которые можно обработать.",
+                _tr('yadreno_admin.process_yadreno_album_buffer.2'),
+                user_message=_tr('yadreno_admin.process_yadreno_album_buffer.3'),
             )
 
         if await _rerender_bound_yaa_page_if_changed(
@@ -1689,8 +1606,7 @@ async def _handle_broadcast_yaa(
         if staged_photo.get("status") != "ok":
             await safe_edit_or_send(
                 message,
-                "⚠️ <b>Не удалось добавить фото в черновик</b>\n\n"
-                "Рабочая рассылка изменилась. Откройте экран заново и повторите запрос.",
+                _tr('yadreno_admin.handle_broadcast_yaa.1'),
                 reply_markup=broadcast_editor_kb(),
                 force_new=True,
             )
@@ -1706,7 +1622,7 @@ async def _handle_broadcast_yaa(
     prompt = task_html
     status_message = await safe_edit_or_send(
         pending_input.prompt_message if pending_input else message,
-        "✍️ <b>Редактор рассылки</b>\n\n⏳ Отправляю запрос...",
+        _tr('yadreno_admin.handle_broadcast_yaa.2'),
         reply_markup=None,
         force_new=pending_input is None,
     )
@@ -1765,12 +1681,10 @@ async def _handle_broadcast_yaa(
         final,
         YADRENO_ADMIN_BROADCAST_TOPIC_ID,
         suffix=(
-            "\n\nМожно ответить обычным сообщением — повторять "
-            "<code>/yaa</code> не нужно."
+            _tr('yadreno_admin.handle_broadcast_yaa.3')
         ),
         rich_suffix=(
-            "\n\nМожно ответить обычным сообщением — повторять "
-            "`/yaa` не нужно."
+            _tr('yadreno_admin.handle_broadcast_yaa.4')
         ),
     )
 
@@ -1805,9 +1719,7 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
     if not is_broadcast_surface and not page_context:
         await safe_edit_or_send(
             message,
-            "🤖 <b>Yadreno Admin</b>\n\n"
-            "Сейчас я не знаю, какую пользовательскую страницу вы имеете в виду. "
-            "Откройте поддерживаемую страницу и повторите команду.",
+            _tr('yadreno_admin.handle_yaa_command.1'),
             force_new=True,
         )
         return
@@ -1845,10 +1757,10 @@ async def handle_yaa_command(message: Message, command: CommandObject, state: FS
         invitation.prompt_message = await safe_edit_or_send(
             pending.prompt_message if pending else message,
             (
-                "✍️ <b>Редактор рассылки</b>\n\nЧто подготовить или изменить в рассылке?"
+                _tr('yadreno_admin.handle_yaa_command.2')
                 if is_broadcast_surface else
-                "🤖 <b>Редактор страницы</b>\n\nЧто хотите изменить на этой странице?"
-            ) + "\nОтправьте текст, голосовое сообщение или аудиозапись.",
+                _tr('yadreno_admin.handle_yaa_command.3')
+            ) + _tr('yadreno_admin.handle_yaa_command.4'),
             reply_markup=yadreno_admin_input_kb(),
             force_new=pending is None,
         )
@@ -1880,8 +1792,7 @@ async def _submit_page_yaa(
     except Exception as e:
         await safe_edit_or_send(
             message,
-            "❌ <b>Не удалось создать резервную копию</b>\n\n"
-            f"Запрос агенту не отправлен: {escape_html(str(e))}",
+            _tr('yadreno_admin.submit_page_yaa.1', p0=f'{escape_html(str(e))}'),
             force_new=True,
         )
         return
@@ -1900,8 +1811,7 @@ async def _submit_page_yaa(
         admission["accepted_callback"] = partial(accept_yaa_input, state, pending_input)
     status_message = await safe_edit_or_send(
         pending_input.prompt_message if pending_input else message,
-        "🤖 <b>Yadreno Admin</b>\n\n"
-        "⏳ Отправляю запрос...",
+        _tr('yadreno_admin.handle_yadreno_chat_message.1'),
         reply_markup=None,
         force_new=pending_input is None,
     )
@@ -1965,12 +1875,10 @@ async def _submit_page_yaa(
         final,
         YADRENO_ADMIN_YAA_TOPIC_ID,
         suffix=(
-            "\n\nМожно ответить обычным сообщением, без "
-            "<code>/yaa</code>."
+            _tr('yadreno_admin.submit_page_yaa.2')
         ),
         rich_suffix=(
-            "\n\nМожно ответить обычным сообщением, без "
-            "`/yaa`."
+            _tr('yadreno_admin.submit_page_yaa.3')
         ),
     )
 
@@ -2000,17 +1908,17 @@ async def _submit_pending_yaa_input(
 async def exit_yaa_input(callback: CallbackQuery, state: FSMContext) -> None:
     """Close only an unsent invitation; never cancel or reset a Hub request."""
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Доступ запрещён", show_alert=True)
+        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
         return
     pending = await get_pending_yaa_input(state)
     if pending is None:
-        await callback.answer("Ввод уже закрыт")
+        await callback.answer(_tr('yadreno_admin.exit_yaa_input.1'))
         return
     if pending.submissions:
-        await callback.answer("Запрос отправляется. Дождитесь статуса.")
+        await callback.answer(_tr('yadreno_admin.exit_yaa_input.2'))
         return
     await close_yaa_input(state, pending)
-    await safe_edit_or_send(callback.message, "🤖 <b>Yadreno Admin</b>\n\nВвод запроса закрыт.")
+    await safe_edit_or_send(callback.message, _tr('yadreno_admin.exit_yaa_input.3'))
     await callback.answer()
 
 
@@ -2022,7 +1930,7 @@ async def cancel_yaa_input(message: Message, state: FSMContext) -> None:
     pending = await get_pending_yaa_input(state)
     if pending is not None and not pending.submissions:
         await close_yaa_input(state, pending)
-        await safe_edit_or_send(pending.prompt_message, "🤖 <b>Yadreno Admin</b>\n\nВвод запроса закрыт.")
+        await safe_edit_or_send(pending.prompt_message, _tr('yadreno_admin.exit_yaa_input.3'))
 
 
 @router.message(AdminStates.yadreno_waiting_task, F.text, ~F.text.startswith('/'))
@@ -2054,7 +1962,7 @@ async def handle_yaa_input(message: Message, state: FSMContext) -> None:
             message, state, pending,
             YadrenoAdminError(
                 "Metadata-only media requires a task",
-                user_message="Видео и GIF не отправляются на анализ. Добавьте подпись с задачей.",
+                user_message=_tr('yadreno_admin.handle_yaa_input.1'),
             ),
             yadreno_admin_input_kb(),
         )
@@ -2071,7 +1979,7 @@ async def handle_yaa_unsupported_input(message: Message, state: FSMContext) -> N
     if pending is not None:
         pending.prompt_message = await safe_edit_or_send(
             pending.prompt_message,
-            "🤖 <b>Yadreno Admin</b>\n\nОтправьте текст, голосовое сообщение, аудиозапись или файл с задачей.",
+            _tr('yadreno_admin.handle_yaa_unsupported_input.1'),
             reply_markup=yadreno_admin_input_kb(),
         )
 
@@ -2098,8 +2006,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
         if staged_photo.get("status") != "ok":
             await safe_edit_or_send(
                 message,
-                "⚠️ <b>Не удалось добавить фото в черновик</b>\n\n"
-                "Рабочая рассылка изменилась. Перечитайте состояние редактора.",
+                _tr('yadreno_admin.handle_yadreno_chat_attachment.1'),
                 reply_markup=broadcast_editor_kb(),
                 force_new=True,
             )
@@ -2124,9 +2031,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
     if metadata_only and not raw_prompt:
         await safe_edit_or_send(
             message,
-            "🤖 <b>Yadreno Admin</b>\n\n"
-            "Видео и GIF не отправляются на анализ. Добавьте подпись с задачей "
-            "или используйте <code>/yaa ...</code> на открытой странице, если нужно поставить это медиа.",
+            _tr('yadreno_admin.handle_yadreno_chat_attachment.2'),
             reply_markup=yadreno_admin_chat_kb(topic_id),
             force_new=True,
         )
@@ -2136,20 +2041,19 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
     if not prompt and message_audio_kind(message) is None:
         if topic_id == YADRENO_ADMIN_BROADCAST_TOPIC_ID and message.photo:
             prompt = (
-                "Используй приложенное изображение как новое фото рассылки, "
-                "проанализируй его и подготовь подходящую подпись."
+                _tr('yadreno_admin.handle_yadreno_chat_attachment.3')
             )
         else:
             prompt = (
-                "Проанализируй приложенное изображение."
+                _tr('yadreno_admin.handle_yadreno_chat_attachment.4')
                 if message.photo
-                else "Проанализируй приложенный файл."
+                else _tr('yadreno_admin.handle_yadreno_chat_attachment.5')
             )
     prompt = f"{prompt}{attachment_context}"
     status_text = (
-        "⏳ Передаю медиа агенту без скачивания..."
+        _tr('yadreno_admin.handle_yadreno_chat_attachment.6')
         if metadata_only
-        else "⏳ Загружаю файл и запускаю агента..."
+        else _tr('yadreno_admin.handle_yadreno_chat_attachment.7')
     )
 
     thinking = await safe_edit_or_send(
@@ -2185,8 +2089,8 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
             )
         else:
             raise YadrenoAdminError(
-                "В сообщении нет поддерживаемого файла",
-                user_message="В сообщении нет файла, который можно обработать.",
+                _tr('yadreno_admin.handle_yadreno_chat_attachment.8'),
+                user_message=_tr('yadreno_admin.handle_yadreno_chat_attachment.9'),
             )
         if await _rerender_bound_yaa_page_if_changed(
             progress,

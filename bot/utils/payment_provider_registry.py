@@ -1,6 +1,8 @@
 """Registry of custom payment providers for custom extensions."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import inspect
 import logging
@@ -104,15 +106,15 @@ def register_payment_provider(
     pid = normalize_payment_provider_id(provider_id)
     _require_bool_option(replace, 'replace')
     if not callable(create_payment):
-        raise ValueError('create_payment должен быть callable')
+        raise ValueError(_tr('payment_provider_registry.register_payment_provider.1'))
     if not callable(check_payment):
-        raise ValueError('check_payment должен быть callable')
+        raise ValueError(_tr('payment_provider_registry.register_payment_provider.2'))
     if webhook_handler is not None and not callable(webhook_handler):
-        raise ValueError('webhook_handler должен быть callable или None')
+        raise ValueError(_tr('payment_provider_registry.register_payment_provider.3'))
     if callable(is_enabled) is False and not isinstance(is_enabled, bool):
-        raise ValueError('is_enabled должен быть bool или callable')
+        raise ValueError(_tr('payment_provider_registry.register_payment_provider.4'))
     if pid in PAYMENT_PROVIDERS and not replace:
-        raise ValueError(f"payment provider '{pid}' уже зарегистрирован")
+        raise ValueError(_tr('payment_provider_registry.register_payment_provider.5', p0=f'{pid}'))
 
     from bot.services.money import normalize_currency
 
@@ -139,9 +141,9 @@ def register_payment_provider(
         metadata=_normalize_config_metadata(metadata),
     )
     if not provider.title:
-        raise ValueError('title не может быть пустым')
+        raise ValueError(_tr('payment_provider_registry.register_payment_provider.6'))
     if not provider.label:
-        raise ValueError('label не может быть пустым')
+        raise ValueError(_tr('payment_provider_registry.register_payment_provider.7'))
 
     PAYMENT_PROVIDERS[pid] = provider
     return provider
@@ -150,12 +152,12 @@ def register_payment_provider(
 def normalize_payment_provider_id(provider_id: str) -> str:
     """Normalizes and validates provider_id for the payment provider API."""
     if not isinstance(provider_id, str):
-        raise ValueError("provider_id должен быть строкой")
+        raise ValueError(_tr('payment_provider_registry.normalize_payment_provider_id.1'))
     value = provider_id.strip().casefold()
     if not _PROVIDER_ID_RE.fullmatch(value):
-        raise ValueError("provider_id должен соответствовать ^[a-z][a-z0-9_]{0,31}$")
+        raise ValueError(_tr('payment_provider_registry.normalize_payment_provider_id.2'))
     if value.startswith('ext_') or value in _RESERVED_PROVIDER_IDS:
-        raise ValueError('provider_id зарезервирован ядром')
+        raise ValueError(_tr('payment_provider_registry.normalize_payment_provider_id.3'))
     return value
 
 
@@ -212,9 +214,9 @@ def is_payment_provider_enabled(provider_id: str, context: Mapping[str, Any] | N
     try:
         result = enabled(dict(enabled_context))
         if inspect.isawaitable(result):
-            raise ValueError('is_enabled должен быть синхронным')
+            raise ValueError(_tr('payment_provider_registry.is_payment_provider_enabled.1'))
         if not isinstance(result, bool):
-            raise ValueError('is_enabled должен вернуть bool')
+            raise ValueError(_tr('payment_provider_registry.is_payment_provider_enabled.2'))
         return result
     except Exception as e:
         logger.warning("Payment provider '%s' скрыт из-за ошибки is_enabled: %s", provider.provider_id, e)
@@ -231,7 +233,7 @@ async def create_payment(provider_id: str, context: Mapping[str, Any]) -> dict[s
     """Calls create_payment on the registered provider and normalizes the result."""
     provider = get_payment_provider(provider_id)
     if provider is None:
-        raise ValueError('payment provider не зарегистрирован')
+        raise ValueError(_tr('custom_payments.check_custom_payment_order.1'))
     normalized_context = _normalize_required_context(context)
 
     async def _create_once() -> dict[str, Any]:
@@ -259,7 +261,7 @@ async def check_payment(provider_id: str, context: Mapping[str, Any]) -> dict[st
     """Calls check_payment of the registered provider and normalizes the status."""
     provider = get_payment_provider(provider_id)
     if provider is None:
-        raise ValueError('payment provider не зарегистрирован')
+        raise ValueError(_tr('custom_payments.check_custom_payment_order.1'))
     normalized_context = _normalize_required_context(context)
 
     async def _check_once() -> dict[str, Any]:
@@ -290,9 +292,9 @@ async def handle_payment_webhook(provider_id: str, context: Mapping[str, Any]) -
     require_active()
     provider = get_payment_provider(provider_id)
     if provider is None:
-        raise ValueError('payment provider не зарегистрирован')
+        raise ValueError(_tr('custom_payments.check_custom_payment_order.1'))
     if provider.webhook_handler is None:
-        raise ValueError('payment provider не принимает webhook')
+        raise ValueError(_tr('payment_provider_registry.handle_payment_webhook.1'))
     raw_result = provider.webhook_handler(_normalize_required_context(context))
     if inspect.isawaitable(raw_result):
         raw_result = await raw_result
@@ -314,7 +316,7 @@ def validate_payment_webhook_secret(provider_id: str, provided_secret: str | Non
 
 def _normalize_create_result(raw_result: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(raw_result, Mapping):
-        raise ValueError('create_payment должен вернуть dict')
+        raise ValueError(_tr('payment_provider_registry.normalize_create_result.1'))
     result = dict(raw_result)
     payment_url = _required_result_text(result, 'payment_url', aliases=('url',))
     _validate_payment_url(payment_url)
@@ -333,7 +335,7 @@ def _normalize_check_result(raw_result: Mapping[str, Any] | str | None) -> dict[
     if isinstance(raw_result, str):
         raw_result = {'status': raw_result}
     if not isinstance(raw_result, Mapping):
-        raise ValueError('check_payment должен вернуть dict, str status или awaitable')
+        raise ValueError(_tr('payment_provider_registry.normalize_check_result.1'))
     result = dict(raw_result)
     metadata = _normalize_result_metadata(result)
 
@@ -351,13 +353,13 @@ def _normalize_check_result(raw_result: Mapping[str, Any] | str | None) -> dict[
 
 def _normalize_webhook_result(raw_result: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(raw_result, Mapping):
-        raise ValueError('webhook_handler должен вернуть dict')
+        raise ValueError(_tr('payment_provider_registry.normalize_webhook_result.1'))
     result = dict(raw_result)
     metadata = _normalize_result_metadata(result)
 
     ignored = result.get('ignored', False)
     if not isinstance(ignored, bool):
-        raise ValueError('ignored должен быть bool')
+        raise ValueError(_tr('payment_provider_registry.normalize_webhook_result.2'))
     if ignored:
         return {
             'ignored': True,
@@ -375,7 +377,7 @@ def _normalize_webhook_result(raw_result: Mapping[str, Any] | None) -> dict[str,
         'metadata': dict(metadata),
     }
     if not normalized['order_id'] and not normalized['provider_payment_id']:
-        raise ValueError('webhook_handler должен вернуть order_id или provider_payment_id')
+        raise ValueError(_tr('payment_provider_registry.normalize_webhook_result.3'))
     if normalized['payment_url']:
         _validate_payment_url(normalized['payment_url'])
     return normalized
@@ -383,30 +385,30 @@ def _normalize_webhook_result(raw_result: Mapping[str, Any] | None) -> dict[str,
 
 def _normalize_status(status: Any) -> str:
     if not isinstance(status, str):
-        raise ValueError("status должен быть строкой: succeeded, pending или canceled")
+        raise ValueError(_tr('payment_provider_registry.normalize_status.1'))
     value = status.strip().casefold()
     normalized = _STATUS_ALIASES.get(value)
     if not normalized:
-        raise ValueError("status должен быть succeeded, pending или canceled")
+        raise ValueError(_tr('payment_provider_registry.normalize_status.2'))
     return normalized
 
 
 def _validate_payment_url(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_URL_SCHEMES:
-        raise ValueError('payment_url должен использовать https://, http:// или tg://')
+        raise ValueError(_tr('payment_provider_registry.validate_payment_url.1'))
     if parsed.scheme in {'http', 'https'} and not parsed.netloc:
-        raise ValueError('payment_url должен содержать host')
+        raise ValueError(_tr('payment_provider_registry.validate_payment_url.2'))
     if parsed.scheme == 'tg' and not parsed.netloc:
-        raise ValueError('tg:// payment_url должен содержать host')
+        raise ValueError(_tr('payment_provider_registry.validate_payment_url.3'))
 
 
 def _normalize_amount(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f'{field} должен быть целым числом')
+        raise ValueError(_tr('payment_provider_registry.normalize_amount.1', p0=f'{field}'))
     amount = value
     if amount < 0:
-        raise ValueError(f'{field} не может быть отрицательным')
+        raise ValueError(_tr('payment_provider_registry.normalize_amount.2', p0=f'{field}'))
     return amount
 
 
@@ -414,10 +416,10 @@ def _normalize_auto_check_interval(value: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError('auto_check_interval_seconds должен быть целым числом или None')
+        raise ValueError(_tr('payment_provider_registry.normalize_auto_check_interval.1'))
     seconds = value
     if seconds < 0:
-        raise ValueError('auto_check_interval_seconds не может быть отрицательным')
+        raise ValueError(_tr('payment_provider_registry.normalize_auto_check_interval.2'))
     return seconds
 
 
@@ -425,14 +427,14 @@ def _normalize_supported_purposes(value: Any) -> frozenset[str]:
     if value is None:
         return _DEFAULT_SUPPORTED_PURPOSES
     if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple, set, frozenset)):
-        raise ValueError('supported_purposes должен быть списком назначений платежа')
+        raise ValueError(_tr('payment_provider_registry.normalize_supported_purposes.1'))
     normalized = frozenset(str(item).strip().casefold() for item in value)
     if not normalized:
-        raise ValueError('supported_purposes не может быть пустым')
+        raise ValueError(_tr('payment_provider_registry.normalize_supported_purposes.2'))
     unknown = normalized - _CORE_PAYMENT_PURPOSES
     if unknown:
         raise ValueError(
-            'supported_purposes содержит неизвестные назначения: '
+            _tr('payment_provider_registry.normalize_supported_purposes.3')
             + ', '.join(sorted(unknown))
         )
     return normalized
@@ -440,7 +442,7 @@ def _normalize_supported_purposes(value: Any) -> frozenset[str]:
 
 def _normalize_display_text(value: Any, field: str) -> str:
     if not isinstance(value, str):
-        raise ValueError(f'{field} должен быть строкой')
+        raise ValueError(_tr('action_registry.require_text.1', p0=f'{field}'))
     return value.strip()
 
 
@@ -448,7 +450,7 @@ def _optional_config_text(value: Any, field: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f'{field} должен быть строкой или None')
+        raise ValueError(_tr('payment_provider_registry.optional_config_text.1', p0=f'{field}'))
     text = value.strip()
     return text or None
 
@@ -457,7 +459,7 @@ def _normalize_config_metadata(value: Mapping[str, Any] | None) -> dict[str, Any
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise ValueError('metadata должен быть mapping или None')
+        raise ValueError(_tr('payment_provider_registry.normalize_config_metadata.1'))
     return dict(value)
 
 
@@ -469,7 +471,7 @@ def _normalize_optional_context(context: Mapping[str, Any] | None) -> dict[str, 
 
 def _normalize_required_context(context: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(context, Mapping):
-        raise ValueError('context должен быть mapping')
+        raise ValueError(_tr('action_registry.resolve_system_button.1'))
     return dict(context)
 
 
@@ -478,13 +480,13 @@ def _normalize_result_metadata(result: Mapping[str, Any]) -> dict[str, Any]:
         return {}
     metadata = result['metadata']
     if not isinstance(metadata, Mapping):
-        raise ValueError('metadata должен быть mapping')
+        raise ValueError(_tr('payment_provider_registry.normalize_result_metadata.1'))
     return dict(metadata)
 
 
 def _require_bool_option(value: Any, field: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f'{field} должен быть bool')
+        raise ValueError(_tr('action_registry.require_bool.1', p0=f'{field}'))
     return value
 
 
@@ -513,12 +515,12 @@ def _pick_result_text(
         if value is None:
             continue
         if not isinstance(value, str):
-            raise ValueError(f'{field} должен быть строкой')
+            raise ValueError(_tr('action_registry.require_text.1', p0=f'{field}'))
         text = value.strip()
         if text:
             return text
     if required:
-        raise ValueError(f'create_payment должен вернуть {field}')
+        raise ValueError(_tr('payment_provider_registry.pick_result_text.1', p0=f'{field}'))
     return None
 
 

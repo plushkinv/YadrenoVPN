@@ -119,6 +119,7 @@ def page(item):
 
 
 SCHEMAS['UiSettings'] = obj({'title': S, 'logo': NS, 'preset': S, 'theme': S,
+                           'language': {'type': 'string', 'readOnly': True},
                            'sync_interval_seconds': I})
 SCHEMAS['UiPreview'] = obj({'settings': ref('UiSettings'), 'captured_at': I, 'currency': S,
     'modules': array(ref('ModuleAvailability')),

@@ -1,6 +1,9 @@
 """Secure registry hooks/guards for page builder routes."""
 from __future__ import annotations
 
+from localization import text as _tr
+from bot.utils.user_ui_texts import get_ui_text as _ui_text
+
 import asyncio
 import copy
 import inspect
@@ -118,9 +121,9 @@ def register_page_guard(name: str, func: PageGuard, *, replace: bool = False) ->
     normalized = _normalize_registered_name(name)
     _require_bool(replace, 'replace')
     if not callable(func):
-        raise ValueError('page guard должен быть callable')
+        raise ValueError(_tr('page_flow.register_page_guard.1'))
     if normalized in PAGE_GUARDS and not replace:
-        raise ValueError(f"page guard '{normalized}' уже зарегистрирован")
+        raise ValueError(_tr('page_flow.register_page_guard.2', p0=f'{normalized}'))
     _clear_page_flow_registration_state('guard', normalized)
     PAGE_GUARDS[normalized] = func
 
@@ -130,9 +133,9 @@ def register_page_hook(name: str, func: PageHook, *, replace: bool = False) -> N
     normalized = _normalize_registered_name(name)
     _require_bool(replace, 'replace')
     if not callable(func):
-        raise ValueError('page hook должен быть callable')
+        raise ValueError(_tr('page_flow.register_page_hook.1'))
     if normalized in PAGE_HOOKS and not replace:
-        raise ValueError(f"page hook '{normalized}' уже зарегистрирован")
+        raise ValueError(_tr('page_flow.register_page_hook.2', p0=f'{normalized}'))
     _clear_page_flow_registration_state('hook', normalized)
     PAGE_HOOKS[normalized] = func
 
@@ -269,7 +272,7 @@ async def run_page_guards(
         guard = PAGE_GUARDS.get(normalized_name)
         if guard is None:
             logger.warning("Неизвестный page guard '%s' — переход заблокирован", name)
-            return PageGuardResult(False, "⚠️ Страница временно недоступна")
+            return PageGuardResult(False, _ui_text('interface.page_flow.run_page_guards.1'))
         try:
             execution = await _execute_page_flow_callable(
                 kind='guard',
@@ -283,11 +286,11 @@ async def run_page_guards(
                 normalize=_normalize_and_validate_guard_result,
             )
             if execution.status != 'ok':
-                return PageGuardResult(False, "⚠️ Страница временно недоступна")
+                return PageGuardResult(False, _ui_text('interface.page_flow.run_page_guards.1'))
             normalized = execution.value
         except Exception as e:
             logger.exception("Ошибка page guard '%s': %s", name, e)
-            return PageGuardResult(False, "⚠️ Страница временно недоступна")
+            return PageGuardResult(False, _ui_text('interface.page_flow.run_page_guards.1'))
         if not normalized.allowed:
             return normalized
     return PageGuardResult(True)
@@ -806,13 +809,13 @@ def _normalize_registry_name(name: Any) -> str:
 
 def _normalize_registered_name(name: Any) -> str:
     if not isinstance(name, str):
-        raise ValueError("registry name должен быть строкой")
+        raise ValueError(_tr('page_flow.normalize_registered_name.1'))
     return _normalize_registry_name(name)
 
 
 def _require_context_mapping(context: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(context, Mapping):
-        raise ValueError("context должен быть mapping")
+        raise ValueError(_tr('action_registry.resolve_system_button.1'))
     return dict(context)
 
 
@@ -833,7 +836,7 @@ def _normalize_guard_result(result: PageGuardResult | bool | Mapping[str, Any] |
         return PageGuardResult(result)
     if isinstance(result, Mapping):
         if 'allowed' not in result:
-            raise ValueError("page guard mapping должен содержать поле allowed")
+            raise ValueError(_tr('page_flow.normalize_guard_result.1'))
         message = _optional_text(result.get('message'), 'message') or ''
         return PageGuardResult(
             _require_bool(result.get('allowed'), 'allowed'),
@@ -842,20 +845,20 @@ def _normalize_guard_result(result: PageGuardResult | bool | Mapping[str, Any] |
         )
     if result is None:
         return PageGuardResult(False)
-    raise ValueError("page guard должен вернуть PageGuardResult, bool или mapping с allowed")
+    raise ValueError(_tr('page_flow.normalize_guard_result.2'))
 
 
 def _require_bool(value: Any, field_name: str) -> bool:
     if isinstance(value, bool):
         return value
-    raise ValueError(f"page guard field {field_name} должен быть bool")
+    raise ValueError(_tr('page_flow.require_bool.1', p0=f'{field_name}'))
 
 
 def _optional_text(value: Any, field_name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"page guard field {field_name} должен быть строкой")
+        raise ValueError(_tr('page_flow.optional_text.1', p0=f'{field_name}'))
     return value
 
 
@@ -871,7 +874,7 @@ def _normalize_hook_result(result: PageHookResult | Mapping[str, Any] | None) ->
     if result is None:
         return PageHookResult()
     if not isinstance(result, Mapping):
-        raise ValueError("page hook должен вернуть PageHookResult, mapping или None")
+        raise ValueError(_tr('page_flow.normalize_hook_result.1'))
     return PageHookResult(
         context=_require_mapping_dict(result.get('context'), 'context'),
         text_replacements=_require_mapping_dict(result.get('text_replacements'), 'text_replacements'),
@@ -885,7 +888,7 @@ def _require_mapping_dict(value: Any, field_name: str) -> dict[str, Any]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        raise ValueError(f"page hook field {field_name} должен быть mapping")
+        raise ValueError(_tr('page_flow.require_mapping_dict.1', p0=f'{field_name}'))
     return dict(value)
 
 
@@ -894,9 +897,9 @@ def _require_visibility_dict(value: Any) -> dict[str, bool]:
     result: dict[str, bool] = {}
     for button_id, visible in raw.items():
         if not isinstance(button_id, str):
-            raise ValueError("page hook visibility keys должны быть строками")
+            raise ValueError(_tr('page_flow.require_visibility_dict.1'))
         if not isinstance(visible, bool):
-            raise ValueError("page hook visibility values должны быть bool")
+            raise ValueError(_tr('page_flow.require_visibility_dict.2'))
         result[button_id] = visible
     return result
 
@@ -907,15 +910,15 @@ def _normalize_button_rows(value: Any, field_name: str) -> list[list[InlineKeybo
     if value is None:
         return None
     if not isinstance(value, (list, tuple)):
-        raise ValueError(f"page hook field {field_name} должен быть списком рядов кнопок")
+        raise ValueError(_tr('page_flow.normalize_button_rows.1', p0=f'{field_name}'))
     rows: list[list[InlineKeyboardButton]] = []
     for row in value:
         if not isinstance(row, (list, tuple)):
-            raise ValueError(f"page hook field {field_name} должен содержать только ряды кнопок")
+            raise ValueError(_tr('page_flow.normalize_button_rows.2', p0=f'{field_name}'))
         buttons: list[InlineKeyboardButton] = []
         for button in row:
             if not isinstance(button, InlineKeyboardButton):
-                raise ValueError(f"page hook field {field_name} должен содержать только InlineKeyboardButton")
+                raise ValueError(_tr('page_flow.normalize_button_rows.3', p0=f'{field_name}'))
             buttons.append(button)
         rows.append(buttons)
     return rows
@@ -959,12 +962,12 @@ def _missing_context_values(
 def _not_banned_guard(target: Any, context: Mapping[str, Any]) -> PageGuardResult:
     telegram_id = _context_int(context, 'telegram_id')
     if telegram_id is None:
-        return PageGuardResult(False, "⚠️ Страница недоступна")
+        return PageGuardResult(False, _ui_text('interface.action_dispatcher.apply_extension_callback_result.1'))
 
     from database.requests import is_user_banned
 
     if is_user_banned(telegram_id):
-        return PageGuardResult(False, "⛔ Доступ заблокирован")
+        return PageGuardResult(False, _ui_text('interface.page_flow.not_banned_guard.1'))
     return PageGuardResult(True)
 
 
@@ -972,7 +975,7 @@ def _referral_enabled_guard(target: Any, context: Mapping[str, Any]) -> PageGuar
     from database.requests import is_referral_enabled
 
     if not is_referral_enabled():
-        return PageGuardResult(False, "❌ Реферальная система недоступна")
+        return PageGuardResult(False, _ui_text('interface.page_flow.referral_enabled_guard.1'))
     return PageGuardResult(True)
 
 

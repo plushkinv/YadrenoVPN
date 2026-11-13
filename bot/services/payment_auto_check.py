@@ -1,6 +1,8 @@
 """Bounded background polling and completion for API payment providers."""
 from __future__ import annotations
 
+from localization import text as _tr
+
 import asyncio
 import logging
 import math
@@ -448,10 +450,7 @@ async def _notify_admins_completion_failure(
     from bot.utils.text import escape_html
 
     text = (
-        '❌ <b>Не завершён подтверждённый платёж</b>\n\n'
-        f"Провайдер: <code>{escape_html(str(row.get('provider_id') or '-'))}</code>\n"
-        f"Ордер: <code>{escape_html(str(row.get('order_id') or '-'))}</code>\n"
-        f"Ошибка: {escape_html(str(error))}"
+        _tr('payment_auto_check.notify_admins_completion_failure.1', p0=f"{escape_html(str(row.get('provider_id') or '-'))}", p1=f"{escape_html(str(row.get('order_id') or '-'))}", p2=f'{escape_html(str(error))}')
     )
     for admin_id in ADMIN_IDS:
         try:

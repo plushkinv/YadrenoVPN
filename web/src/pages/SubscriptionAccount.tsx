@@ -1,3 +1,4 @@
+import { text as _tr } from "../i18n/runtime";
 import { ArrowUpRight, History, Pencil, RefreshCw, Settings2, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Operation, Page, Subscription, TrialOffer } from '../api/contracts';
@@ -76,7 +77,7 @@ function HomeAccountContent() {
   const clientImport = useClientImport(client, canConnect && !environment.native ? selected.id : null);
   const [choose, setChoose] = useState(false), [chooseSubscription, setChooseSubscription] = useState(false);
   const empty = { id: '', name: '', plan: '', state: 'active' as const, expires: t.unknown, remaining: t.unknown, traffic: null, trafficPercent: null, devices: null };
-  if (environment.native && selected) return <><PageHeading title={t.subscriptions} /><section className="panel form-panel"><h2>{selected.name || selected.tariff_name}</h2><p>{subscriptionView(selected).expires}</p><Button onClick={() => navigate('connect/' + selected.id)}>Добавить подписку</Button><Button tone="secondary" onClick={() => navigate('subscriptions')}>{t.subscriptions}</Button></section></>;
+  if (environment.native && selected) return <><PageHeading title={t.subscriptions} /><section className="panel form-panel"><h2>{selected.name || selected.tariff_name}</h2><p>{subscriptionView(selected).expires}</p><Button onClick={() => navigate('connect/' + selected.id)}>{_tr("NativeConnection.14")}</Button><Button tone="secondary" onClick={() => navigate('subscriptions')}>{t.subscriptions}</Button></section></>;
   if (state.error) return <Failure error={state.error} retry={state.retry} />;
   return <><Home state={state.loading ? 'loading' : selected ? subscriptionView(selected).state : 'new'} subscription={selected ? subscriptionView(selected) : empty}
     hasMultiple={state.hasMultiple} client={client} onSubscriptions={() => navigate('subscriptions')} onSelectSubscription={() => setChooseSubscription(true)}
@@ -177,7 +178,7 @@ export function Trials() {
   const action = useAction();
   const keys = useRef<Record<number, string>>({});
   return <><PageHeading title={t.trialTitle} back={back} /><Resource state={state}>{data => <section className="panel form-panel">
-    {!data.offers.length && <Empty />}{data.offers.map((offer, index) => <div className="action-list" key={offer.offer?.offer_id ?? index}><h2>{offer.offer?.tariff_name || t.trialTitle}</h2><p>{offer.offer?.duration_days ?? t.unknown} дн.</p>
+    {!data.offers.length && <Empty />}{data.offers.map((offer, index) => <div className="action-list" key={offer.offer?.offer_id ?? index}><h2>{offer.offer?.tariff_name || t.trialTitle}</h2><p>{offer.offer?.duration_days ?? t.unknown} {_tr("Information.1")}</p>
       <Button disabled={!offer.eligible || !offer.offer || action.busy} onClick={() => action.run(async () => {
         const id = offer.offer!.offer_id;
         const result = await api.request<Operation>(`/trials/${id}/activate`, 'POST', {}, keys.current[id] ??= mutationKey());
