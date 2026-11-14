@@ -66,11 +66,24 @@ When adding a server, first choose a connection method:
 - **🔑 По API-ключу (Using an API key)** — recommended for official 3X-UI version 3.3.0 or later. Create a dedicated API token in the panel's security settings and copy it immediately. Panel two-factor authentication can remain enabled.
 - **👤 Логин и пароль (Username and password)** — the alternative for the same official 3X-UI 3.3.0+. The bot signs in only to obtain its own API token, then uses that token for subsequent operations. Saved credentials also allow one attempt to recover a rejected token. Automatic sign-in does not work with two-factor authentication enabled; use an existing API key instead.
 
-Both methods, and subsequent address or credential changes, are saved only after a successful connection check. Versions below 3.3.0, an unknown version or an unavailable modern API prevent saving. The administrator sees **«Не удалось подключиться к панели» (Could not connect to the panel)**; the detailed reason remains in the log. An unverified connection cannot be saved. The server card shows the verified version and check time.
+Both methods, and subsequent address or credential changes, are saved only after a successful connection check. Versions below 3.3.0, an unknown version or an unavailable modern API prevent saving. The administrator sees a connection-check failure message; the detailed reason remains in the log. An unverified connection cannot be saved. The server card shows the verified version and check time.
 
 If the connection uses only an existing API key and the panel later rejects it, the bot retains the key and checks it again on the next request. After a temporary failure, operation resumes when the panel accepts the key again. All administrators receive **«Панель не принимает API-ключ» (The panel is rejecting the API key)**. For one panel, subsequent failures trigger this message at most once per hour, including across bot restarts. It lists only servers where the bot has already encountered the error.
 
 If the error persists, check the API key in 3X-UI and replace it in the listed server cards under **Серверы (Servers)** if necessary. Without saved login credentials, the bot cannot issue a new key itself. If it reports **«API-ключ панели не указан» (Panel API key is missing)**, save an API key through the server card.
+
+To replace an existing server connection, open its card → **✏️ Изменить настройки (Edit settings)**.
+Use the arrows to enter the new address and username/password or API key, then
+press **💾 Сохранить (Save)**. Until then, the entered values stay in the editor.
+The bot checks the complete new configuration. The old panel need not be
+reachable, and restarting the bot is unnecessary.
+
+If the check fails, the saved settings remain unchanged and your entries remain
+in the editor: correct them and save again. **❌ Отмена (Cancel)**, leaving the
+editor or restarting the bot discards unsaved changes. Name and virtual
+inbound-group changes can be saved while the panel is unavailable. Changing the
+connection preserves existing keys' association with this server; it does not
+itself transfer panel data to a new VPS.
 
 ### Virtual inbound groups
 

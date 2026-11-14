@@ -142,6 +142,7 @@ def edit_server_kb(
     total_params: int = 6,
     *,
     allow_clear_group: bool = False,
+    busy: bool = False,
 ) -> InlineKeyboardMarkup:
     """
     Server editing keyboard with navigation.
@@ -151,6 +152,9 @@ def edit_server_kb(
         total_params: Total number of parameters
     """
     builder = InlineKeyboardBuilder()
+    if busy:
+        builder.row(InlineKeyboardButton(text=_tr('server_edit.cancel'), callback_data='admin_server_edit_cancel'))
+        return builder.as_markup()
     if allow_clear_group:
         builder.row(
             InlineKeyboardButton(
@@ -168,7 +172,10 @@ def edit_server_kb(
     else:
         nav_buttons.append(InlineKeyboardButton(text='—', callback_data='noop'))
     builder.row(*nav_buttons)
-    builder.row(InlineKeyboardButton(text=_tr('admin_payments.edit_crypto_kb.3'), callback_data='admin_server_edit_done'))
+    builder.row(
+        InlineKeyboardButton(text=_tr('server_edit.save'), callback_data='admin_server_edit_done'),
+        InlineKeyboardButton(text=_tr('server_edit.cancel'), callback_data='admin_server_edit_cancel'),
+    )
     return builder.as_markup()
 
 def confirm_delete_kb(server_id: int) -> InlineKeyboardMarkup:

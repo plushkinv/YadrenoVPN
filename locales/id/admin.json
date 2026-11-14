@@ -2117,5 +2117,15 @@
   "gateway.help.stripe": "Tagihan menggunakan USD dan kurs yang Anda tetapkan. Domain dan notifikasi masuk tidak diperlukan.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "Tagihan menggunakan USD dan kurs yang Anda tetapkan. Domain dan notifikasi masuk tidak diperlukan.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "Tagihan menggunakan USD dan kurs yang Anda tetapkan. Domain dan notifikasi masuk tidak diperlukan.\nProfil PayTabs harus mendukung USD. Hasil pembayaran ditampilkan di halaman PayTabs.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "Pilih wilayah dan mata uang akun, lalu tetapkan kurs. Pemilihan wilayah menetapkan mata uangnya. BHD, KWD, OMR, dan JOD menggunakan tiga angka desimal.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "Pilih wilayah dan mata uang akun, lalu tetapkan kurs. Pemilihan wilayah menetapkan mata uangnya. BHD, KWD, OMR, dan JOD menggunakan tiga angka desimal.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "Editor ini sudah ditutup. Buka kembali pengaturan server.",
+  "server_edit.checking_short": "Pemeriksaan koneksi masih berlangsung.",
+  "server_edit.value": "📝 Nilai di editor: <code>{value}</code>",
+  "server_edit.hint": "Perubahan diterapkan saat Anda menekan “💾 Simpan”. Anda dapat mengubah alamat dan semua kredensial terlebih dahulu.",
+  "server_edit.checking": "⏳ <b>Memeriksa koneksi</b>\n\nMemeriksa pengaturan baru. Tunggu hasilnya atau tekan “❌ Batal”.",
+  "server_edit.failed": "❌ Tidak dapat terhubung. Pengaturan belum disimpan; nilai yang Anda masukkan tetap ada di editor. Periksa alamat dan kredensial, lalu tekan “💾 Simpan” lagi.",
+  "server_edit.unchanged": "ℹ️ <b>Pengaturan tidak berubah</b>",
+  "server_edit.saved": "✅ <b>Pengaturan tersimpan</b>",
+  "server_edit.save": "💾 Simpan",
+  "server_edit.cancel": "❌ Batal"
 }

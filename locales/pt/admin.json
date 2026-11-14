@@ -2119,5 +2119,15 @@
   "gateway.help.stripe": "As faturas são emitidas em USD com a taxa de câmbio definida por você. Não é necessário domínio nem notificações de entrada.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "As faturas são emitidas em USD com a taxa de câmbio definida por você. Não é necessário domínio nem notificações de entrada.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "As faturas são emitidas em USD com a taxa de câmbio definida por você. Não é necessário domínio nem notificações de entrada.\nSeu perfil do PayTabs deve aceitar USD. O resultado do pagamento aparece na página do PayTabs.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "Escolha a região e a moeda da conta e defina a taxa de câmbio. A seleção da região define sua moeda. BHD, KWD, OMR e JOD usam três casas decimais.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "Escolha a região e a moeda da conta e defina a taxa de câmbio. A seleção da região define sua moeda. BHD, KWD, OMR e JOD usam três casas decimais.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "Este editor está fechado. Abra novamente as configurações do servidor.",
+  "server_edit.checking_short": "A verificação da conexão ainda está em andamento.",
+  "server_edit.value": "📝 Valor no editor: <code>{value}</code>",
+  "server_edit.hint": "As alterações são aplicadas ao tocar em “💾 Salvar”. Você pode alterar primeiro o endereço e todas as credenciais.",
+  "server_edit.checking": "⏳ <b>Verificando conexão</b>\n\nVerificando as novas configurações. Aguarde o resultado ou toque em “❌ Cancelar”.",
+  "server_edit.failed": "❌ Não foi possível conectar. As configurações não foram salvas; os valores inseridos continuam no editor. Confira o endereço e as credenciais e toque em “💾 Salvar” novamente.",
+  "server_edit.unchanged": "ℹ️ <b>Configurações sem alterações</b>",
+  "server_edit.saved": "✅ <b>Configurações salvas</b>",
+  "server_edit.save": "💾 Salvar",
+  "server_edit.cancel": "❌ Cancelar"
 }

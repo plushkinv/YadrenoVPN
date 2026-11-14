@@ -2117,5 +2117,15 @@
   "gateway.help.stripe": "Faturalar belirlediğiniz kurla USD cinsinden oluşturulur. Alan adı ve gelen bildirimler gerekli değildir.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "Faturalar belirlediğiniz kurla USD cinsinden oluşturulur. Alan adı ve gelen bildirimler gerekli değildir.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "Faturalar belirlediğiniz kurla USD cinsinden oluşturulur. Alan adı ve gelen bildirimler gerekli değildir.\nPayTabs profiliniz USD desteklemelidir. Ödeme sonucu PayTabs sayfasında gösterilir.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "Hesap bölgesini ve para birimini seçin, ardından kuru ayarlayın. Bölge seçildiğinde o bölgenin para birimi ayarlanır. BHD, KWD, OMR ve JOD üç ondalık basamak kullanır.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "Hesap bölgesini ve para birimini seçin, ardından kuru ayarlayın. Bölge seçildiğinde o bölgenin para birimi ayarlanır. BHD, KWD, OMR ve JOD üç ondalık basamak kullanır.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "Bu düzenleyici kapalı. Sunucu ayarlarını yeniden açın.",
+  "server_edit.checking_short": "Bağlantı kontrolü devam ediyor.",
+  "server_edit.value": "📝 Düzenleyicideki değer: <code>{value}</code>",
+  "server_edit.hint": "Değişiklikler “💾 Kaydet” düğmesine bastığınızda uygulanır. Önce adresi ve tüm kimlik bilgilerini değiştirebilirsiniz.",
+  "server_edit.checking": "⏳ <b>Bağlantı kontrol ediliyor</b>\n\nYeni ayarlar kontrol ediliyor. Sonucu bekleyin veya “❌ İptal” düğmesine basın.",
+  "server_edit.failed": "❌ Bağlantı kurulamadı. Ayarlar kaydedilmedi; girdiğiniz değerler düzenleyicide duruyor. Adresi ve kimlik bilgilerini kontrol edip “💾 Kaydet” düğmesine yeniden basın.",
+  "server_edit.unchanged": "ℹ️ <b>Ayarlar değişmedi</b>",
+  "server_edit.saved": "✅ <b>Ayarlar kaydedildi</b>",
+  "server_edit.save": "💾 Kaydet",
+  "server_edit.cancel": "❌ İptal"
 }

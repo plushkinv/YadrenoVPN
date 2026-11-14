@@ -6,6 +6,7 @@ from aiogram import Router
 from bot.handlers.admin.main import router as main_router
 from bot.handlers.admin.message_editor import router as message_editor_router
 from bot.handlers.admin.servers import router as servers_router
+from bot.handlers.admin.server_edit import router as server_edit_router
 from bot.handlers.admin.payments import router as payments_router
 from bot.handlers.admin.cryptobot import router as cryptobot_router
 from bot.handlers.admin.payment_gateways import router as payment_gateways_router
@@ -35,6 +36,7 @@ admin_router = Router()
 admin_router.include_router(main_router)
 admin_router.include_router(message_editor_router)
 admin_router.include_router(servers_router)
+admin_router.include_router(server_edit_router)
 admin_router.include_router(payments_router)
 admin_router.include_router(cryptobot_router)
 admin_router.include_router(payment_gateways_router)

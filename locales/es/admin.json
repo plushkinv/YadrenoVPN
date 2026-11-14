@@ -2119,5 +2119,15 @@
   "gateway.help.stripe": "Las facturas se emiten en USD con el tipo de cambio que configures. No se necesitan dominio ni notificaciones entrantes.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "Las facturas se emiten en USD con el tipo de cambio que configures. No se necesitan dominio ni notificaciones entrantes.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "Las facturas se emiten en USD con el tipo de cambio que configures. No se necesitan dominio ni notificaciones entrantes.\nTu perfil de PayTabs debe admitir USD. El resultado del pago aparece en la página de PayTabs.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "Elige la región y la moneda de la cuenta y configura el tipo de cambio. Al elegir una región se establece su moneda. BHD, KWD, OMR y JOD usan tres decimales.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "Elige la región y la moneda de la cuenta y configura el tipo de cambio. Al elegir una región se establece su moneda. BHD, KWD, OMR y JOD usan tres decimales.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "Este editor está cerrado. Abre de nuevo la configuración del servidor.",
+  "server_edit.checking_short": "La comprobación de conexión sigue en curso.",
+  "server_edit.value": "📝 Valor en el editor: <code>{value}</code>",
+  "server_edit.hint": "Los cambios se aplican al pulsar «💾 Guardar». Puedes cambiar primero la dirección y todas las credenciales.",
+  "server_edit.checking": "⏳ <b>Comprobando conexión</b>\n\nComprobamos la nueva configuración. Espera el resultado o pulsa «❌ Cancelar».",
+  "server_edit.failed": "❌ No se pudo conectar. La configuración no se guardó; los valores introducidos siguen en el editor. Revisa la dirección y las credenciales y pulsa «💾 Guardar» de nuevo.",
+  "server_edit.unchanged": "ℹ️ <b>Configuración sin cambios</b>",
+  "server_edit.saved": "✅ <b>Configuración guardada</b>",
+  "server_edit.save": "💾 Guardar",
+  "server_edit.cancel": "❌ Cancelar"
 }

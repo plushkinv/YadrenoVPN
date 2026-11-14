@@ -2119,5 +2119,15 @@
   "gateway.help.stripe": "Invoices use USD and your configured exchange rate. A domain and incoming notifications are not required.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "Invoices use USD and your configured exchange rate. A domain and incoming notifications are not required.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "Invoices use USD and your configured exchange rate. A domain and incoming notifications are not required.\nYour PayTabs profile must support USD. Payment results appear on the PayTabs page.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "Select the account region and currency, then set the exchange rate. Selecting a region sets its currency. BHD, KWD, OMR and JOD use three decimal places.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "Select the account region and currency, then set the exchange rate. Selecting a region sets its currency. BHD, KWD, OMR and JOD use three decimal places.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "This editor is closed. Open the server settings again.",
+  "server_edit.checking_short": "The connection check is still running.",
+  "server_edit.value": "📝 Value in editor: <code>{value}</code>",
+  "server_edit.hint": "Changes apply when you tap “💾 Save”. You can change the address and all credentials first.",
+  "server_edit.checking": "⏳ <b>Checking connection</b>\n\nChecking the new settings. Wait for the result or tap “❌ Cancel”.",
+  "server_edit.failed": "❌ Could not connect. Settings were not saved; your entries remain in the editor. Check the address and credentials, then tap “💾 Save” again.",
+  "server_edit.unchanged": "ℹ️ <b>Settings unchanged</b>",
+  "server_edit.saved": "✅ <b>Settings saved</b>",
+  "server_edit.save": "💾 Save",
+  "server_edit.cancel": "❌ Cancel"
 }

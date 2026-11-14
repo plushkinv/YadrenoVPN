@@ -12,7 +12,6 @@ Processes:
 
 from localization import text as _tr
 import logging
-import datetime
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -28,7 +27,6 @@ from database.requests import (
     get_groups_count,
     get_all_groups,
     get_group_by_id,
-    update_server,
     get_server_group_ids,
     toggle_server_group
 )
@@ -61,7 +59,6 @@ from bot.keyboards.admin import (
     add_server_step_kb,
     add_server_confirm_kb,
     add_server_test_failed_kb,
-    edit_server_kb,
     confirm_delete_kb,
     back_and_home_kb,
     group_select_kb
@@ -82,24 +79,33 @@ router = Router()
 
 
 
-async def render_servers_list(message: Message, state: FSMContext, *, turn=None):
+def _with_notice(render, notice):
+    def format_snapshot(snapshot):
+        payload = render(snapshot)
+        if payload is not None and notice:
+            return notice + '\n\n' + payload[0], payload[1]
+        return payload
+    return format_snapshot
+
+
+async def render_servers_list(message: Message, state: FSMContext, *, turn=None, notice=None):
     turn = turn or await monitoring_turn(state)
     await show_monitoring_screen(
         message, turn, AdminMonitoringRead(),
-        lambda snapshot: (build_servers_monitoring_text(snapshot), servers_list_kb(snapshot['records'])),
+        _with_notice(lambda snapshot: (build_servers_monitoring_text(snapshot), servers_list_kb(snapshot['records'])), notice),
         deliver=safe_edit_or_send,
     )
 
 
-async def render_server_view(message: Message, server_id: int, state: FSMContext):
+async def render_server_view(message: Message, server_id: int, state: FSMContext, *, turn=None, notice=None):
     """Renders the server browsing screen."""
-    turn = await monitoring_turn(state)
+    turn = turn or await monitoring_turn(state)
     if not turn.current() or not get_server_by_id(server_id):
         return
     await state.set_state(AdminStates.server_view)
     await state.update_data(server_id=server_id)
     await show_monitoring_screen(
-        message, turn, AdminMonitoringRead(server_id), build_server_view,
+        message, turn, AdminMonitoringRead(server_id), _with_notice(build_server_view, notice),
         deliver=safe_edit_or_send,
     )
 
@@ -303,17 +309,6 @@ def _add_step_keyboard(step: int, auth_method: str):
         step,
         get_total_params(auth_method),
         allow_skip=_is_inbound_group_step(step, auth_method),
-    )
-
-
-def _edit_step_keyboard(current_param: int, auth_method: str):
-    return edit_server_kb(
-        current_param,
-        get_total_params(auth_method),
-        allow_clear_group=(
-            get_param_by_index(current_param, auth_method)['key']
-            == 'inbound_group_id'
-        ),
     )
 
 
@@ -797,313 +792,6 @@ async def add_server_save(callback: CallbackQuery, state: FSMContext):
             reply_markup=back_and_home_kb("admin_servers")
         )
         await callback.answer(_tr('servers.add_server_save.5'), show_alert=True)
-
-
-# ============================================================================
-# EDITING THE SERVER
-# ============================================================================
-
-def get_edit_text(server: dict, current_param: int, auth_method: str) -> str:
-    """Generates text for the editing screen."""
-    param = get_param_by_index(current_param, auth_method)
-    total = get_total_params(auth_method)
-    
-    # Get the current value
-    if param['key'] == 'panel_url':
-        current_value = f"{server.get('protocol', 'https')}://{server.get('host', '')}:{server.get('port', '')}{server.get('web_base_path', '')}"
-    else:
-        current_value = server.get(param['key'], '')
-    
-    display_value = _masked_server_value(param['key'], current_value)
-    
-    lines = [
-        _tr('servers.get_edit_text.1', p0=f"{escape_html(server['name'])}", p1=f'{current_param + 1}', p2=f'{total}'),
-        _tr('servers.get_edit_text.2', p0=f"{param['label']}"),
-        _tr('servers.get_edit_text.3', p0=f'{display_value}'),
-    ]
-    if param['key'] == 'inbound_group_id':
-        lines.append(_inbound_group_help_text(allow_skip=False))
-    else:
-        lines.extend([
-            _tr('servers.get_edit_text.4'),
-            f"<i>({escape_html(param['hint'])})</i>",
-        ])
-    
-    return "\n".join(lines)
-
-
-@router.callback_query(F.data.startswith("admin_server_edit:"))
-async def start_edit_server(callback: CallbackQuery, state: FSMContext):
-    """Starts editing the server."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
-        return
-    
-    server_id = int(callback.data.split(":")[1])
-    server = get_server_by_id(server_id)
-    
-    if not server:
-        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
-        return
-    
-    auth_method = get_server_auth_method(server)
-    await state.set_state(AdminStates.edit_server)
-    await state.update_data(
-        server_id=server_id,
-        edit_param=0,
-        edit_auth_method=auth_method,
-    )
-    
-    text = get_edit_text(server, 0, auth_method)
-    
-    await safe_edit_or_send(callback.message, 
-        text,
-        reply_markup=_edit_step_keyboard(0, auth_method)
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin_server_edit_clear_inbound_group")
-async def clear_server_inbound_group(
-    callback: CallbackQuery,
-    state: FSMContext,
-):
-    """Restore legacy all-inbound behavior for one logical server."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
-        return
-
-    data = await state.get_data()
-    server_id = data.get('server_id')
-    current_param = int(data.get('edit_param', 0))
-    auth_method = data.get('edit_auth_method', AUTH_LOGIN_PASSWORD)
-    if (
-        get_param_by_index(current_param, auth_method)['key']
-        != 'inbound_group_id'
-    ):
-        await callback.answer(_tr('servers.clear_server_inbound_group.1'), show_alert=True)
-        return
-    if not update_server(server_id, inbound_group_id=None):
-        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
-        return
-
-    await invalidate_client_cache(server_id)
-    server = get_server_by_id(server_id)
-    await safe_edit_or_send(
-        callback.message,
-        _tr('servers.clear_server_inbound_group.2')
-        + get_edit_text(server, current_param, auth_method),
-        reply_markup=_edit_step_keyboard(current_param, auth_method),
-    )
-    await callback.answer(_tr('servers.clear_server_inbound_group.3'))
-
-
-@router.callback_query(F.data == "admin_server_edit_prev")
-async def edit_server_prev(callback: CallbackQuery, state: FSMContext):
-    """Previous parameter when editing."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
-        return
-    
-    data = await state.get_data()
-    server_id = data.get('server_id')
-    current_param = data.get('edit_param', 0)
-    auth_method = data.get('edit_auth_method', AUTH_LOGIN_PASSWORD)
-    
-    server = get_server_by_id(server_id)
-    if not server:
-        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
-        return
-    
-    new_param = max(0, current_param - 1)
-    await state.update_data(edit_param=new_param)
-    
-    text = get_edit_text(server, new_param, auth_method)
-    
-    await safe_edit_or_send(callback.message, 
-        text,
-        reply_markup=_edit_step_keyboard(new_param, auth_method)
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin_server_edit_next")
-async def edit_server_next(callback: CallbackQuery, state: FSMContext):
-    """Next parameter when editing."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
-        return
-    
-    data = await state.get_data()
-    server_id = data.get('server_id')
-    current_param = data.get('edit_param', 0)
-    auth_method = data.get('edit_auth_method', AUTH_LOGIN_PASSWORD)
-    
-    server = get_server_by_id(server_id)
-    if not server:
-        await callback.answer(_tr('servers.show_server_view.1'), show_alert=True)
-        return
-    
-    new_param = min(get_total_params(auth_method) - 1, current_param + 1)
-    await state.update_data(edit_param=new_param)
-    
-    text = get_edit_text(server, new_param, auth_method)
-    
-    await safe_edit_or_send(callback.message, 
-        text,
-        reply_markup=_edit_step_keyboard(new_param, auth_method)
-    )
-    await callback.answer()
-
-
-@router.message(AdminStates.edit_server)
-@regular_panel_operation
-async def edit_server_value(message: Message, state: FSMContext):
-    """Handles the entry of a new value when editing."""
-    data = await state.get_data()
-    server_id = data.get('server_id')
-    current_param = data.get('edit_param', 0)
-    auth_method = data.get('edit_auth_method', AUTH_LOGIN_PASSWORD)
-    
-    from bot.utils.text import get_message_text_for_storage, safe_edit_or_send
-    
-    param = get_param_by_index(current_param, auth_method)
-    value = get_message_text_for_storage(message, 'plain')
-    
-    # Validation
-    if not param['validate'](value):
-        await safe_edit_or_send(message,
-            f"❌ {param['error']}"
-        )
-        return
-    
-    server = get_server_by_id(server_id)
-    if not server:
-        await safe_edit_or_send(message, _tr('servers.show_server_view.1'))
-        return
-
-    updates = {}
-    if param['key'] == 'panel_url':
-        url_str = value
-        if not url_str.startswith(('http://', 'https://')):
-            url_str = 'https://' + url_str
-            
-        try:
-            parsed = urllib.parse.urlparse(url_str)
-            protocol = parsed.scheme
-            host = parsed.hostname
-            if not host:
-                raise ValueError(_tr('servers.process_add_step.1'))
-                
-            port = parsed.port
-            if not port:
-                port = 443 if protocol == 'https' else 80
-                
-            path = parsed.path
-            if not path.endswith('/'):
-                path += '/'
-                
-            updates.update({
-                'protocol': protocol,
-                'host': host,
-                'port': port,
-                'web_base_path': path,
-            })
-        except Exception as e:
-            await safe_edit_or_send(message,
-                _tr('servers.edit_server_value.1')
-            )
-            return
-    else:
-        if 'convert' in param:
-            value = param['convert'](value)
-        updates[param['key']] = value
-
-    connection_fields = {'panel_url', 'api_token', 'login', 'password'}
-    if param['key'] in connection_fields:
-        candidate = dict(server)
-        candidate['id'] = None
-        candidate.update(updates)
-
-        # Validate the supplied authentication material itself. A previously
-        # valid Bearer must not conceal an invalid replacement password.
-        if param['key'] in {'login', 'password'}:
-            candidate['api_token'] = None
-            candidate['_force_auth_bootstrap'] = True
-        elif param['key'] == 'api_token':
-            candidate['login'] = ''
-            candidate['password'] = ''
-
-        try:
-            await message.delete()
-        except Exception:
-            pass
-
-        test_result = await test_server_connection(candidate)
-        if not test_result['success']:
-            await safe_edit_or_send(
-                message,
-                _tr('servers.process_add_step.4'),
-                reply_markup=_edit_step_keyboard(current_param, auth_method),
-                force_new=True,
-            )
-            return
-
-        updates['api_token'] = candidate.get('api_token')
-        updates['panel_version'] = candidate.get('panel_version')
-        updates['panel_checked_at'] = (
-            datetime.datetime.now(datetime.timezone.utc)
-            .replace(microsecond=0)
-            .isoformat()
-            .replace('+00:00', 'Z')
-        )
-
-    success = update_server(server_id, **updates)
-    
-    if not success:
-        await safe_edit_or_send(message, _tr('servers.edit_server_value.2'))
-        return
-    
-    # Resetting the client cache (the settings have changed)
-    await invalidate_client_cache(server_id)
-    
-    # Deleting a user's message
-    try:
-        await message.delete()
-    except:
-        pass
-    
-    # Refresh the screen with the new value
-    server = get_server_by_id(server_id)
-    text = get_edit_text(server, current_param, auth_method)
-    
-    await safe_edit_or_send(message,
-        _tr('servers.edit_server_value.3', p0=f"{param['label']}") + text,
-        reply_markup=_edit_step_keyboard(current_param, auth_method),
-        force_new=True
-    )
-
-
-@router.callback_query(F.data == "admin_server_edit_done")
-async def edit_server_done(callback: CallbackQuery, state: FSMContext):
-    """Finish editing - return to viewing."""
-    if not is_admin(callback.from_user.id):
-        await callback.answer(_tr('broadcast.show_broadcast_menu.1'), show_alert=True)
-        return
-    
-    await callback.answer()
-    data = await state.get_data()
-    server_id = data.get('server_id')
-    
-    # Redirect to view server
-    # Redirect to view server
-    await render_server_view(callback.message, server_id, state)
-
-
-@router.callback_query(F.data == "admin_server_edit_cancel")
-async def edit_server_cancel(callback: CallbackQuery, state: FSMContext):
-    """Cancel editing - return to viewing."""
-    await edit_server_done(callback, state)
 
 
 # ============================================================================

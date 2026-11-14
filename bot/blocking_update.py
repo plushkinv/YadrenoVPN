@@ -38,5 +38,12 @@ def check_unblock_conditions():
     return get_setting('referral_enabled', '0') == '1'
 """
 
-# No active blocking condition in the current release.
+# Keep the standard administrator message for the database migration boundary.
 BLOCKING_MESSAGE = None
+
+
+def check_unblock_conditions() -> bool:
+    """Allow later releases once this release's database migrations are complete."""
+    from database.migrations import LATEST_VERSION, get_current_version
+
+    return get_current_version() >= LATEST_VERSION

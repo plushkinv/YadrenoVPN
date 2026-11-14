@@ -1273,6 +1273,8 @@ class XUIClient(BaseVPNClient):
         }
         if "limitHwid" in source:
             payload["limitHwid"] = self._int(source.get("limitHwid"))
+        if "group" in source:
+            payload["group"] = source["group"]
         if identifier:
             payload["id"] = identifier
         for field_name in ("password", "auth", "flow", "secret", "adTag", "reverse"):

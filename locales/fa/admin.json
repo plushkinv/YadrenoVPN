@@ -2117,5 +2117,15 @@
   "gateway.help.stripe": "صورتحساب‌ها با USD و نرخ تبدیل تعیین‌شده توسط شما صادر می‌شوند. دامنه و اعلان ورودی لازم نیست.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "صورتحساب‌ها با USD و نرخ تبدیل تعیین‌شده توسط شما صادر می‌شوند. دامنه و اعلان ورودی لازم نیست.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "صورتحساب‌ها با USD و نرخ تبدیل تعیین‌شده توسط شما صادر می‌شوند. دامنه و اعلان ورودی لازم نیست.\nپروفایل PayTabs باید از USD پشتیبانی کند. نتیجه پرداخت در صفحه PayTabs نمایش داده می‌شود.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "منطقه و ارز حساب را انتخاب کنید، سپس نرخ تبدیل را تنظیم کنید. انتخاب منطقه، ارز آن را تنظیم می‌کند. BHD، KWD، OMR و JOD سه رقم اعشار دارند.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "منطقه و ارز حساب را انتخاب کنید، سپس نرخ تبدیل را تنظیم کنید. انتخاب منطقه، ارز آن را تنظیم می‌کند. BHD، KWD، OMR و JOD سه رقم اعشار دارند.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "این ویرایشگر بسته شده است. تنظیمات سرور را دوباره باز کنید.",
+  "server_edit.checking_short": "بررسی اتصال هنوز در حال انجام است.",
+  "server_edit.value": "📝 مقدار در ویرایشگر: <code>{value}</code>",
+  "server_edit.hint": "تغییرات پس از زدن «💾 ذخیره» اعمال می‌شوند. می‌توانید ابتدا آدرس و همه اطلاعات ورود را تغییر دهید.",
+  "server_edit.checking": "⏳ <b>بررسی اتصال</b>\n\nدر حال بررسی تنظیمات جدید. منتظر نتیجه بمانید یا «❌ لغو» را بزنید.",
+  "server_edit.failed": "❌ اتصال برقرار نشد. تنظیمات ذخیره نشدند؛ مقادیر واردشده در ویرایشگر باقی مانده‌اند. آدرس و اطلاعات ورود را بررسی کنید و دوباره «💾 ذخیره» را بزنید.",
+  "server_edit.unchanged": "ℹ️ <b>تنظیمات تغییری نکرده‌اند</b>",
+  "server_edit.saved": "✅ <b>تنظیمات ذخیره شدند</b>",
+  "server_edit.save": "💾 ذخیره",
+  "server_edit.cancel": "❌ لغو"
 }

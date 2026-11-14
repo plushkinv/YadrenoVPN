@@ -2127,5 +2127,15 @@
   "gateway.help.stripe": "تُصدر الفواتير بعملة USD وفق سعر الصرف الذي تحدده. لا يلزم نطاق أو إشعارات واردة.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "تُصدر الفواتير بعملة USD وفق سعر الصرف الذي تحدده. لا يلزم نطاق أو إشعارات واردة.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "تُصدر الفواتير بعملة USD وفق سعر الصرف الذي تحدده. لا يلزم نطاق أو إشعارات واردة.\nيجب أن يدعم ملف PayTabs عملة USD. تظهر نتيجة الدفع على صفحة PayTabs.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "اختر منطقة الحساب وعملته، ثم حدد سعر الصرف. يؤدي اختيار المنطقة إلى تعيين عملتها. تستخدم BHD وKWD وOMR وJOD ثلاث خانات عشرية.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "اختر منطقة الحساب وعملته، ثم حدد سعر الصرف. يؤدي اختيار المنطقة إلى تعيين عملتها. تستخدم BHD وKWD وOMR وJOD ثلاث خانات عشرية.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "تم إغلاق هذا المحرر. افتح إعدادات الخادم مجددًا.",
+  "server_edit.checking_short": "لا يزال فحص الاتصال جاريًا.",
+  "server_edit.value": "📝 القيمة في المحرر: <code>{value}</code>",
+  "server_edit.hint": "تُطبَّق التغييرات عند الضغط على «💾 حفظ». يمكنك أولًا تغيير العنوان وجميع بيانات تسجيل الدخول.",
+  "server_edit.checking": "⏳ <b>جارٍ فحص الاتصال</b>\n\nنختبر الإعدادات الجديدة. انتظر النتيجة أو اضغط على «❌ إلغاء».",
+  "server_edit.failed": "❌ تعذّر الاتصال. لم تُحفظ الإعدادات؛ تبقى القيم المدخلة في المحرر. تحقّق من العنوان وبيانات تسجيل الدخول، ثم اضغط على «💾 حفظ» مجددًا.",
+  "server_edit.unchanged": "ℹ️ <b>لم تتغير الإعدادات</b>",
+  "server_edit.saved": "✅ <b>تم حفظ الإعدادات</b>",
+  "server_edit.save": "💾 حفظ",
+  "server_edit.cancel": "❌ إلغاء"
 }

@@ -2123,5 +2123,15 @@
   "gateway.help.stripe": "Faktúry sa vystavujú v USD podľa vami nastaveného kurzu. Doména ani prichádzajúce oznámenia nie sú potrebné.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "Faktúry sa vystavujú v USD podľa vami nastaveného kurzu. Doména ani prichádzajúce oznámenia nie sú potrebné.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "Faktúry sa vystavujú v USD podľa vami nastaveného kurzu. Doména ani prichádzajúce oznámenia nie sú potrebné.\nVáš profil PayTabs musí podporovať USD. Výsledok platby sa zobrazí na stránke PayTabs.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "Vyberte región a menu účtu a nastavte kurz. Výber regiónu nastaví jeho menu. BHD, KWD, OMR a JOD používajú tri desatinné miesta.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "Vyberte región a menu účtu a nastavte kurz. Výber regiónu nastaví jeho menu. BHD, KWD, OMR a JOD používajú tri desatinné miesta.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "Tento editor je zatvorený. Znova otvorte nastavenia servera.",
+  "server_edit.checking_short": "Kontrola pripojenia ešte prebieha.",
+  "server_edit.value": "📝 Hodnota v editore: <code>{value}</code>",
+  "server_edit.hint": "Zmeny sa použijú po stlačení „💾 Uložiť“. Najprv môžete zmeniť adresu a všetky prihlasovacie údaje.",
+  "server_edit.checking": "⏳ <b>Kontrola pripojenia</b>\n\nKontrolujú sa nové nastavenia. Počkajte na výsledok alebo stlačte „❌ Zrušiť“.",
+  "server_edit.failed": "❌ Pripojenie sa nepodarilo. Nastavenia sa neuložili; zadané hodnoty zostávajú v editore. Skontrolujte adresu a prihlasovacie údaje a znova stlačte „💾 Uložiť“.",
+  "server_edit.unchanged": "ℹ️ <b>Nastavenia sa nezmenili</b>",
+  "server_edit.saved": "✅ <b>Nastavenia uložené</b>",
+  "server_edit.save": "💾 Uložiť",
+  "server_edit.cancel": "❌ Zrušiť"
 }

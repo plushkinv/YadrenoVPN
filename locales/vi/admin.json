@@ -2117,5 +2117,15 @@
   "gateway.help.stripe": "Hóa đơn dùng USD theo tỷ giá bạn thiết lập. Không cần tên miền hoặc thông báo gửi đến.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "Hóa đơn dùng USD theo tỷ giá bạn thiết lập. Không cần tên miền hoặc thông báo gửi đến.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "Hóa đơn dùng USD theo tỷ giá bạn thiết lập. Không cần tên miền hoặc thông báo gửi đến.\nHồ sơ PayTabs phải hỗ trợ USD. Kết quả thanh toán hiển thị trên trang PayTabs.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "Chọn khu vực và tiền tệ tài khoản, rồi đặt tỷ giá. Khi chọn khu vực, tiền tệ tương ứng sẽ được đặt. BHD, KWD, OMR và JOD dùng ba chữ số thập phân.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "Chọn khu vực và tiền tệ tài khoản, rồi đặt tỷ giá. Khi chọn khu vực, tiền tệ tương ứng sẽ được đặt. BHD, KWD, OMR và JOD dùng ba chữ số thập phân.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "Trình chỉnh sửa này đã đóng. Hãy mở lại cài đặt máy chủ.",
+  "server_edit.checking_short": "Quá trình kiểm tra kết nối vẫn đang diễn ra.",
+  "server_edit.value": "📝 Giá trị trong trình chỉnh sửa: <code>{value}</code>",
+  "server_edit.hint": "Thay đổi được áp dụng khi nhấn “💾 Lưu”. Bạn có thể đổi địa chỉ và toàn bộ thông tin đăng nhập trước.",
+  "server_edit.checking": "⏳ <b>Đang kiểm tra kết nối</b>\n\nĐang kiểm tra cài đặt mới. Hãy chờ kết quả hoặc nhấn “❌ Hủy”.",
+  "server_edit.failed": "❌ Không thể kết nối. Cài đặt chưa được lưu; các giá trị đã nhập vẫn còn trong trình chỉnh sửa. Kiểm tra địa chỉ và thông tin đăng nhập, rồi nhấn “💾 Lưu” lần nữa.",
+  "server_edit.unchanged": "ℹ️ <b>Cài đặt không thay đổi</b>",
+  "server_edit.saved": "✅ <b>Đã lưu cài đặt</b>",
+  "server_edit.save": "💾 Lưu",
+  "server_edit.cancel": "❌ Hủy"
 }

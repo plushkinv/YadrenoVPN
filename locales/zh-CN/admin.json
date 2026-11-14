@@ -2117,5 +2117,15 @@
   "gateway.help.stripe": "账单使用 USD，按您设置的汇率换算。不需要域名或接收回调通知。\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "账单使用 USD，按您设置的汇率换算。不需要域名或接收回调通知。\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "账单使用 USD，按您设置的汇率换算。不需要域名或接收回调通知。\nPayTabs 配置必须支持 USD。付款结果显示在 PayTabs 页面上。\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "选择账户地区和货币，然后设置汇率。选择地区会设置对应货币。BHD、KWD、OMR 和 JOD 使用三位小数。\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "选择账户地区和货币，然后设置汇率。选择地区会设置对应货币。BHD、KWD、OMR 和 JOD 使用三位小数。\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "此编辑器已关闭。请重新打开服务器设置。",
+  "server_edit.checking_short": "连接检查仍在进行中。",
+  "server_edit.value": "📝 编辑器中的值：<code>{value}</code>",
+  "server_edit.hint": "点击“💾 保存”后更改才会生效。您可以先修改地址和所有登录凭据。",
+  "server_edit.checking": "⏳ <b>正在检查连接</b>\n\n正在检查新设置。请等待结果，或点击“❌ 取消”。",
+  "server_edit.failed": "❌ 无法连接。设置未保存，输入的值仍保留在编辑器中。请检查地址和登录凭据，然后再次点击“💾 保存”。",
+  "server_edit.unchanged": "ℹ️ <b>设置未更改</b>",
+  "server_edit.saved": "✅ <b>设置已保存</b>",
+  "server_edit.save": "💾 保存",
+  "server_edit.cancel": "❌ 取消"
 }

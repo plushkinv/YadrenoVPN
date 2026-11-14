@@ -2117,5 +2117,15 @@
   "gateway.help.stripe": "帳單使用 USD，依您設定的匯率換算。不需要網域或接收回呼通知。\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "帳單使用 USD，依您設定的匯率換算。不需要網域或接收回呼通知。\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "帳單使用 USD，依您設定的匯率換算。不需要網域或接收回呼通知。\nPayTabs 設定必須支援 USD。付款結果顯示在 PayTabs 頁面上。\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "選擇帳戶地區和貨幣，再設定匯率。選擇地區會設定對應貨幣。BHD、KWD、OMR 和 JOD 使用三位小數。\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "選擇帳戶地區和貨幣，再設定匯率。選擇地區會設定對應貨幣。BHD、KWD、OMR 和 JOD 使用三位小數。\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "此編輯器已關閉。請重新開啟伺服器設定。",
+  "server_edit.checking_short": "連線檢查仍在進行中。",
+  "server_edit.value": "📝 編輯器中的值：<code>{value}</code>",
+  "server_edit.hint": "點選「💾 儲存」後變更才會生效。您可以先修改位址和所有登入憑證。",
+  "server_edit.checking": "⏳ <b>正在檢查連線</b>\n\n正在檢查新設定。請等待結果，或點選「❌ 取消」。",
+  "server_edit.failed": "❌ 無法連線。設定未儲存，輸入的值仍保留在編輯器中。請檢查位址和登入憑證，然後再次點選「💾 儲存」。",
+  "server_edit.unchanged": "ℹ️ <b>設定未變更</b>",
+  "server_edit.saved": "✅ <b>設定已儲存</b>",
+  "server_edit.save": "💾 儲存",
+  "server_edit.cancel": "❌ 取消"
 }

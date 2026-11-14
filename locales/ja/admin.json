@@ -2117,5 +2117,15 @@
   "gateway.help.stripe": "請求は設定した為替レートでUSD建てになります。ドメインや受信通知は不要です。\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "請求は設定した為替レートでUSD建てになります。ドメインや受信通知は不要です。\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "請求は設定した為替レートでUSD建てになります。ドメインや受信通知は不要です。\nPayTabsのプロファイルでUSDが有効になっている必要があります。支払い結果はPayTabsのページに表示されます。\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "アカウントの地域と通貨を選び、為替レートを設定してください。地域を選ぶとその地域の通貨が設定されます。BHD、KWD、OMR、JODは小数点以下3桁を使用します。\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "アカウントの地域と通貨を選び、為替レートを設定してください。地域を選ぶとその地域の通貨が設定されます。BHD、KWD、OMR、JODは小数点以下3桁を使用します。\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "この編集画面は閉じられています。サーバー設定を開き直してください。",
+  "server_edit.checking_short": "接続確認はまだ実行中です。",
+  "server_edit.value": "📝 編集中の値: <code>{value}</code>",
+  "server_edit.hint": "「💾 保存」を押すと変更が適用されます。先にアドレスとすべての認証情報を変更できます。",
+  "server_edit.checking": "⏳ <b>接続を確認中</b>\n\n新しい設定を確認しています。結果を待つか、「❌ キャンセル」を押してください。",
+  "server_edit.failed": "❌ 接続できませんでした。設定は保存されていません。入力した値は編集画面に残っています。アドレスと認証情報を確認し、もう一度「💾 保存」を押してください。",
+  "server_edit.unchanged": "ℹ️ <b>設定に変更はありません</b>",
+  "server_edit.saved": "✅ <b>設定を保存しました</b>",
+  "server_edit.save": "💾 保存",
+  "server_edit.cancel": "❌ キャンセル"
 }

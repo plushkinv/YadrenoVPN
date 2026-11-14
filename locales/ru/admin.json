@@ -2120,5 +2120,15 @@
   "gateway.help.stripe": "Счета выставляются в USD по заданному вами курсу. Домен и входящие уведомления не требуются.\n<a href=\"https://docs.stripe.com/checkout/quickstart\">📖 API</a>",
   "gateway.help.paypal": "Счета выставляются в USD по заданному вами курсу. Домен и входящие уведомления не требуются.\n<a href=\"https://developer.paypal.com/api/orders/v2\">📖 API</a>",
   "gateway.help.paytabs": "Счета выставляются в USD по заданному вами курсу. Домен и входящие уведомления не требуются.\nВ профиле PayTabs должен быть разрешён USD. Результат оплаты показывается на странице PayTabs.\n<a href=\"https://docs.paytabs.com/\">📖 API</a>",
-  "gateway.help.myfatoorah": "Выберите регион и валюту аккаунта, затем задайте курс. Выбор региона устанавливает его валюту. BHD, KWD, OMR и JOD используют три десятичных знака.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>"
+  "gateway.help.myfatoorah": "Выберите регион и валюту аккаунта, затем задайте курс. Выбор региона устанавливает его валюту. BHD, KWD, OMR и JOD используют три десятичных знака.\n<a href=\"https://docs.myfatoorah.com/docs/v3-hosted-payment-page\">📖 API</a>",
+  "server_edit.closed": "Этот редактор уже закрыт. Откройте настройки сервера заново.",
+  "server_edit.checking_short": "Проверка подключения ещё идёт.",
+  "server_edit.value": "📝 Значение в редакторе: <code>{value}</code>",
+  "server_edit.hint": "Изменения применятся после нажатия «💾 Сохранить». Можно сначала изменить адрес и все учётные данные.",
+  "server_edit.checking": "⏳ <b>Проверка подключения</b>\n\nПроверяем новые настройки. Дождитесь результата или нажмите «❌ Отмена».",
+  "server_edit.failed": "❌ Не удалось подключиться. Настройки не сохранены, введённые значения остались в редакторе. Проверьте адрес и учётные данные, затем нажмите «💾 Сохранить» ещё раз.",
+  "server_edit.unchanged": "ℹ️ <b>Настройки не изменились</b>",
+  "server_edit.saved": "✅ <b>Настройки сохранены</b>",
+  "server_edit.save": "💾 Сохранить",
+  "server_edit.cancel": "❌ Отмена"
 }
