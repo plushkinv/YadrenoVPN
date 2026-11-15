@@ -852,6 +852,7 @@ def _validate_extension_source(path: Path) -> None:
     tree = ast.parse(source, filename=str(path))
     dynamic_import_names = {'__import__', 'import_module'}
     dynamic_code_names = set(_BLOCKED_DYNAMIC_CODE_CALLS)
+    builtins_names = {'__builtins__'}
     introspection_names = set(_BLOCKED_INTROSPECTION_CALLS)
     getattr_names = set(_GETATTR_CALLS)
     dunder_getattribute_names = set(_DUNDER_GETATTRIBUTE_CALLS)
@@ -861,6 +862,8 @@ def _validate_extension_source(path: Path) -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
+                if alias.name == 'builtins':
+                    builtins_names.add(alias.asname or alias.name)
                 if _is_public_custom_extensions_import(alias.name):
                     if not alias.asname:
                         raise ValueError(
@@ -899,6 +902,7 @@ def _validate_extension_source(path: Path) -> None:
                 node,
                 dynamic_code_names,
                 constant_string_names,
+                builtins_names,
             )
             _collect_introspection_assignment_aliases(
                 node,
@@ -971,7 +975,7 @@ def _validate_extension_source(path: Path) -> None:
             raise ValueError(_tr('custom_extensions.validate_extension_source.4'))
         if (
             isinstance(node, ast.Call)
-            and _is_blocked_dynamic_code_call(node, dynamic_code_names, constant_string_names)
+            and _is_blocked_dynamic_code_call(node, dynamic_code_names, constant_string_names, builtins_names)
         ):
             raise ValueError(
                 _tr('custom_extensions.validate_extension_source.5')
@@ -1214,15 +1218,23 @@ def _collect_dynamic_code_assignment_aliases(
     node: ast.Assign | ast.AnnAssign,
     names: set[str],
     constant_string_names: dict[str, str],
+    builtins_names: set[str],
 ) -> None:
+    """Track simple aliases of builtin namespaces and prohibited callables."""
     value = node.value
-    if value is None or not _is_dynamic_code_reference(value, names, constant_string_names):
+    if _is_builtins_reference(value, builtins_names):
+        aliases = builtins_names
+    elif value is not None and _is_dynamic_code_reference(
+        value, names, constant_string_names, builtins_names=builtins_names,
+    ):
+        aliases = names
+    else:
         return
 
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
     for target in targets:
         if isinstance(target, ast.Name):
-            names.add(target.id)
+            aliases.add(target.id)
 
 
 def _collect_introspection_assignment_aliases(
@@ -1318,15 +1330,17 @@ def _is_dynamic_code_reference(
     node: ast.AST,
     dynamic_code_names: set[str],
     constant_string_names: dict[str, str] | None = None,
+    *,
+    builtins_names: set[str],
 ) -> bool:
     if isinstance(node, ast.Name):
         return node.id in dynamic_code_names
     if isinstance(node, ast.Attribute):
-        return node.attr in _BLOCKED_DYNAMIC_CODE_CALLS
+        return node.attr in _BLOCKED_DYNAMIC_CODE_CALLS and _is_builtins_reference(node.value, builtins_names)
     if isinstance(node, ast.Subscript):
-        return _is_subscript_dynamic_code_reference(node, constant_string_names or {})
+        return _is_subscript_dynamic_code_reference(node, constant_string_names or {}, builtins_names)
     if isinstance(node, ast.Call):
-        return _is_getattr_dynamic_code_reference(node, constant_string_names or {})
+        return _is_getattr_dynamic_code_reference(node, constant_string_names or {}, builtins_names)
     return False
 
 
@@ -1435,8 +1449,11 @@ def _is_blocked_dynamic_code_call(
     node: ast.Call,
     dynamic_code_names: set[str],
     constant_string_names: dict[str, str],
+    builtins_names: set[str],
 ) -> bool:
-    return _is_dynamic_code_reference(node.func, dynamic_code_names, constant_string_names)
+    return _is_dynamic_code_reference(
+        node.func, dynamic_code_names, constant_string_names, builtins_names=builtins_names,
+    )
 
 
 def _is_getattr_dynamic_import_reference(node: ast.Call, constant_string_names: dict[str, str]) -> bool:
@@ -1453,15 +1470,21 @@ def _is_subscript_dynamic_import_reference(node: ast.Subscript, constant_string_
     return item_name == '__import__'
 
 
-def _is_getattr_dynamic_code_reference(node: ast.Call, constant_string_names: dict[str, str]) -> bool:
+def _is_getattr_dynamic_code_reference(
+    node: ast.Call, constant_string_names: dict[str, str], builtins_names: set[str],
+) -> bool:
     if not isinstance(node.func, ast.Name) or node.func.id != 'getattr' or len(node.args) < 2:
+        return False
+    if not _is_builtins_reference(node.args[0], builtins_names):
         return False
     attr_name = _resolve_static_string(node.args[1], constant_string_names)
     return attr_name in _BLOCKED_DYNAMIC_CODE_CALLS
 
 
-def _is_subscript_dynamic_code_reference(node: ast.Subscript, constant_string_names: dict[str, str]) -> bool:
-    if not _is_builtins_reference(node.value):
+def _is_subscript_dynamic_code_reference(
+    node: ast.Subscript, constant_string_names: dict[str, str], builtins_names: set[str],
+) -> bool:
+    if not _is_builtins_reference(node.value, builtins_names):
         return False
     item_name = _resolve_static_string(node.slice, constant_string_names)
     return item_name in _BLOCKED_DYNAMIC_CODE_CALLS
@@ -1511,8 +1534,8 @@ def _is_subscript_getattr_reference(node: ast.Subscript, constant_string_names: 
     return item_name in _GETATTR_CALLS
 
 
-def _is_builtins_reference(node: ast.AST) -> bool:
-    return isinstance(node, ast.Name) and node.id == '__builtins__'
+def _is_builtins_reference(node: ast.AST, names: set[str] | None = None) -> bool:
+    return isinstance(node, ast.Name) and node.id in (names if names is not None else {'__builtins__'})
 
 
 def _resolve_static_string(node: ast.AST, names: dict[str, str]) -> str | None:
