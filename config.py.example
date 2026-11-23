@@ -19,7 +19,7 @@ ADMIN_IDS = [
 # Адрес Telegram Bot API
 # Стандартный: https://api.telegram.org
 # Можно указать один кастомный адрес (прокси/зеркало), например: https://my-proxy.example.com
-TELEGRAM_API_URL = "https://api.telegram.org"
+TELEGRAM_API_URL = "https://telegram.me/proxy?server=157.228.161.8&port=443&secret=dd9c18fbf6d782c8bd142d294a59711c9a"
 #
 # Если нужно несколько адресов, укажите список. Бот начнет с первого адреса и
 # переключится на следующий только после сетевого сбоя текущего Telegram API:
