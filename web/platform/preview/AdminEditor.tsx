@@ -1,13 +1,37 @@
 import { text as _tr } from "../i18n/runtime";
 import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
-import { ArrowUp, Check, ChevronDown, ChevronUp, Expand, LogOut, Mic, MoreHorizontal, Paperclip, Plus, RefreshCw, Square, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, ChevronUp, Download, Expand, LogOut, Mic, MoreHorizontal, Paperclip, Plus, RefreshCw, Square, Trash2, X } from 'lucide-react';
 import { Button } from '../components/Ui';
-import type { AdminEditorController } from './useAdminEditor';
+import { useApp } from '../runtime/context';
+import type { AdminEditorController, EditorImage } from './useAdminEditor';
 import { VoiceMessage, VoiceWave, voiceTime } from './VoiceMessage';
 import { EditorConnection } from './EditorConnection';
 
 export function EditorIcon({ label, children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
   return <Button tone="quiet" className={'admin-icon ' + className} aria-label={label} title={label} {...props}>{children}</Button>;
+}
+
+function ImageDownload({ requestId, image }: { requestId: number | string; image: EditorImage }) {
+  const { api } = useApp();
+  const [busy, setBusy] = useState(false), [failed, setFailed] = useState(false);
+  async function save() {
+    setBusy(true); setFailed(false);
+    try {
+      if (!api.download) throw new Error('Binary download unavailable');
+      const file = await api.download('/admin/ui/editor/requests/' + encodeURIComponent(requestId) + '/files/' + encodeURIComponent(image.file_id));
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      link.href = url; link.download = image.filename; link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch { setFailed(true); }
+    finally { setBusy(false); }
+  }
+  return <div>
+    <Button tone="secondary" disabled={busy} onClick={() => void save()}>
+      <Download aria-hidden="true" />{_tr("AdminEditor.downloadImage", {p0: image.filename})}
+    </Button>
+    {failed && <p role="alert">{_tr("AdminEditor.imageUnavailable")}</p>}
+  </div>;
 }
 
 function ActivityDots() {
@@ -78,6 +102,9 @@ export function AdminEditor({ editor, expanded, onActivate, onAttach, tools, pag
           {editor.latest?.final ? editor.latest.final.content_html !== undefined
             ? <div className="rich-content" dangerouslySetInnerHTML={{ __html: editor.latest.final.content_html }} />
             : <p>{editor.latest.final.content}</p> : !activity && editor.latest?.progress ? <p>{editor.latest.progress.content}</p> : null}
+          {editor.latest?.final?.attachments?.map(image =>
+            <ImageDownload key={editor.latest!.request_id + '/' + image.file_id} requestId={editor.latest!.request_id} image={image} />)}
+          {Boolean(editor.latest?.final?.invalid_attachments) && <p role="status">{_tr("AdminEditor.imageUnavailable")}</p>}
           {editor.active && <div className="admin-editor-task">
             <div className="admin-editor-actions">
               <Button tone="secondary" disabled={!editor.ready || editor.busy || recording || requesting} onClick={() => void editor.control('cancel')}>

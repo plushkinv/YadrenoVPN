@@ -1071,6 +1071,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 Cập nhật",
   "admin_settings.bot_settings_kb.2": "🌐 Web và Mini App",
   "admin_settings.bot_settings_kb.3": "📦 Tạo bản sao lưu",
+  "admin_settings.backup_video_guide": "🎬 Video hướng dẫn chuyển máy chủ (tiếng Nga)",
   "admin_settings.bot_settings_kb.4": "📱 Hạn chế về thiết bị",
   "admin_settings.bot_settings_kb.5": "✏️ Thay đổi văn bản",
   "admin_settings.bot_settings_kb.6": "📥 Tải xuống nhật ký",
@@ -2127,5 +2128,6 @@
   "server_edit.unchanged": "ℹ️ <b>Cài đặt không thay đổi</b>",
   "server_edit.saved": "✅ <b>Đã lưu cài đặt</b>",
   "server_edit.save": "💾 Lưu",
-  "server_edit.cancel": "❌ Hủy"
+  "server_edit.cancel": "❌ Hủy",
+  "yadreno_admin.images_failed": "Số hình ảnh không gửi được: {count}."
 }

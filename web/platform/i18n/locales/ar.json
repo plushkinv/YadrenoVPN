@@ -284,5 +284,7 @@
   "VoiceMessage.3": "إيقاف مؤقت",
   "VoiceMessage.4": "استمع إلى التسجيل",
   "VoiceMessage.5": "مدة التسجيل {p0}",
-  "Surface.1": "حساب شخصي"
+  "Surface.1": "حساب شخصي",
+  "AdminEditor.downloadImage": "تنزيل {p0}",
+  "AdminEditor.imageUnavailable": "تعذّر تنزيل الصورة."
 }

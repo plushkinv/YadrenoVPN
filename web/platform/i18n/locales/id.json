@@ -284,5 +284,7 @@
   "VoiceMessage.3": "Jeda",
   "VoiceMessage.4": "Dengarkan rekamannya",
   "VoiceMessage.5": "Durasi perekaman {p0}",
-  "Surface.1": "Akun pribadi"
+  "Surface.1": "Akun pribadi",
+  "AdminEditor.downloadImage": "Unduh {p0}",
+  "AdminEditor.imageUnavailable": "Gambar gagal diunduh."
 }

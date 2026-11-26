@@ -284,5 +284,7 @@
   "VoiceMessage.3": "暂停",
   "VoiceMessage.4": "听录音",
   "VoiceMessage.5": "录音时长 {p0}",
-  "Surface.1": "个人中心"
+  "Surface.1": "个人中心",
+  "AdminEditor.downloadImage": "下载 {p0}",
+  "AdminEditor.imageUnavailable": "无法下载图片。"
 }

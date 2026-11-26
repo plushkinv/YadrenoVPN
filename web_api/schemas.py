@@ -139,7 +139,8 @@ SCHEMAS['EditorViewed'] = obj({'contract_version': {'type': 'integer', 'enum': [
 EDITOR_REQUEST_ID = {'anyOf': [ID, {'type': 'string', 'minLength': 1, 'maxLength': 19,
     'description': 'Exact decimal Hub ID when outside the legacy numeric range; treat as opaque.'}]}
 SCHEMAS['EditorFinal'] = obj({'content': S, 'content_html': S, 'viewer_url': nullable(S),
-    'request_id': nullable(EDITOR_REQUEST_ID), 'rich_markdown': nullable(S)},
+    'request_id': nullable(EDITOR_REQUEST_ID), 'rich_markdown': nullable(S), 'invalid_attachments': I,
+    'attachments': array(obj({'file_id': S, 'filename': S, 'size_bytes': I}))},
     ['content', 'viewer_url', 'request_id', 'rich_markdown'])
 SCHEMAS['EditorProgress'] = obj({'event': S, 'content': S, 'slot': S, 'cancel_button_text': nullable(S)})
 SCHEMAS['EditorLatest'] = obj({'request_id': EDITOR_REQUEST_ID, 'event': S, 'final': nullable(ref('EditorFinal')),
@@ -152,9 +153,9 @@ SCHEMAS['EditorCandidate'] = obj({'build_id': S, 'base_build_id': S, 'content_ha
 
 
 def route(method, path, output, inputs=None, *, anonymous=False, idempotent=False, paging=False, query=None,
-          media_type='application/json'):
+          media_type='application/json', response_types=None):
     ROUTES.append({'method': method, 'path': '/api/v1/' + path, 'input': inputs, 'output': output,
-        'anonymous': anonymous, 'idempotent': idempotent, 'media_type': media_type, 'query': query or ({
+        'anonymous': anonymous, 'idempotent': idempotent, 'media_type': media_type, 'response_types': response_types, 'query': query or ({
             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
             'offset': {'type': 'integer', 'minimum': 0, 'maximum': 1000000}} if paging else {})})
 
@@ -175,6 +176,8 @@ route('GET', 'ui/packages/{content_hash}', {'type': 'string', 'format': 'binary'
 route('GET', 'admin/ui/preview', ref('UiPreview'))
 route('POST', 'admin/ui/preset', ref('UiSettings'), obj({'preset': text_bound(32)}))
 route('GET', 'admin/ui/editor', ref('EditorState'))
+route('GET', 'admin/ui/editor/requests/{request_id}/files/{file_id}', {'type': 'string', 'format': 'binary'},
+      response_types=('image/png', 'image/jpeg', 'image/webp'))
 route('POST', 'admin/ui/editor/preview', obj({'task_id': S, 'candidate': ref('EditorCandidate'),
     'viewed': ref('EditorViewed'), 'preview_url': S, 'published': B,
     'pages': array(obj({'id': S, 'title': nullable(S), 'preview_parameter': S}, required=['id']))}), obj())
@@ -382,11 +385,13 @@ def openapi_document():
                             'description': 'Required whenever a valid session cookie is sent, including anonymous auth endpoints.'}]
         if entry['idempotent']:
             parameters.append({'name': 'Idempotency-Key', 'in': 'header', 'required': True, 'schema': text_bound(128)})
-        binary = entry['output'].get('format') == 'binary'
+        response_types = entry['response_types'] or (
+            'application/octet-stream' if entry['output'].get('format') == 'binary' else 'application/json',
+        )
         operation = {'operationId': entry['method'].lower() + '_' + re.sub(r'[^a-zA-Z0-9]+', '_', entry['path']).strip('_'),
             'security': [] if entry['anonymous'] else [{'SessionCookie': []}], 'parameters': parameters,
             'responses': {'200': {'description': 'Successful own-account result. Sensitive responses are never cached.',
-                'content': {'application/octet-stream' if binary else 'application/json': {'schema': entry['output']}}},
+                'content': {kind: {'schema': entry['output']} for kind in response_types}},
                 **{str(code): {'description': description, 'content': {'application/json': {'schema': ref('Error')}}}
                    for code, description in ((400, 'Domain rejection'), (401, 'Authentication required'), (403, 'Origin, CSRF or access denied'),
                        (404, 'Resource unavailable to this account'), (405, 'Method not allowed'),

@@ -1071,6 +1071,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 アップデート",
   "admin_settings.bot_settings_kb.2": "🌐 ウェブとMini App",
   "admin_settings.bot_settings_kb.3": "📦 バックアップを作成する",
+  "admin_settings.backup_video_guide": "🎬 サーバー移行の動画ガイド（ロシア語）",
   "admin_settings.bot_settings_kb.4": "📱 デバイスの制限",
   "admin_settings.bot_settings_kb.5": "✏️ テキストを変更する",
   "admin_settings.bot_settings_kb.6": "📥 ログをダウンロードする",
@@ -2127,5 +2128,6 @@
   "server_edit.unchanged": "ℹ️ <b>設定に変更はありません</b>",
   "server_edit.saved": "✅ <b>設定を保存しました</b>",
   "server_edit.save": "💾 保存",
-  "server_edit.cancel": "❌ キャンセル"
+  "server_edit.cancel": "❌ キャンセル",
+  "yadreno_admin.images_failed": "送信できなかった画像は {count} 件です。"
 }

@@ -401,6 +401,8 @@ Self-service top-ups are not part of the standard menu. They can be added throug
 
 ## Broadcasts and notifications
 
+In the broadcast editor, ask Yadreno Admin to draw a photo and place it in the draft. Check the caption and image in the preview before launching the broadcast.
+
 Under **Маркетинг (Marketing)** → **Рассылка (Broadcast)**, prepare content for users:
 
 - write text;
@@ -702,6 +704,8 @@ Users, subscriptions, payments, history, website connection, domain and HTTPS ar
 ## Backups
 
 Open **Настройки бота (Bot settings) → 📦 Создать бэкап (Create backup)**. The bot builds an archive and sends it privately to you. Its name includes date and time, and its caption identifies manual creation. Daily archives still go to all administrators. Local copies are kept for seven days.
+
+The **🎬 Видеоинструкция по переносу (Server migration video)** link below the backup button opens a Russian-language guide to moving YadrenoVPN to a new server.
 
 Both archives contain the bot database, saved settings and customizations, extension files, website and Mini App design with its signing key, and available VPN-panel backups. If a panel does not provide its backup, the archive caption includes a warning.
 

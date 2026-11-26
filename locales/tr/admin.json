@@ -1071,6 +1071,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 Güncellemeler",
   "admin_settings.bot_settings_kb.2": "🌐 Web ve Mini App",
   "admin_settings.bot_settings_kb.3": "📦 Yedek oluştur",
+  "admin_settings.backup_video_guide": "🎬 Sunucu taşıma videosu (Rusça)",
   "admin_settings.bot_settings_kb.4": "📱 Cihaz kısıtlamaları",
   "admin_settings.bot_settings_kb.5": "✏️ Metinleri değiştir",
   "admin_settings.bot_settings_kb.6": "📥 Günlükleri indirin",
@@ -2127,5 +2128,6 @@
   "server_edit.unchanged": "ℹ️ <b>Ayarlar değişmedi</b>",
   "server_edit.saved": "✅ <b>Ayarlar kaydedildi</b>",
   "server_edit.save": "💾 Kaydet",
-  "server_edit.cancel": "❌ İptal"
+  "server_edit.cancel": "❌ İptal",
+  "yadreno_admin.images_failed": "Gönderilemeyen görsel sayısı: {count}."
 }

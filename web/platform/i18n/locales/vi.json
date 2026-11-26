@@ -284,5 +284,7 @@
   "VoiceMessage.3": "Tạm dừng",
   "VoiceMessage.4": "Nghe đoạn ghi âm",
   "VoiceMessage.5": "Thời lượng ghi âm: {p0}",
-  "Surface.1": "Tài khoản cá nhân"
+  "Surface.1": "Tài khoản cá nhân",
+  "AdminEditor.downloadImage": "Tải xuống {p0}",
+  "AdminEditor.imageUnavailable": "Không thể tải hình ảnh xuống."
 }

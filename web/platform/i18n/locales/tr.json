@@ -284,5 +284,7 @@
   "VoiceMessage.3": "Duraklat",
   "VoiceMessage.4": "Kaydı dinle",
   "VoiceMessage.5": "Kayıt süresi {p0}",
-  "Surface.1": "Kullanıcı paneli"
+  "Surface.1": "Kullanıcı paneli",
+  "AdminEditor.downloadImage": "{p0} dosyasını indir",
+  "AdminEditor.imageUnavailable": "Görsel indirilemedi."
 }

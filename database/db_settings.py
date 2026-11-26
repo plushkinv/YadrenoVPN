@@ -49,6 +49,7 @@ __all__ = [
     'set_yadreno_admin_active_request_id',
     'clear_yadreno_admin_active_request_id',
     'list_yadreno_admin_active_requests',
+    'list_yadreno_admin_pending_images',
     'get_yadreno_admin_last_request_id',
     'set_yadreno_admin_last_request_id',
     'clear_yadreno_admin_last_request_id',
@@ -505,6 +506,24 @@ def list_yadreno_admin_active_requests() -> List[Dict[str, int]]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def list_yadreno_admin_pending_images(key_digest: str) -> List[Dict[str, int]]:
+    """Return interrupted final deliveries still belonging to the last request in their lane."""
+    prefix = 'yadreno_admin_image_request:'
+    with get_db() as conn:
+        rows = conn.execute("SELECT key, value FROM settings WHERE key GLOB ?", (prefix + '*',)).fetchall()
+    pending = []
+    for row in rows:
+        try:
+            actor, topic = map(int, row['key'][len(prefix):].split(':'))
+            state = json.loads(row['value'])
+            if (isinstance(state, dict) and state.get('pending') is True and state.get('key') == key_digest
+                    and get_yadreno_admin_last_request_id(actor, topic) == state['request']):
+                pending.append({'telegram_id': actor, 'topic_id': topic, 'request_id': state['request']})
+        except (TypeError, ValueError, KeyError):
+            continue
+    return pending
 
 
 def get_yadreno_admin_last_request_id(telegram_id: int, topic_id: int) -> Optional[int]:

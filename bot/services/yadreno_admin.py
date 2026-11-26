@@ -23,6 +23,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
+from bot.services import yadreno_admin_images as images
 from bot.services import yadreno_admin_web_diagnostics as web_diagnostics
 from bot.knowledge_version import KNOWLEDGE_VERSION
 from bot.services.yadreno_admin_secret_inputs import (
@@ -261,9 +262,12 @@ def _capabilities_for_skill(
     customization_tools_v3_supported: bool = False,
     file_edits_supported: bool = False,
     secret_inputs_supported: bool = False,
+    image_files_supported: bool = False,
 ) -> list[str]:
     """Advertise confirmed optional capabilities; keep broadcast tools isolated."""
     capabilities = [*SATELLITE_CAPABILITIES, KNOWLEDGE_VERSION_CAPABILITY]
+    if image_files_supported:
+        capabilities.append(images.CAPABILITY)
     if secret_inputs_supported:
         capabilities.append(SECRET_INPUTS_CAPABILITY)
     if skill_id == YADRENO_ADMIN_BROADCAST_SKILL_ID:
@@ -573,6 +577,9 @@ class YadrenoAdminFinal:
     viewer_url: Optional[str] = None
     request_id: Optional[int] = None
     rich_markdown: Optional[str] = None
+    attachments: tuple[images.HubImage, ...] = ()
+    invalid_attachments: int = 0
+    image_request: images.ImageRequest | None = None
 
 
 @dataclass
@@ -1118,6 +1125,7 @@ async def _request_json(
     max_attempts = _hub_attempt_count()
     last_error: Optional[Exception] = None
     read_only = method.upper() in {"GET", "HEAD", "OPTIONS"}
+    event_request = path.partition("?")[0] in {"/api/v1/satellite/poll", "/api/v1/satellite/latest"}
     endpoints = _hub_endpoint_selector.candidates(max_attempts)
 
     for attempt, endpoint in enumerate(endpoints, start=1):
@@ -1128,8 +1136,11 @@ async def _request_json(
                 f"{endpoint}{path}",
                 headers=headers,
                 json=json_payload,
+                **({"allow_redirects": False} if event_request else {}),
             ) as response:
                 web_diagnostics.response_received(response.status)
+                if event_request and 300 <= response.status < 400:
+                    raise YadrenoAdminError("Redirected satellite event", kind="protocol")
                 if allow_no_content and response.status == 204:
                     _hub_endpoint_selector.mark_success(endpoint)
                     return response.status, None
@@ -1157,10 +1168,10 @@ async def _request_json(
                     )
                 web_diagnostics.response_received(response.status, data)
                 _hub_endpoint_selector.mark_success(endpoint)
-                return response.status, _rewrite_hub_viewer_url(
-                    data,
-                    endpoint=endpoint,
-                )
+                data = _rewrite_hub_viewer_url(data, endpoint=endpoint)
+                if data.get("event") in ("final", "tool_call"):
+                    data = images.HubEvent(data, endpoint)
+                return response.status, data
         except (aiohttp.ClientError, asyncio.TimeoutError, YadrenoAdminError) as e:
             if not isinstance(e, YadrenoAdminError):
                 web_diagnostics.failure_reason('timeout' if isinstance(e, asyncio.TimeoutError) else 'connection_error')
@@ -1604,7 +1615,7 @@ async def _execute_shell(
         return {"result": "", "error": str(e)}
 
 
-async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
+async def _write_file(args: dict[str, Any], *, image_source: Path | None = None) -> dict[str, Optional[str]]:
     """Create or replace one complete file; fragment edits use their own tool."""
     from web_tools.errors import WebSourceError, failure
     from web_tools.paths import atomic_write, publication_lock
@@ -1612,6 +1623,14 @@ async def _write_file(args: dict[str, Any]) -> dict[str, Optional[str]]:
     def write():
         # All regular writers use the same source lock as builds/restoration.
         with publication_lock(PROJECT_ROOT / 'web_runtime/source-lock'):
+            if image_source is not None:
+                from filecmp import cmp
+                path = _resolve_tool_path(args["path"])
+                changed = not path.is_file() or not cmp(path, image_source, shallow=False)
+                if changed:
+                    with image_source.open("rb") as stream:
+                        atomic_write(path, stream, mode=path.stat().st_mode & 0o777 if path.is_file() else 0o600)
+                return {"status": "ok", "changed": changed, "file": str(path), "publication_changed": False}
             if not isinstance(args, dict) or set(args) != {'path', 'content'}:
                 raise WebSourceError('file_write_invalid', 'Expected only arguments.path and arguments.content. No files were changed.',
                                      next_action='Use satellite_write_file with path and full content. '
@@ -1992,10 +2011,16 @@ async def _run_tool_call(
     telegram_id: int = 0,
     web_binding: WebEditorBinding | None = None,
     api_key: str | None = None,
+    image_request: images.ImageRequest | None = None,
+    image_session: aiohttp.ClientSession | None = None,
 ) -> dict[str, Any]:
     """Executes one tool_call of the hub."""
     tool = str(event.get("tool") or "")
     args = event.get("args") or {}
+    if images.uses_image(tool, args) and (image_request is None or image_session is None or not api_key):
+        result = {"result": "", "error": "Generated images were not negotiated for this request"}
+        _log_tool_audit(event, result)
+        return result
     if is_yadreno_admin_broadcast_topic(topic_id):
         if tool != "satellite_broadcast_editor":
             result = {
@@ -2007,6 +2032,17 @@ async def _run_tool_call(
                 "result": "",
                 "error": "invalid local broadcast editor context",
             }
+        elif images.uses_image(tool, args):
+            from bot.services.broadcast_editor import replace_generated_photo
+
+            async def upload():
+                image = images.HubImage.parse(args.get("image"), image_request.request_id)
+                return await images.telegram_photo_id(image_request, image_session, api_key, image, telegram_id)
+
+            try:
+                result = {"result": await replace_generated_photo(telegram_id, args, upload), "error": None}
+            except (images.ImageError, OSError) as error:
+                result = {"result": "", "error": str(error)}
         else:
             from bot.services.broadcast_editor import execute_broadcast_editor_action
 
@@ -2066,6 +2102,17 @@ async def _run_tool_call(
         if tool == "satellite_execute":
             return await _execute_shell(args, runtime=runtime)
         if tool == "satellite_write_file":
+            if isinstance(args, dict) and "image" in args:
+                try:
+                    if set(args) != {"path", "image"} or not isinstance(args["path"], str):
+                        raise images.ImageError("Expected path and generated image")
+                    image = images.HubImage.parse(args["image"], image_request.request_id)
+                    if Path(args["path"]).suffix.lower() not in images.EXTENSIONS[image.mime_type]:
+                        raise images.ImageError(f"Use a filename ending in {images.EXTENSIONS[image.mime_type][0]}")
+                    async with image_request.download(image_session, api_key, image) as original:
+                        return await _write_file(args, image_source=original)
+                except (images.ImageError, OSError) as error:
+                    return {"result": "", "error": str(error)}
             return await _write_file(args)
         if tool == "satellite_edit_files":
             return await _edit_files(args)
@@ -2083,11 +2130,20 @@ async def _run_tool_call(
                 return {'result': await run_web_customization_tool(
                     tool, args, web_binding, api_key,
                 ), 'error': None}
+            local_args = args
+            if images.uses_image(tool, args):
+                if web_binding is None:
+                    return {"result": "", "error": "A bound v3 customization request is required for generated page media"}
+                try:
+                    local_args = await images.resolve_page_images(
+                        args, image_request, image_session, api_key, web_binding.authority(api_key)["telegram_id"])
+                except (images.ImageError, OSError) as error:
+                    return {"result": "", "error": str(error)}
             return {
                 "result": await asyncio.to_thread(
                     execute_customization_tool,
                     tool,
-                    args,
+                    local_args,
                 ),
                 "error": None,
             }
@@ -2294,22 +2350,15 @@ async def _poll_until_final(
                 try:
                     if tool_started_here:
                         web_diagnostics.update(stage='execute_tool')
+                        options = {"topic_id": topic_id}
                         if is_yadreno_admin_customization_topic(topic_id) and web_binding is not None:
-                            tool_result = await _run_tool_call(
-                                event, topic_id=topic_id, telegram_id=telegram_id,
-                                web_binding=web_binding, api_key=api_key,
-                            )
+                            options.update(telegram_id=telegram_id, web_binding=web_binding, api_key=api_key)
                         elif is_yadreno_admin_broadcast_topic(topic_id):
-                            tool_result = await _run_tool_call(
-                                event,
-                                topic_id=topic_id,
-                                telegram_id=telegram_id,
-                            )
-                        else:
-                            tool_result = await _run_tool_call(
-                                event,
-                                topic_id=topic_id,
-                            )
+                            options["telegram_id"] = telegram_id
+                        if images.uses_image(event.get("tool"), event.get("args")):
+                            options.update(image_request=images.ImageRequest.from_event(
+                                event, telegram_id, topic_id, request_id, api_key), image_session=session, api_key=api_key)
+                        tool_result = await _run_tool_call(event, **options)
                     deferred_restart = bool(tool_result.pop("_deferred_restart", False))
                     tool_result_payload: dict[str, Any] = {
                         "request_id": request_id,
@@ -2353,13 +2402,11 @@ async def _poll_until_final(
 
             if event_type == "final":
                 await finalize_core_guards_for_request(request_id)
+                final = _final_from_event(request_id, event, telegram_id, topic_id, api_key)
+                if final.image_request and topic_id != YADRENO_ADMIN_WEB_TOPIC_ID:
+                    final.image_request.mark_pending(True)
                 final_received = True
-                return YadrenoAdminFinal(
-                    content=event.get("content") or "",
-                    rich_markdown=event.get("rich_markdown"),
-                    viewer_url=event.get("viewer_url"),
-                    request_id=request_id,
-                )
+                return final
 
             raise YadrenoAdminError(_tr('yadreno_admin.poll_until_final.3', p0=f'{event}'))
     finally:
@@ -2383,6 +2430,7 @@ async def run_dialog(
     page_binding: YaaPageBinding | None = None,
     accepted_callback: Callable[[], Awaitable[None]] | None = None,
     web_binding: WebEditorBinding | None = None,
+    image_destination: tuple[int, int | None] | None = None,
 ) -> YadrenoAdminFinal:
     """
     Performs a full cycle of dialogue with the Yadreno Admin agent.
@@ -2459,6 +2507,7 @@ async def run_dialog(
                 ),
                 file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
                 secret_inputs_supported=SECRET_INPUTS_CAPABILITY in negotiated_capabilities,
+                image_files_supported=images.CAPABILITY in negotiated_capabilities,
             ),
         }
         payload.update(_application_identity_fields(payload["capabilities"]))
@@ -2484,6 +2533,8 @@ async def run_dialog(
         _raise_for_hub_rejection(process_data, "process request")
 
         request_id = _accepted_request_id(process_data, "process request")
+        if images.CAPABILITY in negotiated_capabilities:
+            images.bind_request(telegram_id, topic_id, request_id, api_key, destination=image_destination)
         web_diagnostics.update(stage='bind_request', request_id=request_id, admission='accepted')
         if web_binding is not None:
             _bind_web_request(telegram_id, topic_id, request_id, web_binding, api_key)
@@ -2524,6 +2575,7 @@ async def run_dialog_with_uploads(
     overflow_count: int = 0,
     accepted_callback: Callable[[], Awaitable[None]] | None = None,
     web_binding: WebEditorBinding | None = None,
+    image_destination: tuple[int, int | None] | None = None,
 ) -> YadrenoAdminFinal:
     """Sends files to Yadreno Admin and waits for the final response from the agent."""
     if not uploads:
@@ -2538,6 +2590,7 @@ async def run_dialog_with_uploads(
             page_binding=page_binding,
             **({"web_binding": web_binding} if web_binding is not None else {}),
             **({"accepted_callback": accepted_callback} if accepted_callback else {}),
+            **({"image_destination": image_destination} if image_destination else {}),
         )
 
     web_diagnostics.update(stage='runtime_context')
@@ -2616,6 +2669,7 @@ async def run_dialog_with_uploads(
             ),
             file_edits_supported=FILE_EDITS_CAPABILITY in negotiated_capabilities,
             secret_inputs_supported=SECRET_INPUTS_CAPABILITY in negotiated_capabilities,
+            image_files_supported=images.CAPABILITY in negotiated_capabilities,
         )
         fields: dict[str, str | int] = {
             "message": agent_message,
@@ -2664,6 +2718,8 @@ async def run_dialog_with_uploads(
         _raise_for_hub_rejection(upload_data, "upload request")
 
         request_id = _accepted_request_id(upload_data, "upload request")
+        if images.CAPABILITY in negotiated_capabilities:
+            images.bind_request(telegram_id, topic_id, request_id, api_key, destination=image_destination)
         web_diagnostics.update(stage='bind_request', request_id=request_id, admission='accepted')
         if web_binding is not None:
             _bind_web_request(telegram_id, topic_id, request_id, web_binding, api_key)
@@ -2757,7 +2813,32 @@ async def resume_active_dialog(
             )
 
 
-def _latest_from_event(request_id: int, event: Optional[dict[str, Any]]) -> YadrenoAdminLatest:
+def _final_from_event(request_id, event, actor, topic, api_key):
+    final = YadrenoAdminFinal(content=str(event.get("content") or ""), request_id=request_id,
+                              rich_markdown=event.get("rich_markdown"), viewer_url=event.get("viewer_url"))
+    if not event.get("attachments") or not api_key:
+        return final
+    request = images.ImageRequest.from_event(event, actor, topic, request_id, api_key)
+    if request is None:
+        return final
+    final.image_request = request
+    raw = event["attachments"]
+    if not isinstance(raw, list):
+        final.invalid_attachments = 1
+        return final
+    parsed = {}
+    for item in raw:
+        try:
+            image = images.HubImage.parse(item, request_id)
+            parsed.setdefault(image.file_id, image)
+        except images.ImageError:
+            final.invalid_attachments += 1
+    final.attachments = tuple(parsed.values())
+    return final
+
+
+def _latest_from_event(request_id: int, event: Optional[dict[str, Any]], *,
+                       actor=None, topic=None, api_key=None) -> YadrenoAdminLatest:
     """Converts a hub snapshot into a local structure without tool_call."""
     if not event:
         return YadrenoAdminLatest(request_id=request_id)
@@ -2767,12 +2848,7 @@ def _latest_from_event(request_id: int, event: Optional[dict[str, Any]]) -> Yadr
         return YadrenoAdminLatest(
             request_id=request_id,
             event=event_type,
-            final=YadrenoAdminFinal(
-                content=str(event.get("content") or ""),
-                rich_markdown=event.get("rich_markdown"),
-                viewer_url=event.get("viewer_url"),
-                request_id=request_id,
-            ),
+            final=_final_from_event(request_id, event, actor, topic, api_key),
         )
     if event_type in {"status", "task_update"}:
         return YadrenoAdminLatest(
@@ -2927,7 +3003,7 @@ async def fetch_latest_dialog_event(
             request_id=request_id,
             resume_allowed=hub_status.resume_allowed if hub_status else True,
         )
-    latest = _latest_from_event(request_id, event)
+    latest = _latest_from_event(request_id, event, actor=telegram_id, topic=topic_id, api_key=api_key)
     if (
         hub_status is not None
         and hub_status.status in {"idle", "orphan_cleared"}
@@ -3135,7 +3211,16 @@ async def _recover_one_active_dialog_on_startup(
     request_id: int,
 ) -> None:
     """Checks one active request after restart and continues only live tasks."""
-    from bot.utils.yadreno_admin_delivery import send_yadreno_admin_final
+    from bot.utils.yadreno_admin_delivery import deliver_final_images, send_yadreno_admin_final
+
+    async def deliver(final):
+        chat_id, thread_id = final.image_request.destination(telegram_id) if final.image_request else (telegram_id, None)
+        await send_yadreno_admin_final(
+            bot, chat_id=chat_id, fallback_html=_format_recovered_final(final.content),
+            rich_markdown=final.rich_markdown, reply_markup=_recovered_final_keyboard(topic_id, final.viewer_url),
+            **({"thread_id": thread_id} if thread_id is not None else {}),
+        )
+        await deliver_final_images(bot, chat_id, final, api_key=api_key, thread_id=thread_id)
 
     try:
         hub_status = await fetch_dialog_status(
@@ -3152,17 +3237,8 @@ async def _recover_one_active_dialog_on_startup(
                     api_key,
                     topic_id=topic_id,
                 )
-                if latest is not None and latest.final is not None:
-                    await send_yadreno_admin_final(
-                        bot,
-                        chat_id=telegram_id,
-                        fallback_html=_format_recovered_final(latest.final.content),
-                        rich_markdown=latest.final.rich_markdown,
-                        reply_markup=_recovered_final_keyboard(
-                            topic_id,
-                            latest.final.viewer_url,
-                        ),
-                    )
+                if latest is not None and latest.request_id == request_id and latest.final is not None:
+                    await deliver(latest.final)
             logger.info(
                 "Yadreno Admin startup recovery skipped: admin=%s topic=%s request_id=%s status=%s",
                 telegram_id,
@@ -3180,13 +3256,7 @@ async def _recover_one_active_dialog_on_startup(
         )
         if final is None or topic_id == YADRENO_ADMIN_WEB_TOPIC_ID:
             return
-        await send_yadreno_admin_final(
-            bot,
-            chat_id=telegram_id,
-            fallback_html=_format_recovered_final(final.content),
-            rich_markdown=final.rich_markdown,
-            reply_markup=_recovered_final_keyboard(topic_id, final.viewer_url),
-        )
+        await deliver(final)
     except YadrenoAdminRequestStopped:
         return
     except Exception as e:
@@ -3205,6 +3275,9 @@ async def recover_active_dialogs_on_startup(bot: Any) -> None:
     if not api_key:
         return
     active_requests = list_yadreno_admin_active_requests()
+    for pending in images.pending_deliveries(api_key):
+        if pending not in active_requests:
+            active_requests.append(pending)
     if not active_requests:
         return
 

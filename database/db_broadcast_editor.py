@@ -118,13 +118,18 @@ def compare_and_swap_broadcast_stage(
     telegram_id: int,
     expected_stage_revision: int,
     raw_stage: str,
+    *, expected_snapshot: dict[str, Optional[str]] | None = None,
 ) -> tuple[bool, Optional[str]]:
-    """Replace a stage only when its embedded revision matches the caller."""
+    """Commit a matching revision and, for a prepared upload, its original snapshot."""
     with get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         current_raw = _read_setting(conn, _stage_key(telegram_id))
         if _stage_revision(current_raw) != int(expected_stage_revision):
             return False, current_raw
+        if expected_snapshot is not None:
+            config = _read_setting(conn, BROADCAST_CONFIG_REVISION_SETTING)
+            if current_raw != expected_snapshot["stage"] or _safe_revision(config) != _safe_revision(expected_snapshot["config_revision"]):
+                return False, current_raw
         _write_setting(conn, _stage_key(telegram_id), raw_stage)
         return True, raw_stage
 

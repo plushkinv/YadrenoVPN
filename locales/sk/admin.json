@@ -1077,6 +1077,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 Aktualizácie",
   "admin_settings.bot_settings_kb.2": "🌐 Web a Mini App",
   "admin_settings.bot_settings_kb.3": "📦 Vytvoriť zálohu",
+  "admin_settings.backup_video_guide": "🎬 Videonávod na migráciu servera (po rusky)",
   "admin_settings.bot_settings_kb.4": "📱 Obmedzenia zariadení",
   "admin_settings.bot_settings_kb.5": "✏️ Zmeniť texty",
   "admin_settings.bot_settings_kb.6": "📥 Stiahnuť protokoly",
@@ -2133,5 +2134,6 @@
   "server_edit.unchanged": "ℹ️ <b>Nastavenia sa nezmenili</b>",
   "server_edit.saved": "✅ <b>Nastavenia uložené</b>",
   "server_edit.save": "💾 Uložiť",
-  "server_edit.cancel": "❌ Zrušiť"
+  "server_edit.cancel": "❌ Zrušiť",
+  "yadreno_admin.images_failed": "Počet neodoslaných obrázkov: {count}."
 }

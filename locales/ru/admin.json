@@ -1074,6 +1074,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 Обновления",
   "admin_settings.bot_settings_kb.2": "🌐 Веб и Mini App",
   "admin_settings.bot_settings_kb.3": "📦 Создать бэкап",
+  "admin_settings.backup_video_guide": "🎬 Видеоинструкция по переносу",
   "admin_settings.bot_settings_kb.4": "📱 Ограничение устройств",
   "admin_settings.bot_settings_kb.5": "✏️ Изменить тексты",
   "admin_settings.bot_settings_kb.6": "📥 Скачать логи",
@@ -2130,5 +2131,6 @@
   "server_edit.unchanged": "ℹ️ <b>Настройки не изменились</b>",
   "server_edit.saved": "✅ <b>Настройки сохранены</b>",
   "server_edit.save": "💾 Сохранить",
-  "server_edit.cancel": "❌ Отмена"
+  "server_edit.cancel": "❌ Отмена",
+  "yadreno_admin.images_failed": "Не удалось отправить изображения: {count}."
 }

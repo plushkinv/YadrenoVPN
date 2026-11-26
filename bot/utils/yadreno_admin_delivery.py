@@ -51,12 +51,16 @@ async def send_yadreno_admin_final(
     fallback_html: str,
     rich_markdown: Optional[str],
     reply_markup: Any = None,
+    thread_id: int | None = None,
 ) -> Message:
     """Send a fresh Rich Markdown final with an HTML compatibility fallback."""
+    target = {"chat_id": chat_id}
+    if thread_id is not None:
+        target["message_thread_id"] = thread_id
     if rich_markdown:
         try:
             result = await bot.send_rich_message(
-                chat_id=chat_id,
+                **target,
                 rich_message=InputRichMessage(markdown=rich_markdown),
                 reply_markup=reply_markup,
             )
@@ -69,8 +73,44 @@ async def send_yadreno_admin_final(
             )
 
     return await bot.send_message(
-        chat_id=chat_id,
+        **target,
         text=fallback_html,
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
+
+
+async def deliver_final_images(bot, chat_id, final, *, api_key=None, thread_id=None):
+    """Deliver verified originals independently and remember each successful Telegram send."""
+    import aiohttp
+    from aiogram.exceptions import TelegramAPIError
+    from aiogram.types import FSInputFile
+    from bot.services.yadreno_admin_images import ImageError
+    from database.requests import get_yadreno_admin_api_key
+    from localization import text
+
+    request = getattr(final, "image_request", None)
+    if request is None:
+        return
+    failed = final.invalid_attachments
+    api_key = api_key or get_yadreno_admin_api_key() or ""
+    destination = str(chat_id) if thread_id is None else f"{chat_id}:{thread_id}"
+    target = {"chat_id": chat_id}
+    if thread_id is not None:
+        target["message_thread_id"] = thread_id
+    async with request.delivery_lock(), aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=70)) as session:
+        request.mark_pending(True)
+        for image in final.attachments:
+            if request.sent(destination, image.file_id):
+                continue
+            try:
+                async with request.download(session, api_key, image) as original:
+                    await bot.send_document(**target, document=FSInputFile(original, filename=image.filename))
+                request.sent(destination, image.file_id, confirm=True)
+            except (ImageError, TelegramAPIError, OSError) as error:
+                failed += 1
+                logger.warning("Satellite image delivery failed for request %s: %s", request.request_id, type(error).__name__)
+        if failed:
+            await bot.send_message(**target, text=text("yadreno_admin.images_failed", count=failed), parse_mode="HTML")
+        if failed == final.invalid_attachments:
+            request.mark_pending(False)

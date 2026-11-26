@@ -284,5 +284,7 @@
   "VoiceMessage.3": "Pauza",
   "VoiceMessage.4": "Vypočuť nahrávku",
   "VoiceMessage.5": "Dĺžka nahrávky {p0}",
-  "Surface.1": "Osobný účet"
+  "Surface.1": "Osobný účet",
+  "AdminEditor.downloadImage": "Stiahnuť {p0}",
+  "AdminEditor.imageUnavailable": "Obrázok sa nepodarilo stiahnuť."
 }

@@ -1073,6 +1073,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 Actualizaciones",
   "admin_settings.bot_settings_kb.2": "🌐 Web y Mini App",
   "admin_settings.bot_settings_kb.3": "📦 Crea una copia de seguridad",
+  "admin_settings.backup_video_guide": "🎬 Cómo migrar a otro servidor (video en ruso)",
   "admin_settings.bot_settings_kb.4": "📱 Límite de dispositivos",
   "admin_settings.bot_settings_kb.5": "✏️ Cambiar textos",
   "admin_settings.bot_settings_kb.6": "📥 Descargar registros",
@@ -2129,5 +2130,6 @@
   "server_edit.unchanged": "ℹ️ <b>Configuración sin cambios</b>",
   "server_edit.saved": "✅ <b>Configuración guardada</b>",
   "server_edit.save": "💾 Guardar",
-  "server_edit.cancel": "❌ Cancelar"
+  "server_edit.cancel": "❌ Cancelar",
+  "yadreno_admin.images_failed": "Imágenes que no se pudieron enviar: {count}."
 }

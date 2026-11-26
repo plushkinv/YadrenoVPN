@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from localization import text as _tr
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -391,8 +392,9 @@ def _mutate_stage(
     telegram_id: int,
     expected_stage_revision: int,
     mutator: Callable[[dict[str, Any]], list[str]],
+    *, prepared=None,
 ) -> dict[str, Any]:
-    stage, snapshot = ensure_broadcast_editor_stage(telegram_id)
+    stage, snapshot = prepared if prepared is not None else ensure_broadcast_editor_stage(telegram_id)
     if stage["stage_revision"] != int(expected_stage_revision):
         return _state_payload(stage, snapshot, status="conflict")
     if stage["base_config_revision"] != _safe_int(snapshot.get("config_revision")):
@@ -406,6 +408,7 @@ def _mutate_stage(
         telegram_id,
         stage["stage_revision"],
         _json_dumps(updated),
+        expected_snapshot=snapshot if prepared is not None else None,
     )
     if not success:
         return _conflict_payload(telegram_id)
@@ -465,9 +468,29 @@ def stage_local_broadcast_photo(telegram_id: int, photo_file_id: str) -> dict[st
     return _mutate_stage(telegram_id, stage["stage_revision"], mutate)
 
 
-def _stage_message(telegram_id: int, expected: int, args: dict[str, Any]) -> dict[str, Any]:
+async def replace_generated_photo(telegram_id, args, upload) -> str:
+    """Check the revision on both sides of the asynchronous Telegram upload."""
+    expected = args.get("expected_stage_revision")
+    if type(expected) is not int or expected < 0:
+        return _json_dumps({'status': 'error', 'error': _tr('broadcast_editor.execute_broadcast_editor_action.1')})
+    stage, snapshot = await asyncio.to_thread(ensure_broadcast_editor_stage, telegram_id)
+    if stage["stage_revision"] != expected or stage["base_config_revision"] != _safe_int(snapshot.get("config_revision")):
+        status = "conflict" if stage["stage_revision"] != expected else "config_conflict"
+        state = await asyncio.to_thread(_state_payload, stage, snapshot, status=status)
+        return _json_dumps(state)
+    file_id = await upload()
+    try:
+        updated = await asyncio.to_thread(_stage_message, telegram_id, expected, args, photo=file_id,
+                                          prepared=(stage, snapshot))
+    except (BroadcastValidationError, BroadcastEditorError) as error:
+        return _json_dumps({"status": "error", "error": str(error)})
+    return _json_dumps(updated)
+
+
+def _stage_message(telegram_id: int, expected: int, args: dict[str, Any], *,
+                   photo: str | None = None, prepared=None) -> dict[str, Any]:
     media_action = str(args.get("media_action") or "keep")
-    if media_action not in {"keep", "remove"}:
+    if media_action not in {"keep", "remove"} and not (media_action == "replace" and photo):
         raise BroadcastEditorError(_tr('broadcast_editor.stage_message.1'))
 
     def mutate(stage: dict[str, Any]) -> list[str]:
@@ -477,10 +500,11 @@ def _stage_message(telegram_id: int, expected: int, args: dict[str, Any]) -> dic
             if media_action == "keep" and current.get("kind") == BROADCAST_KIND_MESSAGE
             else None
         )
-        text = validate_broadcast_message(
-            args.get("message_text"),
-            has_photo=bool(photo_file_id),
-        )
+        photo_file_id = photo or photo_file_id
+        preserve_caption = photo is not None and "message_text" not in args
+        text = current.get("text", "") if preserve_caption else args.get("message_text")
+        if text or not preserve_caption:
+            text = validate_broadcast_message(text, has_photo=bool(photo_file_id))
         stage["content"] = {
             "kind": BROADCAST_KIND_MESSAGE,
             "text": text,
@@ -489,10 +513,11 @@ def _stage_message(telegram_id: int, expected: int, args: dict[str, Any]) -> dic
         dirty = set(stage.get("dirty_fields") or [])
         dirty.add("material")
         stage["dirty_fields"] = sorted(dirty)
-        stage["style_rewrite_required"] = False
+        if not preserve_caption:
+            stage["style_rewrite_required"] = False
         return ["material"]
 
-    return _mutate_stage(telegram_id, expected, mutate)
+    return _mutate_stage(telegram_id, expected, mutate, prepared=prepared)
 
 
 def _stage_poll(telegram_id: int, expected: int, args: dict[str, Any]) -> dict[str, Any]:

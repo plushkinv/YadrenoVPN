@@ -1073,6 +1073,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 Updates",
   "admin_settings.bot_settings_kb.2": "🌐 Web and Mini App",
   "admin_settings.bot_settings_kb.3": "📦 Create a backup",
+  "admin_settings.backup_video_guide": "🎬 Server migration video (Russian)",
   "admin_settings.bot_settings_kb.4": "📱 Device restrictions",
   "admin_settings.bot_settings_kb.5": "✏️ Change texts",
   "admin_settings.bot_settings_kb.6": "📥 Download logs",
@@ -2129,5 +2130,6 @@
   "server_edit.unchanged": "ℹ️ <b>Settings unchanged</b>",
   "server_edit.saved": "✅ <b>Settings saved</b>",
   "server_edit.save": "💾 Save",
-  "server_edit.cancel": "❌ Cancel"
+  "server_edit.cancel": "❌ Cancel",
+  "yadreno_admin.images_failed": "Images that could not be sent: {count}."
 }

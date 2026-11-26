@@ -7,9 +7,11 @@ import type { PreviewContext } from './contracts';
 import { useEditorVoice } from './useEditorVoice';
 import { maxVoiceBytes } from './voice';
 
+export interface EditorImage { file_id: string; filename: string; size_bytes: number }
+
 interface EditorState {
   task: { task_id: string; viewed: PreviewContext } | null;
-  latest: { request_id: number | string; event: string; final: { content: string; content_html?: string } | null;
+  latest: { request_id: number | string; event: string; final: { content: string; content_html?: string; attachments?: EditorImage[]; invalid_attachments?: number } | null;
     progress: { content: string; cancel_button_text: string | null } | null;
     resume_allowed: boolean; cancel_button_text: string | null } | null;
   local_polling: boolean;

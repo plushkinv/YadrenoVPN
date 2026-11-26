@@ -85,7 +85,7 @@ from bot.utils.yadreno_admin_errors import (
     format_yadreno_admin_error,
     yadreno_admin_error_alert,
 )
-from bot.utils.yadreno_admin_delivery import edit_or_send_yadreno_admin_final
+from bot.utils.yadreno_admin_delivery import deliver_final_images, edit_or_send_yadreno_admin_final
 from database.requests import (
     create_bot_database_backup,
     get_display_timezone,
@@ -236,6 +236,11 @@ def _final_response_keyboard(
     )
 
 
+async def _deliver_message_images(message, final):
+    if getattr(final, "image_request", None) is not None:
+        await deliver_final_images(message.bot, message.chat.id, final, thread_id=message.message_thread_id)
+
+
 async def _deliver_final_response(
     message: Message,
     final: YadrenoAdminFinal,
@@ -251,12 +256,14 @@ async def _deliver_final_response(
         if final.rich_markdown
         else None
     )
-    return await edit_or_send_yadreno_admin_final(
+    delivered = await edit_or_send_yadreno_admin_final(
         message,
         fallback_html=fallback_html,
         rich_markdown=rich_markdown,
         reply_markup=_final_response_keyboard(topic_id, final.viewer_url),
     )
+    await _deliver_message_images(message, final)
+    return delivered
 
 
 def _format_latest_event(latest: YadrenoAdminLatest) -> str | None:
@@ -348,6 +355,15 @@ class _YadrenoProgressRenderer:
             "🤖 <b>Yadreno Admin</b>",
             _tr('yadreno_admin.init.1'),
         )
+
+    def turn_options(self, actor):
+        """Bind non-private chats and Telegram topics to their original delivery destination."""
+        options = {"progress_callback": self.handle}
+        chat_id = getattr(getattr(self._anchor, "chat", None), "id", None)
+        thread_id = getattr(self._anchor, "message_thread_id", None)
+        if type(chat_id) is int and (chat_id != actor or thread_id is not None):
+            options["image_destination"] = (chat_id, thread_id)
+        return options
 
     @property
     def final_target(self) -> Message:
@@ -910,7 +926,7 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
             api_key,
             text,
             topic_id=topic_id,
-            progress_callback=progress.handle,
+            **progress.turn_options(message.from_user.id),
         )
         if await _rerender_bound_yaa_page_if_changed(
             progress,
@@ -919,6 +935,7 @@ async def handle_yadreno_chat_message(message: Message, state: FSMContext):
             bound_page_before,
             topic_id,
         ):
+            await _deliver_message_images(progress.final_target, final)
             return
         await _deliver_final_response(
             progress.final_target,
@@ -1500,7 +1517,7 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
                 prompt,
                 uploads,
                 topic_id=buffer.topic_id,
-                progress_callback=progress.handle,
+                **progress.turn_options(buffer.user_id),
                 overflow_count=overflow_count,
             )
         elif metadata_only:
@@ -1509,7 +1526,7 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
                 buffer.api_key,
                 prompt,
                 topic_id=buffer.topic_id,
-                progress_callback=progress.handle,
+                **progress.turn_options(buffer.user_id),
             )
         else:
             raise YadrenoAdminError(
@@ -1524,6 +1541,7 @@ async def _process_yadreno_album_buffer(buffer: _YadrenoAlbumBuffer) -> None:
             bound_page_before,
             buffer.topic_id,
         ):
+            await _deliver_message_images(progress.final_target, final)
             return
         await _deliver_final_response(
             progress.final_target, final, buffer.topic_id,
@@ -1647,7 +1665,7 @@ async def _handle_broadcast_yaa(
                 prompt,
                 uploads,
                 topic_id=YADRENO_ADMIN_BROADCAST_TOPIC_ID,
-                progress_callback=progress.handle,
+                **progress.turn_options(message.from_user.id),
                 overflow_count=overflow_count,
                 **admission,
             )
@@ -1657,7 +1675,7 @@ async def _handle_broadcast_yaa(
                 api_key,
                 prompt,
                 topic_id=YADRENO_ADMIN_BROADCAST_TOPIC_ID,
-                progress_callback=progress.handle,
+                **progress.turn_options(message.from_user.id),
                 **admission,
             )
     except YadrenoAdminRequestStopped:
@@ -1837,7 +1855,7 @@ async def _submit_page_yaa(
                 task_html,
                 uploads,
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
-                progress_callback=progress.handle,
+                **progress.turn_options(message.from_user.id),
                 page_binding=binding,
                 overflow_count=overflow_count,
                 **admission,
@@ -1848,7 +1866,7 @@ async def _submit_page_yaa(
                 api_key,
                 task_html,
                 topic_id=YADRENO_ADMIN_YAA_TOPIC_ID,
-                progress_callback=progress.handle,
+                **progress.turn_options(message.from_user.id),
                 page_binding=binding,
                 **admission,
             )
@@ -1868,6 +1886,7 @@ async def _submit_page_yaa(
         before,
         YADRENO_ADMIN_YAA_TOPIC_ID,
     ):
+        await _deliver_message_images(progress.final_target, final)
         return
 
     await _deliver_final_response(
@@ -2077,7 +2096,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
                 prompt,
                 uploads,
                 topic_id=topic_id,
-                progress_callback=progress.handle,
+                **progress.turn_options(message.from_user.id),
             )
         elif metadata_only:
             final = await run_dialog(
@@ -2085,7 +2104,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
                 api_key,
                 prompt,
                 topic_id=topic_id,
-                progress_callback=progress.handle,
+                **progress.turn_options(message.from_user.id),
             )
         else:
             raise YadrenoAdminError(
@@ -2099,6 +2118,7 @@ async def handle_yadreno_chat_attachment(message: Message, state: FSMContext):
             bound_page_before,
             topic_id,
         ):
+            await _deliver_message_images(progress.final_target, final)
             return
         await _deliver_final_response(progress.final_target, final, topic_id)
     except YadrenoAdminRequestStopped:

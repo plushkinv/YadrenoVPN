@@ -126,7 +126,12 @@ def atomic_write(path, content, *, mode=0o600):
     try:
         with os.fdopen(descriptor, 'wb') as stream:
             os.fchmod(stream.fileno(), mode) if hasattr(os, 'fchmod') else None
-            stream.write(content); stream.flush(); os.fsync(stream.fileno())
+            if hasattr(content, "read"):
+                shutil.copyfileobj(content, stream)
+            else:
+                stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
         _commit_file(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)

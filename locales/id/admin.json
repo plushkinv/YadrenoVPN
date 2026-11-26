@@ -1071,6 +1071,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 Pembaruan",
   "admin_settings.bot_settings_kb.2": "🌐 Web dan Mini App",
   "admin_settings.bot_settings_kb.3": "📦 Buat cadangan",
+  "admin_settings.backup_video_guide": "🎬 Video panduan pindah server (bahasa Rusia)",
   "admin_settings.bot_settings_kb.4": "📱 Pembatasan perangkat",
   "admin_settings.bot_settings_kb.5": "✏️ Ubah teks",
   "admin_settings.bot_settings_kb.6": "📥 Unduh log",
@@ -2127,5 +2128,6 @@
   "server_edit.unchanged": "ℹ️ <b>Pengaturan tidak berubah</b>",
   "server_edit.saved": "✅ <b>Pengaturan tersimpan</b>",
   "server_edit.save": "💾 Simpan",
-  "server_edit.cancel": "❌ Batal"
+  "server_edit.cancel": "❌ Batal",
+  "yadreno_admin.images_failed": "Jumlah gambar yang gagal dikirim: {count}."
 }

@@ -284,5 +284,7 @@
   "VoiceMessage.3": "مکث کنید",
   "VoiceMessage.4": "پخش فایل صوتی",
   "VoiceMessage.5": "مدت زمان ضبط {p0}",
-  "Surface.1": "حساب شخصی"
+  "Surface.1": "حساب شخصی",
+  "AdminEditor.downloadImage": "دانلود {p0}",
+  "AdminEditor.imageUnavailable": "دانلود تصویر ممکن نشد."
 }

@@ -284,5 +284,7 @@
   "VoiceMessage.3": "Пауза",
   "VoiceMessage.4": "Прослушать запись",
   "VoiceMessage.5": "Длительность записи {p0}",
-  "Surface.1": "Личный кабинет"
+  "Surface.1": "Личный кабинет",
+  "AdminEditor.downloadImage": "Скачать {p0}",
+  "AdminEditor.imageUnavailable": "Не удалось получить изображение."
 }

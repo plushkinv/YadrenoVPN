@@ -284,5 +284,7 @@
   "VoiceMessage.3": "Pausa",
   "VoiceMessage.4": "Escuchar grabación",
   "VoiceMessage.5": "Duración de la grabación {p0}",
-  "Surface.1": "Área de usuario"
+  "Surface.1": "Área de usuario",
+  "AdminEditor.downloadImage": "Descargar {p0}",
+  "AdminEditor.imageUnavailable": "No se pudo descargar la imagen."
 }

@@ -62,6 +62,12 @@ If the bot moved to another server and the old key is no longer accepted, create
 
 **«Ключ Yadreno Admin повреждён» (Yadreno Admin key is damaged)** means the saved value cannot be used safely. Press **🔑 Заменить api_key (Replace api_key)** and send only the complete key on one line. The bot will not extract it from an explanation or automatically repair the saved value.
 
+## Images from the agent
+
+Ask, for example, “Draw a cover for the summer promotion.” Telegram delivers the original as a file alongside the answer. In the Web editor, use **Download** beside the filename.
+
+You can specify the destination in the same request, for example “Create a cover and put it in my broadcast draft” or “Draw an illustration for the help page and add it to that page.” Preview the broadcast and launch it with the usual button. For a website, ask the agent to add the image to the design, check the preview and apply the changes when ready.
+
 ## Voice messages and audio recordings
 
 All four tools accept voice messages and audio recordings. In **Админ (Admin)** and **Кастомизатор (Customizer)**, open the appropriate chat and send voice. For a page or broadcast, send `/yaa` without text; the bot asks what you want to do. Then send voice, a recording or text. The agent does not start before that message. **⬅️ Назад (Back)** closes input.

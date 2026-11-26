@@ -1,5 +1,6 @@
 """Authenticated Mini App adapter for the existing customization conversation."""
 from aiohttp import web
+from aiohttp.helpers import content_disposition_header
 
 from bot.services.yadreno_admin_web_dialog import WebEditorDialog, authorize
 from bot.services import yadreno_admin_web_diagnostics as diagnostics
@@ -27,6 +28,21 @@ def _response(value):
 
 async def state(request):
     return _response(await request.app[EDITOR_KEY].state(request[SESSION_KEY]))
+
+
+async def download(request):
+    async with request.app[EDITOR_KEY].download_image(request[SESSION_KEY], **request.match_info) as (image, original):
+        response = web.StreamResponse(headers={
+            'Content-Type': image.mime_type, 'Content-Length': str(image.size_bytes),
+            'Content-Disposition': content_disposition_header('attachment', filename=image.filename),
+            'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+        })
+        with original.open('rb') as stream:
+            await response.prepare(request)
+            while chunk := stream.read(65536):
+                await response.write(chunk)
+        await response.write_eof()
+        return response
 
 
 async def start(request):
@@ -65,6 +81,7 @@ def add_routes(app):
     app.on_cleanup.append(cleanup)
     prefix = '/api/v1/admin/ui/editor'
     app.router.add_get(prefix, state)
+    app.router.add_get(prefix + '/requests/{request_id}/files/{file_id}', download)
     app.router.add_post(prefix + '/uploads', upload)
     for suffix, handler in (('turns', start), ('resume', resume), ('cancel', cancel), ('new-chat', new_chat)):
         app.router.add_post(prefix + '/' + suffix, handler)

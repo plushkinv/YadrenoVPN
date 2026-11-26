@@ -284,5 +284,7 @@
   "VoiceMessage.3": "一時停止",
   "VoiceMessage.4": "録音を聞く",
   "VoiceMessage.5": "録音時間 {p0}",
-  "Surface.1": "マイページ"
+  "Surface.1": "マイページ",
+  "AdminEditor.downloadImage": "{p0} をダウンロード",
+  "AdminEditor.imageUnavailable": "画像をダウンロードできませんでした。"
 }

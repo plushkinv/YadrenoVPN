@@ -1071,6 +1071,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 更新",
   "admin_settings.bot_settings_kb.2": "🌐 Web 和 Mini App",
   "admin_settings.bot_settings_kb.3": "📦 创建备份",
+  "admin_settings.backup_video_guide": "🎬 服务器迁移视频教程（俄语）",
   "admin_settings.bot_settings_kb.4": "📱 设备限制",
   "admin_settings.bot_settings_kb.5": "✏️更改文字",
   "admin_settings.bot_settings_kb.6": "📥 下载日志",
@@ -2127,5 +2128,6 @@
   "server_edit.unchanged": "ℹ️ <b>设置未更改</b>",
   "server_edit.saved": "✅ <b>设置已保存</b>",
   "server_edit.save": "💾 保存",
-  "server_edit.cancel": "❌ 取消"
+  "server_edit.cancel": "❌ 取消",
+  "yadreno_admin.images_failed": "有 {count} 张图片未能发送。"
 }

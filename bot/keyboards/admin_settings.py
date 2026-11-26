@@ -13,6 +13,10 @@ def bot_settings_kb() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text=_tr('admin_settings.bot_settings_kb.2'), callback_data='admin_web'))
     builder.row(InlineKeyboardButton(text=_tr('admin_settings.bot_settings_kb.3'), callback_data='admin_backup_create'))
     builder.row(InlineKeyboardButton(
+        text=_tr('admin_settings.backup_video_guide'),
+        url='https://youtu.be/zNtAzEcV-cI',
+    ))
+    builder.row(InlineKeyboardButton(
         text=_tr('admin_settings.bot_settings_kb.4'),
         callback_data='admin_device_limit',
     ))

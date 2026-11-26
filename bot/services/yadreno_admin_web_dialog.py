@@ -4,9 +4,13 @@ from __future__ import annotations
 from localization import text as _tr
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 
+import aiohttp
+
 from bot.services import yadreno_admin as satellite
+from bot.services.yadreno_admin_images import ImageError
 from bot.services import yadreno_admin_web_diagnostics as diagnostics
 from bot.services.yadreno_admin_web_binding import WebEditorBinding, WEB_LANE_ACTOR, WEB_TOPIC_ID
 from core.results import CoreError
@@ -49,6 +53,24 @@ def public_error(error):
                        retryable=error.kind in {'transport', 'service_unavailable', 'maintenance'})
     diagnostics.report(error, public)
     return public
+
+
+def _public_latest(latest):
+    if latest is None:
+        return None
+    final = latest.final
+    public_final = None
+    if final:
+        public_final = {'content': final.content, 'viewer_url': final.viewer_url,
+                        'rich_markdown': final.rich_markdown, 'request_id': final.request_id}
+        if final.attachments:
+            public_final['attachments'] = [{'file_id': item.file_id, 'filename': item.filename,
+                                             'size_bytes': item.size_bytes} for item in final.attachments]
+        if final.invalid_attachments:
+            public_final['invalid_attachments'] = final.invalid_attachments
+    return {'request_id': latest.request_id, 'event': latest.event, 'final': public_final,
+            'progress': asdict(latest.progress) if latest.progress else None,
+            'resume_allowed': latest.resume_allowed, 'cancel_button_text': latest.cancel_button_text}
 
 
 class WebEditorDialog:
@@ -166,8 +188,33 @@ class WebEditorDialog:
             # Never combine its content with an older view or expose an unbound ID.
             binding = self._request_binding(latest.request_id, api_key)
         return {'task': {'task_id': binding.task_id, 'viewed': binding.runtime_context(api_key)['web_editor']['viewed']},
-                'latest': asdict(latest) if latest else None,
+                'latest': _public_latest(latest),
                 'local_polling': satellite.is_local_request_active(WEB_LANE_ACTOR, WEB_TOPIC_ID)}
+
+    @asynccontextmanager
+    async def download_image(self, session, request_id, file_id):
+        api_key = authorize(session)
+        bound_id, binding = self._binding(api_key)
+        if binding is None or str(bound_id) != request_id:
+            raise CoreError('attachment_not_found')
+        try:
+            latest = await satellite.fetch_latest_dialog_event(WEB_LANE_ACTOR, api_key, topic_id=WEB_TOPIC_ID)
+        except satellite.YadrenoAdminError as error:
+            raise public_error(error) from None
+        final = latest.final if latest and latest.request_id == bound_id else None
+        if not final or not final.image_request:
+            raise CoreError('attachment_not_found')
+        image = next((item for item in final.attachments if item.file_id == file_id), None)
+        if image is None:
+            raise CoreError('attachment_not_found')
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=70)) as client:
+                async with final.image_request.download(client, api_key, image) as original:
+                    if authorize(session) != api_key or self._binding(api_key)[0] != bound_id:
+                        raise CoreError('attachment_not_found')
+                    yield image, original
+        except ImageError as error:
+            raise CoreError('action_unavailable', details={'reason': 'image_unavailable'}) from error
 
     @diagnostics.observed('resume')
     async def resume(self, session):

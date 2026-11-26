@@ -1081,6 +1081,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 التحديثات",
   "admin_settings.bot_settings_kb.2": "🌐 الويب والتطبيق المصغر",
   "admin_settings.bot_settings_kb.3": "📦 إنشاء نسخة احتياطية",
+  "admin_settings.backup_video_guide": "🎬 فيديو شرح نقل الخادم (بالروسية)",
   "admin_settings.bot_settings_kb.4": "📱 قيود الجهاز",
   "admin_settings.bot_settings_kb.5": "✏️ تغيير النصوص",
   "admin_settings.bot_settings_kb.6": "📥 تحميل السجلات",
@@ -2137,5 +2138,6 @@
   "server_edit.unchanged": "ℹ️ <b>لم تتغير الإعدادات</b>",
   "server_edit.saved": "✅ <b>تم حفظ الإعدادات</b>",
   "server_edit.save": "💾 حفظ",
-  "server_edit.cancel": "❌ إلغاء"
+  "server_edit.cancel": "❌ إلغاء",
+  "yadreno_admin.images_failed": "عدد الصور التي تعذّر إرسالها: {count}."
 }

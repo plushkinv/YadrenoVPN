@@ -1071,6 +1071,7 @@
   "admin_settings.bot_settings_kb.1": "🔄 به روز رسانی",
   "admin_settings.bot_settings_kb.2": "🌐 وب و Mini App",
   "admin_settings.bot_settings_kb.3": "📦 یک نسخه پشتیبان ایجاد کنید",
+  "admin_settings.backup_video_guide": "🎬 راهنمای ویدیویی انتقال سرور (به روسی)",
   "admin_settings.bot_settings_kb.4": "📱 محدودیت های دستگاه",
   "admin_settings.bot_settings_kb.5": "✏️ تغییر متون",
   "admin_settings.bot_settings_kb.6": "📥 لاگ ها را دانلود کنید",
@@ -2127,5 +2128,6 @@
   "server_edit.unchanged": "ℹ️ <b>تنظیمات تغییری نکرده‌اند</b>",
   "server_edit.saved": "✅ <b>تنظیمات ذخیره شدند</b>",
   "server_edit.save": "💾 ذخیره",
-  "server_edit.cancel": "❌ لغو"
+  "server_edit.cancel": "❌ لغو",
+  "yadreno_admin.images_failed": "تعداد تصاویر ارسال‌نشده: {count}"
 }
