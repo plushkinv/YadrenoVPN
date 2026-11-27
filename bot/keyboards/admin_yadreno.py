@@ -11,6 +11,11 @@ from bot.utils.telegram_links import build_telegram_link
 from .admin_misc import back_button, home_button
 
 
+def original_image_keyboard(url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=_tr("yadreno_admin.download_original"), url=url)]])
+
+
 def yadreno_admin_no_key_kb() -> InlineKeyboardMarkup:
     """Screen keyboard where api_key has not yet been set."""
     builder = InlineKeyboardBuilder()

@@ -26,6 +26,9 @@ function ImageDownload({ requestId, image }: { requestId: number | string; image
     } catch { setFailed(true); }
     finally { setBusy(false); }
   }
+  if (image.download_url) return <a href={image.download_url} download={image.filename}>
+    <Download aria-hidden="true" />{_tr("AdminEditor.downloadImage", {p0: image.filename})}
+  </a>;
   return <div>
     <Button tone="secondary" disabled={busy} onClick={() => void save()}>
       <Download aria-hidden="true" />{_tr("AdminEditor.downloadImage", {p0: image.filename})}

@@ -1,4 +1,4 @@
-"""Authenticated transfer of original Hub images and request-local delivery receipts."""
+"""Verified generated image downloads and request-local Telegram delivery receipts."""
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +16,7 @@ import aiohttp
 
 from database.requests import get_setting, list_yadreno_admin_pending_images, set_setting
 
-CAPABILITY = "image_files_v1"
+CAPABILITY = "image_files_v2"
 EXTENSIONS = {"image/png": (".png",), "image/jpeg": (".jpg", ".jpeg"), "image/webp": (".webp",)}
 logger = logging.getLogger(__name__)
 _delivery_locks = WeakValueDictionary()
@@ -34,6 +34,13 @@ class HubEvent(dict):
         self.origin = origin
 
 
+def valid_download_url(url):
+    from bot.services import yadreno_admin as sat
+    return isinstance(url, str) and any(
+        re.fullmatch(re.escape(origin.rstrip("/")) + r"/files/images/[a-f0-9]{32}", url)
+        for origin in sat.HUB_URLS)
+
+
 @dataclass(frozen=True)
 class HubImage:
     file_id: str
@@ -41,27 +48,45 @@ class HubImage:
     mime_type: str
     size_bytes: int
     sha256: str
-    download_path: str
+    download_url: str
+    width: int
+    height: int
 
     @classmethod
-    def parse(cls, data, request_id):
-        if not isinstance(data, dict):
+    def parse(cls, value):
+        if not isinstance(value, dict):
             raise ImageError("Invalid image descriptor")
-        file_id, mime, size = (data.get(k) for k in ("file_id", "mime_type", "size_bytes"))
-        if not isinstance(file_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", file_id):
-            raise ImageError("Invalid image identifier")
-        path = f"/api/v1/satellite/requests/{request_id}/files/{file_id}"
-        digest = data.get("sha256")
-        if (data.get("download_path") != path or not isinstance(mime, str) or mime not in EXTENSIONS
-                or type(size) is not int or size <= 0 or not isinstance(digest, str)
-                or not re.fullmatch(r"[0-9a-fA-F]{64}", digest)):
-            raise ImageError("Invalid image metadata or request binding")
-        name = data.get("filename")
-        if (not isinstance(name, str) or not name.strip() or len(name) > 240
-                or any(ord(c) < 32 or ord(c) == 127 for c in name)
-                or any(c in name for c in '/\\:"') or Path(name).suffix.lower() not in EXTENSIONS[mime]):
+        file_id, mime, digest = (value.get(k) for k in ("file_id", "mime_type", "sha256"))
+        size, width, height = (value.get(k) for k in ("size_bytes", "width", "height"))
+        if (not isinstance(file_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", file_id)
+                or not isinstance(mime, str) or mime not in EXTENSIONS
+                or not isinstance(digest, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", digest)
+                or any(type(n) is not int or n <= 0 for n in (size, width, height))):
+            raise ImageError("Invalid image metadata")
+        url = value.get("download_url")
+        if not valid_download_url(url):
+            raise ImageError("Invalid image download URL")
+        name = value.get("filename")
+        if (not isinstance(name, str) or not name or len(name) > 200
+                or any(c in '/\\:"' or not c.isprintable() for c in name)
+                or Path(name).suffix.lower() not in EXTENSIONS[mime]):
             name = file_id + EXTENSIONS[mime][0]
-        return cls(file_id, name, mime, size, digest.lower(), path)
+        return cls(file_id, name, mime, size, digest.lower(), url, width, height)
+
+
+@dataclass(frozen=True)
+class ImageAttachment:
+    result_id: str
+    original: HubImage
+    recommended: HubImage
+
+    @classmethod
+    def parse(cls, value):
+        if not isinstance(value, dict) or not isinstance(value.get("result_id"), str):
+            raise ImageError("Invalid image attachment")
+        if not re.fullmatch(r"[a-f0-9]{32}", value["result_id"]):
+            raise ImageError("Invalid image result ID")
+        return cls(value["result_id"], HubImage.parse(value.get("original")), HubImage.parse(value.get("recommended")))
 
 
 def _key(actor, topic):
@@ -146,12 +171,11 @@ class ImageRequest:
 
     @asynccontextmanager
     async def download(self, session, api_key, image):
-        """Yield a verified private original. Never follow redirects with credentials."""
+        """Yield the verified image from its public Hub download URL."""
         from bot.services import yadreno_admin as satellite
         if (self.key_digest != _key_digest(api_key) or self.origin not in satellite.HUB_URLS
-                or image.download_path != f'/api/v1/satellite/requests/{self.request_id}/files/{image.file_id}'):
+                or not valid_download_url(image.download_url)):
             raise ImageError("Image download authorization changed")
-        headers = satellite._hub_headers(api_key)
         directory = satellite.TMP_DIR
         directory.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=directory) as temporary:
@@ -159,7 +183,7 @@ class ImageRequest:
             delays = satellite.RETRY_CONFIG.get("delays") or [1]
             for attempt in range(satellite._hub_attempt_count()):
                 try:
-                    async with session.get(self.origin + image.download_path, headers=headers,
+                    async with session.get(image.download_url,
                                            allow_redirects=False) as response:
                         if response.status != 200:
                             if response.status in {408, 429} or response.status >= 500:
@@ -230,7 +254,7 @@ async def resolve_page_images(args, request, session, api_key, admin_id):
             if (set(change) != {"type", "media_type", "image"} or change["type"] != "media.set"
                     or change["media_type"] != "photo"):
                 raise ImageError("Generated images require media.set with media_type=photo")
-            image = HubImage.parse(change["image"], request.request_id)
+            image = HubImage.parse(change["image"])
             if image not in photo_ids:
                 photo_ids[image] = await telegram_photo_id(request, session, api_key, image, admin_id)
             change = {**change, "image": photo_ids[image]}

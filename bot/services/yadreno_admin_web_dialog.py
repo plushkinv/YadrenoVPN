@@ -64,8 +64,9 @@ def _public_latest(latest):
         public_final = {'content': final.content, 'viewer_url': final.viewer_url,
                         'rich_markdown': final.rich_markdown, 'request_id': final.request_id}
         if final.attachments:
-            public_final['attachments'] = [{'file_id': item.file_id, 'filename': item.filename,
-                                             'size_bytes': item.size_bytes} for item in final.attachments]
+            public_final['attachments'] = [{'file_id': item.original.file_id, 'filename': item.original.filename,
+                                             'size_bytes': item.original.size_bytes, 'download_url': item.original.download_url,
+                                             'preview_url': item.recommended.download_url} for item in final.attachments]
         if final.invalid_attachments:
             public_final['invalid_attachments'] = final.invalid_attachments
     return {'request_id': latest.request_id, 'event': latest.event, 'final': public_final,
@@ -204,7 +205,7 @@ class WebEditorDialog:
         final = latest.final if latest and latest.request_id == bound_id else None
         if not final or not final.image_request:
             raise CoreError('attachment_not_found')
-        image = next((item for item in final.attachments if item.file_id == file_id), None)
+        image = next((item.original for item in final.attachments if item.original.file_id == file_id), None)
         if image is None:
             raise CoreError('attachment_not_found')
         try:

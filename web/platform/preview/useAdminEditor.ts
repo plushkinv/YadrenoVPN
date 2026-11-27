@@ -7,7 +7,7 @@ import type { PreviewContext } from './contracts';
 import { useEditorVoice } from './useEditorVoice';
 import { maxVoiceBytes } from './voice';
 
-export interface EditorImage { file_id: string; filename: string; size_bytes: number }
+export interface EditorImage { file_id: string; filename: string; size_bytes: number; download_url?: string; preview_url?: string }
 
 interface EditorState {
   task: { task_id: string; viewed: PreviewContext } | null;

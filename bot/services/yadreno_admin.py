@@ -577,7 +577,7 @@ class YadrenoAdminFinal:
     viewer_url: Optional[str] = None
     request_id: Optional[int] = None
     rich_markdown: Optional[str] = None
-    attachments: tuple[images.HubImage, ...] = ()
+    attachments: tuple[images.ImageAttachment, ...] = ()
     invalid_attachments: int = 0
     image_request: images.ImageRequest | None = None
 
@@ -2036,7 +2036,7 @@ async def _run_tool_call(
             from bot.services.broadcast_editor import replace_generated_photo
 
             async def upload():
-                image = images.HubImage.parse(args.get("image"), image_request.request_id)
+                image = images.HubImage.parse(args.get("image"))
                 return await images.telegram_photo_id(image_request, image_session, api_key, image, telegram_id)
 
             try:
@@ -2106,7 +2106,7 @@ async def _run_tool_call(
                 try:
                     if set(args) != {"path", "image"} or not isinstance(args["path"], str):
                         raise images.ImageError("Expected path and generated image")
-                    image = images.HubImage.parse(args["image"], image_request.request_id)
+                    image = images.HubImage.parse(args["image"])
                     if Path(args["path"]).suffix.lower() not in images.EXTENSIONS[image.mime_type]:
                         raise images.ImageError(f"Use a filename ending in {images.EXTENSIONS[image.mime_type][0]}")
                     async with image_request.download(image_session, api_key, image) as original:
@@ -2829,8 +2829,8 @@ def _final_from_event(request_id, event, actor, topic, api_key):
     parsed = {}
     for item in raw:
         try:
-            image = images.HubImage.parse(item, request_id)
-            parsed.setdefault(image.file_id, image)
+            attachment = images.ImageAttachment.parse(item)
+            parsed.setdefault(attachment.result_id, attachment)
         except images.ImageError:
             final.invalid_attachments += 1
     final.attachments = tuple(parsed.values())

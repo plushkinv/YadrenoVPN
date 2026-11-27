@@ -64,7 +64,7 @@ If the bot moved to another server and the old key is no longer accepted, create
 
 ## Images from the agent
 
-Ask, for example, “Draw a cover for the summer promotion.” Telegram delivers the original as a file alongside the answer. In the Web editor, use **Download** beside the filename.
+Ask, for example, “Draw a cover for the summer promotion.” Telegram shows the cover as a photo. Select **Download original** to get the finished image at full quality. Ask for both variants if you want to compare them. In the Web editor, use **Download** beside the filename.
 
 You can specify the destination in the same request, for example “Create a cover and put it in my broadcast draft” or “Draw an illustration for the help page and add it to that page.” Preview the broadcast and launch it with the usual button. For a website, ask the agent to add the image to the design, check the preview and apply the changes when ready.
 

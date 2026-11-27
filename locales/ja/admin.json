@@ -1,4 +1,5 @@
 {
+  "yadreno_admin.download_original": "⬇️ オリジナルをダウンロード",
   "backups.authorized.1": "管理者のみが利用可能",
   "backups.authorized.2": "メッセージを利用できません。ボットとのチャットを開いてください。",
   "backups.create_backup.1": "バックアップはすでに作成中です",

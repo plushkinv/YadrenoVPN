@@ -81,10 +81,11 @@ async def send_yadreno_admin_final(
 
 
 async def deliver_final_images(bot, chat_id, final, *, api_key=None, thread_id=None):
-    """Deliver verified originals independently and remember each successful Telegram send."""
+    """Deliver verified photo previews independently and remember each successful Telegram send."""
     import aiohttp
     from aiogram.exceptions import TelegramAPIError
     from aiogram.types import FSInputFile
+    from bot.keyboards.admin_yadreno import original_image_keyboard
     from bot.services.yadreno_admin_images import ImageError
     from database.requests import get_yadreno_admin_api_key
     from localization import text
@@ -100,13 +101,15 @@ async def deliver_final_images(bot, chat_id, final, *, api_key=None, thread_id=N
         target["message_thread_id"] = thread_id
     async with request.delivery_lock(), aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=70)) as session:
         request.mark_pending(True)
-        for image in final.attachments:
-            if request.sent(destination, image.file_id):
+        for attachment in final.attachments:
+            image = attachment.recommended
+            if request.sent(destination, attachment.result_id):
                 continue
             try:
                 async with request.download(session, api_key, image) as original:
-                    await bot.send_document(**target, document=FSInputFile(original, filename=image.filename))
-                request.sent(destination, image.file_id, confirm=True)
+                    await bot.send_photo(**target, photo=FSInputFile(original, filename=image.filename),
+                                         reply_markup=original_image_keyboard(attachment.original.download_url))
+                request.sent(destination, attachment.result_id, confirm=True)
             except (ImageError, TelegramAPIError, OSError) as error:
                 failed += 1
                 logger.warning("Satellite image delivery failed for request %s: %s", request.request_id, type(error).__name__)

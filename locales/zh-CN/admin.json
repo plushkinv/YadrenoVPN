@@ -1,4 +1,5 @@
 {
+  "yadreno_admin.download_original": "⬇️ 下载原图",
   "backups.authorized.1": "仅管理员可用",
   "backups.authorized.2": "消息不可用。打开与机器人的聊天。",
   "backups.create_backup.1": "正在创建备份，请稍候",

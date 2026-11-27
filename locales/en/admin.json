@@ -1,4 +1,5 @@
 {
+  "yadreno_admin.download_original": "⬇️ Download original",
   "backups.authorized.1": "Only available to administrators",
   "backups.authorized.2": "Message unavailable. Open a chat with the bot.",
   "backups.create_backup.1": "Backup is already being created",

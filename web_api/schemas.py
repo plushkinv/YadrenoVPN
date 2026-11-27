@@ -140,7 +140,8 @@ EDITOR_REQUEST_ID = {'anyOf': [ID, {'type': 'string', 'minLength': 1, 'maxLength
     'description': 'Exact decimal Hub ID when outside the legacy numeric range; treat as opaque.'}]}
 SCHEMAS['EditorFinal'] = obj({'content': S, 'content_html': S, 'viewer_url': nullable(S),
     'request_id': nullable(EDITOR_REQUEST_ID), 'rich_markdown': nullable(S), 'invalid_attachments': I,
-    'attachments': array(obj({'file_id': S, 'filename': S, 'size_bytes': I}))},
+    'attachments': array(obj({'file_id': S, 'filename': S, 'size_bytes': I, 'download_url': S, 'preview_url': S},
+                             ['file_id', 'filename', 'size_bytes']))},
     ['content', 'viewer_url', 'request_id', 'rich_markdown'])
 SCHEMAS['EditorProgress'] = obj({'event': S, 'content': S, 'slot': S, 'cancel_button_text': nullable(S)})
 SCHEMAS['EditorLatest'] = obj({'request_id': EDITOR_REQUEST_ID, 'event': S, 'final': nullable(ref('EditorFinal')),
